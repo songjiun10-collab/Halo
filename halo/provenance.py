@@ -10,12 +10,6 @@ from .types import Action, Phase
 
 
 class Origin(str, Enum):
-    """Trusted-runtime provenance labels.
-
-    Labels must be assigned by trusted instrumentation, never accepted from
-    model-generated text as assertions about its own trust.
-    """
-
     RUNTIME = "runtime"
     USER_INTENT = "user_intent"
     TRUSTED_PLAN = "trusted_plan"
@@ -60,17 +54,9 @@ def control_provenance_invariant(
     allowed_origins: Iterable[Origin | str] = DEFAULT_TRUSTED_CONTROL_ORIGINS,
     phases: frozenset[Phase] = frozenset({Phase.PRE, Phase.LIVE, Phase.POST}),
 ) -> Invariant:
-    """Require security-sensitive control fields to come only from trusted origins.
-
-    ``telemetry_key`` is expected to be produced by trusted runtime
-    instrumentation and authenticated by HALO telemetry. Missing, malformed,
-    unknown, mixed, or untrusted provenance fails closed.
-    """
-
     required_fields = tuple(fields)
     allowed = _origin_values(allowed_origins)
-
-    if not required_fields or any(not field for field in required_fields):
+    if not required_fields or any(not isinstance(field, str) or not field for field in required_fields):
         raise ValueError("at least one non-empty control field is required")
     if not allowed:
         raise ValueError("at least one trusted control origin is required")
@@ -119,8 +105,6 @@ def capability_scope_invariant(
     telemetry_key: str = "capability",
     phases: frozenset[Phase] = frozenset({Phase.PRE, Phase.LIVE, Phase.POST}),
 ) -> Invariant:
-    """Require the authenticated runtime capability to authorize the action."""
-
     def predicate(action: Action, phase: Phase, telemetry: Mapping[str, Any]) -> bool:
         raw = telemetry.get(telemetry_key)
         if not isinstance(raw, Mapping):
@@ -132,8 +116,7 @@ def capability_scope_invariant(
             return False
         if not subject or not operations or not resources:
             return False
-        scope = CapabilityScope(subject, operations, resources)
-        return scope.allows(action)
+        return CapabilityScope(subject, operations, resources).allows(action)
 
     return Invariant(
         name=name,
@@ -149,29 +132,22 @@ def resource_binding_invariant(
     telemetry_key: str = "resource_binding",
     phases: frozenset[Phase] = frozenset({Phase.PRE, Phase.LIVE, Phase.POST}),
 ) -> Invariant:
-    """Require the runtime-observed resource/descriptor digest to match approval.
-
-    Both digests are expected to be produced by trusted runtime instrumentation
-    and protected by the authenticated telemetry envelope. This is intended for
-    tool manifests/descriptors or other resources whose identity may change
-    between approval and use.
-    """
-
-    def valid_digest(value: Any) -> bool:
+    def decode_digest(value: Any) -> bytes | None:
         if not isinstance(value, str) or len(value) != 64:
-            return False
+            return None
         try:
-            return len(bytes.fromhex(value)) == 32
+            decoded = bytes.fromhex(value)
         except ValueError:
-            return False
+            return None
+        return decoded if len(decoded) == 32 else None
 
     def predicate(action: Action, phase: Phase, telemetry: Mapping[str, Any]) -> bool:
         raw = telemetry.get(telemetry_key)
         if not isinstance(raw, Mapping):
             return False
-        approved = raw.get("approved_digest")
-        observed = raw.get("observed_digest")
-        if not valid_digest(approved) or not valid_digest(observed):
+        approved = decode_digest(raw.get("approved_digest"))
+        observed = decode_digest(raw.get("observed_digest"))
+        if approved is None or observed is None:
             return False
         return hmac.compare_digest(approved, observed)
 
