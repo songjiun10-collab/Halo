@@ -5,19 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from halo import (
-    Action,
-    HALOEnforcer,
-    HashChainAuditLog,
-    InvariantEngine,
-    Phase,
-    PolicyEngine,
-    PolicyRule,
-    TelemetryEnvelope,
-    TelemetryVerifier,
-    Verdict,
+    Action, HALOEnforcer, HashChainAuditLog, InvariantEngine, Phase,
+    PolicyEngine, PolicyRule, TelemetryEnvelope, TelemetryVerifier, Verdict,
 )
 from halo.canonical import canonical_json
-
 
 KEY = b"telemetry-secret"
 AUDIT_KEY = b"audit-secret"
@@ -30,35 +21,21 @@ def allow_rule():
 
 
 def envelope(
-    action_id: str = "a1",
-    *,
-    seq: int = 0,
-    phase: Phase = Phase.PRE,
-    payload: dict | None = None,
-    prev: str = "",
-    session: str = SESSION,
+    action_id: str = "a1", *, seq: int = 0, phase: Phase = Phase.PRE,
+    payload: dict | None = None, prev: str = "", session: str = SESSION,
     issued: int = NOW,
 ) -> TelemetryEnvelope:
+    a = Action(action_id, "agent", "read", "workspace")
     return TelemetryEnvelope.seal(
-        key=KEY,
-        source="runtime",
-        session_id=session,
-        sequence=seq,
-        phase=phase,
-        action_id=action_id,
-        payload=payload or {},
-        previous_digest=prev,
-        issued_at_ms=issued,
+        key=KEY, source="runtime", session_id=session, sequence=seq, phase=phase,
+        action=a, payload=payload or {}, previous_digest=prev, issued_at_ms=issued,
     )
 
 
 def enforcer(tmp_path, *, session: str = SESSION, clock=lambda: NOW):
     return HALOEnforcer(
-        telemetry=TelemetryVerifier(
-            {"runtime": KEY}, session_id=session, clock_ms=clock
-        ),
-        invariants=InvariantEngine(),
-        policy=PolicyEngine([allow_rule()]),
+        telemetry=TelemetryVerifier({"runtime": KEY}, session_id=session, clock_ms=clock),
+        invariants=InvariantEngine(), policy=PolicyEngine([allow_rule()]),
         audit=HashChainAuditLog(tmp_path / "audit.jsonl", key=AUDIT_KEY),
     )
 
@@ -67,10 +44,8 @@ def test_action_attributes_are_deep_frozen_snapshot():
     attrs = {"args": {"target": "safe"}, "items": [1, 2]}
     action = Action("a1", "agent", "write", "workspace", attrs)
     original_digest = HALOEnforcer._action_digest(action)
-
     attrs["args"]["target"] = "changed"
     attrs["items"].append(3)
-
     assert action.attributes["args"]["target"] == "safe"
     assert action.attributes["items"] == (1, 2)
     assert HALOEnforcer._action_digest(action) == original_digest
@@ -96,7 +71,6 @@ def test_stale_and_future_telemetry_denied(tmp_path):
     action = Action("a1", "agent", "read", "workspace")
     stale = envelope(issued=NOW - 30_001)
     assert "expired" in enforcer(tmp_path).pre(action, stale).reason
-
     future_action = Action("a2", "agent", "read", "workspace")
     future = envelope(action_id="a2", issued=NOW + 5_001)
     assert "future" in enforcer(tmp_path / "future").pre(future_action, future).reason
@@ -115,11 +89,8 @@ def test_malformed_telemetry_verifier_error_becomes_deny(tmp_path):
     class BrokenVerifier:
         def verify(self, *args, **kwargs):
             raise TypeError("bad envelope")
-
     guard = HALOEnforcer(
-        telemetry=BrokenVerifier(),
-        invariants=InvariantEngine(),
-        policy=PolicyEngine([allow_rule()]),
+        telemetry=BrokenVerifier(), invariants=InvariantEngine(), policy=PolicyEngine([allow_rule()]),
         audit=HashChainAuditLog(tmp_path / "audit.jsonl", key=AUDIT_KEY),
     )
     decision = guard.pre(Action("a1", "agent", "read", "workspace"), object())
@@ -156,11 +127,10 @@ def test_concurrent_audit_instances_serialize_appends(tmp_path):
 
 
 def test_replay_within_same_session_still_denied():
-    verifier = TelemetryVerifier(
-        {"runtime": KEY}, session_id=SESSION, clock_ms=lambda: NOW
-    )
+    verifier = TelemetryVerifier({"runtime": KEY}, session_id=SESSION, clock_ms=lambda: NOW)
+    a = Action("a1", "agent", "read", "workspace")
     sealed = envelope()
-    assert verifier.verify(sealed, phase=Phase.PRE, action_id="a1")[0]
-    ok, reason = verifier.verify(sealed, phase=Phase.PRE, action_id="a1")
+    assert verifier.verify(sealed, phase=Phase.PRE, action=a)[0]
+    ok, reason = verifier.verify(sealed, phase=Phase.PRE, action=a)
     assert not ok
     assert "sequence" in reason
