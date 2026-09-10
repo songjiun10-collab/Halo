@@ -20,6 +20,8 @@ from halo import (
 
 KEY = b"telemetry-secret"
 AUDIT_KEY = b"audit-secret"
+SESSION = "core-test-session"
+NOW = 1_900_000_000_000
 
 
 def action(action_id: str = "a1") -> Action:
@@ -36,17 +38,21 @@ def env(
     return TelemetryEnvelope.seal(
         key=KEY,
         source="runtime",
+        session_id=SESSION,
         sequence=seq,
         phase=phase,
         action_id=action_id,
         payload=payload,
         previous_digest=prev,
+        issued_at_ms=NOW,
     )
 
 
 def make_enforcer(tmp_path, *, invariants=(), rules=()):
     return HALOEnforcer(
-        telemetry=TelemetryVerifier({"runtime": KEY}),
+        telemetry=TelemetryVerifier(
+            {"runtime": KEY}, session_id=SESSION, clock_ms=lambda: NOW
+        ),
         invariants=InvariantEngine(invariants),
         policy=PolicyEngine(rules),
         audit=HashChainAuditLog(tmp_path / "audit.jsonl", key=AUDIT_KEY),
@@ -202,7 +208,9 @@ def test_audit_failure_converts_allow_to_deny(tmp_path):
             raise OSError("sink unavailable")
 
     guard = HALOEnforcer(
-        telemetry=TelemetryVerifier({"runtime": KEY}),
+        telemetry=TelemetryVerifier(
+            {"runtime": KEY}, session_id=SESSION, clock_ms=lambda: NOW
+        ),
         invariants=InvariantEngine(),
         policy=PolicyEngine([allow_rule()]),
         audit=BrokenAudit(),
