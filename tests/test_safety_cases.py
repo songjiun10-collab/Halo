@@ -230,3 +230,52 @@ def test_unknown_or_missing_instruction_provenance_is_not_allowed(event):
     findings = evaluate_trace([event])
     assert Signal.MONITORING_GAP in {f.signal for f in findings}
     assert decide(findings, effectful=False).decision is Decision.REVIEW
+
+
+@pytest.mark.parametrize(
+    "declared,target",
+    [
+        ("opaque_custom", "external"),
+        ("workspace", "opaque_custom"),
+        (123, "workspace"),
+    ],
+)
+def test_unknown_or_invalid_scope_is_policy_uncertainty(declared, target):
+    findings = evaluate_trace([
+        Event(
+            kind="tool",
+            action="upload",
+            target_scope=target,
+            declared_scope=declared,
+            approved=True,
+        )
+    ])
+    assert Signal.MONITORING_GAP in {f.signal for f in findings}
+    assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+
+
+@pytest.mark.parametrize(
+    "contains_secret,classification",
+    [
+        (False, "secret"),
+        (True, "public"),
+        (False, "mystery"),
+        (False, 7),
+    ],
+)
+def test_inconsistent_or_invalid_data_classification_is_not_silently_allowed(
+    contains_secret, classification
+):
+    findings = evaluate_trace([
+        Event(
+            kind="tool",
+            action="upload",
+            target_scope="external",
+            declared_scope="external",
+            contains_secret=contains_secret,
+            approved=True,
+            metadata={"data_classification": classification},
+        )
+    ])
+    assert Signal.MONITORING_GAP in {f.signal for f in findings}
+    assert decide(findings, effectful=True).decision is Decision.QUARANTINE

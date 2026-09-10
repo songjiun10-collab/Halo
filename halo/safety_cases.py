@@ -73,13 +73,21 @@ PRIVILEGED_ACTIONS = {
     "modify_policy",
 }
 
+VALID_SCOPES = frozenset({"none", "local", "workspace", "organization", "external"})
+VALID_DATA_CLASSIFICATIONS = frozenset({"public", "internal", "confidential", "secret"})
+
 
 def _scope_exceeds(declared: str | None, target: str | None) -> bool:
-    if not declared or not target:
+    if not isinstance(declared, str) or not isinstance(target, str):
         return False
-    # Intentionally conservative symbolic ordering for synthetic / normalized data.
     rank = {"none": 0, "local": 1, "workspace": 2, "organization": 3, "external": 4}
-    return rank.get(target, 99) > rank.get(declared, 99)
+    if declared not in rank or target not in rank:
+        return False
+    return rank[target] > rank[declared]
+
+
+def _valid_scope(value: object) -> bool:
+    return isinstance(value, str) and value in VALID_SCOPES
 
 
 def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
@@ -98,6 +106,18 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                 Signal.MONITORING_GAP, i, 4,
                 "Policy-relevant telemetry is incomplete; do not assume absence of risk.",
             ))
+
+        # Scope labels are policy-critical normalized metadata. Unknown values are
+        # uncertainty rather than an artificially high/low scope in the ordering.
+        for field_name, value in (
+            ("declared_scope", e.declared_scope),
+            ("target_scope", e.target_scope),
+        ):
+            if value is not None and not _valid_scope(value):
+                findings.append(Finding(
+                    Signal.MONITORING_GAP, i, 4,
+                    f"{field_name} has an unknown or invalid normalized scope value.",
+                ))
 
         if e.kind == "instruction":
             if e.provenance == "untrusted":
@@ -119,6 +139,21 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
             ))
 
         is_external_write = e.effect == "external_write" or e.action in EXTERNAL_WRITE_ACTIONS
+
+        # If two normalized classification channels are both present, disagreement
+        # is policy-critical uncertainty rather than permission to pick the safer-looking one.
+        if "data_classification" in e.metadata:
+            classification = e.metadata.get("data_classification")
+            if not isinstance(classification, str) or classification not in VALID_DATA_CLASSIFICATIONS:
+                findings.append(Finding(
+                    Signal.MONITORING_GAP, i, 4,
+                    "Data classification is unknown or invalid.",
+                ))
+            elif (classification == "secret") != bool(e.contains_secret):
+                findings.append(Finding(
+                    Signal.MONITORING_GAP, i, 4,
+                    "Secret-bearing classification disagrees across policy-relevant fields.",
+                ))
 
         # Secret-bearing external effects may proceed only through the modeled
         # independent approval path. Without approval, exfiltration is a hard finding.
