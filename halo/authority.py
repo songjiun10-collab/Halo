@@ -191,7 +191,11 @@ def attribute_authorization_invariant(
     Supported trusted constraint groups are ``exact``, ``allowed``,
     ``numeric_min`` and ``numeric_max``. Constraints apply to top-level
     ``Action.attributes`` keys and fail closed on missing or malformed values.
+    Unknown constraint group names also fail closed so configuration typos do
+    not silently weaken authorization.
     """
+
+    supported_groups = frozenset({"exact", "allowed", "numeric_min", "numeric_max"})
 
     def same_value(left: Any, right: Any) -> bool:
         try:
@@ -210,8 +214,10 @@ def attribute_authorization_invariant(
         raw = telemetry.get(telemetry_key)
         if not isinstance(raw, Mapping):
             return False
+        if any(not isinstance(key, str) or key not in supported_groups for key in raw):
+            return False
 
-        groups = {key: raw.get(key) for key in ("exact", "allowed", "numeric_min", "numeric_max")}
+        groups = {key: raw.get(key) for key in supported_groups}
         if not any(isinstance(value, Mapping) and value for value in groups.values()):
             return False
         for value in groups.values():
