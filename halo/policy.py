@@ -27,9 +27,29 @@ class PolicyResult:
     reasons: tuple[str, ...]
 
 
-def decide(findings: Iterable[Finding], *, effectful: bool = False) -> PolicyResult:
+def decide(
+    findings: Iterable[Finding],
+    *,
+    effectful: bool = False,
+    effectful_event_indices: Iterable[int] | None = None,
+) -> PolicyResult:
     findings = tuple(findings)
     signals = {f.signal for f in findings}
+    explicit_effectful_indices = (
+        frozenset(effectful_event_indices)
+        if effectful_event_indices is not None
+        else None
+    )
+    event_indices = {f.event_index for f in findings}
+
+    def applies_to_effect(finding: Finding) -> bool:
+        if finding.effectful:
+            return True
+        if explicit_effectful_indices is not None:
+            return finding.event_index in explicit_effectful_indices
+        # Backward compatibility for the old single-event API only. Applying a
+        # global flag across a multi-event trace would misattribute stale state.
+        return effectful and len(event_indices) <= 1
 
     hard_denies = {
         Signal.PRIVILEGE_ESCALATION,
@@ -44,21 +64,26 @@ def decide(findings: Iterable[Finding], *, effectful: bool = False) -> PolicyRes
             tuple(f.reason for f in findings if f.signal in hard_denies),
         )
 
-    # A stale approval on an effectful action is stricter than a telemetry
-    # quarantine. If findings overlap, the strongest applicable decision wins.
-    if effectful and Signal.STATE_MISMATCH in signals:
+    stale_effectful = tuple(
+        f
+        for f in findings
+        if f.signal is Signal.STATE_MISMATCH and applies_to_effect(f)
+    )
+    if stale_effectful:
         return PolicyResult(
             Decision.DENY,
-            ("Effect-time state no longer matches the state that was approved.",),
+            tuple(f.reason for f in stale_effectful),
         )
 
-    # Missing observability plus an effectful action means the safety claim cannot
-    # be evaluated reliably; preserve the evidence and isolate the action instead
-    # of interpreting missing telemetry as benign.
-    if effectful and Signal.MONITORING_GAP in signals:
+    effectful_gaps = tuple(
+        f
+        for f in findings
+        if f.signal is Signal.MONITORING_GAP and applies_to_effect(f)
+    )
+    if effectful_gaps:
         return PolicyResult(
             Decision.QUARANTINE,
-            ("Effectful action cannot be authorized with incomplete telemetry.",),
+            tuple(f.reason for f in effectful_gaps),
         )
 
     review_signals = {
