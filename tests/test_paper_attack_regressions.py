@@ -1,16 +1,37 @@
 from __future__ import annotations
 
-from halo.invariants import InvariantEngine
+import pytest
+
+from halo import (
+    Action,
+    HALOEnforcer,
+    HashChainAuditLog,
+    InvariantEngine,
+    Phase,
+    PolicyEngine,
+    PolicyRule,
+    TelemetryEnvelope,
+    TelemetryVerifier,
+    Verdict,
+)
 from halo.provenance import (
     Origin,
     capability_scope_invariant,
     control_provenance_invariant,
 )
-from halo.types import Action, CheckStatus, Phase
+from halo.types import CheckStatus
 
 
-def _action(operation: str = "read", resource: str = "workspace") -> Action:
-    return Action("paper-case", "agent", operation, resource, {})
+KEY = b"paper-regression-telemetry"
+AUDIT_KEY = b"paper-regression-audit"
+
+
+def _action(
+    action_id: str = "paper-case",
+    operation: str = "read",
+    resource: str = "workspace",
+) -> Action:
+    return Action(action_id, "agent", operation, resource, {})
 
 
 def _trusted_payload() -> dict:
@@ -33,6 +54,30 @@ def _evaluate(payload: dict, action: Action | None = None):
         [control_provenance_invariant(), capability_scope_invariant()]
     )
     return engine.evaluate(action or _action(), Phase.PRE, payload)
+
+
+def _enforcer(tmp_path):
+    return HALOEnforcer(
+        telemetry=TelemetryVerifier({"runtime": KEY}),
+        invariants=InvariantEngine(
+            [control_provenance_invariant(), capability_scope_invariant()]
+        ),
+        policy=PolicyEngine(
+            [PolicyRule("allow_if_boundary_passes", Verdict.ALLOW, lambda a, p, t: True)]
+        ),
+        audit=HashChainAuditLog(tmp_path / "audit.jsonl", key=AUDIT_KEY),
+    )
+
+
+def _sealed(action: Action, payload: dict) -> TelemetryEnvelope:
+    return TelemetryEnvelope.seal(
+        key=KEY,
+        source="runtime",
+        sequence=0,
+        phase=Phase.PRE,
+        action_id=action.action_id,
+        payload=payload,
+    )
 
 
 def test_trusted_control_and_capability_pass():
@@ -69,12 +114,12 @@ def test_missing_or_unknown_provenance_fails():
 
 
 def test_capability_prevents_operation_escalation():
-    checks = _evaluate(_trusted_payload(), _action("delete", "workspace"))
+    checks = _evaluate(_trusted_payload(), _action(operation="delete"))
     assert checks[1].status is CheckStatus.FAIL
 
 
 def test_capability_prevents_resource_diversion():
-    checks = _evaluate(_trusted_payload(), _action("read", "restricted_store"))
+    checks = _evaluate(_trusted_payload(), _action(resource="restricted_store"))
     assert checks[1].status is CheckStatus.FAIL
 
 
@@ -99,17 +144,28 @@ def test_malformed_capability_fails_closed():
         assert _evaluate(payload)[1].status is CheckStatus.FAIL
 
 
-# These are sanitized structural regressions, not reproductions of exploit
-# prompts. They model only the trust transition that matters to HALO.
+# Sanitized structural regressions only. No exploit prompt is reproduced.
+# Each family models where attacker-controlled influence originates.
 PAPER_ATTACK_FAMILIES = [
     ("jailbroken_competing_objectives", "model"),
     ("gcg_adversarial_suffix", "model"),
+    ("amplegcg_generated_suffixes", "model"),
     ("autodan_semantic_search", "model"),
     ("pair_iterative_refinement", "model"),
     ("tap_tree_search", "model"),
     ("many_shot_long_context", "model"),
     ("artprompt_representation_obfuscation", "model"),
     ("best_of_n_input_augmentation", "model"),
+    ("deepinception_nested_scene", "model"),
+    ("renellm_rewrite_and_nesting", "model"),
+    ("flipattack_input_transformation", "model"),
+    ("masterkey_automated_jailbreak", "model"),
+    ("gptfuzzer_mutation_search", "model"),
+    ("fuzzllm_combo_fuzzing", "model"),
+    ("cognitive_overload", "model"),
+    ("pap_persuasion", "model"),
+    ("cipherchat_non_natural_encoding", "model"),
+    ("crescendo_multiturn_escalation", "model"),
     ("direct_prompt_injection", "model"),
     ("indirect_prompt_injection", "external_data"),
     ("houyi_context_partition", "external_data"),
@@ -124,22 +180,41 @@ PAPER_ATTACK_FAMILIES = [
 ]
 
 
-def test_paper_attack_families_cannot_become_trusted_control():
-    engine = InvariantEngine([control_provenance_invariant()])
-    for family, origin in PAPER_ATTACK_FAMILIES:
-        payload = _trusted_payload()
-        payload["attack_family"] = family
-        payload["control_provenance"]["operation"] = [origin]
-        result = engine.evaluate(_action(), Phase.PRE, payload)[0]
-        assert result.status is CheckStatus.FAIL, family
+@pytest.mark.parametrize("family,origin", PAPER_ATTACK_FAMILIES)
+def test_paper_attack_family_cannot_become_trusted_control(family: str, origin: str):
+    payload = _trusted_payload()
+    payload["attack_family"] = family
+    payload["control_provenance"]["operation"] = [origin]
+    result = InvariantEngine([control_provenance_invariant()]).evaluate(
+        _action(), Phase.PRE, payload
+    )[0]
+    assert result.status is CheckStatus.FAIL, family
 
 
-def test_untrusted_content_is_allowed_when_it_does_not_influence_control():
-    engine = InvariantEngine(
-        [control_provenance_invariant(), capability_scope_invariant()]
-    )
-    for family, _ in PAPER_ATTACK_FAMILIES:
-        payload = _trusted_payload()
-        payload["untrusted_content"] = {"family": family, "synthetic": True}
-        result = engine.evaluate(_action(), Phase.PRE, payload)
-        assert all(check.status is CheckStatus.PASS for check in result), family
+@pytest.mark.parametrize("family,origin", PAPER_ATTACK_FAMILIES)
+def test_untrusted_content_is_not_overblocked_when_control_stays_trusted(
+    family: str, origin: str
+):
+    payload = _trusted_payload()
+    payload["untrusted_content"] = {
+        "family": family,
+        "origin": origin,
+        "synthetic": True,
+    }
+    result = _evaluate(payload)
+    assert all(check.status is CheckStatus.PASS for check in result), family
+
+
+@pytest.mark.parametrize("family,origin", PAPER_ATTACK_FAMILIES)
+def test_paper_attack_family_is_denied_end_to_end(
+    tmp_path, family: str, origin: str
+):
+    action = _action(action_id=f"case-{family}")
+    payload = _trusted_payload()
+    payload["attack_family"] = family
+    payload["control_provenance"]["operation"] = [origin]
+
+    decision = _enforcer(tmp_path).pre(action, _sealed(action, payload))
+
+    assert decision.verdict is Verdict.DENY, family
+    assert "provenance" in decision.reason
