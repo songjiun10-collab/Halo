@@ -42,8 +42,13 @@ def evaluate(
     }
     fpr = float(np.mean(benign >= threshold))
 
+    # With no explicit deployment mixture, report the true aggregate over the
+    # provided attack examples rather than a macro-average over subgroup labels.
     if attack_weights is None:
-        attack_weights = {name: 1.0 for name in normalized_attacks}
+        attack_weights = {
+            name: float(scores.size)
+            for name, scores in normalized_attacks.items()
+        }
     if set(attack_weights) != set(normalized_attacks):
         raise ValueError("attack_weights keys must match attack_scores")
     if any(weight < 0 for weight in attack_weights.values()):

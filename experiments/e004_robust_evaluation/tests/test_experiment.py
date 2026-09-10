@@ -19,6 +19,19 @@ def test_evaluate_reports_group_and_false_positive_rates():
     assert metrics.worst_group_tpr == 0.5
 
 
+def test_default_aggregate_is_weighted_by_attack_example_count():
+    benign = np.array([0.0])
+    attacks = {
+        "large_detected": np.ones(100),
+        "small_missed": np.zeros(1),
+    }
+
+    metrics = evaluate(benign, attacks, threshold=0.5)
+
+    assert metrics.attack_tpr == pytest.approx(100 / 101)
+    assert metrics.worst_group_tpr == 0.0
+
+
 def test_worst_group_selection_respects_false_positive_budget():
     benign = np.array([0.10, 0.20, 0.30, 0.40])
     attacks = {
