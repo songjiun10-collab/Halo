@@ -120,7 +120,11 @@ if __name__ == "__main__":
     rows = run()
     out = Path(__file__).with_name("results.csv")
     with out.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer = csv.DictWriter(
+            f,
+            fieldnames=rows[0].keys(),
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(rows)
 

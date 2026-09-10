@@ -45,5 +45,5 @@ if __name__ == "__main__":
     from pathlib import Path
     rows=run(); p=Path(__file__).with_name("heldout_results.csv")
     with p.open("w",newline="",encoding="utf-8") as f:
-        w=csv.DictWriter(f,fieldnames=rows[0].keys()); w.writeheader(); w.writerows(rows)
+        w=csv.DictWriter(f,fieldnames=rows[0].keys(),lineterminator="\n"); w.writeheader(); w.writerows(rows)
     print(f"held-out coverage: {sum(r['caught'] for r in rows)}/{len(rows)}")
