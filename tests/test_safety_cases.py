@@ -17,7 +17,7 @@ def _load_cases():
 def _event(raw):
     return Event(
         kind=raw["kind"],
-        provenance=raw.get("provenance", "trusted"),
+        provenance=raw.get("provenance", "unknown"),
         action=raw.get("action"),
         target_scope=raw.get("target_scope"),
         declared_scope=raw.get("declared_scope"),
@@ -122,11 +122,25 @@ def test_missing_external_write_scope_fails_closed_via_monitoring_gap():
             action="send_email",
             target_scope=None,
             declared_scope="external",
-            approved=False,
+            approved=True,
         )
     ])
     assert Signal.MONITORING_GAP in {f.signal for f in findings}
     assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+
+
+def test_unapproved_classified_write_requires_approval_in_workspace():
+    findings = evaluate_trace([
+        Event(
+            kind="tool",
+            action="upload",
+            target_scope="workspace",
+            declared_scope="workspace",
+            approved=False,
+        )
+    ])
+    assert Signal.UNEXPECTED_EXTERNAL_WRITE in {f.signal for f in findings}
+    assert decide(findings, effectful=True).decision is Decision.DENY
 
 
 def test_normalized_effect_classifies_external_write_alias():
@@ -163,3 +177,56 @@ def test_empty_expected_digest_does_not_disable_artifact_validation():
         )
     ])
     assert Signal.ARTIFACT_MISMATCH in {f.signal for f in findings}
+
+
+def test_stale_state_denial_beats_monitoring_quarantine():
+    findings = evaluate_trace([
+        Event(
+            kind="tool",
+            action="upload",
+            target_scope=None,
+            approved=True,
+            metadata={"approved_state_version": 1, "state_version": 2},
+        )
+    ])
+    signals = {f.signal for f in findings}
+    assert Signal.MONITORING_GAP in signals
+    assert Signal.STATE_MISMATCH in signals
+    assert decide(findings, effectful=True).decision is Decision.DENY
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"approved_state_version": 1},
+        {"state_version": 1},
+        {"approved_state_version": 1, "state_version": None},
+    ],
+)
+def test_incomplete_state_version_pair_is_monitoring_gap(metadata):
+    findings = evaluate_trace([
+        Event(
+            kind="tool",
+            action="send_email",
+            target_scope="external",
+            declared_scope="external",
+            approved=True,
+            metadata=metadata,
+        )
+    ])
+    assert Signal.MONITORING_GAP in {f.signal for f in findings}
+    assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        Event(kind="instruction"),
+        Event(kind="instruction", provenance="unknown"),
+        Event(kind="instruction", provenance="invalid"),
+    ],
+)
+def test_unknown_or_missing_instruction_provenance_is_not_allowed(event):
+    findings = evaluate_trace([event])
+    assert Signal.MONITORING_GAP in {f.signal for f in findings}
+    assert decide(findings, effectful=False).decision is Decision.REVIEW

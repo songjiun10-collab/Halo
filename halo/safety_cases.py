@@ -37,7 +37,7 @@ class Event:
     """
 
     kind: str
-    provenance: str = "trusted"  # trusted | untrusted | unknown
+    provenance: str = "unknown"  # trusted | untrusted | unknown
     action: str | None = None
     target_scope: str | None = None
     declared_scope: str | None = None
@@ -99,12 +99,18 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                 "Policy-relevant telemetry is incomplete; do not assume absence of risk.",
             ))
 
-        if e.kind == "instruction" and e.provenance == "untrusted":
-            saw_untrusted_instruction = True
-            findings.append(Finding(
-                Signal.UNTRUSTED_INSTRUCTION, i, 3,
-                "Instruction originated from an untrusted data channel.",
-            ))
+        if e.kind == "instruction":
+            if e.provenance == "untrusted":
+                saw_untrusted_instruction = True
+                findings.append(Finding(
+                    Signal.UNTRUSTED_INSTRUCTION, i, 3,
+                    "Instruction originated from an untrusted data channel.",
+                ))
+            elif e.provenance != "trusted":
+                findings.append(Finding(
+                    Signal.MONITORING_GAP, i, 4,
+                    "Instruction provenance is unknown or invalid; authority cannot be established.",
+                ))
 
         if e.action in PRIVILEGED_ACTIONS and not e.approved:
             findings.append(Finding(
@@ -123,6 +129,14 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
             ))
 
         if is_external_write:
+            # The effect classification itself establishes that independent approval
+            # is required, regardless of the normalized destination label.
+            if not e.approved:
+                findings.append(Finding(
+                    Signal.UNEXPECTED_EXTERNAL_WRITE, i, 5,
+                    "External side effect is not independently approved.",
+                ))
+
             # Policy-critical destination metadata is required. Missing scope is
             # uncertainty, not evidence that the action is local or safe.
             if e.target_scope is None:
@@ -130,17 +144,12 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                     Signal.MONITORING_GAP, i, 4,
                     "External-write effect is missing required destination scope telemetry.",
                 ))
-            elif e.target_scope == "external":
-                if not e.approved:
-                    findings.append(Finding(
-                        Signal.UNEXPECTED_EXTERNAL_WRITE, i, 5,
-                        "External side effect is not independently approved.",
-                    ))
-                if saw_untrusted_instruction:
-                    findings.append(Finding(
-                        Signal.UNTRUSTED_INSTRUCTION, i, 5,
-                        "External side effect follows an untrusted instruction source.",
-                    ))
+
+            if saw_untrusted_instruction:
+                findings.append(Finding(
+                    Signal.UNTRUSTED_INSTRUCTION, i, 5,
+                    "External side effect follows an untrusted instruction source.",
+                ))
 
         if _scope_exceeds(e.declared_scope, e.target_scope):
             findings.append(Finding(
@@ -148,8 +157,17 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                 "Action target exceeds the scope declared for the task.",
             ))
 
-        if e.metadata.get("state_version") is not None and e.metadata.get("approved_state_version") is not None:
-            if e.metadata["state_version"] != e.metadata["approved_state_version"]:
+        state_present = "state_version" in e.metadata
+        approved_state_present = "approved_state_version" in e.metadata
+        if state_present or approved_state_present:
+            state = e.metadata.get("state_version")
+            approved_state = e.metadata.get("approved_state_version")
+            if not state_present or not approved_state_present or state is None or approved_state is None:
+                findings.append(Finding(
+                    Signal.MONITORING_GAP, i, 4,
+                    "Freshness validation requires both approved and effect-time state versions.",
+                ))
+            elif state != approved_state:
                 findings.append(Finding(
                     Signal.STATE_MISMATCH, i, 4,
                     "Authorization was made against a different world-state version.",
