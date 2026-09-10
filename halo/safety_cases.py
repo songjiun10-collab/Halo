@@ -90,6 +90,10 @@ def _valid_scope(value: object) -> bool:
     return isinstance(value, str) and value in VALID_SCOPES
 
 
+def _nonempty_text(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
     """Return defensive findings for a sanitized trace.
 
@@ -101,11 +105,36 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
     saw_untrusted_instruction = False
 
     for i, e in enumerate(events):
-        if not e.telemetry_complete:
+        # Policy booleans may arrive from decoded/untyped telemetry. Treat only
+        # actual bools as authoritative rather than relying on Python truthiness.
+        if not isinstance(e.telemetry_complete, bool):
+            findings.append(Finding(
+                Signal.MONITORING_GAP, i, 4,
+                "Telemetry-completeness status is not a Boolean.",
+            ))
+            telemetry_complete = False
+        else:
+            telemetry_complete = e.telemetry_complete
+
+        if not telemetry_complete:
             findings.append(Finding(
                 Signal.MONITORING_GAP, i, 4,
                 "Policy-relevant telemetry is incomplete; do not assume absence of risk.",
             ))
+
+        if not isinstance(e.approved, bool):
+            findings.append(Finding(
+                Signal.MONITORING_GAP, i, 4,
+                "Approval status is not a Boolean and cannot grant authority.",
+            ))
+        approved = e.approved is True
+
+        if not isinstance(e.contains_secret, bool):
+            findings.append(Finding(
+                Signal.MONITORING_GAP, i, 4,
+                "Secret-bearing status is not a Boolean.",
+            ))
+        contains_secret = e.contains_secret is True
 
         # Scope labels are policy-critical normalized metadata. Unknown values are
         # uncertainty rather than an artificially high/low scope in the ordering.
@@ -132,13 +161,33 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                     "Instruction provenance is unknown or invalid; authority cannot be established.",
                 ))
 
-        if e.action in PRIVILEGED_ACTIONS and not e.approved:
+        is_privilege_change = (
+            e.effect == "privilege_change" or e.action in PRIVILEGED_ACTIONS
+        )
+        is_external_write = (
+            e.effect == "external_write" or e.action in EXTERNAL_WRITE_ACTIONS
+        )
+        is_policy_effect = is_privilege_change or is_external_write
+
+        # Effectful authorization requires both sides of the scope comparison.
+        # Missing values are uncertainty, never proof that no scope expansion occurred.
+        if is_policy_effect:
+            if e.declared_scope is None:
+                findings.append(Finding(
+                    Signal.MONITORING_GAP, i, 4,
+                    "Effectful action is missing required declared-scope telemetry.",
+                ))
+            if e.target_scope is None:
+                findings.append(Finding(
+                    Signal.MONITORING_GAP, i, 4,
+                    "Effectful action is missing required target-scope telemetry.",
+                ))
+
+        if is_privilege_change and not approved:
             findings.append(Finding(
                 Signal.PRIVILEGE_ESCALATION, i, 5,
                 "Privilege-changing action lacks independent approval.",
             ))
-
-        is_external_write = e.effect == "external_write" or e.action in EXTERNAL_WRITE_ACTIONS
 
         # If two normalized classification channels are both present, disagreement
         # is policy-critical uncertainty rather than permission to pick the safer-looking one.
@@ -149,7 +198,7 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                     Signal.MONITORING_GAP, i, 4,
                     "Data classification is unknown or invalid.",
                 ))
-            elif (classification == "secret") != bool(e.contains_secret):
+            elif (classification == "secret") != contains_secret:
                 findings.append(Finding(
                     Signal.MONITORING_GAP, i, 4,
                     "Secret-bearing classification disagrees across policy-relevant fields.",
@@ -157,7 +206,7 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
 
         # Secret-bearing external effects may proceed only through the modeled
         # independent approval path. Without approval, exfiltration is a hard finding.
-        if e.contains_secret and e.target_scope == "external" and not e.approved:
+        if contains_secret and e.target_scope == "external" and not approved:
             findings.append(Finding(
                 Signal.SECRET_EGRESS, i, 5,
                 "Secret-bearing data is being sent outside the trusted scope without independent approval.",
@@ -166,18 +215,10 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
         if is_external_write:
             # The effect classification itself establishes that independent approval
             # is required, regardless of the normalized destination label.
-            if not e.approved:
+            if not approved:
                 findings.append(Finding(
                     Signal.UNEXPECTED_EXTERNAL_WRITE, i, 5,
                     "External side effect is not independently approved.",
-                ))
-
-            # Policy-critical destination metadata is required. Missing scope is
-            # uncertainty, not evidence that the action is local or safe.
-            if e.target_scope is None:
-                findings.append(Finding(
-                    Signal.MONITORING_GAP, i, 4,
-                    "External-write effect is missing required destination scope telemetry.",
                 ))
 
             if saw_untrusted_instruction:
@@ -209,16 +250,21 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                 ))
 
         # Presence of an independently expected digest creates an obligation to
-        # report the observed digest. Missing/falsy observed values cannot disable
-        # validation via truthiness.
+        # report two usable digest values. Null/empty values cannot satisfy an
+        # integrity check merely by comparing equal.
         if "expected_artifact_digest" in e.metadata:
             expected = e.metadata.get("expected_artifact_digest")
             observed_present = "artifact_digest" in e.metadata
             observed = e.metadata.get("artifact_digest")
-            if not observed_present or expected != observed:
+            if (
+                not _nonempty_text(expected)
+                or not observed_present
+                or not _nonempty_text(observed)
+                or expected != observed
+            ):
                 findings.append(Finding(
                     Signal.ARTIFACT_MISMATCH, i, 5,
-                    "Produced artifact digest is missing or differs from the independently expected digest.",
+                    "Artifact digest telemetry is missing, malformed, or mismatched.",
                 ))
 
         if bool(e.metadata.get("evaluation_probe")):
