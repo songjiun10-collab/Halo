@@ -53,7 +53,7 @@ def _enforcer(tmp_path):
 def _sealed(action: Action, payload: dict) -> TelemetryEnvelope:
     return TelemetryEnvelope.seal(
         key=KEY, source="runtime", session_id=SESSION, sequence=0, phase=Phase.PRE,
-        action_id=action.action_id, payload=payload, issued_at_ms=NOW,
+        action=action, payload=payload, issued_at_ms=NOW,
     )
 
 
@@ -126,8 +126,6 @@ def test_malformed_resource_binding_fails_closed():
     assert _evaluate(payload)[2].status is CheckStatus.FAIL
 
 
-# Sanitized structural regressions only. No exploit prompt is reproduced.
-# Each family models where attacker-controlled influence originates.
 PAPER_ATTACK_FAMILIES = [
     ("jailbroken_competing_objectives", "model"),
     ("gcg_adversarial_suffix", "model"),
