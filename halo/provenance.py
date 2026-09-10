@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterable, Mapping
@@ -22,6 +23,10 @@ class Origin(str, Enum):
     TOOL_OUTPUT = "tool_output"
     EXTERNAL_DATA = "external_data"
     MEMORY = "memory"
+    RETRIEVAL = "retrieval"
+    MCP_DESCRIPTOR = "mcp_descriptor"
+    PEER_AGENT = "peer_agent"
+    PERCEPTION = "perception"
 
 
 DEFAULT_TRUSTED_CONTROL_ORIGINS = frozenset(
@@ -135,4 +140,44 @@ def capability_scope_invariant(
         predicate=predicate,
         phases=phases,
         failure_reason="action exceeds authenticated capability scope",
+    )
+
+
+def resource_binding_invariant(
+    *,
+    name: str = "resource_digest_binding",
+    telemetry_key: str = "resource_binding",
+    phases: frozenset[Phase] = frozenset({Phase.PRE, Phase.LIVE, Phase.POST}),
+) -> Invariant:
+    """Require the runtime-observed resource/descriptor digest to match approval.
+
+    Both digests are expected to be produced by trusted runtime instrumentation
+    and protected by the authenticated telemetry envelope. This is intended for
+    tool manifests/descriptors or other resources whose identity may change
+    between approval and use.
+    """
+
+    def valid_digest(value: Any) -> bool:
+        if not isinstance(value, str) or len(value) != 64:
+            return False
+        try:
+            return len(bytes.fromhex(value)) == 32
+        except ValueError:
+            return False
+
+    def predicate(action: Action, phase: Phase, telemetry: Mapping[str, Any]) -> bool:
+        raw = telemetry.get(telemetry_key)
+        if not isinstance(raw, Mapping):
+            return False
+        approved = raw.get("approved_digest")
+        observed = raw.get("observed_digest")
+        if not valid_digest(approved) or not valid_digest(observed):
+            return False
+        return hmac.compare_digest(approved, observed)
+
+    return Invariant(
+        name=name,
+        predicate=predicate,
+        phases=phases,
+        failure_reason="resource descriptor binding changed or is malformed",
     )
