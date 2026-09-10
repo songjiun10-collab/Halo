@@ -1,7 +1,11 @@
 import numpy as np
 import pytest
 
-from experiment import evaluate, run, select_worst_group_threshold
+from experiments.e004_robust_evaluation.experiment import (
+    evaluate,
+    run,
+    select_worst_group_threshold,
+)
 
 
 def test_evaluate_reports_group_and_false_positive_rates():
