@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping
 
+from .canonical import freeze_json
+
 
 class Phase(str, Enum):
     PRE = "pre"
@@ -29,6 +31,13 @@ class Action:
     operation: str
     resource: str
     attributes: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in ("action_id", "subject", "operation", "resource"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise TypeError(f"{name} must be a non-empty string")
+        object.__setattr__(self, "attributes", freeze_json(self.attributes))
 
 
 @dataclass(frozen=True, slots=True)
