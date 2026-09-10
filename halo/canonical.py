@@ -1,20 +1,28 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
+import math
 from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
 
+def _checked_float(value: float) -> float:
+    if not math.isfinite(value):
+        raise TypeError("non-finite floats are not JSON-compatible")
+    return value
+
+
 def freeze_json(value: Any) -> Any:
     """Return an immutable snapshot of JSON-like data.
 
     Mapping keys must already be strings. Lists/tuples become tuples and
-    mappings become read-only proxies. Unsupported values are rejected so a
-    security decision is never made over data that cannot be authenticated
-    canonically.
+    mappings become read-only proxies. Unsupported or non-finite values are
+    rejected so security decisions are never made over data that cannot be
+    authenticated canonically.
     """
     if isinstance(value, Mapping):
         frozen: dict[str, Any] = {}
@@ -25,7 +33,9 @@ def freeze_json(value: Any) -> Any:
         return MappingProxyType(frozen)
     if isinstance(value, (list, tuple)):
         return tuple(freeze_json(item) for item in value)
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, float):
+        return _checked_float(value)
+    if value is None or isinstance(value, (str, int, bool)):
         return value
     raise TypeError(f"value of type {type(value).__name__} is not JSON-compatible")
 
@@ -47,7 +57,9 @@ def _normalise(value: Any) -> Any:
         return {key: out[key] for key in sorted(out)}
     if isinstance(value, (list, tuple)):
         return [_normalise(v) for v in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, float):
+        return _checked_float(value)
+    if value is None or isinstance(value, (str, int, bool)):
         return value
     raise TypeError(f"value of type {type(value).__name__} is not canonically serialisable")
 
@@ -60,3 +72,7 @@ def canonical_json(value: Any) -> bytes:
         ensure_ascii=False,
         allow_nan=False,
     ).encode("utf-8")
+
+
+def canonical_digest(value: Any) -> str:
+    return hashlib.sha256(canonical_json(value)).hexdigest()
