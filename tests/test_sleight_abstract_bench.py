@@ -31,20 +31,20 @@ def test_sleight_abstract_snapshot_is_explicit():
 
     result = summary()
     assert result["categories"] == 11
-    assert result["detected"] == 5
+    assert result["detected"] == 8
     assert result["benign_flagged"] == 0
     assert set(result["detected_categories"]) == {
         "file_object_reuse",
         "system_state",
         "authorization_confusion",
+        "n_hops",
         "plausible_naming",
+        "omission",
+        "multi_session",
         "jailbreaks",
     }
     assert set(result["missed_categories"]) == {
         "counting",
         "model_priors",
         "needle_in_haystack",
-        "n_hops",
-        "omission",
-        "multi_session",
     }
