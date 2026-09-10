@@ -2,12 +2,19 @@ from .audit import AuditRecord, HashChainAuditLog
 from .enforcement import HALOEnforcer
 from .invariants import Invariant, InvariantEngine
 from .policy import PolicyEngine, PolicyResult, PolicyRule
+from .provenance import (
+    CapabilityScope,
+    Origin,
+    capability_scope_invariant,
+    control_provenance_invariant,
+)
 from .telemetry import TelemetryEnvelope, TelemetryVerifier
 from .types import Action, CheckResult, CheckStatus, EnforcementDecision, Phase, Verdict
 
 __all__ = [
     "Action",
     "AuditRecord",
+    "CapabilityScope",
     "CheckResult",
     "CheckStatus",
     "EnforcementDecision",
@@ -15,6 +22,7 @@ __all__ = [
     "HashChainAuditLog",
     "Invariant",
     "InvariantEngine",
+    "Origin",
     "Phase",
     "PolicyEngine",
     "PolicyResult",
@@ -22,4 +30,6 @@ __all__ = [
     "TelemetryEnvelope",
     "TelemetryVerifier",
     "Verdict",
+    "capability_scope_invariant",
+    "control_provenance_invariant",
 ]
