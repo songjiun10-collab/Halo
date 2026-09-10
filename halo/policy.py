@@ -40,16 +40,17 @@ def decide(
         if effectful_event_indices is not None
         else None
     )
-    event_indices = {f.event_index for f in findings}
 
     def applies_to_effect(finding: Finding) -> bool:
         if finding.effectful:
             return True
         if explicit_effectful_indices is not None:
             return finding.event_index in explicit_effectful_indices
-        # Backward compatibility for the old single-event API only. Applying a
-        # global flag across a multi-event trace would misattribute stale state.
-        return effectful and len(event_indices) <= 1
+        # `effectful` is retained for source compatibility with the original API,
+        # but a trace-wide Boolean cannot safely attribute a finding to an event.
+        # Generated findings carry event-local effectfulness; callers constructing
+        # findings manually should pass effectful_event_indices instead.
+        return False
 
     hard_denies = {
         Signal.PRIVILEGE_ESCALATION,
