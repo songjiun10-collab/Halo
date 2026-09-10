@@ -17,7 +17,6 @@ from halo import (
     Verdict,
 )
 
-
 KEY = b"telemetry-secret"
 AUDIT_KEY = b"audit-secret"
 SESSION = "core-test-session"
@@ -28,20 +27,14 @@ def action(action_id: str = "a1") -> Action:
     return Action(action_id, "agent", "write", "workspace", {"tenant": "demo"})
 
 
-def env(
-    seq: int,
-    phase: Phase,
-    action_id: str,
-    payload: dict,
-    prev: str = "",
-) -> TelemetryEnvelope:
+def env(seq: int, phase: Phase, action_id: str, payload: dict, prev: str = "") -> TelemetryEnvelope:
     return TelemetryEnvelope.seal(
         key=KEY,
         source="runtime",
         session_id=SESSION,
         sequence=seq,
         phase=phase,
-        action_id=action_id,
+        action=action(action_id),
         payload=payload,
         previous_digest=prev,
         issued_at_ms=NOW,
@@ -50,9 +43,7 @@ def env(
 
 def make_enforcer(tmp_path, *, invariants=(), rules=()):
     return HALOEnforcer(
-        telemetry=TelemetryVerifier(
-            {"runtime": KEY}, session_id=SESSION, clock_ms=lambda: NOW
-        ),
+        telemetry=TelemetryVerifier({"runtime": KEY}, session_id=SESSION, clock_ms=lambda: NOW),
         invariants=InvariantEngine(invariants),
         policy=PolicyEngine(rules),
         audit=HashChainAuditLog(tmp_path / "audit.jsonl", key=AUDIT_KEY),
@@ -60,11 +51,7 @@ def make_enforcer(tmp_path, *, invariants=(), rules=()):
 
 
 def allow_rule():
-    return PolicyRule(
-        "allow_workspace",
-        Verdict.ALLOW,
-        lambda a, p, t: a.resource == "workspace",
-    )
+    return PolicyRule("allow_workspace", Verdict.ALLOW, lambda a, p, t: a.resource == "workspace")
 
 
 def test_default_deny(tmp_path):
@@ -110,16 +97,9 @@ def test_telemetry_replay_is_denied(tmp_path):
 
 
 def test_invariant_failure_is_denied(tmp_path):
-    invariant = Invariant(
-        "budget",
-        lambda a, p, t: t["spent"] <= t["limit"],
-        failure_reason="budget exceeded",
-    )
+    invariant = Invariant("budget", lambda a, p, t: t["spent"] <= t["limit"], failure_reason="budget exceeded")
     guard = make_enforcer(tmp_path, invariants=[invariant], rules=[allow_rule()])
-    d = guard.pre(
-        action(),
-        env(0, Phase.PRE, "a1", {"spent": 11, "limit": 10}),
-    )
+    d = guard.pre(action(), env(0, Phase.PRE, "a1", {"spent": 11, "limit": 10}))
     assert not d.allowed
     assert d.reason == "budget exceeded"
 
@@ -141,19 +121,9 @@ def test_policy_exception_fails_closed(tmp_path):
 
 
 def test_explicit_deny_overrides_allow(tmp_path):
-    rules = [
-        allow_rule(),
-        PolicyRule(
-            "deny_sensitive",
-            Verdict.DENY,
-            lambda a, p, t: bool(t.get("sensitive")),
-        ),
-    ]
+    rules = [allow_rule(), PolicyRule("deny_sensitive", Verdict.DENY, lambda a, p, t: bool(t.get("sensitive")))]
     guard = make_enforcer(tmp_path, rules=rules)
-    d = guard.pre(
-        action(),
-        env(0, Phase.PRE, "a1", {"sensitive": True}),
-    )
+    d = guard.pre(action(), env(0, Phase.PRE, "a1", {"sensitive": True}))
     assert not d.allowed
     assert d.policy_rule == "deny_sensitive"
 
@@ -189,13 +159,7 @@ def test_action_cannot_change_after_pre(tmp_path):
     guard = make_enforcer(tmp_path, rules=[allow_rule()])
     e0 = env(0, Phase.PRE, "a1", {})
     assert guard.pre(action(), e0).allowed
-    changed = Action(
-        "a1",
-        "agent",
-        "delete",
-        "other-resource",
-        {"tenant": "demo"},
-    )
+    changed = Action("a1", "agent", "delete", "other-resource", {"tenant": "demo"})
     e1 = env(1, Phase.LIVE, "a1", {}, e0.digest)
     d = guard.live(changed, e1)
     assert not d.allowed
@@ -208,9 +172,7 @@ def test_audit_failure_converts_allow_to_deny(tmp_path):
             raise OSError("sink unavailable")
 
     guard = HALOEnforcer(
-        telemetry=TelemetryVerifier(
-            {"runtime": KEY}, session_id=SESSION, clock_ms=lambda: NOW
-        ),
+        telemetry=TelemetryVerifier({"runtime": KEY}, session_id=SESSION, clock_ms=lambda: NOW),
         invariants=InvariantEngine(),
         policy=PolicyEngine([allow_rule()]),
         audit=BrokenAudit(),
