@@ -4,78 +4,84 @@ This slice implements a small, model-agnostic reference-monitor core. It does **
 
 ## Trust boundary
 
-The model/agent is untrusted. HALO, its policy configuration, telemetry authentication keys, audit authentication key, protected-tool adapter, and the runtime that assigns provenance/session identifiers are trusted. Production deployment must make bypass of the HALO enforcement point impossible; this Python library cannot create process isolation by itself.
+The model/agent is untrusted. HALO, policy configuration, telemetry/audit authentication keys, the protected-tool adapter, and trusted runtime instrumentation are trusted. Production deployment must make bypass of the HALO enforcement point impossible; this Python library does not create process isolation by itself.
 
 ## Enforcement path
 
 `PRE -> zero or more LIVE checkpoints -> POST`
 
-Each checkpoint is processed in this order:
+Each mediated checkpoint:
 
-1. verify telemetry authenticity, action binding, non-reused runtime session, issuance freshness, sequence, and hash-chain continuity;
-2. evaluate hard invariants;
-3. evaluate ordered policy rules with deny-overrides and default deny;
-4. append the decision to an authenticated append-only hash chain;
-5. return ALLOW only if all prior steps completed successfully.
+1. verifies telemetry authenticity, full-action binding, session/freshness, sequence, and chain continuity;
+2. evaluates hard invariants;
+3. evaluates deny-overrides/default-deny policy;
+4. commits the decision to the authenticated audit history;
+5. returns ALLOW only after every required step succeeds.
 
-Unknown telemetry sources, malformed/tampered/replayed/stale telemetry, invariant exceptions, policy exceptions, unmatched policy, invalid lifecycle transitions, action mutation, resource/descriptor mutation, and audit unavailability all fail closed.
+Unknown, malformed, tampered, replayed, stale, misbound, or out-of-order evidence; invariant/policy errors; lifecycle races; action/resource mutation; capacity exhaustion; and audit failures all fail closed.
 
-## Immutable authorization inputs
+## Immutable and fully bound authorization inputs
 
-`Action` attributes and authenticated telemetry payloads are recursively snapshotted into immutable JSON-like structures. This prevents a caller from changing nested values after authorization or between telemetry verification and policy/invariant evaluation.
+`Action.attributes` and telemetry payloads are recursively snapshotted into immutable JSON-like values. Mapping keys must be strings and non-finite floats (`NaN`, `+/-inf`) are rejected before they can reach authorization hashing.
 
-Canonical serialization rejects non-string mapping keys rather than coercing them. This keeps the authenticated representation injective with respect to mapping key types and avoids collisions such as a string key and a numerically typed key normalizing to the same text.
+Every `TelemetryEnvelope` contains an authenticated SHA-256 digest of the **complete canonical `Action`**: action ID, subject, operation, resource, and attributes. Reusing valid telemetry with a different action that merely shares the same ID therefore fails before policy evaluation.
 
 ## Provenance, capability, and resource binding
 
-`control_provenance_invariant()` keeps security-sensitive `subject`, `operation`, and `resource` control fields restricted to configured trusted origins. The default trusted set is `runtime`, `user_intent`, and `trusted_plan`. Model output, tool output, external data, memory, retrieval output, MCP/tool descriptors, peer-agent messages, and perception-derived content remain untrusted control inputs by default.
+`control_provenance_invariant()` restricts security-sensitive `subject`, `operation`, and `resource` control fields to configured trusted origins. The default trusted origins are `runtime`, `user_intent`, and `trusted_plan`. Model output, tool output, external data, memory, retrieval output, MCP/tool descriptors, peer-agent messages, and perception-derived content remain untrusted control inputs by default.
 
-`capability_scope_invariant()` separately constrains the authenticated subject, operation, and resource scope. Passing provenance checks therefore does not imply broad authority.
+`capability_scope_invariant()` separately constrains the authenticated subject, operation, and resource scope.
 
-`resource_binding_invariant()` binds an approved SHA-256 resource/descriptor digest to the digest observed by trusted runtime instrumentation at enforcement time. A changed or malformed binding fails closed. This covers approval-to-use mutation surfaces such as a tool descriptor changing after review.
+`resource_binding_invariant()` compares decoded SHA-256 digest bytes for the approved and runtime-observed resource/tool descriptor, so equivalent upper/lowercase hexadecimal encodings compare correctly while real descriptor mutation fails closed.
 
-Provenance labels, capability metadata, and observed resource digests must come from trusted instrumentation; HALO does not trust a model, tool, peer agent, or remote server to self-declare its own privilege.
+Provenance labels, capabilities, and observed resource digests must come from trusted instrumentation; HALO does not trust a model, tool, peer agent, or remote server to self-declare privilege.
 
-## Telemetry session and freshness model
+## Telemetry replay and freshness
 
-Every `TelemetryEnvelope` carries an authenticated `session_id` and `issued_at_ms`. `TelemetryVerifier` requires a configured session identifier and rejects envelopes from any other session, envelopes older than `max_age_ms`, and envelopes too far in the future.
+Every envelope carries authenticated `session_id` and `issued_at_ms`. The verifier rejects wrong sessions, expired evidence, excessive future skew, gaps, reordering, replay, and chain substitution.
 
-The trusted runtime **must generate a fresh, non-reused session identifier for every verifier/process lifetime**. This is the restart replay defense: a valid envelope captured from a previous process lifetime cannot be accepted by the new verifier even though the in-memory sequence head was reset. If a deployment cannot guarantee non-reused sessions, it must instead provide durable trusted replay state before relying on this property.
+The trusted runtime **must generate a fresh, non-reused session identifier for every verifier/process lifetime**. If that cannot be guaranteed, durable trusted replay state is required instead.
 
-Within one session, per-source sequence and digest chaining detect replay, gaps, reordering, and chain substitution. Concurrent producers sharing one source identity must serialize emission or use distinct source identities.
+Within a process, replay-state read/check/update is serialized so two concurrent copies of the same next envelope cannot both verify successfully.
 
-## Audit concurrency and durability
+## Lifecycle concurrency and bounded state
 
-Audit records are canonical JSONL records with SHA-256 hash chaining and HMAC authentication. Appends take an OS-backed sidecar lock, re-verify/refresh the current head while that lock is held, then append and `fsync()` before returning. This prevents separate `HashChainAuditLog` instances/processes that opened the same path from independently appending conflicting sequence numbers.
+PRE reservation is atomic. A per-action lock is acquired before the state becomes visible, preventing concurrent PRE/LIVE/POST calls from observing a partially authorized lifecycle.
 
-The audit file alone is still not deletion-proof or rollback-proof if an attacker controls the filesystem and can replace the entire file with an older valid prefix. Production deployments should periodically export or anchor the audit head to a separately trusted sink.
+Only active actions stay in `_state`; completed or denied action IDs move to a bounded, expiring recent-ID set. `max_active_actions` is a hard fail-closed capacity rather than an eviction policy. Recent-ID retention is bounded by both capacity and TTL, preventing unbounded memory growth.
 
-## Why these choices
+The permanent uniqueness guarantee therefore applies only while an action is active or retained in the recent-ID window. Replay protection beyond that window relies on authenticated session/sequence telemetry and deployment-level idempotency for external side effects.
 
-- **Complete mediation:** Saltzer & Schroeder argue every access to every object should be checked, and warn against blindly caching authority decisions. PRE/LIVE/POST make mediation explicit over an action lifecycle.
-- **PDP/PEP separation:** NIST SP 800-207 separates policy decisions from enforcement at the protected resource boundary. `PolicyEngine` is the decision component; `HALOEnforcer` is the enforcement point.
-- **Authenticated, fresh telemetry:** enforcement cannot be stronger than the evidence it consumes. HMAC-SHA256 authenticates envelopes; session binding, timestamp bounds, sequence numbers, and digest chaining constrain replay and staleness under the stated trusted-runtime assumptions.
-- **Fail closed:** uncertainty or malformed evidence is not converted into permission. Even verifier exceptions are converted to DENY at the public enforcement path.
-- **Strict policy effects:** `PolicyRule.effect` must be an actual `Verdict`; dynamically loaded strings cannot silently fall through into an allow path.
-- **Tamper-evident audit:** each JSONL record is canonically serialized, hash chained, HMAC authenticated, cross-instance serialized, and flushed before ALLOW is returned.
-- **Control/data separation:** content can remain usable as data while being denied authority over security-sensitive control fields.
-- **Approval/use binding:** mutable tools or resources are re-bound to an authenticated digest rather than trusting an earlier description indefinitely.
+## Audit commit protocol
 
-## Non-guarantees
+Audit events are recursively snapshotted once before hashing and serialization. A caller cannot mutate nested metadata between the hash operation and the bytes written to disk.
 
-HMAC integrity assumes keys remain outside the untrusted model/agent boundary. Session replay resistance assumes session identifiers are generated by trusted runtime code and never reused across process lifetimes. Provenance and resource-binding guarantees assume trusted instrumentation labels and hashes the real data/tool/resource seen at the protected boundary.
+The log uses:
 
-`POST` cannot retroactively prevent side effects that already occurred. Irreversible effects therefore need PRE and, for long-running actions, LIVE mediation before the effect boundary.
+- canonical JSONL records;
+- SHA-256 hash chaining and HMAC authentication;
+- an OS-backed cross-instance/process append lock;
+- an HMAC-authenticated `.head` checkpoint containing committed count, head hash, and byte length.
 
-A Python object being immutable does not create OS/process isolation. The protected tool/resource must remain unreachable except through the HALO enforcement point.
+The checkpoint is the **commit point**. An append writes and `fsync()`s the record first, then atomically replaces the authenticated checkpoint. If record durability or checkpoint commit fails, HALO truncates the log back to the previously committed byte length. On restart, bytes beyond the authenticated checkpoint are treated as an uncommitted tail and removed rather than promoted.
+
+A non-empty audit file with no authenticated checkpoint fails closed. Steady-state appends use the authenticated checkpoint and are O(1) in history length; startup and explicit `verify_file()` still perform O(N) full-history verification.
+
+This trades per-request full-history rescans for an authenticated committed head. Consequently, same-length retroactive modification of already committed historical bytes is detected by startup/explicit verification, not by every steady-state append. Production deployments should protect the log/checkpoint storage and export or anchor committed heads to a separately trusted/WORM sink.
+
+The local log and checkpoint can still be rolled back together by an attacker who controls the filesystem. External head anchoring is required to detect whole-prefix rollback.
+
+## Configuration validation
+
+Hard invariants and policy rules require non-empty, typed phase sets. A malformed empty invariant phase set cannot silently disable a safety invariant. Policy effects must be actual `Verdict` values.
 
 ## Prior work checked before implementation
 
-- Saltzer & Schroeder, *The Protection of Information in Computer Systems* (1975): complete mediation, least privilege, open design.
-- NIST SP 800-207, *Zero Trust Architecture* (2020): policy decision point / policy enforcement point separation and per-request authorization.
-- Crosby & Wallach, *Efficient Data Structures for Tamper-Evident Logging* (USENIX Security 2009): authenticated history structures and scaling limits of simple hash chains.
-- Prompt-injection and agent-security literature summarized in `PAPER_ATTACK_COVERAGE.md`, including control/data separation, persistent-memory poisoning, RAG poisoning, tool/MCP poisoning, multi-agent propagation, and multimodal/perception injection.
-- Recent model-agnostic agent runtime/audit architectures are used as architectural references, not evidence that HALO itself is secure.
+- Saltzer & Schroeder, *The Protection of Information in Computer Systems* (1975): complete mediation and least privilege.
+- NIST SP 800-207, *Zero Trust Architecture* (2020): policy decision/enforcement separation and per-request authorization.
+- Crosby & Wallach, *Efficient Data Structures for Tamper-Evident Logging* (USENIX Security 2009): authenticated history structures and limits of naive hash-chain verification.
+- Prompt-injection and agent-security literature summarized in `PAPER_ATTACK_COVERAGE.md`, including control/data separation, persistent-memory poisoning, RAG poisoning, MCP/tool poisoning, multi-agent propagation, and multimodal/perception injection.
+- Recent agent-runtime/audit architectures are treated as architectural references, not evidence that HALO itself is secure.
 
 ## Public API
 
@@ -90,8 +96,6 @@ A Python object being immutable does not create OS/process isolation. The protec
 
 ## Minimal integration shape
 
-A protected adapter should construct an immutable `Action`, obtain telemetry from a trusted source bound to the current non-reused runtime session, call `pre()`, and execute nothing unless the decision is ALLOW. Long-running actions should call `live()` at relevant effect boundaries. Completion/failure state should be passed through `post()` for final policy/invariant evaluation and audit.
+A trusted adapter constructs the immutable `Action`, produces telemetry over that exact action, calls `pre()`, and performs no protected side effect unless ALLOW is returned. Long-running actions call `live()` at meaningful effect boundaries, and completion/failure is passed through `post()`.
 
-For mutable tool/resource definitions, trusted runtime instrumentation should hash the approved descriptor and the descriptor actually observed at the effect boundary and provide both through authenticated telemetry for `resource_binding_invariant()`.
-
-The protected tool/resource must not remain directly reachable from the untrusted model, otherwise complete mediation is not satisfied.
+The protected tool/resource must not remain directly reachable from the untrusted model; otherwise complete mediation is not satisfied.
