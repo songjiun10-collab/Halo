@@ -1,0 +1,134 @@
+{
+  "accuracy_optimal": {
+    "attack_tpr": 0.8857900000000001,
+    "false_positive_rate": 0.05058,
+    "group_tpr": {
+      "hard_family": 0.46335,
+      "known_family": 0.9914
+    },
+    "threshold": 0.49499999999999994,
+    "worst_group_tpr": 0.46335
+  },
+  "shifted": {
+    "0.00": {
+      "accuracy_optimal": {
+        "attack_tpr": 0.9914,
+        "false_positive_rate": 0.05058,
+        "group_tpr": {
+          "hard_family": 0.46335,
+          "known_family": 0.9914
+        },
+        "threshold": 0.49499999999999994,
+        "worst_group_tpr": 0.46335
+      },
+      "worst_group_constrained": {
+        "attack_tpr": 0.997425,
+        "false_positive_rate": 0.09645,
+        "group_tpr": {
+          "hard_family": 0.5806,
+          "known_family": 0.997425
+        },
+        "threshold": 0.44499999999999995,
+        "worst_group_tpr": 0.5806
+      }
+    },
+    "0.25": {
+      "accuracy_optimal": {
+        "attack_tpr": 0.8593875,
+        "false_positive_rate": 0.05058,
+        "group_tpr": {
+          "hard_family": 0.46335,
+          "known_family": 0.9914
+        },
+        "threshold": 0.49499999999999994,
+        "worst_group_tpr": 0.46335
+      },
+      "worst_group_constrained": {
+        "attack_tpr": 0.8932187500000001,
+        "false_positive_rate": 0.09645,
+        "group_tpr": {
+          "hard_family": 0.5806,
+          "known_family": 0.997425
+        },
+        "threshold": 0.44499999999999995,
+        "worst_group_tpr": 0.5806
+      }
+    },
+    "0.50": {
+      "accuracy_optimal": {
+        "attack_tpr": 0.727375,
+        "false_positive_rate": 0.05058,
+        "group_tpr": {
+          "hard_family": 0.46335,
+          "known_family": 0.9914
+        },
+        "threshold": 0.49499999999999994,
+        "worst_group_tpr": 0.46335
+      },
+      "worst_group_constrained": {
+        "attack_tpr": 0.7890125,
+        "false_positive_rate": 0.09645,
+        "group_tpr": {
+          "hard_family": 0.5806,
+          "known_family": 0.997425
+        },
+        "threshold": 0.44499999999999995,
+        "worst_group_tpr": 0.5806
+      }
+    },
+    "0.75": {
+      "accuracy_optimal": {
+        "attack_tpr": 0.5953625,
+        "false_positive_rate": 0.05058,
+        "group_tpr": {
+          "hard_family": 0.46335,
+          "known_family": 0.9914
+        },
+        "threshold": 0.49499999999999994,
+        "worst_group_tpr": 0.46335
+      },
+      "worst_group_constrained": {
+        "attack_tpr": 0.6848062500000001,
+        "false_positive_rate": 0.09645,
+        "group_tpr": {
+          "hard_family": 0.5806,
+          "known_family": 0.997425
+        },
+        "threshold": 0.44499999999999995,
+        "worst_group_tpr": 0.5806
+      }
+    },
+    "1.00": {
+      "accuracy_optimal": {
+        "attack_tpr": 0.46335,
+        "false_positive_rate": 0.05058,
+        "group_tpr": {
+          "hard_family": 0.46335,
+          "known_family": 0.9914
+        },
+        "threshold": 0.49499999999999994,
+        "worst_group_tpr": 0.46335
+      },
+      "worst_group_constrained": {
+        "attack_tpr": 0.5806,
+        "false_positive_rate": 0.09645,
+        "group_tpr": {
+          "hard_family": 0.5806,
+          "known_family": 0.997425
+        },
+        "threshold": 0.44499999999999995,
+        "worst_group_tpr": 0.5806
+      }
+    }
+  },
+  "worst_group_constrained": {
+    "attack_tpr": 0.9140600000000001,
+    "false_positive_rate": 0.09645,
+    "group_tpr": {
+      "hard_family": 0.5806,
+      "known_family": 0.997425
+    },
+    "threshold": 0.44499999999999995,
+    "worst_group_tpr": 0.5806
+  }
+}
