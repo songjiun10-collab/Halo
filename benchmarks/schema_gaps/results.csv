@@ -1,8 +1,8 @@
 case,expected,actual,bypassed,gap
 external_write_action_alias,deny,allow,true,effect classification depends on a closed action-name set
 privileged_action_alias,deny,allow,true,privilege classification depends on a closed action-name set
-unknown_declared_scope,review,allow,true,unknown declared scope is ranked above known scopes instead of failing closed
-secret_metadata_not_bound,deny,allow,true,secret-egress rule trusts one boolean and ignores inconsistent classification metadata
+unknown_declared_scope,review,quarantine,false,unknown declared scope is ranked above known scopes instead of failing closed
+secret_metadata_not_bound,deny,quarantine,false,secret-egress rule trusts one boolean and ignores inconsistent classification metadata
 approval_target_replay,deny,allow,true,approval boolean is not cryptographically/logically bound to target scope
 empty_expected_digest,deny,deny,false,"artifact check uses truthiness, so an empty expected digest disables comparison"
 unknown_instruction_provenance,review,quarantine,false,unknown provenance is treated as neither trusted nor untrusted
