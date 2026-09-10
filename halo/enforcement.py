@@ -46,7 +46,7 @@ class HALOEnforcer:
             return self._commit(self._deny(action, Phase.PRE, "action_id already exists"))
 
         state = _LifecycleState(action_digest=self._action_digest(action))
-        self._state[action.action_id] = state  # reserve IDs even when PRE is denied
+        self._state[action.action_id] = state
         decision = self._evaluate(action, Phase.PRE, telemetry)
         state.pre_allowed = decision.allowed
         return decision
@@ -84,33 +84,37 @@ class HALOEnforcer:
         phase: Phase,
         telemetry: TelemetryEnvelope,
     ) -> EnforcementDecision:
-        ok, telemetry_reason = self._telemetry.verify(
-            telemetry,
-            phase=phase,
-            action_id=action.action_id,
-        )
+        try:
+            ok, telemetry_reason = self._telemetry.verify(
+                telemetry,
+                phase=phase,
+                action_id=action.action_id,
+            )
+        except Exception as exc:
+            ok = False
+            telemetry_reason = f"telemetry verification error: {type(exc).__name__}"
+
         telemetry_check = CheckResult(
             name="telemetry_integrity",
             status=CheckStatus.PASS if ok else CheckStatus.FAIL,
             reason="" if ok else telemetry_reason,
         )
         if not ok:
-            return self._commit(
-                self._deny(action, phase, telemetry_reason, (telemetry_check,))
-            )
+            return self._commit(self._deny(action, phase, telemetry_reason, (telemetry_check,)))
 
-        invariant_checks = self._invariants.evaluate(action, phase, telemetry.payload)
+        # TelemetryEnvelope freezes payloads on construction, so policy and
+        # invariants evaluate exactly the authenticated snapshot.
+        payload = telemetry.payload
+        invariant_checks = self._invariants.evaluate(action, phase, payload)
         checks = (telemetry_check, *invariant_checks)
         bad = next(
             (check for check in invariant_checks if check.status is not CheckStatus.PASS),
             None,
         )
         if bad is not None:
-            return self._commit(
-                self._deny(action, phase, bad.reason or bad.name, checks)
-            )
+            return self._commit(self._deny(action, phase, bad.reason or bad.name, checks))
 
-        policy = self._policy.decide(action, phase, telemetry.payload)
+        policy = self._policy.decide(action, phase, payload)
         decision = EnforcementDecision(
             verdict=policy.verdict,
             phase=phase,
@@ -145,7 +149,6 @@ class HALOEnforcer:
             self._audit.append_decision(decision)
             return decision
         except Exception as exc:
-            # Return ALLOW only after the audit sink has accepted the decision.
             if decision.verdict is Verdict.DENY:
                 return decision
             return EnforcementDecision(
