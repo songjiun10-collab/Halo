@@ -37,7 +37,7 @@ class Event:
     """
 
     kind: str
-    provenance: str = "trusted"  # trusted | untrusted | unknown
+    provenance: str = "unknown"  # trusted | untrusted | unknown
     action: str | None = None
     target_scope: str | None = None
     declared_scope: str | None = None
@@ -99,12 +99,18 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                 "Policy-relevant telemetry is incomplete; do not assume absence of risk.",
             ))
 
-        if e.kind == "instruction" and e.provenance == "untrusted":
-            saw_untrusted_instruction = True
-            findings.append(Finding(
-                Signal.UNTRUSTED_INSTRUCTION, i, 3,
-                "Instruction originated from an untrusted data channel.",
-            ))
+        if e.kind == "instruction":
+            if e.provenance == "untrusted":
+                saw_untrusted_instruction = True
+                findings.append(Finding(
+                    Signal.UNTRUSTED_INSTRUCTION, i, 3,
+                    "Instruction originated from an untrusted data channel.",
+                ))
+            elif e.provenance != "trusted":
+                findings.append(Finding(
+                    Signal.MONITORING_GAP, i, 4,
+                    "Instruction provenance is unknown or invalid; authority cannot be established.",
+                ))
 
         if e.action in PRIVILEGED_ACTIONS and not e.approved:
             findings.append(Finding(
@@ -112,18 +118,33 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                 "Privilege-changing action lacks independent approval.",
             ))
 
-        if e.contains_secret and e.target_scope == "external":
+        is_external_write = e.effect == "external_write" or e.action in EXTERNAL_WRITE_ACTIONS
+
+        # Secret-bearing external effects may proceed only through the modeled
+        # independent approval path. Without approval, exfiltration is a hard finding.
+        if e.contains_secret and e.target_scope == "external" and not e.approved:
             findings.append(Finding(
                 Signal.SECRET_EGRESS, i, 5,
-                "Secret-bearing data is being sent outside the trusted scope.",
+                "Secret-bearing data is being sent outside the trusted scope without independent approval.",
             ))
 
-        if e.action in EXTERNAL_WRITE_ACTIONS and e.target_scope == "external":
+        if is_external_write:
+            # The effect classification itself establishes that independent approval
+            # is required, regardless of the normalized destination label.
             if not e.approved:
                 findings.append(Finding(
                     Signal.UNEXPECTED_EXTERNAL_WRITE, i, 5,
                     "External side effect is not independently approved.",
                 ))
+
+            # Policy-critical destination metadata is required. Missing scope is
+            # uncertainty, not evidence that the action is local or safe.
+            if e.target_scope is None:
+                findings.append(Finding(
+                    Signal.MONITORING_GAP, i, 4,
+                    "External-write effect is missing required destination scope telemetry.",
+                ))
+
             if saw_untrusted_instruction:
                 findings.append(Finding(
                     Signal.UNTRUSTED_INSTRUCTION, i, 5,
@@ -136,18 +157,33 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                 "Action target exceeds the scope declared for the task.",
             ))
 
-        if e.metadata.get("state_version") is not None and e.metadata.get("approved_state_version") is not None:
-            if e.metadata["state_version"] != e.metadata["approved_state_version"]:
+        state_present = "state_version" in e.metadata
+        approved_state_present = "approved_state_version" in e.metadata
+        if state_present or approved_state_present:
+            state = e.metadata.get("state_version")
+            approved_state = e.metadata.get("approved_state_version")
+            if not state_present or not approved_state_present or state is None or approved_state is None:
+                findings.append(Finding(
+                    Signal.MONITORING_GAP, i, 4,
+                    "Freshness validation requires both approved and effect-time state versions.",
+                ))
+            elif state != approved_state:
                 findings.append(Finding(
                     Signal.STATE_MISMATCH, i, 4,
                     "Authorization was made against a different world-state version.",
                 ))
 
-        if e.metadata.get("expected_artifact_digest") and e.metadata.get("artifact_digest"):
-            if e.metadata["expected_artifact_digest"] != e.metadata["artifact_digest"]:
+        # Presence of an independently expected digest creates an obligation to
+        # report the observed digest. Missing/falsy observed values cannot disable
+        # validation via truthiness.
+        if "expected_artifact_digest" in e.metadata:
+            expected = e.metadata.get("expected_artifact_digest")
+            observed_present = "artifact_digest" in e.metadata
+            observed = e.metadata.get("artifact_digest")
+            if not observed_present or expected != observed:
                 findings.append(Finding(
                     Signal.ARTIFACT_MISMATCH, i, 5,
-                    "Produced artifact differs from the independently expected digest.",
+                    "Produced artifact digest is missing or differs from the independently expected digest.",
                 ))
 
         if bool(e.metadata.get("evaluation_probe")):

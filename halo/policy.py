@@ -44,6 +44,14 @@ def decide(findings: Iterable[Finding], *, effectful: bool = False) -> PolicyRes
             tuple(f.reason for f in findings if f.signal in hard_denies),
         )
 
+    # A stale approval on an effectful action is stricter than a telemetry
+    # quarantine. If findings overlap, the strongest applicable decision wins.
+    if effectful and Signal.STATE_MISMATCH in signals:
+        return PolicyResult(
+            Decision.DENY,
+            ("Effect-time state no longer matches the state that was approved.",),
+        )
+
     # Missing observability plus an effectful action means the safety claim cannot
     # be evaluated reliably; preserve the evidence and isolate the action instead
     # of interpreting missing telemetry as benign.
@@ -51,13 +59,6 @@ def decide(findings: Iterable[Finding], *, effectful: bool = False) -> PolicyRes
         return PolicyResult(
             Decision.QUARANTINE,
             ("Effectful action cannot be authorized with incomplete telemetry.",),
-        )
-
-    # A stale approval is only promoted to a hard stop when it gates a real effect.
-    if effectful and Signal.STATE_MISMATCH in signals:
-        return PolicyResult(
-            Decision.DENY,
-            ("Effect-time state no longer matches the state that was approved.",),
         )
 
     review_signals = {
