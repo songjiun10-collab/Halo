@@ -146,7 +146,11 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
             e.kind == "tool"
             and not is_policy_effect
             and not known_safe_action
-            and (e.effect is None or e.effect not in VALID_EFFECTS)
+            and (
+                e.effect is None
+                or not isinstance(e.effect, str)
+                or e.effect not in VALID_EFFECTS
+            )
         )
         event_effectful = is_policy_effect or unknown_tool_effect
 
@@ -170,7 +174,6 @@ def evaluate_trace(events: Sequence[Event]) -> list[Finding]:
                 Signal.MONITORING_GAP,
                 4,
                 "Event kind is unknown or invalid; event semantics cannot be established.",
-                effectful=False,
             )
 
         if not action_is_text:
