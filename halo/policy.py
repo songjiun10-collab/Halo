@@ -16,6 +16,18 @@ class PolicyRule:
     predicate: PolicyPredicate
     phases: frozenset[Phase] = frozenset({Phase.PRE, Phase.LIVE, Phase.POST})
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise TypeError("policy rule name must be a non-empty string")
+        if not isinstance(self.effect, Verdict):
+            raise TypeError("policy rule effect must be a Verdict")
+        if not callable(self.predicate):
+            raise TypeError("policy rule predicate must be callable")
+        if not isinstance(self.phases, frozenset) or not self.phases:
+            raise TypeError("policy rule phases must be a non-empty frozenset")
+        if any(not isinstance(phase, Phase) for phase in self.phases):
+            raise TypeError("policy rule phases must contain only Phase values")
+
 
 @dataclass(frozen=True, slots=True)
 class PolicyResult:
@@ -29,6 +41,8 @@ class PolicyEngine:
 
     def __init__(self, rules: Iterable[PolicyRule] = ()):
         self._rules = tuple(rules)
+        if any(not isinstance(rule, PolicyRule) for rule in self._rules):
+            raise TypeError("rules must contain only PolicyRule values")
         names = [rule.name for rule in self._rules]
         if len(set(names)) != len(names):
             raise ValueError("policy rule names must be unique")
@@ -48,7 +62,10 @@ class PolicyEngine:
                 continue
             if rule.effect is Verdict.DENY:
                 return PolicyResult(Verdict.DENY, rule.name, "explicit deny rule matched")
-            matched_allow = matched_allow or rule.name
+            if rule.effect is Verdict.ALLOW:
+                matched_allow = matched_allow or rule.name
+            else:
+                return PolicyResult(Verdict.DENY, rule.name, "invalid policy effect")
 
         if matched_allow is not None:
             return PolicyResult(Verdict.ALLOW, matched_allow, "explicit allow rule matched")
