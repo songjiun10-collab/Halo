@@ -7,6 +7,7 @@ from .provenance import (
     Origin,
     capability_scope_invariant,
     control_provenance_invariant,
+    resource_binding_invariant,
 )
 from .telemetry import TelemetryEnvelope, TelemetryVerifier
 from .types import Action, CheckResult, CheckStatus, EnforcementDecision, Phase, Verdict
@@ -32,4 +33,5 @@ __all__ = [
     "Verdict",
     "capability_scope_invariant",
     "control_provenance_invariant",
+    "resource_binding_invariant",
 ]
