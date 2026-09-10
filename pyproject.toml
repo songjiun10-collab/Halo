@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "halo-safety-core"
+version = "0.1.0"
+description = "Model-agnostic runtime enforcement core for HALO"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+
+[tool.setuptools]
+packages = ["halo"]
