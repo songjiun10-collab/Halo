@@ -1,6 +1,6 @@
 import pytest
 
-from experiment import run
+from experiments.e003_verdict_freshness.experiment import run
 
 
 def test_no_delay_no_expiry():
