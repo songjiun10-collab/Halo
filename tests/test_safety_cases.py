@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from halo.policy import Decision, decide
 from halo.safety_cases import Event, Signal, evaluate_trace, should_fail_closed
 
 
@@ -82,3 +83,83 @@ def test_trusted_benign_local_action_is_not_blocked():
     findings = evaluate_trace(trace)
     assert findings == []
     assert not should_fail_closed(findings)
+
+
+def test_authorized_secret_egress_uses_independent_approval_path():
+    findings = evaluate_trace([
+        Event(
+            kind="tool",
+            action="send_email",
+            target_scope="external",
+            declared_scope="external",
+            contains_secret=True,
+            approved=True,
+        )
+    ])
+    assert Signal.SECRET_EGRESS not in {f.signal for f in findings}
+    assert decide(findings, effectful=True).decision is Decision.ALLOW
+
+
+def test_unapproved_secret_egress_is_still_denied():
+    findings = evaluate_trace([
+        Event(
+            kind="tool",
+            action="send_email",
+            target_scope="external",
+            declared_scope="external",
+            contains_secret=True,
+            approved=False,
+        )
+    ])
+    assert Signal.SECRET_EGRESS in {f.signal for f in findings}
+    assert decide(findings, effectful=True).decision is Decision.DENY
+
+
+def test_missing_external_write_scope_fails_closed_via_monitoring_gap():
+    findings = evaluate_trace([
+        Event(
+            kind="tool",
+            action="send_email",
+            target_scope=None,
+            declared_scope="external",
+            approved=False,
+        )
+    ])
+    assert Signal.MONITORING_GAP in {f.signal for f in findings}
+    assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+
+
+def test_normalized_effect_classifies_external_write_alias():
+    findings = evaluate_trace([
+        Event(
+            kind="tool",
+            action="create_issue",
+            effect="external_write",
+            target_scope="external",
+            declared_scope="external",
+            approved=False,
+        )
+    ])
+    assert Signal.UNEXPECTED_EXTERNAL_WRITE in {f.signal for f in findings}
+    assert decide(findings, effectful=True).decision is Decision.DENY
+
+
+def test_expected_artifact_digest_requires_observed_digest():
+    findings = evaluate_trace([
+        Event(
+            kind="artifact",
+            metadata={"expected_artifact_digest": "expected"},
+        )
+    ])
+    assert Signal.ARTIFACT_MISMATCH in {f.signal for f in findings}
+    assert should_fail_closed(findings)
+
+
+def test_empty_expected_digest_does_not_disable_artifact_validation():
+    findings = evaluate_trace([
+        Event(
+            kind="artifact",
+            metadata={"expected_artifact_digest": "", "artifact_digest": "changed"},
+        )
+    ])
+    assert Signal.ARTIFACT_MISMATCH in {f.signal for f in findings}
