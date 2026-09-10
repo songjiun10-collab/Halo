@@ -24,6 +24,8 @@ from halo.types import CheckStatus
 
 KEY = b"paper-regression-telemetry"
 AUDIT_KEY = b"paper-regression-audit"
+SESSION = "paper-regression-session"
+NOW = 1_900_000_000_000
 
 
 def _action(
@@ -58,12 +60,20 @@ def _evaluate(payload: dict, action: Action | None = None):
 
 def _enforcer(tmp_path):
     return HALOEnforcer(
-        telemetry=TelemetryVerifier({"runtime": KEY}),
+        telemetry=TelemetryVerifier(
+            {"runtime": KEY}, session_id=SESSION, clock_ms=lambda: NOW
+        ),
         invariants=InvariantEngine(
             [control_provenance_invariant(), capability_scope_invariant()]
         ),
         policy=PolicyEngine(
-            [PolicyRule("allow_if_boundary_passes", Verdict.ALLOW, lambda a, p, t: True)]
+            [
+                PolicyRule(
+                    "allow_if_boundary_passes",
+                    Verdict.ALLOW,
+                    lambda a, p, t: True,
+                )
+            ]
         ),
         audit=HashChainAuditLog(tmp_path / "audit.jsonl", key=AUDIT_KEY),
     )
@@ -73,10 +83,12 @@ def _sealed(action: Action, payload: dict) -> TelemetryEnvelope:
     return TelemetryEnvelope.seal(
         key=KEY,
         source="runtime",
+        session_id=SESSION,
         sequence=0,
         phase=Phase.PRE,
         action_id=action.action_id,
         payload=payload,
+        issued_at_ms=NOW,
     )
 
 
@@ -114,13 +126,17 @@ def test_missing_or_unknown_provenance_fails():
 
 
 def test_capability_prevents_operation_escalation():
-    checks = _evaluate(_trusted_payload(), _action(operation="delete"))
-    assert checks[1].status is CheckStatus.FAIL
+    assert (
+        _evaluate(_trusted_payload(), _action(operation="delete"))[1].status
+        is CheckStatus.FAIL
+    )
 
 
 def test_capability_prevents_resource_diversion():
-    checks = _evaluate(_trusted_payload(), _action(resource="restricted_store"))
-    assert checks[1].status is CheckStatus.FAIL
+    assert (
+        _evaluate(_trusted_payload(), _action(resource="restricted_store"))[1].status
+        is CheckStatus.FAIL
+    )
 
 
 def test_capability_prevents_subject_spoofing():
@@ -181,7 +197,9 @@ PAPER_ATTACK_FAMILIES = [
 
 
 @pytest.mark.parametrize("family,origin", PAPER_ATTACK_FAMILIES)
-def test_paper_attack_family_cannot_become_trusted_control(family: str, origin: str):
+def test_paper_attack_family_cannot_become_trusted_control(
+    family: str, origin: str
+):
     payload = _trusted_payload()
     payload["attack_family"] = family
     payload["control_provenance"]["operation"] = [origin]
