@@ -100,3 +100,71 @@ def test_duplicate_event_id_is_ambiguous_context():
         Event(kind="observation", metadata={"event_id": "same"})
     ])
     assert any(f.signal is Signal.MONITORING_GAP for f in findings)
+
+
+def test_exact_count_mismatch_is_state_mismatch():
+    findings = ContextMonitor().evaluate_session(
+        [Event(kind="observation", metadata={"observed_counts": {"records": 41}})],
+        TraceContract(expected_counts=(("records", 40),)),
+    )
+    assert any(f.signal is Signal.STATE_MISMATCH for f in findings)
+
+
+def test_exact_count_match_is_clean():
+    findings = ContextMonitor().evaluate_session(
+        [Event(kind="observation", metadata={"observed_counts": {"records": 40}})],
+        TraceContract(expected_counts=(("records", 40),)),
+    )
+    assert findings == []
+
+
+def test_missing_or_malformed_count_fails_closed():
+    contract = TraceContract(expected_counts=(("records", 40),))
+    missing = ContextMonitor().evaluate_session(
+        [Event(kind="observation", metadata={})], contract
+    )
+    malformed = ContextMonitor().evaluate_session(
+        [Event(kind="observation", metadata={"observed_counts": {"records": True}})],
+        contract,
+    )
+    assert any(f.signal is Signal.MONITORING_GAP for f in missing)
+    assert any(f.signal is Signal.MONITORING_GAP for f in malformed)
+
+
+def test_conflicting_trusted_counts_are_ambiguous():
+    findings = ContextMonitor().evaluate_session(
+        [
+            Event(kind="observation", metadata={"observed_counts": {"records": 40}}),
+            Event(kind="observation", metadata={"observed_counts": {"records": 41}}),
+        ],
+        TraceContract(expected_counts=(("records", 40),)),
+    )
+    assert any(f.signal is Signal.MONITORING_GAP for f in findings)
+
+
+def test_environment_binding_must_match_trusted_profile():
+    findings = ContextMonitor().evaluate_session(
+        [Event(kind="tool", action="compute", effect="local_compute", metadata={
+            "environment_binding": "profile-standard",
+        })],
+        TraceContract(environment_fingerprint="profile-nonstandard"),
+    )
+    assert any(f.signal is Signal.STATE_MISMATCH for f in findings)
+
+
+def test_environment_binding_match_is_clean():
+    findings = ContextMonitor().evaluate_session(
+        [Event(kind="tool", action="compute", effect="local_compute", metadata={
+            "environment_binding": "profile-v2",
+        })],
+        TraceContract(environment_fingerprint="profile-v2"),
+    )
+    assert findings == []
+
+
+def test_missing_environment_binding_is_monitoring_gap():
+    findings = ContextMonitor().evaluate_session(
+        [Event(kind="tool", action="compute", effect="local_compute", metadata={})],
+        TraceContract(environment_fingerprint="profile-v2"),
+    )
+    assert any(f.signal is Signal.MONITORING_GAP for f in findings)
