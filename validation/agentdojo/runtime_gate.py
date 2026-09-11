@@ -15,12 +15,12 @@ class GateContext:
 
 
 class HALORuntimeGate:
-    """Small integration seam for AgentDojo-style function runtimes.
+    """Final effect gate for an AgentDojo ``FunctionsRuntime`` call.
 
-    The wrapped runtime remains responsible for resolving and invoking tools. This gate
-    owns the final call into that runtime, so no protected tool effect can occur before
-    HALO PRE returns an audited ALLOW. It is deliberately independent of benchmark
-    attacks, task labels, and observed scores.
+    The wrapped runtime keeps validation/dependency/error semantics, but the call into
+    ``runtime.run_function`` is owned by this gate and happens only after HALO PRE has
+    returned an audited ALLOW. Attack labels and benchmark outcomes are intentionally
+    absent from this layer.
     """
 
     def __init__(self, *, boundary: HALOEffectBoundary, context: GateContext):
@@ -31,18 +31,24 @@ class HALORuntimeGate:
     def run_function(
         self,
         runtime: Any,
+        env: Any,
         function_name: str,
         function_args: Mapping[str, Any],
+        *,
+        raise_on_error: bool = False,
     ) -> MediatedCallResult:
         if not isinstance(function_name, str) or not function_name:
             raise TypeError("function_name must be a non-empty string")
         if not isinstance(function_args, Mapping):
             raise TypeError("function_args must be a mapping")
+        if type(raise_on_error) is not bool:
+            raise TypeError("raise_on_error must be a bool")
         run_function = getattr(runtime, "run_function", None)
         if not callable(run_function):
             raise TypeError("runtime must expose callable run_function")
 
-        # Snapshot before authorization so caller mutation cannot change the effect.
+        # Snapshot before authorization so later mutation of a model-produced mapping
+        # cannot change the effect after the authorization decision was made.
         args = dict(function_args)
         resource = self._context.resource_for_tool(function_name, args)
         payload = self._context.payload_for_tool(function_name, args)
@@ -61,5 +67,10 @@ class HALORuntimeGate:
         return self._boundary.execute(
             action=action,
             payload=payload,
-            effect=lambda: run_function(function_name, **args),
+            effect=lambda: run_function(
+                env,
+                function_name,
+                args,
+                raise_on_error=raise_on_error,
+            ),
         )
