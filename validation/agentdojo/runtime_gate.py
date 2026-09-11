@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from itertools import count
 from typing import Any, Callable, Mapping
@@ -47,9 +48,9 @@ class HALORuntimeGate:
         if not callable(run_function):
             raise TypeError("runtime must expose callable run_function")
 
-        # Snapshot before authorization so later mutation of a model-produced mapping
-        # cannot change the effect after the authorization decision was made.
-        args = dict(function_args)
+        # Deep snapshot before authorization. A shallow copy would still share nested
+        # lists/dicts with model-controlled input and permit post-decision mutation.
+        args = deepcopy(dict(function_args))
         resource = self._context.resource_for_tool(function_name, args)
         payload = self._context.payload_for_tool(function_name, args)
         if not isinstance(resource, str) or not resource:
