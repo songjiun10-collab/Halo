@@ -1,4 +1,10 @@
 from .audit import AuditRecord, HashChainAuditLog
+from .authority import (
+    attribute_authorization_invariant,
+    delegation_chain_invariant,
+    information_flow_invariant,
+    origin_bound_authority_invariant,
+)
 from .enforcement import HALOEnforcer
 from .invariants import Invariant, InvariantEngine
 from .policy import PolicyEngine, PolicyResult, PolicyRule
@@ -31,7 +37,11 @@ __all__ = [
     "TelemetryEnvelope",
     "TelemetryVerifier",
     "Verdict",
+    "attribute_authorization_invariant",
     "capability_scope_invariant",
     "control_provenance_invariant",
+    "delegation_chain_invariant",
+    "information_flow_invariant",
+    "origin_bound_authority_invariant",
     "resource_binding_invariant",
 ]
