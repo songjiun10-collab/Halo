@@ -71,3 +71,28 @@ def test_synthetic_shift_exposes_aggregate_metric_blind_spot():
         all_hard["accuracy_optimal"].attack_tpr
         == pytest.approx(aggregate.group_tpr["hard_family"])
     )
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+@pytest.mark.parametrize("source", ["benign", "attack"])
+def test_rejects_nonfinite_scores(bad, source):
+    benign = np.array([0.1, bad if source == "benign" else 0.2])
+    attacks = {"a": np.array([0.9, bad if source == "attack" else 0.8])}
+    with pytest.raises(ValueError, match="finite"):
+        evaluate(benign, attacks, threshold=0.5)
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_rejects_nonfinite_attack_weights(bad):
+    with pytest.raises(ValueError, match="finite"):
+        evaluate(np.array([0.1]), {"a": np.array([0.9])}, 0.5, {"a": bad})
+
+
+def test_large_finite_weights_do_not_overflow_aggregate():
+    metrics = evaluate(
+        np.array([0.1]),
+        {"detected": np.array([0.9]), "missed": np.array([0.1])},
+        0.5,
+        {"detected": 1e308, "missed": 1e308},
+    )
+    assert metrics.attack_tpr == pytest.approx(0.5)
