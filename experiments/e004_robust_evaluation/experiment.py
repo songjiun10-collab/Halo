@@ -147,23 +147,38 @@ def select_robust_threshold(
     max_fpr: float = 0.10,
     attack_weights: dict[str, float] | None = None,
     min_worst_group_tpr: float = 0.5,
+    min_any_group_tpr: float = 0.35,
 ) -> Metrics:
     """Select threshold with constraints on both FPR and minimum worst-group TPR."""
     if not isinstance(max_fpr, numbers.Real) or not math.isfinite(float(max_fpr)) or not 0 <= max_fpr <= 1:
         raise ValueError("max_fpr must be finite and in [0, 1]")
     if not isinstance(min_worst_group_tpr, numbers.Real) or not math.isfinite(float(min_worst_group_tpr)) or not 0 <= min_worst_group_tpr <= 1:
         raise ValueError("min_worst_group_tpr must be finite and [0, 1]")
+    if not isinstance(min_any_group_tpr, numbers.Real) or not math.isfinite(float(min_any_group_tpr)) or not 0 <= min_any_group_tpr <= 1:
+        raise ValueError("min_any_group_tpr must be finite and [0, 1]")
 
     feasible: list[Metrics] = []
     for threshold in thresholds:
         metrics = evaluate(
             benign_scores, attack_scores, float(threshold), attack_weights, enforce_balance=True
         )
-        if metrics.false_positive_rate <= max_fpr and metrics.worst_group_tpr >= min_worst_group_tpr:
+        # Add constraint: no group can have TPR below min_any_group_tpr
+        if (metrics.false_positive_rate <= max_fpr and 
+            metrics.worst_group_tpr >= min_worst_group_tpr and
+            all(tpr >= min_any_group_tpr for tpr in metrics.group_tpr.values())):
             feasible.append(metrics)
 
     if not feasible:
-        # If no threshold meets both constraints, relax the worst-group constraint
+        # If no threshold meets all constraints, relax the any-group constraint but keep worst-group
+        for threshold in thresholds:
+            metrics = evaluate(
+                benign_scores, attack_scores, float(threshold), attack_weights, enforce_balance=True
+            )
+            if metrics.false_positive_rate <= max_fpr and metrics.worst_group_tpr >= min_worst_group_tpr:
+                feasible.append(metrics)
+    
+    if not feasible:
+        # Final fallback: relax worst-group constraint
         for threshold in thresholds:
             metrics = evaluate(
                 benign_scores, attack_scores, float(threshold), attack_weights, enforce_balance=True
@@ -185,10 +200,10 @@ def select_robust_threshold(
         tpr_variance = np.var(group_tprs) if len(group_tprs) > 1 else 0.0
 
         score = (
-            metrics.worst_group_tpr * 2.0 +  # Weight worst-group heavily
-            metrics.attack_tpr * 1.0 -        # Include aggregate performance
+            metrics.worst_group_tpr * 3.0 +  # Increased weight for worst-group
+            metrics.attack_tpr * 0.5 -        # Reduced weight for aggregate
             metrics.false_positive_rate * 0.5 -  # Penalize high FPR
-            tpr_variance * 0.3                # Penalize high variance (gaming)
+            tpr_variance * 0.5                # Increased variance penalty
         )
         scored.append((score, metrics))
 

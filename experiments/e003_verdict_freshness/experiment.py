@@ -45,7 +45,8 @@ def run(
     fixed_window_revalidations = 0
 
     # Adaptive window based on volatility - smaller window for higher volatility
-    adaptive_window = max(1, freshness_window - int(volatility * 10))
+    # Use conservative calculation to ensure safety
+    adaptive_window = max(1, freshness_window - int(volatility * 2))
 
     # Progressive refresh with adaptive window
     progressive_allow = allow_at_check.copy()
@@ -64,23 +65,33 @@ def run(
             fixed_window_revalidations += 1
 
         # Progressive refresh with adaptive window based on volatility
-        if step - progressive_last_check > adaptive_window:
+        # Use very conservative window for safety, especially at low volatility
+        if volatility < 0.1:
+            # At low volatility, use half the freshness window for more frequent refresh
+            current_adaptive_window = max(1, freshness_window // 2)
+        else:
+            # At higher volatility, use the standard adaptive calculation
+            current_adaptive_window = max(1, freshness_window - int(volatility * 2))
+        if step - progressive_last_check > current_adaptive_window:
             progressive_allow = policy_allow(s, w).copy()
             progressive_last_check = step
             progressive_revalidations += 1
+    
+    # Store the actual adaptive window used for metadata
+    if volatility < 0.1:
+        final_adaptive_window = max(1, freshness_window // 2)
+    else:
+        final_adaptive_window = max(1, freshness_window - int(volatility * 2))
 
     allow_at_use = policy_allow(s, w)
     cached_allow = allow_at_check
     revalidate_allow = allow_at_use
 
     # Improved adaptive caching with volatility awareness
-    # Adaptive threshold based on volatility level
-    adaptive_cached = allow_at_check.copy()
-    if volatility > 0.1:
-        # Low to high volatility: use use-time revalidation for writes
-        adaptive_cached = np.where(is_write, allow_at_use, allow_at_check)
-    if volatility > 0.5:
-        # Very high volatility: use use-time revalidation for all operations
+    # More conservative approach: always revalidate writes, revalidate all at lower threshold
+    adaptive_cached = np.where(is_write, allow_at_use, allow_at_check)  # Always revalidate writes
+    if volatility > 0.05:
+        # Even lower threshold for full revalidation based on ultra exploit findings
         adaptive_cached = allow_at_use
 
     unsafe_now = ~allow_at_use
@@ -113,6 +124,6 @@ def run(
         "fixed_window_verdict_age": delay_steps - fixed_window_last_check_step,
         "fixed_window_revalidation_count": fixed_window_revalidations,
         "progressive_revalidation_count": progressive_revalidations,
-        "adaptive_window_size": adaptive_window,
+        "adaptive_window_size": final_adaptive_window,
         "volatility_level": volatility,
     }

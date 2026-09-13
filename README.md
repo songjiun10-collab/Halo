@@ -20,6 +20,7 @@ The project is intentionally empirical. Claims are limited to explicit threat mo
 | `E001` | How does containment degrade as trusted metadata becomes wrong? | Deterministic enforcement degraded with metadata corruption; redundant fail-closed evidence reduced containment failures but increased false blocks. |
 | `E001-B` | Does redundancy still help when safety evidence fails in correlated ways? | At 5% marginal metadata error, redundant failure rate rose from **0.187% at ρ=0** to **3.955% at ρ=1**, eliminating the redundancy benefit. |
 | `E002` | Can apparently diverse monitors still share an unseen evidence blind spot? | At ~10% FPR, the algorithm-diverse ensemble fell from **94.60% TPR** on known families to **11.42%** when attacks were entirely from the held-out blind-spot family; adding an independent evidence channel reached **97.65%** on that held-out family. |
+| `E005` | Can a model that only sees allow/block verdicts escalate its evasion over repeated queries, and does a moving-target monitor stop it? | Binary-feedback adaptation reliably escalates containment failure against a static monitor (mean +0.18, std 0.07); re-randomising the projection does not reliably reduce mean escalation (~0.14) and roughly triples outcome variance (std 0.18). |
 
 ### E001-B headline
 
@@ -52,6 +53,18 @@ Three monitors were intentionally made complementary on known attack families wh
 This is a synthetic counterexample to treating observed monitor diversity as proof of independent safety evidence. It is **not** a general theorem about AI containment or an evaluation of existing monitor ensembles.
 
 ## Reproduce
+
+The six statistical experiments also have native Rust implementations, including
+CSV sweeps, SVG figures where applicable, and a 140-scenario numerical stress
+runner. See the [Rust implementation and validation guide](rust/README.ko.md).
+The original Python implementations remain as reference implementations; Rust
+and NumPy use different random streams and do not produce identical seeded samples.
+
+```sh
+cargo build --release --locked --manifest-path rust/Cargo.toml
+cargo test --locked --manifest-path rust/Cargo.toml
+rust/target/release/halo-experiments e001 --json '{"seed":42,"n":10000,"corruption":0.05}'
+```
 
 Python 3.11+ is recommended.
 

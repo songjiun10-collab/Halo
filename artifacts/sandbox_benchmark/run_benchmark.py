@@ -92,7 +92,8 @@ def sandbox_profile(work: Path, executable: Path) -> str:
     # not a recursive read grant. Runtime trees are read-only exceptions,
     # narrowed to exactly the interpreter subtree so /opt/homebrew/etc and
     # /var are not exposed. sysctl-read and file-read-metadata are scoped to
-    # deny parent-process inspection and global filesystem fingerprinting.
+    # limit process inspection. Root listings and volume metadata remain
+    # observable; this profile is not a complete host confidentiality boundary.
     cellar = _python_cellar_root(executable)
     readable = [cellar, "/System/Library", "/usr/lib", "/usr/share", str(work)]
     filters = " ".join(f"(subpath {json.dumps(p)})" for p in readable)
@@ -105,17 +106,16 @@ def sandbox_profile(work: Path, executable: Path) -> str:
 (deny default)
 (allow process-exec {exec_rules})
 (allow sysctl-read
-      (sysctl-name-prefix "hw.")
       (sysctl-name-prefix "kern.os")
       (sysctl-name-prefix "kern.version")
-      (sysctl-name "kern.boottime")
       (sysctl-name "kern.maxfilesperproc")
       (sysctl-name "kern.maxfiles")
       (sysctl-name "machdep.cpu.brand_string"))
 (allow file-read-metadata
       (subpath {json.dumps(str(work))})
-      (subpath "/opt")
-      (subpath "/opt/homebrew")
+      (literal "/opt")
+      (literal "/opt/homebrew")
+      (literal "/opt/homebrew/Cellar")
       (subpath {json.dumps(cellar)})
       (subpath "/System/Library")
       (subpath "/usr/lib")
@@ -124,6 +124,7 @@ def sandbox_profile(work: Path, executable: Path) -> str:
 (allow file-read* {filters} (literal "/") (literal "/dev/null")
       (literal "/dev/random") (literal "/dev/urandom"))
 (allow file-write* (subpath {json.dumps(str(work))}) (literal "/dev/null"))
+(deny process-info*)
 '''
 
 
@@ -137,6 +138,14 @@ def validate_workspace(work: Path) -> None:
 def classify(case: str, result: dict, secret: str, target: Path) -> str:
     if case in BENIGN:
         return "allowed" if result.get("status") == "ok" and result.get("value") == BENIGN[case] else "error"
+    if case.endswith("write"):
+        try:
+            if target.read_bytes() != b"original":
+                return "escaped"
+        except FileNotFoundError:
+            return "escaped"
+        except OSError:
+            return "error"
     expected = "changed" if case.endswith("write") else "connected" if case == "tcp_connect" else secret
     if result.get("value") == expected:
         if case.endswith("write") and target.read_text() != "changed":
