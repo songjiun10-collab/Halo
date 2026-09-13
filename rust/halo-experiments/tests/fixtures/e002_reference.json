@@ -1,0 +1,424 @@
+[
+  {
+    "config": {
+      "operation": "protocol_scores",
+      "scores": [
+        [
+          -1,
+          0,
+          1,
+          2
+        ],
+        [
+          3.2,
+          1.1,
+          1,
+          0.3
+        ],
+        [
+          0.05,
+          0.05,
+          0.05,
+          3.4
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    "expected": {
+      "single_m1": [
+        -1.0,
+        3.2,
+        0.05,
+        0.0
+      ],
+      "algorithm_diverse": [
+        0.0,
+        1.7666666666666668,
+        0.05000000000000001,
+        0.0
+      ],
+      "evidence_diverse": [
+        2.0,
+        1.7666666666666668,
+        3.4,
+        0.0
+      ],
+      "max_pool": [
+        2.0,
+        3.2,
+        3.4,
+        0.0
+      ],
+      "weighted_max": [
+        2.0,
+        2.626666666666667,
+        3.4000000000000004,
+        0.0
+      ],
+      "hybrid_evidence": [
+        1.4,
+        2.7699999999999996,
+        2.395,
+        0.0
+      ],
+      "adaptive_evidence": [
+        2.0,
+        2.5600000000000005,
+        3.4,
+        0.0
+      ],
+      "conservative_max": [
+        1.9,
+        3.04,
+        3.23,
+        0.0
+      ]
+    }
+  },
+  {
+    "config": {
+      "operation": "calibrate_thresholds",
+      "scores": [
+        [
+          -1,
+          0,
+          1,
+          2
+        ],
+        [
+          3.2,
+          1.1,
+          1,
+          0.3
+        ],
+        [
+          0.05,
+          0.05,
+          0.05,
+          3.4
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ],
+      "target_fpr": 0
+    },
+    "expected": {
+      "single_m1": 3.2,
+      "algorithm_diverse": 1.7666666666666668,
+      "evidence_diverse": 3.4,
+      "max_pool": 3.4,
+      "weighted_max": 3.4000000000000004,
+      "hybrid_evidence": 2.7699999999999996,
+      "adaptive_evidence": 3.4,
+      "conservative_max": 3.23
+    }
+  },
+  {
+    "config": {
+      "operation": "calibrate_thresholds",
+      "scores": [
+        [
+          -1,
+          0,
+          1,
+          2
+        ],
+        [
+          3.2,
+          1.1,
+          1,
+          0.3
+        ],
+        [
+          0.05,
+          0.05,
+          0.05,
+          3.4
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ],
+      "target_fpr": 0.1
+    },
+    "expected": {
+      "single_m1": 2.255000000000001,
+      "algorithm_diverse": 1.2516666666666671,
+      "evidence_diverse": 2.9800000000000004,
+      "max_pool": 3.34,
+      "weighted_max": 3.1680000000000006,
+      "hybrid_evidence": 2.6574999999999998,
+      "adaptive_evidence": 3.148,
+      "conservative_max": 3.173
+    }
+  },
+  {
+    "config": {
+      "operation": "calibrate_thresholds",
+      "scores": [
+        [
+          -1,
+          0,
+          1,
+          2
+        ],
+        [
+          3.2,
+          1.1,
+          1,
+          0.3
+        ],
+        [
+          0.05,
+          0.05,
+          0.05,
+          3.4
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ],
+      "target_fpr": 0.5
+    },
+    "expected": {
+      "single_m1": 0.025,
+      "algorithm_diverse": 0.025000000000000005,
+      "evidence_diverse": 1.8833333333333333,
+      "max_pool": 2.6,
+      "weighted_max": 2.3133333333333335,
+      "hybrid_evidence": 1.8975,
+      "adaptive_evidence": 2.2800000000000002,
+      "conservative_max": 2.4699999999999998
+    }
+  },
+  {
+    "config": {
+      "operation": "calibrate_thresholds",
+      "scores": [
+        [
+          -1,
+          0,
+          1,
+          2
+        ],
+        [
+          3.2,
+          1.1,
+          1,
+          0.3
+        ],
+        [
+          0.05,
+          0.05,
+          0.05,
+          3.4
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ],
+      "target_fpr": 1
+    },
+    "expected": {
+      "single_m1": -1.0,
+      "algorithm_diverse": 0.0,
+      "evidence_diverse": 0.0,
+      "max_pool": 0.0,
+      "weighted_max": 0.0,
+      "hybrid_evidence": 0.0,
+      "adaptive_evidence": 0.0,
+      "conservative_max": 0.0
+    }
+  },
+  {
+    "config": {
+      "operation": "protocol_scores",
+      "scores": [
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    "expected": {
+      "single_m1": [
+        0,
+        0
+      ],
+      "algorithm_diverse": [
+        0.0,
+        0.0
+      ],
+      "evidence_diverse": [
+        0.0,
+        0.0
+      ],
+      "max_pool": [
+        0,
+        0
+      ],
+      "weighted_max": [
+        0.0,
+        0.0
+      ],
+      "hybrid_evidence": [
+        0.0,
+        0.0
+      ],
+      "adaptive_evidence": [
+        0.0,
+        0.0
+      ],
+      "conservative_max": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  {
+    "config": {
+      "operation": "calibrate_thresholds",
+      "scores": [
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ],
+      "target_fpr": 0
+    },
+    "expected": {
+      "single_m1": 0.0,
+      "algorithm_diverse": 0.0,
+      "evidence_diverse": 0.0,
+      "max_pool": 0.0,
+      "weighted_max": 0.0,
+      "hybrid_evidence": 0.0,
+      "adaptive_evidence": 0.0,
+      "conservative_max": 0.0
+    }
+  },
+  {
+    "config": {
+      "operation": "calibrate_thresholds",
+      "scores": [
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ],
+      "target_fpr": 0.1
+    },
+    "expected": {
+      "single_m1": 0.0,
+      "algorithm_diverse": 0.0,
+      "evidence_diverse": 0.0,
+      "max_pool": 0.0,
+      "weighted_max": 0.0,
+      "hybrid_evidence": 0.0,
+      "adaptive_evidence": 0.0,
+      "conservative_max": 0.0
+    }
+  },
+  {
+    "config": {
+      "operation": "calibrate_thresholds",
+      "scores": [
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ],
+      "target_fpr": 0.5
+    },
+    "expected": {
+      "single_m1": 0.0,
+      "algorithm_diverse": 0.0,
+      "evidence_diverse": 0.0,
+      "max_pool": 0.0,
+      "weighted_max": 0.0,
+      "hybrid_evidence": 0.0,
+      "adaptive_evidence": 0.0,
+      "conservative_max": 0.0
+    }
+  },
+  {
+    "config": {
+      "operation": "calibrate_thresholds",
+      "scores": [
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ],
+      "target_fpr": 1
+    },
+    "expected": {
+      "single_m1": 0.0,
+      "algorithm_diverse": 0.0,
+      "evidence_diverse": 0.0,
+      "max_pool": 0.0,
+      "weighted_max": 0.0,
+      "hybrid_evidence": 0.0,
+      "adaptive_evidence": 0.0,
+      "conservative_max": 0.0
+    }
+  }
+]

@@ -1,0 +1,2103 @@
+{
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "python": "3.12.13 (main, Mar  3 2026, 12:39:30) [Clang 21.0.0 (clang-2100.0.123.102)]",
+  "repeats": 5,
+  "profile_template": "(version 1)\n(deny default)\n(allow process-exec (literal \"/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/bin/python3.12\") (literal \"/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python\"))\n(allow sysctl-read\n      (sysctl-name-prefix \"kern.os\")\n      (sysctl-name-prefix \"kern.version\")\n      (sysctl-name \"kern.maxfilesperproc\")\n      (sysctl-name \"kern.maxfiles\")\n      (sysctl-name \"machdep.cpu.brand_string\"))\n(allow file-read-metadata\n      (subpath \"<temporary-work-dir>\")\n      (literal \"/opt\")\n      (literal \"/opt/homebrew\")\n      (literal \"/opt/homebrew/Cellar\")\n      (subpath \"/opt/homebrew/Cellar/python@3.12\")\n      (subpath \"/System/Library\")\n      (subpath \"/usr/lib\")\n      (literal \"/\")\n      (literal \"/dev/null\"))\n(allow file-read* (subpath \"/opt/homebrew/Cellar/python@3.12\") (subpath \"/System/Library\") (subpath \"/usr/lib\") (subpath \"/usr/share\") (subpath \"<temporary-work-dir>\") (literal \"/\") (literal \"/dev/null\")\n      (literal \"/dev/random\") (literal \"/dev/urandom\"))\n(allow file-write* (subpath \"<temporary-work-dir>\") (literal \"/dev/null\"))\n(deny process-info*)\n",
+  "temporary_fixtures_removed": true,
+  "summary": {
+    "unconfined_control": {
+      "benign_allowed": 15,
+      "benign_total": 15,
+      "attacks_escaped": 45,
+      "attacks_blocked": 0,
+      "attack_total": 45,
+      "errors": 0,
+      "median_process_ms": 23.107
+    },
+    "sandbox_inherited_capabilities": {
+      "benign_allowed": 15,
+      "benign_total": 15,
+      "attacks_escaped": 10,
+      "attacks_blocked": 35,
+      "attack_total": 45,
+      "errors": 0,
+      "median_process_ms": 27.623
+    },
+    "sandbox_clean_launch": {
+      "benign_allowed": 15,
+      "benign_total": 15,
+      "attacks_escaped": 0,
+      "attacks_blocked": 45,
+      "attack_total": 45,
+      "errors": 0,
+      "median_process_ms": 27.73
+    }
+  },
+  "trials": [
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 23.884,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 23.611,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 24.265,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "absolute_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.23,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "traversal_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.396,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "symlink_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.318,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "absolute_write",
+      "outcome": "escaped",
+      "elapsed_ms": 23.078,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "symlink_write",
+      "outcome": "escaped",
+      "elapsed_ms": 22.704,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "child_read",
+      "outcome": "escaped",
+      "elapsed_ms": 24.896,
+      "evidence": {
+        "status": "child",
+        "returncode": 0,
+        "value": "<synthetic-canary-matched>",
+        "stderr": ""
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "tcp_connect",
+      "outcome": "escaped",
+      "elapsed_ms": 24.666,
+      "evidence": {
+        "status": "ok",
+        "value": "connected"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "environment_secret",
+      "outcome": "escaped",
+      "elapsed_ms": 23.094,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 0,
+      "case": "inherited_fd",
+      "outcome": "escaped",
+      "elapsed_ms": 22.795,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 23.007,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 23.006,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 23.205,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "absolute_read",
+      "outcome": "escaped",
+      "elapsed_ms": 22.78,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "traversal_read",
+      "outcome": "escaped",
+      "elapsed_ms": 22.77,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "symlink_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.036,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "absolute_write",
+      "outcome": "escaped",
+      "elapsed_ms": 22.848,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "symlink_write",
+      "outcome": "escaped",
+      "elapsed_ms": 23.077,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "child_read",
+      "outcome": "escaped",
+      "elapsed_ms": 25.139,
+      "evidence": {
+        "status": "child",
+        "returncode": 0,
+        "value": "<synthetic-canary-matched>",
+        "stderr": ""
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "tcp_connect",
+      "outcome": "escaped",
+      "elapsed_ms": 24.416,
+      "evidence": {
+        "status": "ok",
+        "value": "connected"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "environment_secret",
+      "outcome": "escaped",
+      "elapsed_ms": 23.266,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 1,
+      "case": "inherited_fd",
+      "outcome": "escaped",
+      "elapsed_ms": 23.112,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 23.146,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 23.226,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 23.291,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "absolute_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.135,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "traversal_read",
+      "outcome": "escaped",
+      "elapsed_ms": 22.994,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "symlink_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.096,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "absolute_write",
+      "outcome": "escaped",
+      "elapsed_ms": 23.087,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "symlink_write",
+      "outcome": "escaped",
+      "elapsed_ms": 23.191,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "child_read",
+      "outcome": "escaped",
+      "elapsed_ms": 24.828,
+      "evidence": {
+        "status": "child",
+        "returncode": 0,
+        "value": "<synthetic-canary-matched>",
+        "stderr": ""
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "tcp_connect",
+      "outcome": "escaped",
+      "elapsed_ms": 23.871,
+      "evidence": {
+        "status": "ok",
+        "value": "connected"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "environment_secret",
+      "outcome": "escaped",
+      "elapsed_ms": 22.892,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 2,
+      "case": "inherited_fd",
+      "outcome": "escaped",
+      "elapsed_ms": 22.698,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 22.821,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 22.766,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 23.102,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "absolute_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.029,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "traversal_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.059,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "symlink_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.935,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "absolute_write",
+      "outcome": "escaped",
+      "elapsed_ms": 23.437,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "symlink_write",
+      "outcome": "escaped",
+      "elapsed_ms": 23.396,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "child_read",
+      "outcome": "escaped",
+      "elapsed_ms": 24.897,
+      "evidence": {
+        "status": "child",
+        "returncode": 0,
+        "value": "<synthetic-canary-matched>",
+        "stderr": ""
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "tcp_connect",
+      "outcome": "escaped",
+      "elapsed_ms": 23.937,
+      "evidence": {
+        "status": "ok",
+        "value": "connected"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "environment_secret",
+      "outcome": "escaped",
+      "elapsed_ms": 22.909,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 3,
+      "case": "inherited_fd",
+      "outcome": "escaped",
+      "elapsed_ms": 22.732,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 23.077,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 23.031,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 23.36,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "absolute_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.042,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "traversal_read",
+      "outcome": "escaped",
+      "elapsed_ms": 23.06,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "symlink_read",
+      "outcome": "escaped",
+      "elapsed_ms": 22.904,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "absolute_write",
+      "outcome": "escaped",
+      "elapsed_ms": 23.047,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "symlink_write",
+      "outcome": "escaped",
+      "elapsed_ms": 23.261,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "child_read",
+      "outcome": "escaped",
+      "elapsed_ms": 24.911,
+      "evidence": {
+        "status": "child",
+        "returncode": 0,
+        "value": "<synthetic-canary-matched>",
+        "stderr": ""
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "tcp_connect",
+      "outcome": "escaped",
+      "elapsed_ms": 24.345,
+      "evidence": {
+        "status": "ok",
+        "value": "connected"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "environment_secret",
+      "outcome": "escaped",
+      "elapsed_ms": 23.386,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "unconfined_control",
+      "repeat": 4,
+      "case": "inherited_fd",
+      "outcome": "escaped",
+      "elapsed_ms": 22.97,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 27.462,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 27.464,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 27.808,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "absolute_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.431,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "traversal_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.576,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/../outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "symlink_read",
+      "outcome": "blocked",
+      "elapsed_ms": 28.025,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/read-link'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "absolute_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.665,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/target.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "symlink_write",
+      "outcome": "blocked",
+      "elapsed_ms": 28.068,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/write-link'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "child_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.959,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "tcp_connect",
+      "outcome": "blocked",
+      "elapsed_ms": 28.516,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "environment_secret",
+      "outcome": "escaped",
+      "elapsed_ms": 27.71,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 0,
+      "case": "inherited_fd",
+      "outcome": "escaped",
+      "elapsed_ms": 27.409,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 27.39,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 27.747,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 28.142,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "absolute_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.508,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "traversal_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.623,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/../outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "symlink_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.268,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/read-link'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "absolute_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.629,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/target.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "symlink_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.801,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/write-link'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "child_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.796,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "tcp_connect",
+      "outcome": "blocked",
+      "elapsed_ms": 28.39,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "environment_secret",
+      "outcome": "escaped",
+      "elapsed_ms": 27.449,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 1,
+      "case": "inherited_fd",
+      "outcome": "escaped",
+      "elapsed_ms": 27.439,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 27.515,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 27.691,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 27.528,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "absolute_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.463,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "traversal_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.436,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/../outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "symlink_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.905,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/read-link'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "absolute_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.833,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/target.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "symlink_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.699,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/write-link'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "child_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.495,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "tcp_connect",
+      "outcome": "blocked",
+      "elapsed_ms": 28.511,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "environment_secret",
+      "outcome": "escaped",
+      "elapsed_ms": 27.459,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 2,
+      "case": "inherited_fd",
+      "outcome": "escaped",
+      "elapsed_ms": 27.623,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 27.574,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 27.134,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 27.8,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "absolute_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.703,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "traversal_read",
+      "outcome": "blocked",
+      "elapsed_ms": 28.162,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/../outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "symlink_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.728,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/read-link'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "absolute_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.547,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/target.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "symlink_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.61,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/write-link'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "child_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.633,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "tcp_connect",
+      "outcome": "blocked",
+      "elapsed_ms": 28.48,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "environment_secret",
+      "outcome": "escaped",
+      "elapsed_ms": 27.57,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 3,
+      "case": "inherited_fd",
+      "outcome": "escaped",
+      "elapsed_ms": 27.542,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 27.765,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 27.702,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 27.671,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "absolute_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.523,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "traversal_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.01,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/../outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "symlink_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.603,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/read-link'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "absolute_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.514,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/target.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "symlink_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.329,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/write-link'"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "child_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.843,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "tcp_connect",
+      "outcome": "blocked",
+      "elapsed_ms": 28.082,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "environment_secret",
+      "outcome": "escaped",
+      "elapsed_ms": 27.35,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_inherited_capabilities",
+      "repeat": 4,
+      "case": "inherited_fd",
+      "outcome": "escaped",
+      "elapsed_ms": 26.97,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 27.749,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 27.356,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 27.884,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "absolute_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.615,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "traversal_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.438,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/../outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "symlink_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.911,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/read-link'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "absolute_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.528,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/target.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "symlink_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.937,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/write-link'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "child_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.731,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "tcp_connect",
+      "outcome": "blocked",
+      "elapsed_ms": 28.674,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "environment_secret",
+      "outcome": "blocked",
+      "elapsed_ms": 27.727,
+      "evidence": {
+        "status": "ok",
+        "value": null
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 0,
+      "case": "inherited_fd",
+      "outcome": "blocked",
+      "elapsed_ms": 27.548,
+      "evidence": {
+        "status": "os_error",
+        "errno": 9,
+        "error": "[Errno 9] Bad file descriptor"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 27.665,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 27.882,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 27.887,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "absolute_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.87,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "traversal_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.569,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/../outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "symlink_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.564,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/read-link'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "absolute_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.669,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/target.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "symlink_write",
+      "outcome": "blocked",
+      "elapsed_ms": 28.243,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/write-link'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "child_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.681,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "tcp_connect",
+      "outcome": "blocked",
+      "elapsed_ms": 28.368,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "environment_secret",
+      "outcome": "blocked",
+      "elapsed_ms": 27.351,
+      "evidence": {
+        "status": "ok",
+        "value": null
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 1,
+      "case": "inherited_fd",
+      "outcome": "blocked",
+      "elapsed_ms": 27.475,
+      "evidence": {
+        "status": "os_error",
+        "errno": 9,
+        "error": "[Errno 9] Bad file descriptor"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 27.644,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 27.76,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 27.592,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "absolute_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.83,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "traversal_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.563,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/../outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "symlink_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.728,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/read-link'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "absolute_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.477,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/target.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "symlink_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.815,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/write-link'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "child_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.499,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "tcp_connect",
+      "outcome": "blocked",
+      "elapsed_ms": 27.959,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "environment_secret",
+      "outcome": "blocked",
+      "elapsed_ms": 28.43,
+      "evidence": {
+        "status": "ok",
+        "value": null
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 2,
+      "case": "inherited_fd",
+      "outcome": "blocked",
+      "elapsed_ms": 30.66,
+      "evidence": {
+        "status": "os_error",
+        "errno": 9,
+        "error": "[Errno 9] Bad file descriptor"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 28.283,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 27.68,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 28.288,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "absolute_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.938,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "traversal_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.662,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/../outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "symlink_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.319,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/read-link'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "absolute_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.751,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/target.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "symlink_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.178,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/write-link'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "child_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.731,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "tcp_connect",
+      "outcome": "blocked",
+      "elapsed_ms": 28.326,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "environment_secret",
+      "outcome": "blocked",
+      "elapsed_ms": 27.765,
+      "evidence": {
+        "status": "ok",
+        "value": null
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 3,
+      "case": "inherited_fd",
+      "outcome": "blocked",
+      "elapsed_ms": 27.696,
+      "evidence": {
+        "status": "os_error",
+        "errno": 9,
+        "error": "[Errno 9] Bad file descriptor"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "allowed_compute",
+      "outcome": "allowed",
+      "elapsed_ms": 27.35,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "allowed_read",
+      "outcome": "allowed",
+      "elapsed_ms": 27.86,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "allowed_write",
+      "outcome": "allowed",
+      "elapsed_ms": 27.652,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "absolute_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.882,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "traversal_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.789,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/../outside/canary.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "symlink_read",
+      "outcome": "blocked",
+      "elapsed_ms": 27.491,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/read-link'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "absolute_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.709,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/outside/target.txt'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "symlink_write",
+      "outcome": "blocked",
+      "elapsed_ms": 27.644,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-containment-ay4or7my/work/write-link'"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "child_read",
+      "outcome": "blocked",
+      "elapsed_ms": 28.958,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "tcp_connect",
+      "outcome": "blocked",
+      "elapsed_ms": 30.39,
+      "evidence": {
+        "status": "os_error",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "environment_secret",
+      "outcome": "blocked",
+      "elapsed_ms": 28.109,
+      "evidence": {
+        "status": "ok",
+        "value": null
+      }
+    },
+    {
+      "mode": "sandbox_clean_launch",
+      "repeat": 4,
+      "case": "inherited_fd",
+      "outcome": "blocked",
+      "elapsed_ms": 27.726,
+      "evidence": {
+        "status": "os_error",
+        "errno": 9,
+        "error": "[Errno 9] Bad file descriptor"
+      }
+    }
+  ]
+}

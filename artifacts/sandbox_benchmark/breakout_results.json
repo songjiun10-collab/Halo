@@ -1,0 +1,1139 @@
+{
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "python": "3.12.13 (main, Mar  3 2026, 12:39:30) [Clang 21.0.0 (clang-2100.0.123.102)]",
+  "repeats": 3,
+  "condition": "BASELINE vs HARDENED, clean env, closed FDs; HARDENED additionally gets RLIMIT_NPROC=1",
+  "summary": {
+    "BASELINE": {
+      "hardlink_canary": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "signal_victim": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "signal_probe": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "mach_lookup": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "statfs_probe": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "total": 3
+      },
+      "rename_steal": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "reexec_canary": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "total": 3
+      },
+      "listdir_root": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "total": 3
+      },
+      "sysctl_hw_leak": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "total": 3
+      }
+    },
+    "HARDENED": {
+      "hardlink_canary": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "signal_victim": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "signal_probe": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "mach_lookup": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "statfs_probe": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "total": 3
+      },
+      "rename_steal": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "reexec_canary": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "total": 3
+      },
+      "listdir_root": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "total": 3
+      },
+      "sysctl_hw_leak": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "total": 3
+      }
+    }
+  },
+  "trials": [
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "hardlink_canary",
+      "outcome": "blocked",
+      "elapsed_ms": 57.275,
+      "evidence": {
+        "status": "blocked",
+        "stage": "link",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/hl_canary'"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "signal_victim",
+      "outcome": "blocked",
+      "elapsed_ms": 339.314,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "signal_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 34.219,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "mach_lookup",
+      "outcome": "blocked",
+      "elapsed_ms": 31.015,
+      "evidence": {
+        "status": "blocked",
+        "lookups": {
+          "com.apple.system.opendirectoryd": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.SecurityServer": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.system.logger": {
+            "rc": 1100,
+            "port": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "statfs_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 31.75,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/etc": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/Users/songjiun": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "rename_steal",
+      "outcome": "blocked",
+      "elapsed_ms": 32.048,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/stolen_canary'"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "reexec_canary",
+      "outcome": "escaped",
+      "elapsed_ms": 152.004,
+      "evidence": {
+        "status": "escaped",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "listdir_root",
+      "outcome": "escaped",
+      "elapsed_ms": 35.438,
+      "evidence": {
+        "status": "escaped",
+        "listings": {
+          "/": [
+            ".VolumeIcon.icns",
+            ".file",
+            ".nofollow",
+            ".resolve",
+            ".vol",
+            "Applications",
+            "Library",
+            "System",
+            "Users",
+            "Volumes"
+          ],
+          "/Users": {
+            "errno": 1
+          },
+          "/Users/songjiun": {
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "sysctl_hw_leak",
+      "outcome": "escaped",
+      "elapsed_ms": 32.279,
+      "evidence": {
+        "status": "escaped",
+        "leaked_sysctls": {
+          "hw.model": {
+            "bytes_returned": 8
+          },
+          "hw.memsize": {
+            "bytes_returned": 8
+          },
+          "hw.machine": {
+            "bytes_returned": 6
+          },
+          "kern.boottime": {
+            "bytes_returned": 16
+          },
+          "kern.hostname": {
+            "bytes_returned": 31
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "hardlink_canary",
+      "outcome": "blocked",
+      "elapsed_ms": 31.052,
+      "evidence": {
+        "status": "blocked",
+        "stage": "link",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/hl_canary'"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "signal_victim",
+      "outcome": "blocked",
+      "elapsed_ms": 332.545,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "signal_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 32.035,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "mach_lookup",
+      "outcome": "blocked",
+      "elapsed_ms": 50.194,
+      "evidence": {
+        "status": "blocked",
+        "lookups": {
+          "com.apple.system.opendirectoryd": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.SecurityServer": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.system.logger": {
+            "rc": 1100,
+            "port": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "statfs_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 32.562,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/etc": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/Users/songjiun": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "rename_steal",
+      "outcome": "blocked",
+      "elapsed_ms": 31.696,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/stolen_canary'"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "reexec_canary",
+      "outcome": "escaped",
+      "elapsed_ms": 151.599,
+      "evidence": {
+        "status": "escaped",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "listdir_root",
+      "outcome": "escaped",
+      "elapsed_ms": 31.2,
+      "evidence": {
+        "status": "escaped",
+        "listings": {
+          "/": [
+            ".VolumeIcon.icns",
+            ".file",
+            ".nofollow",
+            ".resolve",
+            ".vol",
+            "Applications",
+            "Library",
+            "System",
+            "Users",
+            "Volumes"
+          ],
+          "/Users": {
+            "errno": 1
+          },
+          "/Users/songjiun": {
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "sysctl_hw_leak",
+      "outcome": "escaped",
+      "elapsed_ms": 31.671,
+      "evidence": {
+        "status": "escaped",
+        "leaked_sysctls": {
+          "hw.model": {
+            "bytes_returned": 8
+          },
+          "hw.memsize": {
+            "bytes_returned": 8
+          },
+          "hw.machine": {
+            "bytes_returned": 6
+          },
+          "kern.boottime": {
+            "bytes_returned": 16
+          },
+          "kern.hostname": {
+            "bytes_returned": 31
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "hardlink_canary",
+      "outcome": "blocked",
+      "elapsed_ms": 32.601,
+      "evidence": {
+        "status": "blocked",
+        "stage": "link",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/hl_canary'"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "signal_victim",
+      "outcome": "blocked",
+      "elapsed_ms": 335.482,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "signal_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 31.662,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "mach_lookup",
+      "outcome": "blocked",
+      "elapsed_ms": 31.995,
+      "evidence": {
+        "status": "blocked",
+        "lookups": {
+          "com.apple.system.opendirectoryd": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.SecurityServer": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.system.logger": {
+            "rc": 1100,
+            "port": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "statfs_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 32.061,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/etc": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/Users/songjiun": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "rename_steal",
+      "outcome": "blocked",
+      "elapsed_ms": 32.578,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/stolen_canary'"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "reexec_canary",
+      "outcome": "escaped",
+      "elapsed_ms": 152.876,
+      "evidence": {
+        "status": "escaped",
+        "value": "<synthetic-canary-matched>"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "listdir_root",
+      "outcome": "escaped",
+      "elapsed_ms": 31.92,
+      "evidence": {
+        "status": "escaped",
+        "listings": {
+          "/": [
+            ".VolumeIcon.icns",
+            ".file",
+            ".nofollow",
+            ".resolve",
+            ".vol",
+            "Applications",
+            "Library",
+            "System",
+            "Users",
+            "Volumes"
+          ],
+          "/Users": {
+            "errno": 1
+          },
+          "/Users/songjiun": {
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "sysctl_hw_leak",
+      "outcome": "escaped",
+      "elapsed_ms": 32.132,
+      "evidence": {
+        "status": "escaped",
+        "leaked_sysctls": {
+          "hw.model": {
+            "bytes_returned": 8
+          },
+          "hw.memsize": {
+            "bytes_returned": 8
+          },
+          "hw.machine": {
+            "bytes_returned": 6
+          },
+          "kern.boottime": {
+            "bytes_returned": 16
+          },
+          "kern.hostname": {
+            "bytes_returned": 31
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "hardlink_canary",
+      "outcome": "blocked",
+      "elapsed_ms": 33.859,
+      "evidence": {
+        "status": "blocked",
+        "stage": "link",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/hl_canary'"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "signal_victim",
+      "outcome": "blocked",
+      "elapsed_ms": 333.783,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "signal_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 31.765,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "mach_lookup",
+      "outcome": "blocked",
+      "elapsed_ms": 32.489,
+      "evidence": {
+        "status": "blocked",
+        "lookups": {
+          "com.apple.system.opendirectoryd": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.SecurityServer": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.system.logger": {
+            "rc": 1100,
+            "port": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "statfs_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 32.559,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/etc": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/Users/songjiun": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "rename_steal",
+      "outcome": "blocked",
+      "elapsed_ms": 32.792,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/stolen_canary'"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "reexec_canary",
+      "outcome": "blocked",
+      "elapsed_ms": 32.555,
+      "evidence": {
+        "status": "blocked",
+        "stage": "spawn",
+        "errno": 35,
+        "error": "[Errno 35] Resource temporarily unavailable"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "listdir_root",
+      "outcome": "escaped",
+      "elapsed_ms": 33.398,
+      "evidence": {
+        "status": "escaped",
+        "listings": {
+          "/": [
+            ".VolumeIcon.icns",
+            ".file",
+            ".nofollow",
+            ".resolve",
+            ".vol",
+            "Applications",
+            "Library",
+            "System",
+            "Users",
+            "Volumes"
+          ],
+          "/Users": {
+            "errno": 1
+          },
+          "/Users/songjiun": {
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "sysctl_hw_leak",
+      "outcome": "escaped",
+      "elapsed_ms": 32.776,
+      "evidence": {
+        "status": "escaped",
+        "leaked_sysctls": {
+          "hw.machine": {
+            "bytes_returned": 6
+          },
+          "kern.hostname": {
+            "bytes_returned": 31
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "hardlink_canary",
+      "outcome": "blocked",
+      "elapsed_ms": 32.391,
+      "evidence": {
+        "status": "blocked",
+        "stage": "link",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/hl_canary'"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "signal_victim",
+      "outcome": "blocked",
+      "elapsed_ms": 336.191,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "signal_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 31.962,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "mach_lookup",
+      "outcome": "blocked",
+      "elapsed_ms": 33.031,
+      "evidence": {
+        "status": "blocked",
+        "lookups": {
+          "com.apple.system.opendirectoryd": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.SecurityServer": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.system.logger": {
+            "rc": 1100,
+            "port": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "statfs_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 32.349,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/etc": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/Users/songjiun": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "rename_steal",
+      "outcome": "blocked",
+      "elapsed_ms": 32.387,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/stolen_canary'"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "reexec_canary",
+      "outcome": "blocked",
+      "elapsed_ms": 32.637,
+      "evidence": {
+        "status": "blocked",
+        "stage": "spawn",
+        "errno": 35,
+        "error": "[Errno 35] Resource temporarily unavailable"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "listdir_root",
+      "outcome": "escaped",
+      "elapsed_ms": 32.608,
+      "evidence": {
+        "status": "escaped",
+        "listings": {
+          "/": [
+            ".VolumeIcon.icns",
+            ".file",
+            ".nofollow",
+            ".resolve",
+            ".vol",
+            "Applications",
+            "Library",
+            "System",
+            "Users",
+            "Volumes"
+          ],
+          "/Users": {
+            "errno": 1
+          },
+          "/Users/songjiun": {
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "sysctl_hw_leak",
+      "outcome": "escaped",
+      "elapsed_ms": 32.647,
+      "evidence": {
+        "status": "escaped",
+        "leaked_sysctls": {
+          "hw.machine": {
+            "bytes_returned": 6
+          },
+          "kern.hostname": {
+            "bytes_returned": 31
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "hardlink_canary",
+      "outcome": "blocked",
+      "elapsed_ms": 32.978,
+      "evidence": {
+        "status": "blocked",
+        "stage": "link",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/hl_canary'"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "signal_victim",
+      "outcome": "blocked",
+      "elapsed_ms": 336.853,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "signal_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 34.166,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "mach_lookup",
+      "outcome": "blocked",
+      "elapsed_ms": 32.847,
+      "evidence": {
+        "status": "blocked",
+        "lookups": {
+          "com.apple.system.opendirectoryd": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.SecurityServer": {
+            "rc": 1100,
+            "port": null
+          },
+          "com.apple.system.logger": {
+            "rc": 1100,
+            "port": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "statfs_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 32.529,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/etc": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/Users/songjiun": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          },
+          "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside": {
+            "ok": true,
+            "f_bsize": 1048576,
+            "f_blocks": 120686613
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "rename_steal",
+      "outcome": "blocked",
+      "elapsed_ms": 32.275,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1,
+        "error": "[Errno 1] Operation not permitted: '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/outside/canary.txt' -> '/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-breakout-dtqoah_y/work/stolen_canary'"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "reexec_canary",
+      "outcome": "blocked",
+      "elapsed_ms": 32.018,
+      "evidence": {
+        "status": "blocked",
+        "stage": "spawn",
+        "errno": 35,
+        "error": "[Errno 35] Resource temporarily unavailable"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "listdir_root",
+      "outcome": "escaped",
+      "elapsed_ms": 32.08,
+      "evidence": {
+        "status": "escaped",
+        "listings": {
+          "/": [
+            ".VolumeIcon.icns",
+            ".file",
+            ".nofollow",
+            ".resolve",
+            ".vol",
+            "Applications",
+            "Library",
+            "System",
+            "Users",
+            "Volumes"
+          ],
+          "/Users": {
+            "errno": 1
+          },
+          "/Users/songjiun": {
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "sysctl_hw_leak",
+      "outcome": "escaped",
+      "elapsed_ms": 32.584,
+      "evidence": {
+        "status": "escaped",
+        "leaked_sysctls": {
+          "hw.machine": {
+            "bytes_returned": 6
+          },
+          "kern.hostname": {
+            "bytes_returned": 31
+          }
+        }
+      }
+    }
+  ]
+}
