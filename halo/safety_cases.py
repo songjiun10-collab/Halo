@@ -95,7 +95,9 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(private[_-]?key|ssh[_-]?key)\s*[:=]{1,2}\s*[\"']?([a-zA-Z0-9+/=_\-]{40,})"), "private_key"),
     (re.compile(r"(?i)authorization\s*[:=]\s*(bearer|token|basic)\s+[\"']?([a-zA-Z0-9_\-\.]{20,})"), "bearer_token"),
     (re.compile(r"(?i)\b(api[_-]?key|secret|token|passwd|pwd|password)\b\s*[:=]{1,2}\s*\S{8,}"), "credential_assignment"),
-    (re.compile(r"[a-zA-Z0-9+/]{40,}={0,2}"), "base64_high_entropy"),
+    # Require a base64 marker so ordinary hexadecimal SHA-256 digests are not
+    # classified as secrets merely because they are 64 characters long.
+    (re.compile(r"(?=[a-zA-Z0-9+/]{40,}={0,2})(?=.*[+/=])[a-zA-Z0-9+/]{40,}={0,2}"), "base64_high_entropy"),
     (re.compile(r"(?i)sk-[a-zA-Z0-9]{32,}"), "openai_style_key"),
     (re.compile(r"(?i)gh[pousr]_[a-zA-Z0-9]{36,}"), "github_token"),
     (re.compile(r"(?i)aws[_-]?(access[_-]?key|secret[_-]?key)\s*[:=]\s*[\"']?([A-Z0-9]{20,})"), "aws_key"),

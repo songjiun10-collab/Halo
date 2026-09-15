@@ -14,7 +14,7 @@ pub struct Shield {
 
 fn hybrid_score(row: [f64; 4]) -> f64 {
     let max = row.into_iter().fold(f64::NEG_INFINITY, f64::max);
-    score(row) * 0.5 + max * 0.25
+    score(row) * 0.5 + max * 0.5
 }
 
 fn score(row: [f64; 4]) -> f64 {

@@ -23,11 +23,7 @@ pub fn execute(config: &Value) -> Result<Value, String> {
     let volatility = support::probability(config, "volatility", 0.05)?;
     let n = support::count(config, "n", 100_000)?;
     let window = support::integer(config, "freshness_window", 2, false)?;
-    let adaptive_window = if volatility < 0.1 {
-        (window / 2).max(1)
-    } else {
-        window.saturating_sub((volatility * 2.0) as u64).max(1)
-    };
+    let adaptive_window = ((window as f64 * (1.0 - volatility)).round() as u64).max(1);
     let mut rng = StdRng::seed_from_u64(seed);
     let mut sensitive: Vec<bool> = (0..n).map(|_| rng.gen::<f64>() < 0.30).collect();
     let mut writable: Vec<bool> = (0..n).map(|_| rng.gen::<f64>() < 0.70).collect();
