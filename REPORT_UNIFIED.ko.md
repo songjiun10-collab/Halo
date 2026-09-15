@@ -26,7 +26,7 @@
 도구, 중복 JSON 키, 추가 필드, 만료·취소·재사용·도구 버전 변경은 거부한다.
 실행 후 오류는 효과가 발생했을 수 있는 `503`으로 구분해 자동 재시도를
 막는다. WSGI factory와 운영 전제는 [GATEWAY.ko.md](halo/GATEWAY.ko.md)에,
-직접 공격 재현은 [GATEWAY_ATTACK_REVIEW.ko.md](halo/GATEWAY_ATTACK_REVIEW.ko.md)에 있다.
+직접 공격 재현은 [HALO_GATEWAY_V1_ATTACK_REVIEW.ko.md](halo/HALO_GATEWAY_V1_ATTACK_REVIEW.ko.md)에 있다.
 
 기본 등록 도구는 부작용 없는 SHA-256 계산뿐이다. 이 경계는 사용자 인증,
 TLS, reverse proxy, 임의 코드 실행 방지, 분산 트랜잭션, OS sandbox를
@@ -69,11 +69,11 @@ E001~E005는 합성 정책·메타데이터·모니터 점수에 대한 연구�
 관련 원자료와 역사적 스냅샷은 다음 문서에 연결돼 있다.
 
 - [REPORT_INDEX.ko.md](REPORT_INDEX.ko.md): 최신 샌드박스 수치 기준점
-- [EXPLOIT_REPORT.md](EXPLOIT_REPORT.md): 초기 종합 분석(역사적 스냅샷)
-- [EXPLOIT_REPORT_DIRECT.md](EXPLOIT_REPORT_DIRECT.md): 직접 공격 기록
-- [DEEP_EXPLOIT_FINDINGS.md](DEEP_EXPLOIT_FINDINGS.md), [DEEP_EXPLOIT_FINDINGS_2.md](DEEP_EXPLOIT_FINDINGS_2.md): HALO 정책 경계 탐침
+- [HALO_EXPLOIT_V4_REPORT.md](HALO_EXPLOIT_V4_REPORT.md): 초기 종합 분석(역사적 스냅샷)
+- [HALO_EXPLOIT_V5_DIRECT_REPORT.md](HALO_EXPLOIT_V5_DIRECT_REPORT.md): 직접 공격 기록
+- [HALO_EXPLOIT_V1_DEEP_FINDINGS.md](HALO_EXPLOIT_V1_DEEP_FINDINGS.md), [HALO_EXPLOIT_V2_DEEP_FINDINGS.md](HALO_EXPLOIT_V2_DEEP_FINDINGS.md): HALO 정책 경계 탐침
 - [artifacts/sandbox_benchmark/RUST_RUNNER.ko.md](artifacts/sandbox_benchmark/RUST_RUNNER.ko.md): Rust 실행기와 반복 수치
-- [artifacts/sandbox_benchmark/CORRECTIONS.ko.md](artifacts/sandbox_benchmark/CORRECTIONS.ko.md): 탐침 판정 정정
+- [artifacts/sandbox_benchmark/HALO_SANDBOX_V4_CORRECTIONS.ko.md](artifacts/sandbox_benchmark/HALO_SANDBOX_V4_CORRECTIONS.ko.md): 탐침 판정 정정
 
 ## 전체 원본 병합 목록
 
@@ -84,21 +84,21 @@ E001~E005는 합성 정책·메타데이터·모니터 점수에 대한 연구�
 
 ### 루트 분석·공격 보고서
 
-- [EXPLOIT_REPORT.md](EXPLOIT_REPORT.md): 초기 E001~E005 종합 분석과 당시 완화 결과. 역사적 스냅샷.
-- [EXPLOIT_REPORT_DIRECT.md](EXPLOIT_REPORT_DIRECT.md): HALO 코드 직접 공격과 경계 재현.
-- [EXPLOIT_REPORT_HALO_DIRECT4.md](EXPLOIT_REPORT_HALO_DIRECT4.md): 직접 입력·정책 경계 후속 분석.
-- [DIRECT_EXPLOIT_FINDINGS.md](DIRECT_EXPLOIT_FINDINGS.md): 직접 공격에서 확인된 입력·권한 결함.
-- [DEEP_EXPLOIT_FINDINGS.md](DEEP_EXPLOIT_FINDINGS.md): safety case와 policy의 1차 깊은 탐침.
-- [DEEP_EXPLOIT_FINDINGS_2.md](DEEP_EXPLOIT_FINDINGS_2.md): metadata subclass, generator 재사용, 비정상 평가 입력 후속 탐침.
-- [ULTRA_EXPLOIT_REPORT.md](ULTRA_EXPLOIT_REPORT.md): 고강도 정책·실험 경계 탐침. 완전성 주장을 하지 않는다.
+- [HALO_EXPLOIT_V4_REPORT.md](HALO_EXPLOIT_V4_REPORT.md): 초기 E001~E005 종합 분석과 당시 완화 결과. 역사적 스냅샷.
+- [HALO_EXPLOIT_V5_DIRECT_REPORT.md](HALO_EXPLOIT_V5_DIRECT_REPORT.md): HALO 코드 직접 공격과 경계 재현.
+- [HALO_EXPLOIT_V6_DIRECT4_REPORT.md](HALO_EXPLOIT_V6_DIRECT4_REPORT.md): 직접 입력·정책 경계 후속 분석.
+- [HALO_EXPLOIT_V3_DIRECT_FINDINGS.md](HALO_EXPLOIT_V3_DIRECT_FINDINGS.md): 직접 공격에서 확인된 입력·권한 결함.
+- [HALO_EXPLOIT_V1_DEEP_FINDINGS.md](HALO_EXPLOIT_V1_DEEP_FINDINGS.md): safety case와 policy의 1차 깊은 탐침.
+- [HALO_EXPLOIT_V2_DEEP_FINDINGS.md](HALO_EXPLOIT_V2_DEEP_FINDINGS.md): metadata subclass, generator 재사용, 비정상 평가 입력 후속 탐침.
+- [HALO_EXPLOIT_V7_ULTRA_REPORT.md](HALO_EXPLOIT_V7_ULTRA_REPORT.md): 고강도 정책·실험 경계 탐침. 완전성 주장을 하지 않는다.
 
 ### 샌드박스·동적 검증 보고서
 
 - [artifacts/sandbox_benchmark/REPORT.ko.md](artifacts/sandbox_benchmark/REPORT.ko.md): 초기 Seatbelt 비교 기준.
 - [artifacts/sandbox_benchmark/EXPLOIT_REPORT.ko.md](artifacts/sandbox_benchmark/EXPLOIT_REPORT.ko.md): 샌드박스 공격 결과와 수정 전후 차이.
-- [artifacts/sandbox_benchmark/DIRECT_ATTACK.ko.md](artifacts/sandbox_benchmark/DIRECT_ATTACK.ko.md): 단일 직접 공격 경로와 canary 결과.
-- [artifacts/sandbox_benchmark/DYNAMIC_VERIFICATION_2026-09-13.ko.md](artifacts/sandbox_benchmark/DYNAMIC_VERIFICATION_2026-09-13.ko.md): 동적 실행 재검증과 잔여 노출.
-- [artifacts/sandbox_benchmark/ROUND4_VERIFICATION_2026-09-13.ko.md](artifacts/sandbox_benchmark/ROUND4_VERIFICATION_2026-09-13.ko.md): Round-4 검증 기록.
+- [artifacts/sandbox_benchmark/HALO_SANDBOX_V1_DIRECT_ATTACK.ko.md](artifacts/sandbox_benchmark/HALO_SANDBOX_V1_DIRECT_ATTACK.ko.md): 단일 직접 공격 경로와 canary 결과.
+- [artifacts/sandbox_benchmark/HALO_SANDBOX_V2_DYNAMIC_VERIFICATION.ko.md](artifacts/sandbox_benchmark/HALO_SANDBOX_V2_DYNAMIC_VERIFICATION.ko.md): 동적 실행 재검증과 잔여 노출.
+- [artifacts/sandbox_benchmark/HALO_SANDBOX_V3_ROUND4_VERIFICATION.ko.md](artifacts/sandbox_benchmark/HALO_SANDBOX_V3_ROUND4_VERIFICATION.ko.md): Round-4 검증 기록.
 - [artifacts/sandbox_benchmark/RUST_RUNNER.ko.md](artifacts/sandbox_benchmark/RUST_RUNNER.ko.md): Rust 100-case runner와 반복 결과.
 - [artifacts/sandbox_benchmark/CORRECTIONS.ko.md](artifacts/sandbox_benchmark/CORRECTIONS.ko.md): `SEM_FAILED` 오판과 잘못된 `fsgetpath` fixture 정정.
 - [REPORT_INDEX.ko.md](REPORT_INDEX.ko.md): 최신 샌드박스 수치와 원자료 우선순위 기준.
@@ -107,7 +107,7 @@ E001~E005는 합성 정책·메타데이터·모니터 점수에 대한 연구�
 
 - [halo/AUTHORITY.ko.md](halo/AUTHORITY.ko.md): 호스트 소유 capability와 메모리 객체 경계.
 - [halo/GATEWAY.ko.md](halo/GATEWAY.ko.md): WSGI 게이트웨이 운영 조건·API·장애 복구.
-- [halo/GATEWAY_ATTACK_REVIEW.ko.md](halo/GATEWAY_ATTACK_REVIEW.ko.md): 인증·토큰·재생·취소·감사 장애 공격 검토.
+- [halo/HALO_GATEWAY_V1_ATTACK_REVIEW.ko.md](halo/HALO_GATEWAY_V1_ATTACK_REVIEW.ko.md): 인증·토큰·재생·취소·감사 장애 공격 검토.
 - [rust/ENFORCEMENT.ko.md](rust/ENFORCEMENT.ko.md): Rust 보호 객체 접근 계약과 신뢰 경계.
 - [rust/SHIELD.ko.md](rust/SHIELD.ko.md): 보호막·검증기 가용성·ACL 회귀 실험.
 - [rust/SANDBOX_BOUNDARY.ko.md](rust/SANDBOX_BOUNDARY.ko.md): Rust 실행기와 OS 격리 한계.
