@@ -96,6 +96,33 @@ It uses disposable files and a loopback listener. See the
 [reproduction script](artifacts/sandbox_benchmark/run_benchmark.py).
 This fixed probe suite does not establish arbitrary-code or model containment.
 
+## LLM tool authority gateway
+
+`halo.gateway` is a local reference gateway for testing the execution boundary
+shown in [the authority design](halo/GATEWAY.ko.md). It treats model output,
+web pages, email, documents, tool results, and other agent messages as data.
+Only a separately authenticated approver can issue a short-lived capability;
+the executor must present the exact tool, arguments, and token. Capabilities
+are stored in SQLite, claimed once before dispatch, and audited through each
+phase. Unknown tools, duplicate JSON keys, changed tool revisions, expiry,
+revocation, and replay are rejected.
+
+The included `sha256` adapter is deliberately side-effect free. The gateway
+does not provide user authentication, TLS, a reverse proxy, arbitrary shell or
+`eval`, distributed transactions, or OS isolation. Do not expose the WSGI
+factory directly to the internet. Run it behind a separately configured TLS
+proxy and private service account, with `HALO_STATE_DIR` set to an existing
+0700 directory and independent `HALO_APPROVER_KEY` and `HALO_EXECUTOR_KEY`
+secrets. See [the Korean operations guide](halo/GATEWAY.ko.md) and the direct
+[adversarial review](halo/GATEWAY_ATTACK_REVIEW.ko.md).
+
+```sh
+.venv/bin/python -m pytest tests/test_gateway.py tests/test_gateway_adversarial.py tests/test_authority.py -q
+```
+
+Passing these tests validates the local reference boundary only. It does not
+authorize connecting an external tool or claim production readiness.
+
 ## Safety scope
 
 E001–E004 use synthetic resources, synthetic policies, simulated metadata corruption, and synthetic monitor scores. The separate local OS sandbox probe executes real processes against its own temporary canaries and loopback listener; it does not target external systems or real credentials.
