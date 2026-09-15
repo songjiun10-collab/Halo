@@ -38,7 +38,7 @@ for h in HIDDEN:
             "tpr_mean": statistics.mean(vals),
             "tpr_ci95_halfwidth": 1.96 * statistics.stdev(vals) / math.sqrt(len(vals)),
             "fpr_mean": statistics.mean(r["fpr"] for r in subset),
-            "known_tpr_mean": statistics.mean(r["known_tpr"] for r in subset if not math.isnan(r["known_tpr"])),
+            "known_tpr_mean": statistics.mean(r["known_tpr"] for r in subset if not math.isnan(r["known_tpr"])) if h < 1 else float("nan"),
             "hidden_tpr_mean": statistics.mean(r["hidden_tpr"] for r in subset if not math.isnan(r["hidden_tpr"])) if h > 0 else float("nan"),
         })
 

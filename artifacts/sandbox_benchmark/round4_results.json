@@ -1,0 +1,2030 @@
+{
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "python": "3.12.13 (main, Mar  3 2026, 12:39:30) [Clang 21.0.0 (clang-2100.0.123.102)]",
+  "repeats": 2,
+  "condition": "PERMISSIVE vs HARDENED, clean env, closed FDs; HARDENED + RLIMIT_NPROC=1",
+  "summary": {
+    "PERMISSIVE": {
+      "proc_listpids": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "proc_pidpath": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "proc_pidinfo_parent": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "getfsstat_full": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "access_oracle": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "sysctl_deep_scan": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "udp_network": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "launchdaemons_read": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "usr_share_read": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "host_processor_info": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "xattr_scan": {
+        "escaped": 0,
+        "blocked": 2,
+        "error": 0,
+        "total": 2
+      },
+      "getattrlist_vol": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      }
+    },
+    "HARDENED": {
+      "proc_listpids": {
+        "escaped": 0,
+        "blocked": 2,
+        "error": 0,
+        "total": 2
+      },
+      "proc_pidpath": {
+        "escaped": 0,
+        "blocked": 2,
+        "error": 0,
+        "total": 2
+      },
+      "proc_pidinfo_parent": {
+        "escaped": 0,
+        "blocked": 2,
+        "error": 0,
+        "total": 2
+      },
+      "getfsstat_full": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "access_oracle": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "sysctl_deep_scan": {
+        "escaped": 0,
+        "blocked": 2,
+        "error": 0,
+        "total": 2
+      },
+      "udp_network": {
+        "escaped": 0,
+        "blocked": 2,
+        "error": 0,
+        "total": 2
+      },
+      "launchdaemons_read": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "usr_share_read": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "host_processor_info": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      },
+      "xattr_scan": {
+        "escaped": 0,
+        "blocked": 2,
+        "error": 0,
+        "total": 2
+      },
+      "getattrlist_vol": {
+        "escaped": 2,
+        "blocked": 0,
+        "error": 0,
+        "total": 2
+      }
+    }
+  },
+  "trials": [
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "proc_listpids",
+      "outcome": "escaped",
+      "elapsed_ms": 31.701,
+      "evidence": {
+        "status": "escaped",
+        "pid_count": 665,
+        "sample_pids": [
+          1,
+          344,
+          347,
+          349,
+          350,
+          353,
+          357,
+          359,
+          360,
+          364,
+          368,
+          370,
+          374,
+          376,
+          377,
+          381,
+          383,
+          384,
+          385,
+          386,
+          387,
+          388,
+          389,
+          390,
+          391
+        ],
+        "proc_info_errno": 0
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "proc_pidpath",
+      "outcome": "escaped",
+      "elapsed_ms": 28.632,
+      "evidence": {
+        "status": "escaped",
+        "proc_paths": {
+          "1": "/sbin/launchd",
+          "344": "/usr/libexec/logd",
+          "347": "/usr/libexec/UserEventAgent",
+          "349": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd",
+          "350": "/System/Library/PrivateFrameworks/MediaRemote.framework/Support/mediaremoted",
+          "353": "/usr/sbin/systemstats",
+          "357": "/usr/libexec/configd",
+          "359": "/System/Library/CoreServices/powerd.bundle/powerd",
+          "360": "/usr/libexec/IOMFB_bics_daemon",
+          "364": "/usr/libexec/remoted",
+          "368": "/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd_system",
+          "370": "/usr/libexec/watchdogd",
+          "374": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds",
+          "376": "/usr/libexec/kernelmanagerd",
+          "377": "/usr/libexec/diskarbitrationd",
+          "381": "/usr/sbin/syslogd",
+          "383": "/usr/libexec/thermalmonitord",
+          "384": "/System/Library/PrivateFrameworks/CoreDuetContext.framework/Versions/A/Resources/contextstored",
+          "385": "/usr/libexec/xprotectd",
+          "386": "/usr/libexec/opendirectoryd",
+          "387": "/System/Library/PrivateFrameworks/ApplePushService.framework/apsd",
+          "388": "/System/Library/CoreServices/launchservicesd",
+          "389": "/usr/libexec/timed",
+          "390": "/Library/Apple/System/Library/PrivateFrameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd",
+          "391": "/usr/sbin/securityd",
+          "393": "/usr/libexec/locationd",
+          "396": "/usr/libexec/autofsd",
+          "397": "/usr/libexec/dasd",
+          "400": "/usr/sbin/distnoted",
+          "404": "/System/Library/CoreServices/logind",
+          "405": "/System/Library/PrivateFrameworks/GenerationalStorage.framework/Versions/A/Support/revisiond",
+          "406": "/usr/sbin/KernelEventAgent",
+          "411": "/usr/sbin/notifyd",
+          "413": "/usr/libexec/corebrightnessd",
+          "414": "/System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/com.apple.cmio.registerassistantservice",
+          "455": "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer",
+          "456": "/System/Library/PrivateFrameworks/TCC.framework/Support/tccd",
+          "457": "/usr/sbin/cfprefsd",
+          "458": "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow",
+          "459": "/usr/libexec/runningboardd"
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "proc_pidinfo_parent",
+      "outcome": "escaped",
+      "elapsed_ms": 28.088,
+      "evidence": {
+        "status": "escaped",
+        "parent_taskinfo_bytes": 96,
+        "first_words": [
+          500482523136,
+          22216704,
+          916267,
+          345295
+        ]
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "getfsstat_full",
+      "outcome": "escaped",
+      "elapsed_ms": 27.879,
+      "evidence": {
+        "status": "escaped",
+        "mount_count": 13,
+        "mounts": [
+          {
+            "on": "/",
+            "from": "/dev/disk3s1s1",
+            "fs": "apfs"
+          },
+          {
+            "on": "/dev",
+            "from": "devfs",
+            "fs": "devfs"
+          },
+          {
+            "on": "/System/Volumes/VM",
+            "from": "/dev/disk3s6",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Preboot",
+            "from": "/dev/disk3s2",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Update",
+            "from": "/dev/disk3s4",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/xarts",
+            "from": "/dev/disk2s2",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/iSCPreboot",
+            "from": "/dev/disk2s1",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Hardware",
+            "from": "/dev/disk2s3",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Data",
+            "from": "/dev/disk3s5",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Data/home",
+            "from": "map auto_home",
+            "fs": "autofs"
+          },
+          {
+            "on": "/Volumes/OpenCode 1.18.25-arm64",
+            "from": "/dev/disk4s1",
+            "fs": "hfs"
+          },
+          {
+            "on": "/Volumes/ChatGPT Installer",
+            "from": "/dev/disk5s1",
+            "fs": "hfs"
+          },
+          {
+            "on": "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/AppTranslocation/CFC8E915-894B-4D4A-8AAE-E3E0A0E4119A",
+            "from": "/Volumes/OpenCode 1.18.25-arm64/OpenCode.app",
+            "fs": "nullfs"
+          }
+        ]
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "access_oracle",
+      "outcome": "escaped",
+      "elapsed_ms": 27.819,
+      "evidence": {
+        "status": "escaped",
+        "access": {
+          "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-round4-hscze80_/outside/canary.txt": {
+            "ok": true
+          },
+          "/Users/songjiun/.ssh/id_rsa": {
+            "ok": false
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true
+          },
+          "/etc/passwd": {
+            "ok": true
+          },
+          "/etc/master.passwd": {
+            "ok": true
+          },
+          "/var/db/dyld/dyld_shared_cache_arm64e": {
+            "ok": false
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true
+          },
+          "/usr/share/zoneinfo/America/New_York": {
+            "ok": true
+          },
+          "/dev/disk0": {
+            "ok": true
+          },
+          "/dev/tty": {
+            "ok": true
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "sysctl_deep_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 27.668,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.logicalcpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "hw.physicalcpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "hw.packages": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\u0001"
+          },
+          "hw.pagesize": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "hw.cpusubtype": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\u0002"
+          },
+          "hw.cacheconfig": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "hw.l2cachesize": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "value": "Apple M5"
+          },
+          "machdep.cpu.core_count": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "machdep.cpu.thread_count": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "machdep.cpu.logical_per_package": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "kern.maxfilesperproc": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "kern.sysv.shmmax": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "vm.loadavg": {
+            "rc": 0,
+            "errno": 0,
+            "value": "k\u0010"
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "net.inet.tcp.keepidle": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "kern.osproductversion": {
+            "rc": 0,
+            "errno": 0,
+            "value": "27.0"
+          },
+          "kern.bootargs": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "kern.clockrate": {
+            "rc": 0,
+            "errno": 0,
+            "value": "d"
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "udp_network",
+      "outcome": "escaped",
+      "elapsed_ms": 27.596,
+      "evidence": {
+        "status": "escaped",
+        "udp": {
+          "udp_loopback_bind": {
+            "ok": true,
+            "errno": 0
+          },
+          "udp_loopback_send": {
+            "ok": true,
+            "errno": 0
+          },
+          "udp_outbound": {
+            "ok": true,
+            "errno": 0
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "launchdaemons_read",
+      "outcome": "escaped",
+      "elapsed_ms": 30.961,
+      "evidence": {
+        "status": "escaped",
+        "dirs": {
+          "/System/Library/LaunchDaemons": {
+            "listable": true,
+            "count": 432,
+            "sample": [
+              {
+                "name": "bootps.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Disabled</key>"
+              },
+              {
+                "name": "com.apple.AirPlayXPCHelper.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>co"
+              },
+              {
+                "name": "com.apple.AppSSOAgent.login.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>co"
+              }
+            ]
+          },
+          "/System/Library/LaunchAgents": {
+            "listable": true,
+            "count": 483,
+            "sample": [
+              {
+                "name": "com.apple.AMPArtworkAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              },
+              {
+                "name": "com.apple.AMPDeviceDiscoveryAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              },
+              {
+                "name": "com.apple.AMPDevicesAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              }
+            ]
+          },
+          "/System/Library/Extensions": {
+            "listable": true,
+            "count": 700,
+            "sample": [
+              {
+                "name": "AFKACIPCKext.kext",
+                "errno": 21
+              },
+              {
+                "name": "AFKHIDTBDevice.kext",
+                "errno": 21
+              },
+              {
+                "name": "AFKRemoteCPMS.kext",
+                "errno": 21
+              }
+            ]
+          },
+          "/Library/LaunchDaemons": {
+            "listable": true,
+            "count": 2,
+            "sample": [
+              {
+                "name": "com.bitgapp.eqmac.helper.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>AssociatedBundleIdentif"
+              },
+              {
+                "name": "com.now.gg.BlueStacks.cleanup.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n    <key>AssociatedBundleIden"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "usr_share_read",
+      "outcome": "escaped",
+      "elapsed_ms": 28.619,
+      "evidence": {
+        "status": "escaped",
+        "share": {
+          "/usr/share/zoneinfo/Asia/Seoul": {
+            "kind": "file",
+            "bytes": 128
+          },
+          "/usr/share/zoneinfo/America/New_York": {
+            "kind": "file",
+            "bytes": 128
+          },
+          "/usr/share/man/man1": {
+            "kind": "dir",
+            "sample": [
+              "4ccconv.1",
+              "@TSET@.1",
+              "BTLEServer.1",
+              "BTLEServerAgent.1",
+              "FeatureAccessAgent.8"
+            ]
+          },
+          "/usr/share/misc/termcap": {
+            "errno": 2
+          },
+          "/usr/share/locale": {
+            "kind": "dir",
+            "sample": [
+              "C.UTF-8",
+              "UTF-8",
+              "af_ZA",
+              "af_ZA.ISO8859-1",
+              "af_ZA.ISO8859-15"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "host_processor_info",
+      "outcome": "escaped",
+      "elapsed_ms": 27.885,
+      "evidence": {
+        "status": "escaped",
+        "rc": 0,
+        "processor_count": 10,
+        "errno": 0
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "xattr_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 28.012,
+      "evidence": {
+        "status": "blocked",
+        "xattr": {
+          "/": {
+            "names": [],
+            "values": {}
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "names": [],
+            "values": {}
+          },
+          "/usr/share": {
+            "names": [],
+            "values": {}
+          },
+          "/dev/null": {
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "getattrlist_vol",
+      "outcome": "escaped",
+      "elapsed_ms": 27.85,
+      "evidence": {
+        "status": "escaped",
+        "volumes": {
+          "/": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": "540000001a0000003c0000000d000000df6e9b03c76fad010000000000000000ffffff07ffffff01000000000000000014210aeab6fe478bb66a2ef99c0a7669"
+          },
+          "/System/Volumes/Data": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": "4c0000001a0000003c00000005000000df6e9b01c76faf010000000000000000ffffff07ffffff0100000000000000001e1961e5dcc546a2aa32dc71e78cad9b"
+          },
+          "/Users": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": "4c0000001a0000003c00000005000000df6e9b01c76faf010000000000000000ffffff07ffffff0100000000000000001e1961e5dcc546a2aa32dc71e78cad9b"
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "proc_listpids",
+      "outcome": "escaped",
+      "elapsed_ms": 27.834,
+      "evidence": {
+        "status": "escaped",
+        "pid_count": 665,
+        "sample_pids": [
+          1,
+          344,
+          347,
+          349,
+          350,
+          353,
+          357,
+          359,
+          360,
+          364,
+          368,
+          370,
+          374,
+          376,
+          377,
+          381,
+          383,
+          384,
+          385,
+          386,
+          387,
+          388,
+          389,
+          390,
+          391
+        ],
+        "proc_info_errno": 0
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "proc_pidpath",
+      "outcome": "escaped",
+      "elapsed_ms": 28.142,
+      "evidence": {
+        "status": "escaped",
+        "proc_paths": {
+          "1": "/sbin/launchd",
+          "344": "/usr/libexec/logd",
+          "347": "/usr/libexec/UserEventAgent",
+          "349": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd",
+          "350": "/System/Library/PrivateFrameworks/MediaRemote.framework/Support/mediaremoted",
+          "353": "/usr/sbin/systemstats",
+          "357": "/usr/libexec/configd",
+          "359": "/System/Library/CoreServices/powerd.bundle/powerd",
+          "360": "/usr/libexec/IOMFB_bics_daemon",
+          "364": "/usr/libexec/remoted",
+          "368": "/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd_system",
+          "370": "/usr/libexec/watchdogd",
+          "374": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds",
+          "376": "/usr/libexec/kernelmanagerd",
+          "377": "/usr/libexec/diskarbitrationd",
+          "381": "/usr/sbin/syslogd",
+          "383": "/usr/libexec/thermalmonitord",
+          "384": "/System/Library/PrivateFrameworks/CoreDuetContext.framework/Versions/A/Resources/contextstored",
+          "385": "/usr/libexec/xprotectd",
+          "386": "/usr/libexec/opendirectoryd",
+          "387": "/System/Library/PrivateFrameworks/ApplePushService.framework/apsd",
+          "388": "/System/Library/CoreServices/launchservicesd",
+          "389": "/usr/libexec/timed",
+          "390": "/Library/Apple/System/Library/PrivateFrameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd",
+          "391": "/usr/sbin/securityd",
+          "393": "/usr/libexec/locationd",
+          "396": "/usr/libexec/autofsd",
+          "397": "/usr/libexec/dasd",
+          "400": "/usr/sbin/distnoted",
+          "404": "/System/Library/CoreServices/logind",
+          "405": "/System/Library/PrivateFrameworks/GenerationalStorage.framework/Versions/A/Support/revisiond",
+          "406": "/usr/sbin/KernelEventAgent",
+          "411": "/usr/sbin/notifyd",
+          "413": "/usr/libexec/corebrightnessd",
+          "414": "/System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/com.apple.cmio.registerassistantservice",
+          "455": "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer",
+          "456": "/System/Library/PrivateFrameworks/TCC.framework/Support/tccd",
+          "457": "/usr/sbin/cfprefsd",
+          "458": "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow",
+          "459": "/usr/libexec/runningboardd"
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "proc_pidinfo_parent",
+      "outcome": "escaped",
+      "elapsed_ms": 27.496,
+      "evidence": {
+        "status": "escaped",
+        "parent_taskinfo_bytes": 96,
+        "first_words": [
+          500482523136,
+          22282240,
+          967002,
+          482241
+        ]
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "getfsstat_full",
+      "outcome": "escaped",
+      "elapsed_ms": 27.865,
+      "evidence": {
+        "status": "escaped",
+        "mount_count": 13,
+        "mounts": [
+          {
+            "on": "/",
+            "from": "/dev/disk3s1s1",
+            "fs": "apfs"
+          },
+          {
+            "on": "/dev",
+            "from": "devfs",
+            "fs": "devfs"
+          },
+          {
+            "on": "/System/Volumes/VM",
+            "from": "/dev/disk3s6",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Preboot",
+            "from": "/dev/disk3s2",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Update",
+            "from": "/dev/disk3s4",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/xarts",
+            "from": "/dev/disk2s2",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/iSCPreboot",
+            "from": "/dev/disk2s1",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Hardware",
+            "from": "/dev/disk2s3",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Data",
+            "from": "/dev/disk3s5",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Data/home",
+            "from": "map auto_home",
+            "fs": "autofs"
+          },
+          {
+            "on": "/Volumes/OpenCode 1.18.25-arm64",
+            "from": "/dev/disk4s1",
+            "fs": "hfs"
+          },
+          {
+            "on": "/Volumes/ChatGPT Installer",
+            "from": "/dev/disk5s1",
+            "fs": "hfs"
+          },
+          {
+            "on": "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/AppTranslocation/CFC8E915-894B-4D4A-8AAE-E3E0A0E4119A",
+            "from": "/Volumes/OpenCode 1.18.25-arm64/OpenCode.app",
+            "fs": "nullfs"
+          }
+        ]
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "access_oracle",
+      "outcome": "escaped",
+      "elapsed_ms": 27.616,
+      "evidence": {
+        "status": "escaped",
+        "access": {
+          "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-round4-hscze80_/outside/canary.txt": {
+            "ok": true
+          },
+          "/Users/songjiun/.ssh/id_rsa": {
+            "ok": false
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true
+          },
+          "/etc/passwd": {
+            "ok": true
+          },
+          "/etc/master.passwd": {
+            "ok": true
+          },
+          "/var/db/dyld/dyld_shared_cache_arm64e": {
+            "ok": false
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true
+          },
+          "/usr/share/zoneinfo/America/New_York": {
+            "ok": true
+          },
+          "/dev/disk0": {
+            "ok": true
+          },
+          "/dev/tty": {
+            "ok": true
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "sysctl_deep_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 27.667,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.logicalcpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "hw.physicalcpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "hw.packages": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\u0001"
+          },
+          "hw.pagesize": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "hw.cpusubtype": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\u0002"
+          },
+          "hw.cacheconfig": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "hw.l2cachesize": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "value": "Apple M5"
+          },
+          "machdep.cpu.core_count": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "machdep.cpu.thread_count": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "machdep.cpu.logical_per_package": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\n"
+          },
+          "kern.maxfilesperproc": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "kern.sysv.shmmax": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "vm.loadavg": {
+            "rc": 0,
+            "errno": 0,
+            "value": "k\u0010"
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "net.inet.tcp.keepidle": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "kern.osproductversion": {
+            "rc": 0,
+            "errno": 0,
+            "value": "27.0"
+          },
+          "kern.bootargs": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "kern.clockrate": {
+            "rc": 0,
+            "errno": 0,
+            "value": "d"
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "udp_network",
+      "outcome": "escaped",
+      "elapsed_ms": 27.598,
+      "evidence": {
+        "status": "escaped",
+        "udp": {
+          "udp_loopback_bind": {
+            "ok": true,
+            "errno": 0
+          },
+          "udp_loopback_send": {
+            "ok": true,
+            "errno": 0
+          },
+          "udp_outbound": {
+            "ok": true,
+            "errno": 0
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "launchdaemons_read",
+      "outcome": "escaped",
+      "elapsed_ms": 28.467,
+      "evidence": {
+        "status": "escaped",
+        "dirs": {
+          "/System/Library/LaunchDaemons": {
+            "listable": true,
+            "count": 432,
+            "sample": [
+              {
+                "name": "bootps.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Disabled</key>"
+              },
+              {
+                "name": "com.apple.AirPlayXPCHelper.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>co"
+              },
+              {
+                "name": "com.apple.AppSSOAgent.login.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>co"
+              }
+            ]
+          },
+          "/System/Library/LaunchAgents": {
+            "listable": true,
+            "count": 483,
+            "sample": [
+              {
+                "name": "com.apple.AMPArtworkAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              },
+              {
+                "name": "com.apple.AMPDeviceDiscoveryAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              },
+              {
+                "name": "com.apple.AMPDevicesAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              }
+            ]
+          },
+          "/System/Library/Extensions": {
+            "listable": true,
+            "count": 700,
+            "sample": [
+              {
+                "name": "AFKACIPCKext.kext",
+                "errno": 21
+              },
+              {
+                "name": "AFKHIDTBDevice.kext",
+                "errno": 21
+              },
+              {
+                "name": "AFKRemoteCPMS.kext",
+                "errno": 21
+              }
+            ]
+          },
+          "/Library/LaunchDaemons": {
+            "listable": true,
+            "count": 2,
+            "sample": [
+              {
+                "name": "com.bitgapp.eqmac.helper.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>AssociatedBundleIdentif"
+              },
+              {
+                "name": "com.now.gg.BlueStacks.cleanup.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n    <key>AssociatedBundleIden"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "usr_share_read",
+      "outcome": "escaped",
+      "elapsed_ms": 28.437,
+      "evidence": {
+        "status": "escaped",
+        "share": {
+          "/usr/share/zoneinfo/Asia/Seoul": {
+            "kind": "file",
+            "bytes": 128
+          },
+          "/usr/share/zoneinfo/America/New_York": {
+            "kind": "file",
+            "bytes": 128
+          },
+          "/usr/share/man/man1": {
+            "kind": "dir",
+            "sample": [
+              "4ccconv.1",
+              "@TSET@.1",
+              "BTLEServer.1",
+              "BTLEServerAgent.1",
+              "FeatureAccessAgent.8"
+            ]
+          },
+          "/usr/share/misc/termcap": {
+            "errno": 2
+          },
+          "/usr/share/locale": {
+            "kind": "dir",
+            "sample": [
+              "C.UTF-8",
+              "UTF-8",
+              "af_ZA",
+              "af_ZA.ISO8859-1",
+              "af_ZA.ISO8859-15"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "host_processor_info",
+      "outcome": "escaped",
+      "elapsed_ms": 27.611,
+      "evidence": {
+        "status": "escaped",
+        "rc": 0,
+        "processor_count": 10,
+        "errno": 0
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "xattr_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 27.847,
+      "evidence": {
+        "status": "blocked",
+        "xattr": {
+          "/": {
+            "names": [],
+            "values": {}
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "names": [],
+            "values": {}
+          },
+          "/usr/share": {
+            "names": [],
+            "values": {}
+          },
+          "/dev/null": {
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "getattrlist_vol",
+      "outcome": "escaped",
+      "elapsed_ms": 27.889,
+      "evidence": {
+        "status": "escaped",
+        "volumes": {
+          "/": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": "540000001a0000003c0000000d000000df6e9b03c76fad010000000000000000ffffff07ffffff01000000000000000014210aeab6fe478bb66a2ef99c0a7669"
+          },
+          "/System/Volumes/Data": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": "4c0000001a0000003c00000005000000df6e9b01c76faf010000000000000000ffffff07ffffff0100000000000000001e1961e5dcc546a2aa32dc71e78cad9b"
+          },
+          "/Users": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": "4c0000001a0000003c00000005000000df6e9b01c76faf010000000000000000ffffff07ffffff0100000000000000001e1961e5dcc546a2aa32dc71e78cad9b"
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "proc_listpids",
+      "outcome": "blocked",
+      "elapsed_ms": 27.87,
+      "evidence": {
+        "status": "blocked",
+        "n": 0,
+        "errno": 1
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "proc_pidpath",
+      "outcome": "blocked",
+      "elapsed_ms": 27.898,
+      "evidence": {
+        "status": "blocked",
+        "proc_paths": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "proc_pidinfo_parent",
+      "outcome": "blocked",
+      "elapsed_ms": 27.588,
+      "evidence": {
+        "status": "blocked",
+        "parent_taskinfo_bytes": 0,
+        "first_words": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "getfsstat_full",
+      "outcome": "escaped",
+      "elapsed_ms": 28.167,
+      "evidence": {
+        "status": "escaped",
+        "mount_count": 13,
+        "mounts": [
+          {
+            "on": "/",
+            "from": "/dev/disk3s1s1",
+            "fs": "apfs"
+          },
+          {
+            "on": "/dev",
+            "from": "devfs",
+            "fs": "devfs"
+          },
+          {
+            "on": "/System/Volumes/VM",
+            "from": "/dev/disk3s6",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Preboot",
+            "from": "/dev/disk3s2",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Update",
+            "from": "/dev/disk3s4",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/xarts",
+            "from": "/dev/disk2s2",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/iSCPreboot",
+            "from": "/dev/disk2s1",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Hardware",
+            "from": "/dev/disk2s3",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Data",
+            "from": "/dev/disk3s5",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Data/home",
+            "from": "map auto_home",
+            "fs": "autofs"
+          },
+          {
+            "on": "/Volumes/OpenCode 1.18.25-arm64",
+            "from": "/dev/disk4s1",
+            "fs": "hfs"
+          },
+          {
+            "on": "/Volumes/ChatGPT Installer",
+            "from": "/dev/disk5s1",
+            "fs": "hfs"
+          },
+          {
+            "on": "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/AppTranslocation/CFC8E915-894B-4D4A-8AAE-E3E0A0E4119A",
+            "from": "/Volumes/OpenCode 1.18.25-arm64/OpenCode.app",
+            "fs": "nullfs"
+          }
+        ]
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "access_oracle",
+      "outcome": "escaped",
+      "elapsed_ms": 27.754,
+      "evidence": {
+        "status": "escaped",
+        "access": {
+          "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-round4-hscze80_/outside/canary.txt": {
+            "ok": true
+          },
+          "/Users/songjiun/.ssh/id_rsa": {
+            "ok": false
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true
+          },
+          "/etc/passwd": {
+            "ok": false
+          },
+          "/etc/master.passwd": {
+            "ok": false
+          },
+          "/var/db/dyld/dyld_shared_cache_arm64e": {
+            "ok": false
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true
+          },
+          "/usr/share/zoneinfo/America/New_York": {
+            "ok": false
+          },
+          "/dev/disk0": {
+            "ok": true
+          },
+          "/dev/tty": {
+            "ok": true
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "sysctl_deep_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 27.603,
+      "evidence": {
+        "status": "blocked",
+        "unexpected_readable": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "udp_network",
+      "outcome": "blocked",
+      "elapsed_ms": 27.806,
+      "evidence": {
+        "status": "blocked",
+        "udp": {
+          "udp_loopback_bind": {
+            "ok": false,
+            "errno": 1
+          },
+          "udp_loopback_send": {
+            "ok": false,
+            "errno": 1
+          },
+          "udp_outbound": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "launchdaemons_read",
+      "outcome": "escaped",
+      "elapsed_ms": 28.411,
+      "evidence": {
+        "status": "escaped",
+        "dirs": {
+          "/System/Library/LaunchDaemons": {
+            "listable": true,
+            "count": 432,
+            "sample": [
+              {
+                "name": "bootps.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Disabled</key>"
+              },
+              {
+                "name": "com.apple.AirPlayXPCHelper.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>co"
+              },
+              {
+                "name": "com.apple.AppSSOAgent.login.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>co"
+              }
+            ]
+          },
+          "/System/Library/LaunchAgents": {
+            "listable": true,
+            "count": 483,
+            "sample": [
+              {
+                "name": "com.apple.AMPArtworkAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              },
+              {
+                "name": "com.apple.AMPDeviceDiscoveryAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              },
+              {
+                "name": "com.apple.AMPDevicesAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              }
+            ]
+          },
+          "/System/Library/Extensions": {
+            "listable": true,
+            "count": 700,
+            "sample": [
+              {
+                "name": "AFKACIPCKext.kext",
+                "errno": 21
+              },
+              {
+                "name": "AFKHIDTBDevice.kext",
+                "errno": 21
+              },
+              {
+                "name": "AFKRemoteCPMS.kext",
+                "errno": 21
+              }
+            ]
+          },
+          "/Library/LaunchDaemons": {
+            "listable": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "usr_share_read",
+      "outcome": "escaped",
+      "elapsed_ms": 28.254,
+      "evidence": {
+        "status": "escaped",
+        "share": {
+          "/usr/share/zoneinfo/Asia/Seoul": {
+            "errno": 1
+          },
+          "/usr/share/zoneinfo/America/New_York": {
+            "errno": 1
+          },
+          "/usr/share/man/man1": {
+            "kind": "dir",
+            "sample": [
+              "4ccconv.1",
+              "@TSET@.1",
+              "BTLEServer.1",
+              "BTLEServerAgent.1",
+              "FeatureAccessAgent.8"
+            ]
+          },
+          "/usr/share/misc/termcap": {
+            "errno": 2
+          },
+          "/usr/share/locale": {
+            "kind": "dir",
+            "sample": [
+              "C.UTF-8",
+              "UTF-8",
+              "af_ZA",
+              "af_ZA.ISO8859-1",
+              "af_ZA.ISO8859-15"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "host_processor_info",
+      "outcome": "escaped",
+      "elapsed_ms": 27.601,
+      "evidence": {
+        "status": "escaped",
+        "rc": 0,
+        "processor_count": 10,
+        "errno": 0
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "xattr_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 28.401,
+      "evidence": {
+        "status": "blocked",
+        "xattr": {
+          "/": {
+            "names": [],
+            "values": {}
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "names": [],
+            "values": {}
+          },
+          "/usr/share": {
+            "names": [],
+            "values": {}
+          },
+          "/dev/null": {
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "getattrlist_vol",
+      "outcome": "escaped",
+      "elapsed_ms": 27.876,
+      "evidence": {
+        "status": "escaped",
+        "volumes": {
+          "/": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": "540000001a0000003c0000000d000000df6e9b03c76fad010000000000000000ffffff07ffffff01000000000000000014210aeab6fe478bb66a2ef99c0a7669"
+          },
+          "/System/Volumes/Data": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "/Users": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "proc_listpids",
+      "outcome": "blocked",
+      "elapsed_ms": 27.934,
+      "evidence": {
+        "status": "blocked",
+        "n": 0,
+        "errno": 1
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "proc_pidpath",
+      "outcome": "blocked",
+      "elapsed_ms": 27.833,
+      "evidence": {
+        "status": "blocked",
+        "proc_paths": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "proc_pidinfo_parent",
+      "outcome": "blocked",
+      "elapsed_ms": 27.688,
+      "evidence": {
+        "status": "blocked",
+        "parent_taskinfo_bytes": 0,
+        "first_words": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "getfsstat_full",
+      "outcome": "escaped",
+      "elapsed_ms": 28.109,
+      "evidence": {
+        "status": "escaped",
+        "mount_count": 13,
+        "mounts": [
+          {
+            "on": "/",
+            "from": "/dev/disk3s1s1",
+            "fs": "apfs"
+          },
+          {
+            "on": "/dev",
+            "from": "devfs",
+            "fs": "devfs"
+          },
+          {
+            "on": "/System/Volumes/VM",
+            "from": "/dev/disk3s6",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Preboot",
+            "from": "/dev/disk3s2",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Update",
+            "from": "/dev/disk3s4",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/xarts",
+            "from": "/dev/disk2s2",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/iSCPreboot",
+            "from": "/dev/disk2s1",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Hardware",
+            "from": "/dev/disk2s3",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Data",
+            "from": "/dev/disk3s5",
+            "fs": "apfs"
+          },
+          {
+            "on": "/System/Volumes/Data/home",
+            "from": "map auto_home",
+            "fs": "autofs"
+          },
+          {
+            "on": "/Volumes/OpenCode 1.18.25-arm64",
+            "from": "/dev/disk4s1",
+            "fs": "hfs"
+          },
+          {
+            "on": "/Volumes/ChatGPT Installer",
+            "from": "/dev/disk5s1",
+            "fs": "hfs"
+          },
+          {
+            "on": "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/AppTranslocation/CFC8E915-894B-4D4A-8AAE-E3E0A0E4119A",
+            "from": "/Volumes/OpenCode 1.18.25-arm64/OpenCode.app",
+            "fs": "nullfs"
+          }
+        ]
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "access_oracle",
+      "outcome": "escaped",
+      "elapsed_ms": 27.885,
+      "evidence": {
+        "status": "escaped",
+        "access": {
+          "/private/var/folders/x0/gp37ndd96_ddxtf0fn0t6kk00000gn/T/halo-round4-hscze80_/outside/canary.txt": {
+            "ok": true
+          },
+          "/Users/songjiun/.ssh/id_rsa": {
+            "ok": false
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true
+          },
+          "/etc/passwd": {
+            "ok": false
+          },
+          "/etc/master.passwd": {
+            "ok": false
+          },
+          "/var/db/dyld/dyld_shared_cache_arm64e": {
+            "ok": false
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true
+          },
+          "/usr/share/zoneinfo/America/New_York": {
+            "ok": false
+          },
+          "/dev/disk0": {
+            "ok": true
+          },
+          "/dev/tty": {
+            "ok": true
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "sysctl_deep_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 27.779,
+      "evidence": {
+        "status": "blocked",
+        "unexpected_readable": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "udp_network",
+      "outcome": "blocked",
+      "elapsed_ms": 27.706,
+      "evidence": {
+        "status": "blocked",
+        "udp": {
+          "udp_loopback_bind": {
+            "ok": false,
+            "errno": 1
+          },
+          "udp_loopback_send": {
+            "ok": false,
+            "errno": 1
+          },
+          "udp_outbound": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "launchdaemons_read",
+      "outcome": "escaped",
+      "elapsed_ms": 28.456,
+      "evidence": {
+        "status": "escaped",
+        "dirs": {
+          "/System/Library/LaunchDaemons": {
+            "listable": true,
+            "count": 432,
+            "sample": [
+              {
+                "name": "bootps.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Disabled</key>"
+              },
+              {
+                "name": "com.apple.AirPlayXPCHelper.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>co"
+              },
+              {
+                "name": "com.apple.AppSSOAgent.login.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>co"
+              }
+            ]
+          },
+          "/System/Library/LaunchAgents": {
+            "listable": true,
+            "count": 483,
+            "sample": [
+              {
+                "name": "com.apple.AMPArtworkAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              },
+              {
+                "name": "com.apple.AMPDeviceDiscoveryAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              },
+              {
+                "name": "com.apple.AMPDevicesAgent.plist",
+                "bytes": 300,
+                "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>EnablePressuredExit</ke"
+              }
+            ]
+          },
+          "/System/Library/Extensions": {
+            "listable": true,
+            "count": 700,
+            "sample": [
+              {
+                "name": "AFKACIPCKext.kext",
+                "errno": 21
+              },
+              {
+                "name": "AFKHIDTBDevice.kext",
+                "errno": 21
+              },
+              {
+                "name": "AFKRemoteCPMS.kext",
+                "errno": 21
+              }
+            ]
+          },
+          "/Library/LaunchDaemons": {
+            "listable": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "usr_share_read",
+      "outcome": "escaped",
+      "elapsed_ms": 28.212,
+      "evidence": {
+        "status": "escaped",
+        "share": {
+          "/usr/share/zoneinfo/Asia/Seoul": {
+            "errno": 1
+          },
+          "/usr/share/zoneinfo/America/New_York": {
+            "errno": 1
+          },
+          "/usr/share/man/man1": {
+            "kind": "dir",
+            "sample": [
+              "4ccconv.1",
+              "@TSET@.1",
+              "BTLEServer.1",
+              "BTLEServerAgent.1",
+              "FeatureAccessAgent.8"
+            ]
+          },
+          "/usr/share/misc/termcap": {
+            "errno": 2
+          },
+          "/usr/share/locale": {
+            "kind": "dir",
+            "sample": [
+              "C.UTF-8",
+              "UTF-8",
+              "af_ZA",
+              "af_ZA.ISO8859-1",
+              "af_ZA.ISO8859-15"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "host_processor_info",
+      "outcome": "escaped",
+      "elapsed_ms": 27.816,
+      "evidence": {
+        "status": "escaped",
+        "rc": 0,
+        "processor_count": 10,
+        "errno": 0
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "xattr_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 27.497,
+      "evidence": {
+        "status": "blocked",
+        "xattr": {
+          "/": {
+            "names": [],
+            "values": {}
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "names": [],
+            "values": {}
+          },
+          "/usr/share": {
+            "names": [],
+            "values": {}
+          },
+          "/dev/null": {
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "getattrlist_vol",
+      "outcome": "escaped",
+      "elapsed_ms": 27.791,
+      "evidence": {
+        "status": "escaped",
+        "volumes": {
+          "/": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": "540000001a0000003c0000000d000000df6e9b03c76fad010000000000000000ffffff07ffffff01000000000000000014210aeab6fe478bb66a2ef99c0a7669"
+          },
+          "/System/Volumes/Data": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "/Users": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -16,11 +16,11 @@ def test_secret_egress_denied():
     assert decide(findings, effectful=True).decision is Decision.DENY
 
 
-def test_effectful_telemetry_gap_quarantined():
+def test_effectful_telemetry_gap_denied():
     findings = evaluate_trace([
         Event(kind="tool", telemetry_complete=False)
     ])
-    assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+    assert decide(findings, effectful=True).decision is Decision.DENY
 
 
 def test_non_effectful_telemetry_gap_reviewed():

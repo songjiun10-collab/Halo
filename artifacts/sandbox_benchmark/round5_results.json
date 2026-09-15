@@ -1,0 +1,1560 @@
+{
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "python": "3.12.13 (main, Mar  3 2026, 12:39:30) [Clang 21.0.0 (clang-2100.0.123.102)]",
+  "repeats": 3,
+  "condition": "PERMISSIVE vs HARDENED, clean env, closed FDs; HARDENED + RLIMIT_NPROC=1",
+  "summary": {
+    "PERMISSIVE": {
+      "sysctl_mib_bypass": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "getifaddrs": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "route_socket": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "sem_open": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "getattrlist_home": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "opendir_home": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "fsgetpath": {
+        "escaped": 0,
+        "blocked": 0,
+        "error": 0,
+        "unsupported": 3,
+        "total": 3
+      },
+      "mach_host_extras": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      }
+    },
+    "HARDENED": {
+      "sysctl_mib_bypass": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "getifaddrs": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "route_socket": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "sem_open": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "getattrlist_home": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "opendir_home": {
+        "escaped": 0,
+        "blocked": 3,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      },
+      "fsgetpath": {
+        "escaped": 0,
+        "blocked": 0,
+        "error": 0,
+        "unsupported": 3,
+        "total": 3
+      },
+      "mach_host_extras": {
+        "escaped": 3,
+        "blocked": 0,
+        "error": 0,
+        "unsupported": 0,
+        "total": 3
+      }
+    }
+  },
+  "trials": [
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "sysctl_mib_bypass",
+      "outcome": "escaped",
+      "elapsed_ms": 67.394,
+      "evidence": {
+        "status": "escaped",
+        "mib_reads": {
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "value": "Mac17,3"
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "value": 17179869184
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": 10
+          },
+          "hw.logicalcpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": 10
+          },
+          "hw.physicalcpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": 88240961960010
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\"}\ufffdj"
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 22,
+            "value": null
+          },
+          "kern.proc": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "kern.osproductversion": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "getifaddrs",
+      "outcome": "escaped",
+      "elapsed_ms": 74.531,
+      "evidence": {
+        "status": "escaped",
+        "interfaces": {
+          "lo0": {
+            "flags": 32841,
+            "addrs": [
+              18,
+              2,
+              30,
+              30
+            ]
+          },
+          "en0": {
+            "flags": 34915,
+            "addrs": [
+              18,
+              30,
+              2
+            ]
+          }
+        },
+        "all_names": [
+          "lo0",
+          "gif0",
+          "stf0",
+          "anpi0",
+          "anpi1",
+          "en2",
+          "en3",
+          "en1",
+          "en4",
+          "bridge0",
+          "utun0",
+          "utun1",
+          "utun2",
+          "utun3",
+          "utun4",
+          "utun5",
+          "utun6",
+          "ap1",
+          "en0",
+          "awdl0",
+          "nan0",
+          "llw0"
+        ]
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "route_socket",
+      "outcome": "escaped",
+      "elapsed_ms": 73.115,
+      "evidence": {
+        "status": "escaped",
+        "route": {
+          "17": {
+            "ok": true,
+            "errno": 0
+          },
+          "18": {
+            "ok": false,
+            "errno": 47
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "sem_open",
+      "outcome": "escaped",
+      "elapsed_ms": 67.716,
+      "evidence": {
+        "status": "escaped",
+        "sem": {
+          "create": {
+            "fd": true,
+            "errno": 0
+          },
+          "close_rc": 0,
+          "unlink_rc": 0,
+          "unlink": 0
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "getattrlist_home",
+      "outcome": "escaped",
+      "elapsed_ms": 68.723,
+      "evidence": {
+        "status": "escaped",
+        "attr": {
+          "/Users/songjiun": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/Users/songjiun/.zsh_history": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/Users/songjiun/Library": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/System/Volumes/Data": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/System/Volumes/Data/Users": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/etc/passwd": {
+            "rc": 0,
+            "errno": 0
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "opendir_home",
+      "outcome": "escaped",
+      "elapsed_ms": 70.709,
+      "evidence": {
+        "status": "escaped",
+        "dirs": {
+          "/Users": {
+            "ok": true,
+            "count": 3,
+            "sample": [
+              ".localized",
+              "Shared",
+              "songjiun"
+            ]
+          },
+          "/Users/songjiun": {
+            "ok": true,
+            "count": 709,
+            "sample": [
+              "f17430016.jpeg",
+              "science_classifier_v8.py",
+              "_DSC0510.NEF",
+              "apple",
+              "DSC_0044.NEF",
+              "DSC_0050.NEF"
+            ]
+          },
+          "/Users/songjiun/Library": {
+            "ok": true,
+            "count": 92,
+            "sample": [
+              "Application Support",
+              "Assistant",
+              "Daemon Containers",
+              "com.apple.appleaccountd",
+              "Autosave Information",
+              "IdentityServices"
+            ]
+          },
+          "/System/Volumes/Data/Users": {
+            "ok": true,
+            "count": 3,
+            "sample": [
+              ".localized",
+              "Shared",
+              "songjiun"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "fsgetpath",
+      "outcome": "unsupported",
+      "elapsed_ms": 68.673,
+      "evidence": {
+        "status": "unsupported",
+        "reason": "fsgetpath requires a validated filesystem ID and object ID fixture"
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "mach_host_extras",
+      "outcome": "escaped",
+      "elapsed_ms": 70.279,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host": 2819,
+          "page_size": {
+            "rc": 0,
+            "pagesize": 16384,
+            "errno": 0
+          },
+          "boot_info": {
+            "rc": 22,
+            "value": "",
+            "errno": 0
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "sysctl_mib_bypass",
+      "outcome": "escaped",
+      "elapsed_ms": 69.419,
+      "evidence": {
+        "status": "escaped",
+        "mib_reads": {
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "value": "Mac17,3"
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "value": 17179869184
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": 10
+          },
+          "hw.logicalcpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": 10
+          },
+          "hw.physicalcpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": 88240961960010
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\"}\ufffdj"
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 22,
+            "value": null
+          },
+          "kern.proc": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "kern.osproductversion": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "getifaddrs",
+      "outcome": "escaped",
+      "elapsed_ms": 64.762,
+      "evidence": {
+        "status": "escaped",
+        "interfaces": {
+          "lo0": {
+            "flags": 32841,
+            "addrs": [
+              18,
+              2,
+              30,
+              30
+            ]
+          },
+          "en0": {
+            "flags": 34915,
+            "addrs": [
+              18,
+              30,
+              2
+            ]
+          }
+        },
+        "all_names": [
+          "lo0",
+          "gif0",
+          "stf0",
+          "anpi0",
+          "anpi1",
+          "en2",
+          "en3",
+          "en1",
+          "en4",
+          "bridge0",
+          "utun0",
+          "utun1",
+          "utun2",
+          "utun3",
+          "utun4",
+          "utun5",
+          "utun6",
+          "ap1",
+          "en0",
+          "awdl0",
+          "nan0",
+          "llw0"
+        ]
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "route_socket",
+      "outcome": "escaped",
+      "elapsed_ms": 63.355,
+      "evidence": {
+        "status": "escaped",
+        "route": {
+          "17": {
+            "ok": true,
+            "errno": 0
+          },
+          "18": {
+            "ok": false,
+            "errno": 47
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "sem_open",
+      "outcome": "escaped",
+      "elapsed_ms": 61.118,
+      "evidence": {
+        "status": "escaped",
+        "sem": {
+          "create": {
+            "fd": true,
+            "errno": 0
+          },
+          "close_rc": 0,
+          "unlink_rc": 0,
+          "unlink": 0
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "getattrlist_home",
+      "outcome": "escaped",
+      "elapsed_ms": 62.742,
+      "evidence": {
+        "status": "escaped",
+        "attr": {
+          "/Users/songjiun": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/Users/songjiun/.zsh_history": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/Users/songjiun/Library": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/System/Volumes/Data": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/System/Volumes/Data/Users": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/etc/passwd": {
+            "rc": 0,
+            "errno": 0
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "opendir_home",
+      "outcome": "escaped",
+      "elapsed_ms": 65.684,
+      "evidence": {
+        "status": "escaped",
+        "dirs": {
+          "/Users": {
+            "ok": true,
+            "count": 3,
+            "sample": [
+              ".localized",
+              "Shared",
+              "songjiun"
+            ]
+          },
+          "/Users/songjiun": {
+            "ok": true,
+            "count": 709,
+            "sample": [
+              "f17430016.jpeg",
+              "science_classifier_v8.py",
+              "_DSC0510.NEF",
+              "apple",
+              "DSC_0044.NEF",
+              "DSC_0050.NEF"
+            ]
+          },
+          "/Users/songjiun/Library": {
+            "ok": true,
+            "count": 92,
+            "sample": [
+              "Application Support",
+              "Assistant",
+              "Daemon Containers",
+              "com.apple.appleaccountd",
+              "Autosave Information",
+              "IdentityServices"
+            ]
+          },
+          "/System/Volumes/Data/Users": {
+            "ok": true,
+            "count": 3,
+            "sample": [
+              ".localized",
+              "Shared",
+              "songjiun"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "fsgetpath",
+      "outcome": "unsupported",
+      "elapsed_ms": 64.78,
+      "evidence": {
+        "status": "unsupported",
+        "reason": "fsgetpath requires a validated filesystem ID and object ID fixture"
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "mach_host_extras",
+      "outcome": "escaped",
+      "elapsed_ms": 66.404,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host": 7939,
+          "page_size": {
+            "rc": 0,
+            "pagesize": 16384,
+            "errno": 0
+          },
+          "boot_info": {
+            "rc": 22,
+            "value": "",
+            "errno": 0
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "sysctl_mib_bypass",
+      "outcome": "escaped",
+      "elapsed_ms": 64.864,
+      "evidence": {
+        "status": "escaped",
+        "mib_reads": {
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "value": "Mac17,3"
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "value": 17179869184
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": 10
+          },
+          "hw.logicalcpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": 10
+          },
+          "hw.physicalcpu": {
+            "rc": 0,
+            "errno": 0,
+            "value": 88240961960010
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "value": "\"}\ufffdj"
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 22,
+            "value": null
+          },
+          "kern.proc": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "value": ""
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "kern.osproductversion": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "getifaddrs",
+      "outcome": "escaped",
+      "elapsed_ms": 62.474,
+      "evidence": {
+        "status": "escaped",
+        "interfaces": {
+          "lo0": {
+            "flags": 32841,
+            "addrs": [
+              18,
+              2,
+              30,
+              30
+            ]
+          },
+          "en0": {
+            "flags": 34915,
+            "addrs": [
+              18,
+              30,
+              2
+            ]
+          }
+        },
+        "all_names": [
+          "lo0",
+          "gif0",
+          "stf0",
+          "anpi0",
+          "anpi1",
+          "en2",
+          "en3",
+          "en1",
+          "en4",
+          "bridge0",
+          "utun0",
+          "utun1",
+          "utun2",
+          "utun3",
+          "utun4",
+          "utun5",
+          "utun6",
+          "ap1",
+          "en0",
+          "awdl0",
+          "nan0",
+          "llw0"
+        ]
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "route_socket",
+      "outcome": "escaped",
+      "elapsed_ms": 62.114,
+      "evidence": {
+        "status": "escaped",
+        "route": {
+          "17": {
+            "ok": true,
+            "errno": 0
+          },
+          "18": {
+            "ok": false,
+            "errno": 47
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "sem_open",
+      "outcome": "escaped",
+      "elapsed_ms": 63.524,
+      "evidence": {
+        "status": "escaped",
+        "sem": {
+          "create": {
+            "fd": true,
+            "errno": 0
+          },
+          "close_rc": 0,
+          "unlink_rc": 0,
+          "unlink": 0
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "getattrlist_home",
+      "outcome": "escaped",
+      "elapsed_ms": 64.976,
+      "evidence": {
+        "status": "escaped",
+        "attr": {
+          "/Users/songjiun": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/Users/songjiun/.zsh_history": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/Users/songjiun/Library": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/System/Volumes/Data": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/System/Volumes/Data/Users": {
+            "rc": 0,
+            "errno": 0
+          },
+          "/etc/passwd": {
+            "rc": 0,
+            "errno": 0
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "opendir_home",
+      "outcome": "escaped",
+      "elapsed_ms": 66.547,
+      "evidence": {
+        "status": "escaped",
+        "dirs": {
+          "/Users": {
+            "ok": true,
+            "count": 3,
+            "sample": [
+              ".localized",
+              "Shared",
+              "songjiun"
+            ]
+          },
+          "/Users/songjiun": {
+            "ok": true,
+            "count": 709,
+            "sample": [
+              "f17430016.jpeg",
+              "science_classifier_v8.py",
+              "_DSC0510.NEF",
+              "apple",
+              "DSC_0044.NEF",
+              "DSC_0050.NEF"
+            ]
+          },
+          "/Users/songjiun/Library": {
+            "ok": true,
+            "count": 92,
+            "sample": [
+              "Application Support",
+              "Assistant",
+              "Daemon Containers",
+              "com.apple.appleaccountd",
+              "Autosave Information",
+              "IdentityServices"
+            ]
+          },
+          "/System/Volumes/Data/Users": {
+            "ok": true,
+            "count": 3,
+            "sample": [
+              ".localized",
+              "Shared",
+              "songjiun"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "fsgetpath",
+      "outcome": "unsupported",
+      "elapsed_ms": 65.196,
+      "evidence": {
+        "status": "unsupported",
+        "reason": "fsgetpath requires a validated filesystem ID and object ID fixture"
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "mach_host_extras",
+      "outcome": "escaped",
+      "elapsed_ms": 65.338,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host": 2563,
+          "page_size": {
+            "rc": 0,
+            "pagesize": 16384,
+            "errno": 0
+          },
+          "boot_info": {
+            "rc": 22,
+            "value": "",
+            "errno": 0
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "sysctl_mib_bypass",
+      "outcome": "blocked",
+      "elapsed_ms": 65.246,
+      "evidence": {
+        "status": "blocked",
+        "mib_reads": {
+          "hw.model": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.memsize": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.ncpu": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.logicalcpu": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.physicalcpu": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "kern.boottime": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "kern.proc": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "vm.swapusage": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "kern.osproductversion": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "getifaddrs",
+      "outcome": "blocked",
+      "elapsed_ms": 60.926,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "route_socket",
+      "outcome": "blocked",
+      "elapsed_ms": 62.41,
+      "evidence": {
+        "status": "blocked",
+        "route": {
+          "17": {
+            "ok": false,
+            "errno": 1
+          },
+          "18": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "sem_open",
+      "outcome": "blocked",
+      "elapsed_ms": 64.886,
+      "evidence": {
+        "status": "blocked",
+        "sem": {
+          "create": {
+            "fd": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "getattrlist_home",
+      "outcome": "blocked",
+      "elapsed_ms": 64.316,
+      "evidence": {
+        "status": "blocked",
+        "attr": {
+          "/Users/songjiun": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/Users/songjiun/.zsh_history": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/Users/songjiun/Library": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/System/Volumes/Data": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/System/Volumes/Data/Users": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/etc/passwd": {
+            "rc": -1,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "opendir_home",
+      "outcome": "blocked",
+      "elapsed_ms": 64.53,
+      "evidence": {
+        "status": "blocked",
+        "dirs": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "fsgetpath",
+      "outcome": "unsupported",
+      "elapsed_ms": 61.178,
+      "evidence": {
+        "status": "unsupported",
+        "reason": "fsgetpath requires a validated filesystem ID and object ID fixture"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "mach_host_extras",
+      "outcome": "escaped",
+      "elapsed_ms": 62.413,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host": 7939,
+          "page_size": {
+            "rc": 0,
+            "pagesize": 16384,
+            "errno": 0
+          },
+          "boot_info": {
+            "rc": 22,
+            "value": "",
+            "errno": 0
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "sysctl_mib_bypass",
+      "outcome": "blocked",
+      "elapsed_ms": 64.483,
+      "evidence": {
+        "status": "blocked",
+        "mib_reads": {
+          "hw.model": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.memsize": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.ncpu": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.logicalcpu": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.physicalcpu": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "kern.boottime": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "kern.proc": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "vm.swapusage": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "kern.osproductversion": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "getifaddrs",
+      "outcome": "blocked",
+      "elapsed_ms": 63.175,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "route_socket",
+      "outcome": "blocked",
+      "elapsed_ms": 60.323,
+      "evidence": {
+        "status": "blocked",
+        "route": {
+          "17": {
+            "ok": false,
+            "errno": 1
+          },
+          "18": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "sem_open",
+      "outcome": "blocked",
+      "elapsed_ms": 60.835,
+      "evidence": {
+        "status": "blocked",
+        "sem": {
+          "create": {
+            "fd": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "getattrlist_home",
+      "outcome": "blocked",
+      "elapsed_ms": 61.25,
+      "evidence": {
+        "status": "blocked",
+        "attr": {
+          "/Users/songjiun": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/Users/songjiun/.zsh_history": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/Users/songjiun/Library": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/System/Volumes/Data": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/System/Volumes/Data/Users": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/etc/passwd": {
+            "rc": -1,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "opendir_home",
+      "outcome": "blocked",
+      "elapsed_ms": 60.286,
+      "evidence": {
+        "status": "blocked",
+        "dirs": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "fsgetpath",
+      "outcome": "unsupported",
+      "elapsed_ms": 62.471,
+      "evidence": {
+        "status": "unsupported",
+        "reason": "fsgetpath requires a validated filesystem ID and object ID fixture"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "mach_host_extras",
+      "outcome": "escaped",
+      "elapsed_ms": 64.343,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host": 7939,
+          "page_size": {
+            "rc": 0,
+            "pagesize": 16384,
+            "errno": 0
+          },
+          "boot_info": {
+            "rc": 22,
+            "value": "",
+            "errno": 0
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "sysctl_mib_bypass",
+      "outcome": "blocked",
+      "elapsed_ms": 63.644,
+      "evidence": {
+        "status": "blocked",
+        "mib_reads": {
+          "hw.model": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.memsize": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.ncpu": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.logicalcpu": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "hw.physicalcpu": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "kern.boottime": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "kern.proc": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "vm.swapusage": {
+            "rc": -1,
+            "errno": 1,
+            "value": null
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          },
+          "kern.osproductversion": {
+            "rc": -1,
+            "errno": 2,
+            "value": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "getifaddrs",
+      "outcome": "blocked",
+      "elapsed_ms": 62.448,
+      "evidence": {
+        "status": "blocked",
+        "errno": 1
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "route_socket",
+      "outcome": "blocked",
+      "elapsed_ms": 60.281,
+      "evidence": {
+        "status": "blocked",
+        "route": {
+          "17": {
+            "ok": false,
+            "errno": 1
+          },
+          "18": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "sem_open",
+      "outcome": "blocked",
+      "elapsed_ms": 62.071,
+      "evidence": {
+        "status": "blocked",
+        "sem": {
+          "create": {
+            "fd": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "getattrlist_home",
+      "outcome": "blocked",
+      "elapsed_ms": 63.008,
+      "evidence": {
+        "status": "blocked",
+        "attr": {
+          "/Users/songjiun": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/Users/songjiun/.zsh_history": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/Users/songjiun/Library": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/System/Volumes/Data": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/System/Volumes/Data/Users": {
+            "rc": -1,
+            "errno": 1
+          },
+          "/etc/passwd": {
+            "rc": -1,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "opendir_home",
+      "outcome": "blocked",
+      "elapsed_ms": 64.076,
+      "evidence": {
+        "status": "blocked",
+        "dirs": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "fsgetpath",
+      "outcome": "unsupported",
+      "elapsed_ms": 63.646,
+      "evidence": {
+        "status": "unsupported",
+        "reason": "fsgetpath requires a validated filesystem ID and object ID fixture"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "mach_host_extras",
+      "outcome": "escaped",
+      "elapsed_ms": 63.061,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host": 3075,
+          "page_size": {
+            "rc": 0,
+            "pagesize": 16384,
+            "errno": 0
+          },
+          "boot_info": {
+            "rc": 22,
+            "value": "",
+            "errno": 0
+          }
+        }
+      }
+    }
+  ]
+}

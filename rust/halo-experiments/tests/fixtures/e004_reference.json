@@ -1,0 +1,1102 @@
+[
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0,
+      "attack_weights": null,
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 0,
+      "false_positive_rate": 1,
+      "attack_tpr": 1,
+      "worst_group_tpr": 1,
+      "group_tpr": {
+        "common": 1,
+        "rare": 1
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0,
+      "attack_weights": null,
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 0,
+      "false_positive_rate": 1,
+      "attack_tpr": 1,
+      "worst_group_tpr": 1,
+      "group_tpr": {
+        "common": 1,
+        "rare": 1
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0,
+      "attack_weights": {
+        "common": 0.99,
+        "rare": 0.01
+      },
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 0,
+      "false_positive_rate": 1,
+      "attack_tpr": 1,
+      "worst_group_tpr": 1,
+      "group_tpr": {
+        "common": 1,
+        "rare": 1
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0,
+      "attack_weights": {
+        "common": 0.99,
+        "rare": 0.01
+      },
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 0,
+      "false_positive_rate": 1,
+      "attack_tpr": 1,
+      "worst_group_tpr": 1,
+      "group_tpr": {
+        "common": 1,
+        "rare": 1
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0,
+      "attack_weights": {
+        "common": 1e+308,
+        "rare": 1e+308
+      },
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 0,
+      "false_positive_rate": 1,
+      "attack_tpr": 1,
+      "worst_group_tpr": 1,
+      "group_tpr": {
+        "common": 1,
+        "rare": 1
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0,
+      "attack_weights": {
+        "common": 1e+308,
+        "rare": 1e+308
+      },
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 0,
+      "false_positive_rate": 1,
+      "attack_tpr": 1,
+      "worst_group_tpr": 1,
+      "group_tpr": {
+        "common": 1,
+        "rare": 1
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.2,
+      "attack_weights": null,
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 0.2,
+      "false_positive_rate": 0.8,
+      "attack_tpr": 0.8571428571428572,
+      "worst_group_tpr": 0.5,
+      "group_tpr": {
+        "common": 1,
+        "rare": 0.5
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.2,
+      "attack_weights": null,
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 0.2,
+      "false_positive_rate": 0.8,
+      "attack_tpr": 0.75,
+      "worst_group_tpr": 0.5,
+      "group_tpr": {
+        "common": 1,
+        "rare": 0.5
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.2,
+      "attack_weights": {
+        "common": 0.99,
+        "rare": 0.01
+      },
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 0.2,
+      "false_positive_rate": 0.8,
+      "attack_tpr": 0.9949999999999999,
+      "worst_group_tpr": 0.5,
+      "group_tpr": {
+        "common": 1,
+        "rare": 0.5
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.2,
+      "attack_weights": {
+        "common": 0.99,
+        "rare": 0.01
+      },
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 0.2,
+      "false_positive_rate": 0.8,
+      "attack_tpr": 0.75,
+      "worst_group_tpr": 0.5,
+      "group_tpr": {
+        "common": 1,
+        "rare": 0.5
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.2,
+      "attack_weights": {
+        "common": 1e+308,
+        "rare": 1e+308
+      },
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 0.2,
+      "false_positive_rate": 0.8,
+      "attack_tpr": 0.75,
+      "worst_group_tpr": 0.5,
+      "group_tpr": {
+        "common": 1,
+        "rare": 0.5
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.2,
+      "attack_weights": {
+        "common": 1e+308,
+        "rare": 1e+308
+      },
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 0.2,
+      "false_positive_rate": 0.8,
+      "attack_tpr": 0.75,
+      "worst_group_tpr": 0.5,
+      "group_tpr": {
+        "common": 1,
+        "rare": 0.5
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.5,
+      "attack_weights": null,
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 0.5,
+      "false_positive_rate": 0.2,
+      "attack_tpr": 0.5714285714285715,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0.8,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.5,
+      "attack_weights": null,
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 0.5,
+      "false_positive_rate": 0.2,
+      "attack_tpr": 0.4,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0.8,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.5,
+      "attack_weights": {
+        "common": 0.99,
+        "rare": 0.01
+      },
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 0.5,
+      "false_positive_rate": 0.2,
+      "attack_tpr": 0.792,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0.8,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.5,
+      "attack_weights": {
+        "common": 0.99,
+        "rare": 0.01
+      },
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 0.5,
+      "false_positive_rate": 0.2,
+      "attack_tpr": 0.4,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0.8,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.5,
+      "attack_weights": {
+        "common": 1e+308,
+        "rare": 1e+308
+      },
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 0.5,
+      "false_positive_rate": 0.2,
+      "attack_tpr": 0.4,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0.8,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 0.5,
+      "attack_weights": {
+        "common": 1e+308,
+        "rare": 1e+308
+      },
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 0.5,
+      "false_positive_rate": 0.2,
+      "attack_tpr": 0.4,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0.8,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 1,
+      "attack_weights": null,
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 1,
+      "false_positive_rate": 0,
+      "attack_tpr": 0,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 1,
+      "attack_weights": null,
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 1,
+      "false_positive_rate": 0,
+      "attack_tpr": 0,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 1,
+      "attack_weights": {
+        "common": 0.99,
+        "rare": 0.01
+      },
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 1,
+      "false_positive_rate": 0,
+      "attack_tpr": 0,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 1,
+      "attack_weights": {
+        "common": 0.99,
+        "rare": 0.01
+      },
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 1,
+      "false_positive_rate": 0,
+      "attack_tpr": 0,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 1,
+      "attack_weights": {
+        "common": 1e+308,
+        "rare": 1e+308
+      },
+      "enforce_balance": false
+    },
+    "expected": {
+      "threshold": 1,
+      "false_positive_rate": 0,
+      "attack_tpr": 0,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "evaluate",
+      "threshold": 1,
+      "attack_weights": {
+        "common": 1e+308,
+        "rare": 1e+308
+      },
+      "enforce_balance": true
+    },
+    "expected": {
+      "threshold": 1,
+      "false_positive_rate": 0,
+      "attack_tpr": 0,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "select_accuracy_threshold",
+      "thresholds": [
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1
+      ],
+      "attack_weights": {
+        "common": 0.8,
+        "rare": 0.2
+      }
+    },
+    "expected": {
+      "threshold": 0.6,
+      "false_positive_rate": 0,
+      "attack_tpr": 0.64,
+      "worst_group_tpr": 0,
+      "group_tpr": {
+        "common": 0.8,
+        "rare": 0
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "select_worst_group_threshold",
+      "thresholds": [
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1
+      ],
+      "attack_weights": {
+        "common": 0.8,
+        "rare": 0.2
+      },
+      "max_fpr": 0.2
+    },
+    "expected": {
+      "threshold": 0.4,
+      "false_positive_rate": 0.2,
+      "attack_tpr": 0.74,
+      "worst_group_tpr": 0.5,
+      "group_tpr": {
+        "common": 0.8,
+        "rare": 0.5
+      }
+    }
+  },
+  {
+    "config": {
+      "benign_scores": [
+        0.1,
+        0.2,
+        0.2,
+        0.3,
+        0.5
+      ],
+      "attack_scores": {
+        "common": [
+          0.3,
+          0.6,
+          0.6,
+          0.8,
+          0.9
+        ],
+        "rare": [
+          0.1,
+          0.4
+        ]
+      },
+      "operation": "select_robust_threshold",
+      "thresholds": [
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1
+      ],
+      "attack_weights": {
+        "common": 0.8,
+        "rare": 0.2
+      },
+      "max_fpr": 0.2
+    },
+    "expected": {
+      "threshold": 0.4,
+      "false_positive_rate": 0.2,
+      "attack_tpr": 0.65,
+      "worst_group_tpr": 0.5,
+      "group_tpr": {
+        "common": 0.8,
+        "rare": 0.5
+      }
+    }
+  }
+]
