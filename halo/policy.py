@@ -53,11 +53,10 @@ def decide(findings: Iterable[Finding], *, effectful: bool = False) -> PolicyRes
         )
 
     # Missing observability plus an effectful action means the safety claim cannot
-    # be evaluated reliably; preserve the evidence and isolate the action instead
-    # of interpreting missing telemetry as benign.
+    # be evaluated reliably; deny the action rather than quarantining.
     if effectful and Signal.MONITORING_GAP in signals:
         return PolicyResult(
-            Decision.QUARANTINE,
+            Decision.DENY,
             ("Effectful action cannot be authorized with incomplete telemetry.",),
         )
 

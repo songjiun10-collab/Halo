@@ -126,7 +126,7 @@ def test_missing_external_write_scope_fails_closed_via_monitoring_gap():
         )
     ])
     assert Signal.MONITORING_GAP in {f.signal for f in findings}
-    assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+    assert decide(findings, effectful=True).decision is Decision.DENY
 
 
 def test_unapproved_classified_write_requires_approval_in_workspace():
@@ -215,7 +215,7 @@ def test_incomplete_state_version_pair_is_monitoring_gap(metadata):
         )
     ])
     assert Signal.MONITORING_GAP in {f.signal for f in findings}
-    assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+    assert decide(findings, effectful=True).decision is Decision.DENY
 
 
 @pytest.mark.parametrize(
@@ -251,7 +251,7 @@ def test_unknown_or_invalid_scope_is_policy_uncertainty(declared, target):
         )
     ])
     assert Signal.MONITORING_GAP in {f.signal for f in findings}
-    assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+    assert decide(findings, effectful=True).decision is Decision.DENY
 
 
 @pytest.mark.parametrize(
@@ -278,4 +278,4 @@ def test_inconsistent_or_invalid_data_classification_is_not_silently_allowed(
         )
     ])
     assert Signal.MONITORING_GAP in {f.signal for f in findings}
-    assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+    assert decide(findings, effectful=True).decision is Decision.DENY

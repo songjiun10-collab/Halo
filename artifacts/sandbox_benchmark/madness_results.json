@@ -1,0 +1,926 @@
+{
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "python": "3.12.13 (main, Mar  3 2026, 12:39:30) [Clang 21.0.0 (clang-2100.0.123.102)]",
+  "repeats": 5,
+  "condition": "BASELINE vs HARDENED, clean env, closed FDs; HARDENED + RLIMIT_NPROC=1",
+  "summary": {
+    "BASELINE": {
+      "ioregistry_enum": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "hw_machine": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "hw_model": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "kern_osversion": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "task_port": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "statfs_host": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      }
+    },
+    "HARDENED": {
+      "ioregistry_enum": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "hw_machine": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "hw_model": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "kern_osversion": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "task_port": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "statfs_host": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      }
+    }
+  },
+  "trials": [
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "ioregistry_enum",
+      "outcome": "escaped",
+      "elapsed_ms": 43.93,
+      "evidence": {
+        "status": "escaped",
+        "io_count": {
+          "IOService": 1584,
+          "IONetworkInterface": 7,
+          "IOBlockStorageDriver": 3,
+          "IOPlatformExpertDevice": 1
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "hw_machine",
+      "outcome": "escaped",
+      "elapsed_ms": 26.238,
+      "evidence": {
+        "status": "escaped",
+        "hw_machine": "arm64"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "hw_model",
+      "outcome": "escaped",
+      "elapsed_ms": 24.583,
+      "evidence": {
+        "status": "escaped",
+        "leaked": {
+          "hw.model": "Mac17,3",
+          "hw.product": "Mac17,3"
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "kern_osversion",
+      "outcome": "escaped",
+      "elapsed_ms": 24.78,
+      "evidence": {
+        "status": "escaped",
+        "leaked": {
+          "kern.osproductversion": "27.0",
+          "kern.osversion": "26A5353q"
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "task_port",
+      "outcome": "blocked",
+      "elapsed_ms": 24.469,
+      "evidence": {
+        "status": "blocked",
+        "note": "taskgated",
+        "rc": 5
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "statfs_host",
+      "outcome": "escaped",
+      "elapsed_ms": 24.523,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          },
+          "/System/Volumes/Data": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "ioregistry_enum",
+      "outcome": "escaped",
+      "elapsed_ms": 27.013,
+      "evidence": {
+        "status": "escaped",
+        "io_count": {
+          "IOService": 1584,
+          "IONetworkInterface": 7,
+          "IOBlockStorageDriver": 3,
+          "IOPlatformExpertDevice": 1
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "hw_machine",
+      "outcome": "escaped",
+      "elapsed_ms": 25.266,
+      "evidence": {
+        "status": "escaped",
+        "hw_machine": "arm64"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "hw_model",
+      "outcome": "escaped",
+      "elapsed_ms": 25.303,
+      "evidence": {
+        "status": "escaped",
+        "leaked": {
+          "hw.model": "Mac17,3",
+          "hw.product": "Mac17,3"
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "kern_osversion",
+      "outcome": "escaped",
+      "elapsed_ms": 24.868,
+      "evidence": {
+        "status": "escaped",
+        "leaked": {
+          "kern.osproductversion": "27.0",
+          "kern.osversion": "26A5353q"
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "task_port",
+      "outcome": "blocked",
+      "elapsed_ms": 24.397,
+      "evidence": {
+        "status": "blocked",
+        "note": "taskgated",
+        "rc": 5
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "statfs_host",
+      "outcome": "escaped",
+      "elapsed_ms": 24.427,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          },
+          "/System/Volumes/Data": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "ioregistry_enum",
+      "outcome": "escaped",
+      "elapsed_ms": 27.099,
+      "evidence": {
+        "status": "escaped",
+        "io_count": {
+          "IOService": 1584,
+          "IONetworkInterface": 7,
+          "IOBlockStorageDriver": 3,
+          "IOPlatformExpertDevice": 1
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "hw_machine",
+      "outcome": "escaped",
+      "elapsed_ms": 24.898,
+      "evidence": {
+        "status": "escaped",
+        "hw_machine": "arm64"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "hw_model",
+      "outcome": "escaped",
+      "elapsed_ms": 24.665,
+      "evidence": {
+        "status": "escaped",
+        "leaked": {
+          "hw.model": "Mac17,3",
+          "hw.product": "Mac17,3"
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "kern_osversion",
+      "outcome": "escaped",
+      "elapsed_ms": 24.023,
+      "evidence": {
+        "status": "escaped",
+        "leaked": {
+          "kern.osproductversion": "27.0",
+          "kern.osversion": "26A5353q"
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "task_port",
+      "outcome": "blocked",
+      "elapsed_ms": 24.268,
+      "evidence": {
+        "status": "blocked",
+        "note": "taskgated",
+        "rc": 5
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "statfs_host",
+      "outcome": "escaped",
+      "elapsed_ms": 24.398,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          },
+          "/System/Volumes/Data": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "ioregistry_enum",
+      "outcome": "escaped",
+      "elapsed_ms": 26.954,
+      "evidence": {
+        "status": "escaped",
+        "io_count": {
+          "IOService": 1584,
+          "IONetworkInterface": 7,
+          "IOBlockStorageDriver": 3,
+          "IOPlatformExpertDevice": 1
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "hw_machine",
+      "outcome": "escaped",
+      "elapsed_ms": 24.721,
+      "evidence": {
+        "status": "escaped",
+        "hw_machine": "arm64"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "hw_model",
+      "outcome": "escaped",
+      "elapsed_ms": 24.341,
+      "evidence": {
+        "status": "escaped",
+        "leaked": {
+          "hw.model": "Mac17,3",
+          "hw.product": "Mac17,3"
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "kern_osversion",
+      "outcome": "escaped",
+      "elapsed_ms": 24.491,
+      "evidence": {
+        "status": "escaped",
+        "leaked": {
+          "kern.osproductversion": "27.0",
+          "kern.osversion": "26A5353q"
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "task_port",
+      "outcome": "blocked",
+      "elapsed_ms": 24.233,
+      "evidence": {
+        "status": "blocked",
+        "note": "taskgated",
+        "rc": 5
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "statfs_host",
+      "outcome": "escaped",
+      "elapsed_ms": 24.25,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          },
+          "/System/Volumes/Data": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "ioregistry_enum",
+      "outcome": "escaped",
+      "elapsed_ms": 26.803,
+      "evidence": {
+        "status": "escaped",
+        "io_count": {
+          "IOService": 1584,
+          "IONetworkInterface": 7,
+          "IOBlockStorageDriver": 3,
+          "IOPlatformExpertDevice": 1
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "hw_machine",
+      "outcome": "escaped",
+      "elapsed_ms": 24.624,
+      "evidence": {
+        "status": "escaped",
+        "hw_machine": "arm64"
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "hw_model",
+      "outcome": "escaped",
+      "elapsed_ms": 24.453,
+      "evidence": {
+        "status": "escaped",
+        "leaked": {
+          "hw.model": "Mac17,3",
+          "hw.product": "Mac17,3"
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "kern_osversion",
+      "outcome": "escaped",
+      "elapsed_ms": 24.599,
+      "evidence": {
+        "status": "escaped",
+        "leaked": {
+          "kern.osproductversion": "27.0",
+          "kern.osversion": "26A5353q"
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "task_port",
+      "outcome": "blocked",
+      "elapsed_ms": 24.933,
+      "evidence": {
+        "status": "blocked",
+        "note": "taskgated",
+        "rc": 5
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "statfs_host",
+      "outcome": "escaped",
+      "elapsed_ms": 24.593,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          },
+          "/System/Volumes/Data": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "ioregistry_enum",
+      "outcome": "escaped",
+      "elapsed_ms": 27.927,
+      "evidence": {
+        "status": "escaped",
+        "io_count": {
+          "IOService": 1584,
+          "IONetworkInterface": 7,
+          "IOBlockStorageDriver": 3,
+          "IOPlatformExpertDevice": 1
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "hw_machine",
+      "outcome": "escaped",
+      "elapsed_ms": 25.29,
+      "evidence": {
+        "status": "escaped",
+        "hw_machine": "arm64"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "hw_model",
+      "outcome": "blocked",
+      "elapsed_ms": 25.022,
+      "evidence": {
+        "status": "blocked",
+        "leaked": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "kern_osversion",
+      "outcome": "blocked",
+      "elapsed_ms": 25.237,
+      "evidence": {
+        "status": "blocked",
+        "leaked": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "task_port",
+      "outcome": "blocked",
+      "elapsed_ms": 24.937,
+      "evidence": {
+        "status": "blocked",
+        "note": "taskgated",
+        "rc": 5
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "statfs_host",
+      "outcome": "escaped",
+      "elapsed_ms": 25.136,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          },
+          "/System/Volumes/Data": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "ioregistry_enum",
+      "outcome": "escaped",
+      "elapsed_ms": 27.813,
+      "evidence": {
+        "status": "escaped",
+        "io_count": {
+          "IOService": 1584,
+          "IONetworkInterface": 7,
+          "IOBlockStorageDriver": 3,
+          "IOPlatformExpertDevice": 1
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "hw_machine",
+      "outcome": "escaped",
+      "elapsed_ms": 24.873,
+      "evidence": {
+        "status": "escaped",
+        "hw_machine": "arm64"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "hw_model",
+      "outcome": "blocked",
+      "elapsed_ms": 25.057,
+      "evidence": {
+        "status": "blocked",
+        "leaked": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "kern_osversion",
+      "outcome": "blocked",
+      "elapsed_ms": 25.057,
+      "evidence": {
+        "status": "blocked",
+        "leaked": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "task_port",
+      "outcome": "blocked",
+      "elapsed_ms": 24.767,
+      "evidence": {
+        "status": "blocked",
+        "note": "taskgated",
+        "rc": 5
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "statfs_host",
+      "outcome": "escaped",
+      "elapsed_ms": 24.918,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          },
+          "/System/Volumes/Data": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "ioregistry_enum",
+      "outcome": "escaped",
+      "elapsed_ms": 27.587,
+      "evidence": {
+        "status": "escaped",
+        "io_count": {
+          "IOService": 1584,
+          "IONetworkInterface": 7,
+          "IOBlockStorageDriver": 3,
+          "IOPlatformExpertDevice": 1
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "hw_machine",
+      "outcome": "escaped",
+      "elapsed_ms": 25.901,
+      "evidence": {
+        "status": "escaped",
+        "hw_machine": "arm64"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "hw_model",
+      "outcome": "blocked",
+      "elapsed_ms": 24.765,
+      "evidence": {
+        "status": "blocked",
+        "leaked": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "kern_osversion",
+      "outcome": "blocked",
+      "elapsed_ms": 25.066,
+      "evidence": {
+        "status": "blocked",
+        "leaked": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "task_port",
+      "outcome": "blocked",
+      "elapsed_ms": 24.864,
+      "evidence": {
+        "status": "blocked",
+        "note": "taskgated",
+        "rc": 5
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "statfs_host",
+      "outcome": "escaped",
+      "elapsed_ms": 24.407,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          },
+          "/System/Volumes/Data": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "ioregistry_enum",
+      "outcome": "escaped",
+      "elapsed_ms": 27.734,
+      "evidence": {
+        "status": "escaped",
+        "io_count": {
+          "IOService": 1584,
+          "IONetworkInterface": 7,
+          "IOBlockStorageDriver": 3,
+          "IOPlatformExpertDevice": 1
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "hw_machine",
+      "outcome": "escaped",
+      "elapsed_ms": 24.617,
+      "evidence": {
+        "status": "escaped",
+        "hw_machine": "arm64"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "hw_model",
+      "outcome": "blocked",
+      "elapsed_ms": 24.716,
+      "evidence": {
+        "status": "blocked",
+        "leaked": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "kern_osversion",
+      "outcome": "blocked",
+      "elapsed_ms": 24.974,
+      "evidence": {
+        "status": "blocked",
+        "leaked": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "task_port",
+      "outcome": "blocked",
+      "elapsed_ms": 25.011,
+      "evidence": {
+        "status": "blocked",
+        "note": "taskgated",
+        "rc": 5
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "statfs_host",
+      "outcome": "escaped",
+      "elapsed_ms": 24.825,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          },
+          "/System/Volumes/Data": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "ioregistry_enum",
+      "outcome": "escaped",
+      "elapsed_ms": 27.38,
+      "evidence": {
+        "status": "escaped",
+        "io_count": {
+          "IOService": 1584,
+          "IONetworkInterface": 7,
+          "IOBlockStorageDriver": 3,
+          "IOPlatformExpertDevice": 1
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "hw_machine",
+      "outcome": "escaped",
+      "elapsed_ms": 24.911,
+      "evidence": {
+        "status": "escaped",
+        "hw_machine": "arm64"
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "hw_model",
+      "outcome": "blocked",
+      "elapsed_ms": 24.829,
+      "evidence": {
+        "status": "blocked",
+        "leaked": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "kern_osversion",
+      "outcome": "blocked",
+      "elapsed_ms": 24.976,
+      "evidence": {
+        "status": "blocked",
+        "leaked": {}
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "task_port",
+      "outcome": "blocked",
+      "elapsed_ms": 24.878,
+      "evidence": {
+        "status": "blocked",
+        "note": "taskgated",
+        "rc": 5
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "statfs_host",
+      "outcome": "escaped",
+      "elapsed_ms": 24.647,
+      "evidence": {
+        "status": "escaped",
+        "statvfs": {
+          "/": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          },
+          "/System/Volumes/Data": {
+            "f_blocks": 120686613,
+            "f_frsize": 4096
+          }
+        }
+      }
+    }
+  ]
+}

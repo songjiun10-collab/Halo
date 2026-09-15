@@ -5,14 +5,23 @@ use std::io::{self, Read};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{symlink, MetadataExt};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod extra_probes;
+
 const BENIGN: [&str; 3] = ["allowed_compute", "allowed_read", "allowed_write"];
-const ATTACKS: [&str; 9] = [
+const ATTACKS: [&str; 100] = [
+    "hardlink_read",
+    "rename_write",
+    "unix_connect",
+    "self_exec_read",
+    "runtime_metadata_read",
+    "runtime_content_read",
     "absolute_read",
     "traversal_read",
     "symlink_read",
@@ -22,6 +31,91 @@ const ATTACKS: [&str; 9] = [
     "tcp_connect",
     "environment_secret",
     "inherited_fd",
+    "read_open",
+    "read_buffered",
+    "read_pread",
+    "read_mmap",
+    "read_readv",
+    "read_openat",
+    "read_nofollow",
+    "read_directory_symlink",
+    "read_double_symlink",
+    "read_dot",
+    "read_double_slash",
+    "read_relative_cwd",
+    "read_copy",
+    "read_dev_fd",
+    "read_dup_fd",
+    "metadata_stat",
+    "metadata_lstat",
+    "metadata_access",
+    "metadata_readlink",
+    "metadata_canonicalize",
+    "metadata_readdir",
+    "metadata_chdir",
+    "metadata_statvfs",
+    "metadata_xattr_list",
+    "metadata_fstat_fd",
+    "write_append",
+    "write_truncate",
+    "write_openat",
+    "write_create",
+    "write_unlink",
+    "write_chmod",
+    "write_utimes",
+    "write_mkdir",
+    "write_rmdir",
+    "write_symlink",
+    "write_hardlink_out",
+    "write_rename_dir",
+    "write_copy",
+    "write_writev",
+    "write_pwrite",
+    "exec_shell",
+    "exec_env",
+    "exec_cat_symlink",
+    "unix_bind",
+    "tcp_bind",
+    "read_open_cloexec",
+    "read_seek",
+    "read_read_to_end",
+    "read_file_ext",
+    "read_open_absolute_c",
+    "read_fstat_then_read",
+    "read_openat_cwd",
+    "read_pathbuf_escape",
+    "metadata_faccessat",
+    "metadata_fstatat",
+    "metadata_pathconf",
+    "metadata_getcwd",
+    "metadata_getpid",
+    "metadata_readlinkat",
+    "metadata_dirfd",
+    "metadata_statfs",
+    "metadata_fstatat_root",
+    "metadata_access_parent",
+    "metadata_lstat_root",
+    "write_open_append",
+    "write_open_excl",
+    "write_ftruncate",
+    "write_fchmod",
+    "write_fchown",
+    "write_futimens",
+    "write_linkat",
+    "write_unlinkat",
+    "write_renameat",
+    "write_mkdirat",
+    "write_symlinkat",
+    "exec_cat_absolute",
+    "exec_cat_shell_n",
+    "exec_env_path",
+    "exec_reexec",
+    "tcp_connect_loopback",
+    "tcp_listen_variant",
+    "udp_bind_variant",
+    "udp_connect_variant",
+    "unix_connect_variant",
+    "unix_bind_variant",
 ];
 const MODES: [&str; 3] = [
     "unconfined_control",
@@ -34,6 +128,9 @@ fn os_error(error: io::Error) -> Value {
 }
 
 fn payload(case: &str, outside: &Path, work: &Path, port: u16, fd: i32) -> Value {
+        if extra_probes::CASES.contains(&case) {
+        return extra_probes::run(case, outside, work, fd).unwrap_or_else(os_error);
+    }
     let result: io::Result<Value> = (|| {
         let value = match case {
             "allowed_compute" => json!((0..1000).sum::<u64>()),
@@ -44,6 +141,46 @@ fn payload(case: &str, outside: &Path, work: &Path, port: u16, fd: i32) -> Value
                 json!(fs::read_to_string(path)?)
             }
             "absolute_read" => json!(fs::read_to_string(outside.join("canary.txt"))?),
+            "hardlink_read" => {
+                let link = work.join("new-hardlink");
+                let _ = fs::remove_file(&link);
+                fs::hard_link(outside.join("canary.txt"), &link)?;
+                let value = fs::read_to_string(&link)?;
+                fs::remove_file(link)?;
+                json!(value)
+            }
+            "rename_write" => {
+                let source = work.join("rename-source");
+                fs::write(&source, "changed")?;
+                fs::rename(source, outside.join("target.txt"))?;
+                json!("changed")
+            }
+            "unix_connect" => {
+                let _connection = UnixStream::connect(outside.join("canary.sock"))?;
+                json!("connected")
+            }
+            "runtime_metadata_read" => {
+                fs::metadata("/System/Library/CoreServices/SystemVersion.plist")?;
+                json!("metadata-readable")
+            }
+            "self_exec_read" => {
+                let mut cmd = Command::new(env::current_exe()?);
+                cmd.arg("--child")
+                    .arg("absolute_read")
+                    .arg(outside)
+                    .arg(work)
+                    .arg(port.to_string())
+                    .arg(fd.to_string());
+                let (status, stdout, _, timed_out) = capture(&mut cmd, Duration::from_secs(2))?;
+                if timed_out || !status.success() {
+                    return Ok(json!({"status":"error", "reason":"nested launch failed"}));
+                }
+                return serde_json::from_slice(&stdout).map_err(io::Error::other);
+            }
+            "runtime_content_read" => {
+                fs::read("/System/Library/CoreServices/SystemVersion.plist")?;
+                json!("runtime-content-readable")
+            }
             "traversal_read" => json!(fs::read_to_string(work.join("../outside/canary.txt"))?),
             "symlink_read" => json!(fs::read_to_string(work.join("read-link"))?),
             "absolute_write" | "symlink_write" => {
@@ -89,8 +226,7 @@ fn payload(case: &str, outside: &Path, work: &Path, port: u16, fd: i32) -> Value
     result.unwrap_or_else(os_error)
 }
 
-// Root/runtime read exceptions remain. This port tests the existing nine
-// vectors; it is not a proof of host metadata isolation.
+// Runtime read exceptions remain; this is not complete host isolation.
 fn profile(work: &Path, exe: &Path) -> String {
     let work = json!(work.to_string_lossy()).to_string();
     let exe = json!(exe.to_string_lossy()).to_string();
@@ -100,7 +236,7 @@ fn profile(work: &Path, exe: &Path) -> String {
 (allow process-exec (literal {exe}))
 (allow sysctl-read (sysctl-name "hw.pagesize") (sysctl-name "hw.pagesize_compat"))
 (allow file-read* (literal {exe}) (subpath {work})
-    (subpath "/System/Library") (subpath "/usr/lib")
+    (subpath "/usr/lib")
     (literal "/") (literal "/dev/null"))
 (allow file-write* (subpath {work}) (literal "/dev/null"))
 (deny process-info*)
@@ -122,6 +258,25 @@ fn classify(case: &str, result: &Value, secret: &str, target: &Path) -> &'static
             "error"
         };
     }
+    if extra_probes::CASES.contains(&case) {
+        let expected = if case.starts_with("read_") || case.starts_with("exec_") {
+            secret
+        } else {
+            "probe-succeeded"
+        };
+        return if result["status"] == "ok" && result["value"] == expected {
+            "escaped"
+        } else if result["status"] == "os_error"
+            && (result["errno"] == libc::EPERM
+                || result["errno"] == libc::EACCES
+                || (matches!(case, "read_dev_fd" | "read_dup_fd" | "metadata_fstat_fd")
+                    && result["errno"] == libc::EBADF))
+        {
+            "blocked"
+        } else {
+            "error"
+        };
+    }
     if case.ends_with("write") {
         match fs::read(target) {
             Ok(bytes) if bytes != b"original" => return "escaped",
@@ -132,7 +287,11 @@ fn classify(case: &str, result: &Value, secret: &str, target: &Path) -> &'static
     }
     let expected = if case.ends_with("write") {
         "changed"
-    } else if case == "tcp_connect" {
+    } else if case == "runtime_content_read" {
+        "runtime-content-readable"
+    } else if case == "runtime_metadata_read" {
+        "metadata-readable"
+    } else if case == "tcp_connect" || case == "unix_connect" {
         "connected"
     } else {
         secret
@@ -356,9 +515,12 @@ fn benchmark(repeats: usize) -> Result<Value, Box<dyn std::error::Error>> {
     symlink(&canary, work.join("read-link"))?;
     symlink(&target, work.join("write-link"))?;
     validate_workspace(&work)?;
+    extra_probes::prepare(&outside, &work)?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
+    let unix_listener = UnixListener::bind(outside.join("canary.sock"))?;
+    unix_listener.set_nonblocking(true)?;
     let handle = File::open(&canary)?;
     // Keep the test FD away from Rust's launch-error pipe. Parent retains CLOEXEC.
     let raw = unsafe { libc::fcntl(handle.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 100) };
@@ -374,6 +536,12 @@ fn benchmark(repeats: usize) -> Result<Value, Box<dyn std::error::Error>> {
         let inherited = mode != "sandbox_clean_launch";
         for repeat in 0..repeats {
             for case in BENIGN.iter().chain(ATTACKS.iter()) {
+                extra_probes::prepare(&outside, &work)?;
+                // Inherited dup/open probes share an open-file-description offset.
+                if unsafe { libc::lseek(raw, 0, libc::SEEK_SET) } < 0 {
+                    return Err(io::Error::last_os_error().into());
+                }
+                while unix_listener.accept().is_ok() {}
                 fs::write(&target, "original")?;
                 let mut cmd = if mode == "unconfined_control" {
                     Command::new(&exe)
@@ -524,7 +692,23 @@ fn main() {
             0
         }
         Action::Run(repeats, output) => match benchmark(repeats) {
-            Ok(report) => {
+            Ok(mut report) => {
+                let passed = report_passes(&report);
+                let residual_cases: std::collections::BTreeSet<_> = report["trials"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| {
+                        row["mode"] == "sandbox_clean_launch" && row["outcome"] == "escaped"
+                    })
+                    .filter_map(|row| row["case"].as_str())
+                    .map(str::to_owned)
+                    .collect();
+                report["security_gate"] = json!({
+                    "passed":passed,
+                    "scope":"tested sandbox operations only",
+                    "residual_cases":residual_cases,
+                });
                 let text = serde_json::to_string_pretty(&report).unwrap();
                 if let Some(path) = output {
                     if let Err(error) = fs::write(path, format!("{text}\n")) {
@@ -533,7 +717,7 @@ fn main() {
                     }
                 }
                 println!("{text}");
-                if report_passes(&report) {
+                if passed {
                     0
                 } else {
                     1
@@ -550,6 +734,34 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extra_probe_errors_are_not_denials_and_reads_require_canary() {
+        for code in [libc::ENOENT, libc::EEXIST, libc::EIO] {
+            assert_eq!(
+                super::classify(
+                    "write_chmod",
+                    &serde_json::json!({"status":"os_error","errno":code}),
+                    "canary",
+                    std::path::Path::new("unused")
+                ),
+                "error"
+            );
+        }
+        assert_eq!(
+            super::classify(
+                "read_dup_fd",
+                &serde_json::json!({"status":"ok","value":""}),
+                "canary",
+                std::path::Path::new("unused")
+            ),
+            "error"
+        );
+        let unique: std::collections::BTreeSet<_> = super::ATTACKS.iter().collect();
+        assert_eq!(unique.len(), 100);
+        assert!(super::extra_probes::CASES
+            .iter()
+            .all(|c| super::ATTACKS.contains(c)));
+    }
     use super::*;
 
     #[test]

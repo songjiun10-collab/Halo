@@ -24,11 +24,24 @@ pub(super) fn quantile(values: &[f64], q: f64) -> f64 {
         return f64::NAN;
     }
     let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
     let index = (sorted.len() - 1) as f64 * q;
     let lo = index.floor() as usize;
     let hi = index.ceil() as usize;
-    sorted[lo] + (sorted[hi] - sorted[lo]) * (index - lo as f64)
+    // Only the two adjacent order statistics are needed, not a full sort.
+    let (lower, upper, _) = sorted.select_nth_unstable_by(hi, f64::total_cmp);
+    let high = *upper;
+    let low = if lo == hi {
+        high
+    } else {
+        *lower.iter().max_by(|a, b| a.total_cmp(b)).unwrap()
+    };
+    let weight = index - lo as f64;
+    if low.is_sign_negative() != high.is_sign_negative() {
+        // Opposite signs can overflow the difference, even for a finite result.
+        low * (1. - weight) + high * weight
+    } else {
+        low + (high - low) * weight
+    }
 }
 
 fn pool(x: [f64; 4]) -> [f64; 8] {
@@ -37,7 +50,20 @@ fn pool(x: [f64; 4]) -> [f64; 8] {
     let avg = if scale == 0. {
         0.
     } else {
-        ((x[0] / scale + x[1] / scale + x[2] / scale) / 3.) * scale
+        // Neumaier compensation preserves small terms across cancellation.
+        let mut sum: f64 = 0.;
+        let mut correction = 0.;
+        for value in &x[..3] {
+            let value = value / scale;
+            let next = sum + value;
+            correction += if sum.abs() >= value.abs() {
+                (sum - next) + value
+            } else {
+                (value - next) + sum
+            };
+            sum = next;
+        }
+        ((sum + correction) / 3.) * scale
     };
     let evidence = avg.max(x[3]);
     let max = x.into_iter().fold(f64::NEG_INFINITY, f64::max);
@@ -265,6 +291,48 @@ pub fn sweep(config: &Value, output: &Path) -> Result<Value, String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn selected_quantiles_match_full_sort_bits() {
+        let mut rng = StdRng::seed_from_u64(812);
+        for n in [1, 2, 3, 31, 256, 1001] {
+            let mut values = scores(&mut rng, [0.; 4], n)
+                .into_iter()
+                .map(|row| row[0])
+                .collect::<Vec<_>>();
+            values.extend([-f64::MAX, f64::MAX, -0., 0., 1., 1.]);
+            let mut ordered = values.clone();
+            ordered.sort_by(f64::total_cmp);
+            for q in [0., 0.0001, 0.1, 0.5, 0.9, 0.9999, 1.] {
+                let index = (ordered.len() - 1) as f64 * q;
+                let low = ordered[index.floor() as usize];
+                let high = ordered[index.ceil() as usize];
+                let weight = index - index.floor();
+                let expected = if low.is_sign_negative() != high.is_sign_negative() {
+                    low * (1. - weight) + high * weight
+                } else {
+                    low + (high - low) * weight
+                };
+                assert_eq!(quantile(&values, q).to_bits(), expected.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn audit_opposite_extreme_quantile_is_finite() {
+        let result = execute(&json!({"operation":"calibrate_thresholds","target_fpr":0.5,
+            "scores":[[-1e308,-1e308,-1e308,-1e308],[1e308,1e308,1e308,1e308]]}))
+        .unwrap();
+        assert_eq!(result["single_m1"], json!(0.0));
+    }
+
+    #[test]
+    fn audit_cancelling_mean_is_permutation_invariant() {
+        for row in [[1e308, -1e308, 3., 0.], [1e308, 3., -1e308, 0.]] {
+            let mean = pool(row)[1];
+            assert!((mean - 1.).abs() < 1e-14, "row={row:?}; mean={mean}");
+        }
+    }
 
     #[test]
     fn audit_large_finite_scores_remain_finite() {

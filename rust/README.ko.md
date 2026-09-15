@@ -1,5 +1,7 @@
 # HALO Rust 실행 코드
 
+명시적 센서 유효성·재검증 판정을 추가한 보호막 후보의 API와 실험 한계는 [SHIELD.ko.md](SHIELD.ko.md)에 있다.
+
 공개 WILDS·RobustBench의 평가 방법을 적용한 별도 [Shift Benchmark](SHIFT_BENCH.ko.md)는 보정·평가 데이터 분리, 복합 교란, 센서 손실, 최악 집단과 오탐률 이동을 평가한다. 실행 파일은 `shift_bench`다.
 
 실험 E001, E001-B, E002, E003, E004, E005의 계산과 반복 실행을 Rust로 옮긴 워크스페이스다. 실행 중 Python·NumPy·pandas를 호출하지 않는다. 원본 Python과 저장된 연구 결과는 비교 기준으로 유지한다.
@@ -62,12 +64,12 @@ rust/target/release/parameter_stress --experiment all --n 1000 --output rust/res
 
 모든 실험은 합성 입력에 대한 연구용 코드다. Rust 전환과 테스트 통과가 모델 안전성이나 완전 격리를 의미하지 않는다.
 
-## 최종 검증 — 2026-09-13
+## 최종 검증 — 2026-09-14
 
-추가 고부하 실행의 규모, 독립 수치 검증, 방어 성능의 한계와 실제 샌드박스 720회 결과는 [고부하 벤치마크 보고서](HARD_BENCH.ko.md)에 기록했다. `hard_bench`로 동일 설정을 재현할 수 있다.
+추가 고부하 실행의 규모, 독립 수치 검증, 방어 성능의 한계와 과거 샌드박스 720회 결과는 [고부하 벤치마크 보고서](HARD_BENCH.ko.md)에 기록했다. 현재 6,180회 실행 기준은 `rust/results/attack-100-validated-20.json`과 [REPORT_INDEX.ko.md](../REPORT_INDEX.ko.md)에 있다. `hard_bench`로 과거 설정을 재현할 수 있다.
 
-- 통계 워크스페이스 자동 테스트 39개 통과: 모듈 33개, 파라미터 그리드 2개, CLI 2개, Python 기준값 비교 2개(고정 입력 37건).
-- 기본 OS 샌드박스 Rust 실행기 테스트 12개 통과. 두 crate 모두 Clippy 경고를 오류로 처리한 검사 통과.
+- 통계 워크스페이스 자동 테스트 57개 통과. OS 샌드박스 실행기 테스트 13개 통과.
+- 100개 공격 사례 검사는 `rust/results/attack-100-validated-20.json`을 기준으로 하며 clean-launch의 메타데이터 잔여 접근 9개 때문에 보안 게이트는 실패한다.
 - release 빌드 성공. 모든 실험의 sweep을 seed 2개, 표본 1,000개로 실행했다. E005는 population 500, rounds 5로 실행했다. 원본 전체 표본 규모의 sweep을 모두 실행한 것은 아니다.
 - 파라미터 스트레스 140개를 표본 1,000개로 실행해 정상 종료했다.
 

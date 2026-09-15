@@ -1,5 +1,6 @@
 //! WILDS/RobustBench-inspired synthetic evaluation of HALO's real E002 pooling.
 use halo_experiments::e002;
+use halo_experiments::shield::{Decision, Shield};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use serde_json::{json, Value};
@@ -65,9 +66,10 @@ fn pooled(rows: &[[f64; 4]]) -> Result<BTreeMap<String, Vec<f64>>, String> {
 // This enforces the finite calibration budget even with ties or a zero budget.
 fn threshold(values: &[f64], fpr: f64) -> f64 {
     let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
     let allowed = (fpr * sorted.len() as f64).floor() as usize;
-    sorted[sorted.len() - allowed - 1].next_up()
+    let index = sorted.len() - allowed - 1;
+    let (_, threshold, _) = sorted.select_nth_unstable_by(index, f64::total_cmp);
+    threshold.next_up()
 }
 
 fn count(values: &[f64], tau: f64) -> usize {
@@ -85,11 +87,13 @@ fn interval(k: usize, n: usize) -> [f64; 2] {
 
 fn run(n: usize, seeds: usize) -> Result<Value, String> {
     let mut reports = Vec::new();
+    let mut shield_reports = Vec::new();
     let mut checks = 0;
     for seed in 0..seeds {
         // Disjoint seed namespaces: calibration, benign test, each attack family.
         let base = seed as u64 * 10000;
-        let calibration = pooled(&generate(base, n, None, "clean", 0.))?;
+        let calibration_raw = generate(base, n, None, "clean", 0.);
+        let calibration = pooled(&calibration_raw)?;
         for domain in DOMAINS {
             for severity in if domain == "clean" {
                 vec![0.]
@@ -97,11 +101,68 @@ fn run(n: usize, seeds: usize) -> Result<Value, String> {
                 vec![0.25, 0.5, 1.]
             } {
                 // Same underlying seeds pair severity comparisons; no threshold retuning.
-                let benign = pooled(&generate(base + 1, n, None, domain, severity))?;
+                let benign_raw = generate(base + 1, n, None, domain, severity);
+                let benign = pooled(&benign_raw)?;
+                let attack_raw: Vec<_> = (0..4)
+                    .map(|g| generate(base + 2 + g as u64, n, Some(g), domain, severity))
+                    .collect();
                 let attacks: Vec<_> = (0..4)
-                    .map(|g| pooled(&generate(base + 2 + g as u64, n, Some(g), domain, severity)))
+                    .map(|g| pooled(&attack_raw[g]))
                     .collect::<Result<_, _>>()?;
+                // An explicit additional resource: separately verified benign
+                // monitoring data, never evaluation labels or attack samples.
+                let refresh_raw = generate(base + 100, n, None, domain, severity);
+                let complete: Vec<_> = refresh_raw
+                    .into_iter()
+                    .filter(|r| !((domain == "sensor_loss" || domain == "compound") && r[3] == 0.))
+                    .collect();
                 for budget in [0.0001, 0.01, 0.1] {
+                    for mode in [
+                        "frozen_centered",
+                        "trusted_refresh_centered",
+                        "frozen_hybrid",
+                    ] {
+                        let cal = if mode != "trusted_refresh_centered" {
+                            &calibration_raw
+                        } else {
+                            &complete
+                        };
+                        let shield = if cal.is_empty() {
+                            None
+                        } else {
+                            Some(if mode == "frozen_hybrid" {
+                                Shield::calibrate_hybrid(cal, budget)?
+                            } else {
+                                Shield::calibrate(cal, budget)?
+                            })
+                        };
+                        let evaluate = |rows: &[[f64; 4]]| {
+                            let mut counts = [0_usize; 3];
+                            for row in rows {
+                                let mut evidence = row.map(Some);
+                                // The simulator writes exact zero for a dropped
+                                // fourth sensor. Production callers must supply
+                                // explicit validity metadata, never infer it from zero.
+                                if (domain == "sensor_loss" || domain == "compound") && row[3] == 0.
+                                {
+                                    evidence[3] = None;
+                                }
+                                let d = shield
+                                    .as_ref()
+                                    .map(|s| s.decide(evidence))
+                                    .unwrap_or(Decision::Revalidate);
+                                counts[match d {
+                                    Decision::Allow => 0,
+                                    Decision::Block => 1,
+                                    Decision::Revalidate => 2,
+                                }] += 1;
+                            }
+                            json!({"allow":counts[0],"block":counts[1],"revalidate":counts[2],"total":rows.len()})
+                        };
+                        shield_reports.push(json!({"seed":seed,"domain":domain,"severity":severity,"target_fpr":budget,
+                            "mode":mode,"calibration_rows":cal.len(),"benign":evaluate(&benign_raw),
+                            "attacks":attack_raw.iter().map(|r|evaluate(r)).collect::<Vec<_>>()}));
+                    }
                     for (name, cal) in &calibration {
                         let tau = threshold(cal, budget);
                         if count(cal, tau) as f64 > (budget * n as f64).floor() {
@@ -178,7 +239,8 @@ fn run(n: usize, seeds: usize) -> Result<Value, String> {
         "threshold_rule":"Frozen clean calibration; >= comparator; floor(n*fpr) empirical budget; ties excluded conservatively",
         "interval_scope":"Pointwise Wilson 95%; no simultaneous coverage across conditions",
         "checks":checks,"fpr_violation_count":fpr_violations,"max_heldout_fpr":max_heldout_fpr,
-        "worst_observed_group_tpr":worst,"rows":reports}),
+        "shield_scope":"Centered scores; explicit revalidation is not detection. Trusted refresh requires separate verified benign data.",
+        "shield_rows":shield_reports,"worst_observed_group_tpr":worst,"rows":reports}),
     )
 }
 

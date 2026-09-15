@@ -48,10 +48,16 @@ def run(
     # Use conservative calculation to ensure safety
     adaptive_window = max(1, freshness_window - int(volatility * 2))
 
-    # Progressive refresh with adaptive window
+# Progressive refresh with an adaptive window that monotonically shrinks
+    # as volatility rises: more state churn means verdicts go stale faster, so
+    # the reuse bound must tighten. Floor at 1 so a volatile stream revalidates
+    # every step rather than ever widening the bound.
     progressive_allow = allow_at_check.copy()
     progressive_last_check = 0
     progressive_revalidations = 0
+
+    def adaptive_window(vol: float) -> int:
+        return max(1, int(round(freshness_window * (1.0 - vol))))
 
     for step in range(1, delay_steps + 1):
         s = np.logical_xor(s, rng.random(n) < volatility)
@@ -64,24 +70,12 @@ def run(
             fixed_window_last_check_step = step
             fixed_window_revalidations += 1
 
-        # Progressive refresh with adaptive window based on volatility
-        # Use very conservative window for safety, especially at low volatility
-        if volatility < 0.1:
-            # At low volatility, use half the freshness window for more frequent refresh
-            current_adaptive_window = max(1, freshness_window // 2)
-        else:
-            # At higher volatility, use the standard adaptive calculation
-            current_adaptive_window = max(1, freshness_window - int(volatility * 2))
-        if step - progressive_last_check > current_adaptive_window:
+        if step - progressive_last_check > adaptive_window(volatility):
             progressive_allow = policy_allow(s, w).copy()
             progressive_last_check = step
             progressive_revalidations += 1
-    
-    # Store the actual adaptive window used for metadata
-    if volatility < 0.1:
-        final_adaptive_window = max(1, freshness_window // 2)
-    else:
-        final_adaptive_window = max(1, freshness_window - int(volatility * 2))
+
+    final_adaptive_window = adaptive_window(volatility)
 
     allow_at_use = policy_allow(s, w)
     cached_allow = allow_at_check

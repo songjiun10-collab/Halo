@@ -91,7 +91,7 @@ pub fn execute(config: &Value) -> Result<Value, String> {
             proposal = population(&mut rng, size, false);
             continue;
         }
-        survivors.sort_by(|a, b| b[0].total_cmp(&a[0]));
+        survivors.sort_unstable_by(|a, b| b[0].total_cmp(&a[0]));
         let keep = ((survivors.len() as f64 * survival) as usize).max(1);
         survivors.truncate(keep);
         for x in &mut survivors {

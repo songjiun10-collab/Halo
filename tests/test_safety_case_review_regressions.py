@@ -18,7 +18,7 @@ def test_effectful_action_requires_declared_scope():
     )
     findings = evaluate_trace([event])
     assert Signal.MONITORING_GAP in {f.signal for f in findings}
-    assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+    assert decide(findings, effectful=True).decision is Decision.DENY
 
 
 @pytest.mark.parametrize("approved", ["false", "true", 0, 1, None])
@@ -61,7 +61,7 @@ def test_privilege_change_requires_target_scope():
     )
     findings = evaluate_trace([event])
     assert Signal.MONITORING_GAP in {f.signal for f in findings}
-    assert decide(findings, effectful=True).decision is Decision.QUARANTINE
+    assert decide(findings, effectful=True).decision is Decision.DENY
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,6578 @@
+{
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "python": "3.12.13 (main, Mar  3 2026, 12:39:30) [Clang 21.0.0 (clang-2100.0.123.102)]",
+  "repeats": 5,
+  "condition": "BASELINE vs HARDENED, clean env, closed FDs; HARDENED additionally gets RLIMIT_NPROC=1",
+  "summary": {
+    "PERMISSIVE": {
+      "system_version_read": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "mach_host_statistics": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "sysctl_allowlist_scan": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "unix_socket_probe": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "sysv_ipc_probe": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "posix_shm_probe": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "identity_probe": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "metadata_boundary_map": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "memory_exhaust_bounded": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      }
+    },
+    "BASELINE": {
+      "system_version_read": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "mach_host_statistics": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "sysctl_allowlist_scan": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "unix_socket_probe": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "sysv_ipc_probe": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "posix_shm_probe": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "identity_probe": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "metadata_boundary_map": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "memory_exhaust_bounded": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      }
+    },
+    "HARDENED": {
+      "system_version_read": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "mach_host_statistics": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "sysctl_allowlist_scan": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "unix_socket_probe": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "sysv_ipc_probe": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "posix_shm_probe": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "identity_probe": {
+        "escaped": 0,
+        "blocked": 5,
+        "error": 0,
+        "total": 5
+      },
+      "metadata_boundary_map": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      },
+      "memory_exhaust_bounded": {
+        "escaped": 5,
+        "blocked": 0,
+        "error": 0,
+        "total": 5
+      }
+    }
+  },
+  "trials": [
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 30.246,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.279,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 2563,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16562577,
+              7771151,
+              317889060,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              5057,
+              262721,
+              260628,
+              144167,
+              575803119,
+              110979777,
+              76003398,
+              70791,
+              1080469727,
+              64586234,
+              0,
+              13542193,
+              3558,
+              17329992,
+              1382
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 29.196,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        },
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 22,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "unix_socket_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.958,
+      "evidence": {
+        "status": "escaped",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 41
+          },
+          "unix_mdns": {
+            "ok": true,
+            "errno": 0
+          },
+          "unix_cups": {
+            "ok": true,
+            "errno": 0
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 61
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 30.029,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 262144,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          },
+          "shmget": {
+            "id": 196609,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          },
+          "msgget": {
+            "id": 327680,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          }
+        },
+        "created_ids": {
+          "semget": 262144,
+          "shmget": 196609,
+          "msgget": 327680
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "posix_shm_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.795,
+      "evidence": {
+        "status": "escaped",
+        "shm": {
+          "create": {
+            "fd": 3,
+            "errno": 0
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 13
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "identity_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 34.279,
+      "evidence": {
+        "status": "escaped",
+        "identity": {
+          "getpwuid": {
+            "ok": true,
+            "name": "songjiun",
+            "home": "/Users/songjiun"
+          },
+          "getgrgid": {
+            "ok": true,
+            "name": "staff",
+            "home": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.885,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/etc/passwd": {
+            "ok": true,
+            "size": 9344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/private/etc": {
+            "ok": true,
+            "size": 2464,
+            "uid": 0,
+            "mtime": 1788771599
+          },
+          "/opt/homebrew/etc": {
+            "ok": true,
+            "size": 384,
+            "uid": 501,
+            "mtime": 1779579579
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true,
+            "size": 749674,
+            "uid": 501,
+            "mtime": 1788876253
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 0,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 213.724,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 30.613,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.547,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 2307,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16562656,
+              7771220,
+              317889385,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              69334,
+              203638,
+              202350,
+              144129,
+              575877054,
+              111005931,
+              76004161,
+              70791,
+              1080562408,
+              64589976,
+              0,
+              13542286,
+              1885,
+              17330482,
+              204
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 29.55,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        },
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 22,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "unix_socket_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.77,
+      "evidence": {
+        "status": "escaped",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 41
+          },
+          "unix_mdns": {
+            "ok": true,
+            "errno": 0
+          },
+          "unix_cups": {
+            "ok": true,
+            "errno": 0
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 61
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.632,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 327680,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          },
+          "shmget": {
+            "id": 262145,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          },
+          "msgget": {
+            "id": 393216,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          }
+        },
+        "created_ids": {
+          "semget": 327680,
+          "shmget": 262145,
+          "msgget": 393216
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "posix_shm_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.375,
+      "evidence": {
+        "status": "escaped",
+        "shm": {
+          "create": {
+            "fd": 3,
+            "errno": 0
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 13
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "identity_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 30.152,
+      "evidence": {
+        "status": "escaped",
+        "identity": {
+          "getpwuid": {
+            "ok": true,
+            "name": "songjiun",
+            "home": "/Users/songjiun"
+          },
+          "getgrgid": {
+            "ok": true,
+            "name": "staff",
+            "home": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.368,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/etc/passwd": {
+            "ok": true,
+            "size": 9344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/private/etc": {
+            "ok": true,
+            "size": 2464,
+            "uid": 0,
+            "mtime": 1788771599
+          },
+          "/opt/homebrew/etc": {
+            "ok": true,
+            "size": 384,
+            "uid": 501,
+            "mtime": 1779579579
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true,
+            "size": 749674,
+            "uid": 501,
+            "mtime": 1788876253
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 1,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 95.169,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 40.677,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 31.68,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 2819,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16562739,
+              7771244,
+              317889639,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              69567,
+              204229,
+              202880,
+              144129,
+              575950745,
+              111007877,
+              76005061,
+              70791,
+              1080657437,
+              64593680,
+              0,
+              13542428,
+              1168,
+              17331201,
+              401
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 30.191,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        },
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 22,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "unix_socket_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 30.026,
+      "evidence": {
+        "status": "escaped",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 41
+          },
+          "unix_mdns": {
+            "ok": true,
+            "errno": 0
+          },
+          "unix_cups": {
+            "ok": true,
+            "errno": 0
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 61
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.736,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 393216,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          },
+          "shmget": {
+            "id": 327681,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          },
+          "msgget": {
+            "id": 458752,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          }
+        },
+        "created_ids": {
+          "semget": 393216,
+          "shmget": 327681,
+          "msgget": 458752
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "posix_shm_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.825,
+      "evidence": {
+        "status": "escaped",
+        "shm": {
+          "create": {
+            "fd": 3,
+            "errno": 0
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 13
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "identity_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.916,
+      "evidence": {
+        "status": "escaped",
+        "identity": {
+          "getpwuid": {
+            "ok": true,
+            "name": "songjiun",
+            "home": "/Users/songjiun"
+          },
+          "getgrgid": {
+            "ok": true,
+            "name": "staff",
+            "home": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.16,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/etc/passwd": {
+            "ok": true,
+            "size": 9344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/private/etc": {
+            "ok": true,
+            "size": 2464,
+            "uid": 0,
+            "mtime": 1788771599
+          },
+          "/opt/homebrew/etc": {
+            "ok": true,
+            "size": 384,
+            "uid": 501,
+            "mtime": 1779579579
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true,
+            "size": 749674,
+            "uid": 501,
+            "mtime": 1788876253
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 2,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 88.679,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 3,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 30.624,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 3,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.41,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 3075,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16562801,
+              7771262,
+              317889898,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              69843,
+              204292,
+              203253,
+              144067,
+              576024321,
+              111007877,
+              76005781,
+              70791,
+              1080749551,
+              64597354,
+              0,
+              13542509,
+              1168,
+              17331201,
+              401
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 3,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 29.21,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        },
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 22,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 3,
+      "case": "unix_socket_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.902,
+      "evidence": {
+        "status": "escaped",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 41
+          },
+          "unix_mdns": {
+            "ok": true,
+            "errno": 0
+          },
+          "unix_cups": {
+            "ok": true,
+            "errno": 0
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 61
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 3,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.452,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 458752,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          },
+          "shmget": {
+            "id": 393217,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          },
+          "msgget": {
+            "id": 524288,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          }
+        },
+        "created_ids": {
+          "semget": 458752,
+          "shmget": 393217,
+          "msgget": 524288
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 3,
+      "case": "posix_shm_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.187,
+      "evidence": {
+        "status": "escaped",
+        "shm": {
+          "create": {
+            "fd": 3,
+            "errno": 0
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 13
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 3,
+      "case": "identity_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 30.81,
+      "evidence": {
+        "status": "escaped",
+        "identity": {
+          "getpwuid": {
+            "ok": true,
+            "name": "songjiun",
+            "home": "/Users/songjiun"
+          },
+          "getgrgid": {
+            "ok": true,
+            "name": "staff",
+            "home": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 3,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.087,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/etc/passwd": {
+            "ok": true,
+            "size": 9344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/private/etc": {
+            "ok": true,
+            "size": 2464,
+            "uid": 0,
+            "mtime": 1788771599
+          },
+          "/opt/homebrew/etc": {
+            "ok": true,
+            "size": 384,
+            "uid": 501,
+            "mtime": 1779579579
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true,
+            "size": 749674,
+            "uid": 501,
+            "mtime": 1788876253
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 3,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 89.733,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 4,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 30.165,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 4,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.132,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 7171,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16562862,
+              7771283,
+              317890161,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              70453,
+              203996,
+              203086,
+              144066,
+              576097938,
+              111007877,
+              76006501,
+              70791,
+              1080841376,
+              64601036,
+              0,
+              13542590,
+              554,
+              17331817,
+              401
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 4,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 29.199,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        },
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 22,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 4,
+      "case": "unix_socket_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.597,
+      "evidence": {
+        "status": "escaped",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 41
+          },
+          "unix_mdns": {
+            "ok": true,
+            "errno": 0
+          },
+          "unix_cups": {
+            "ok": true,
+            "errno": 0
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 61
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 4,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.004,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 524288,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          },
+          "shmget": {
+            "id": 458753,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          },
+          "msgget": {
+            "id": 589824,
+            "create_errno": 0,
+            "rm_rc": 0,
+            "rm_errno": 0
+          }
+        },
+        "created_ids": {
+          "semget": 524288,
+          "shmget": 458753,
+          "msgget": 589824
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 4,
+      "case": "posix_shm_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.315,
+      "evidence": {
+        "status": "escaped",
+        "shm": {
+          "create": {
+            "fd": 3,
+            "errno": 0
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 13
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 4,
+      "case": "identity_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 30.13,
+      "evidence": {
+        "status": "escaped",
+        "identity": {
+          "getpwuid": {
+            "ok": true,
+            "name": "songjiun",
+            "home": "/Users/songjiun"
+          },
+          "getgrgid": {
+            "ok": true,
+            "name": "staff",
+            "home": null
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 4,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.213,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/etc/passwd": {
+            "ok": true,
+            "size": 9344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/private/etc": {
+            "ok": true,
+            "size": 2464,
+            "uid": 0,
+            "mtime": 1788771599
+          },
+          "/opt/homebrew/etc": {
+            "ok": true,
+            "size": 384,
+            "uid": 501,
+            "mtime": 1779579579
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true,
+            "size": 749674,
+            "uid": 501,
+            "mtime": 1788876253
+          }
+        }
+      }
+    },
+    {
+      "profile": "PERMISSIVE",
+      "repeat": 4,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 89.699,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 41.305,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.482,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 7427,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16562926,
+              7771301,
+              317890429,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              69355,
+              204433,
+              203053,
+              144067,
+              576171617,
+              111007877,
+              76007312,
+              70791,
+              1080933567,
+              64604760,
+              0,
+              13542701,
+              554,
+              17331817,
+              437
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 29.236,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        },
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 22,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "unix_socket_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.642,
+      "evidence": {
+        "status": "blocked",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_mdns": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_cups": {
+            "ok": false,
+            "errno": 1
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 28.668,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 589824,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "shmget": {
+            "id": 524289,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "msgget": {
+            "id": 655360,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          }
+        },
+        "created_ids": {
+          "semget": 589824,
+          "shmget": 524289,
+          "msgget": 655360
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "posix_shm_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.654,
+      "evidence": {
+        "status": "blocked",
+        "shm": {
+          "create": {
+            "fd": -1,
+            "errno": 1
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "identity_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 30.627,
+      "evidence": {
+        "status": "blocked",
+        "identity": {
+          "getpwuid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getpwuid(): uid not found: 501'"
+          },
+          "getgrgid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getgrgid(): gid not found: 20'"
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 28.466,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/etc/passwd": {
+            "ok": true,
+            "size": 9344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/private/etc": {
+            "ok": true,
+            "size": 2464,
+            "uid": 0,
+            "mtime": 1788771599
+          },
+          "/opt/homebrew/etc": {
+            "ok": true,
+            "size": 384,
+            "uid": 501,
+            "mtime": 1779579579
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true,
+            "size": 749674,
+            "uid": 501,
+            "mtime": 1788876253
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 0,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 90.737,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 29.657,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 28.55,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 2819,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16562986,
+              7771321,
+              317890685,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              70298,
+              204038,
+              202431,
+              144059,
+              576245199,
+              111008165,
+              76008032,
+              70791,
+              1081025221,
+              64608448,
+              0,
+              13542782,
+              2,
+              17332371,
+              437
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 29.07,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        },
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 22,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "unix_socket_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.495,
+      "evidence": {
+        "status": "blocked",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_mdns": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_cups": {
+            "ok": false,
+            "errno": 1
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.045,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 655360,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "shmget": {
+            "id": 589825,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "msgget": {
+            "id": 720896,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          }
+        },
+        "created_ids": {
+          "semget": 655360,
+          "shmget": 589825,
+          "msgget": 720896
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "posix_shm_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.846,
+      "evidence": {
+        "status": "blocked",
+        "shm": {
+          "create": {
+            "fd": -1,
+            "errno": 1
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "identity_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.307,
+      "evidence": {
+        "status": "blocked",
+        "identity": {
+          "getpwuid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getpwuid(): uid not found: 501'"
+          },
+          "getgrgid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getgrgid(): gid not found: 20'"
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 28.831,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/etc/passwd": {
+            "ok": true,
+            "size": 9344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/private/etc": {
+            "ok": true,
+            "size": 2464,
+            "uid": 0,
+            "mtime": 1788771599
+          },
+          "/opt/homebrew/etc": {
+            "ok": true,
+            "size": 384,
+            "uid": 501,
+            "mtime": 1779579579
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true,
+            "size": 749674,
+            "uid": 501,
+            "mtime": 1788876253
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 1,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 87.674,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 29.842,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.457,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 2563,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16563048,
+              7771338,
+              317890944,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              70269,
+              204038,
+              202474,
+              144059,
+              576318731,
+              111008165,
+              76008752,
+              70791,
+              1081116803,
+              64612127,
+              0,
+              13542863,
+              2,
+              17332371,
+              437
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 29.253,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        },
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 22,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "unix_socket_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.944,
+      "evidence": {
+        "status": "blocked",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_mdns": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_cups": {
+            "ok": false,
+            "errno": 1
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 28.335,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 720896,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "shmget": {
+            "id": 655361,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "msgget": {
+            "id": 786432,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          }
+        },
+        "created_ids": {
+          "semget": 720896,
+          "shmget": 655361,
+          "msgget": 786432
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "posix_shm_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.956,
+      "evidence": {
+        "status": "blocked",
+        "shm": {
+          "create": {
+            "fd": -1,
+            "errno": 1
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "identity_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.908,
+      "evidence": {
+        "status": "blocked",
+        "identity": {
+          "getpwuid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getpwuid(): uid not found: 501'"
+          },
+          "getgrgid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getgrgid(): gid not found: 20'"
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 28.36,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/etc/passwd": {
+            "ok": true,
+            "size": 9344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/private/etc": {
+            "ok": true,
+            "size": 2464,
+            "uid": 0,
+            "mtime": 1788771599
+          },
+          "/opt/homebrew/etc": {
+            "ok": true,
+            "size": 384,
+            "uid": 501,
+            "mtime": 1779579579
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true,
+            "size": 749674,
+            "uid": 501,
+            "mtime": 1788876253
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 2,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 88.254,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 29.328,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 28.506,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 7427,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16563106,
+              7771356,
+              317891198,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              70263,
+              204059,
+              202632,
+              144059,
+              576392328,
+              111008165,
+              76009472,
+              70791,
+              1081208590,
+              64615814,
+              0,
+              13542944,
+              2,
+              17332371,
+              437
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 28.769,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        },
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 22,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "unix_socket_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.984,
+      "evidence": {
+        "status": "blocked",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_mdns": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_cups": {
+            "ok": false,
+            "errno": 1
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 28.936,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 786432,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "shmget": {
+            "id": 720897,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "msgget": {
+            "id": 851968,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          }
+        },
+        "created_ids": {
+          "semget": 786432,
+          "shmget": 720897,
+          "msgget": 851968
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "posix_shm_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.681,
+      "evidence": {
+        "status": "blocked",
+        "shm": {
+          "create": {
+            "fd": -1,
+            "errno": 1
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "identity_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.071,
+      "evidence": {
+        "status": "blocked",
+        "identity": {
+          "getpwuid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getpwuid(): uid not found: 501'"
+          },
+          "getgrgid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getgrgid(): gid not found: 20'"
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.266,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/etc/passwd": {
+            "ok": true,
+            "size": 9344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/private/etc": {
+            "ok": true,
+            "size": 2464,
+            "uid": 0,
+            "mtime": 1788771599
+          },
+          "/opt/homebrew/etc": {
+            "ok": true,
+            "size": 384,
+            "uid": 501,
+            "mtime": 1779579579
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true,
+            "size": 749674,
+            "uid": 501,
+            "mtime": 1788876253
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 3,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 89.255,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 29.342,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.121,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 7683,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16563169,
+              7771378,
+              317891451,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              69970,
+              204422,
+              202731,
+              143976,
+              576466128,
+              111008165,
+              76010212,
+              70791,
+              1081300717,
+              64619521,
+              0,
+              13543025,
+              139,
+              17332371,
+              510
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "escaped",
+      "elapsed_ms": 28.918,
+      "evidence": {
+        "status": "escaped",
+        "unexpected_readable": {
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        },
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.memsize": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.model": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 8
+          },
+          "hw.cputype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.byteorder": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 9
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 2,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 16
+          },
+          "kern.maxfiles": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.maxproc": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "kern.osrevision": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          },
+          "vm.swapusage": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 32
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 22,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 4
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "unix_socket_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.599,
+      "evidence": {
+        "status": "blocked",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_mdns": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_cups": {
+            "ok": false,
+            "errno": 1
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 28.576,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 851968,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "shmget": {
+            "id": 786433,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "msgget": {
+            "id": 917504,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          }
+        },
+        "created_ids": {
+          "semget": 851968,
+          "shmget": 786433,
+          "msgget": 917504
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "posix_shm_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.159,
+      "evidence": {
+        "status": "blocked",
+        "shm": {
+          "create": {
+            "fd": -1,
+            "errno": 1
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "identity_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 28.863,
+      "evidence": {
+        "status": "blocked",
+        "identity": {
+          "getpwuid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getpwuid(): uid not found: 501'"
+          },
+          "getgrgid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getgrgid(): gid not found: 20'"
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 28.492,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/etc/passwd": {
+            "ok": true,
+            "size": 9344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/private/etc": {
+            "ok": true,
+            "size": 2464,
+            "uid": 0,
+            "mtime": 1788771599
+          },
+          "/opt/homebrew/etc": {
+            "ok": true,
+            "size": 384,
+            "uid": 501,
+            "mtime": 1779579579
+          },
+          "/Users/songjiun/.zsh_history": {
+            "ok": true,
+            "size": 749674,
+            "uid": 501,
+            "mtime": 1788876253
+          }
+        }
+      }
+    },
+    {
+      "profile": "BASELINE",
+      "repeat": 4,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 88.356,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 30.026,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.659,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 2819,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16563229,
+              7771396,
+              317891709,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              69716,
+              204432,
+              202734,
+              143976,
+              576539641,
+              111008165,
+              76010932,
+              70791,
+              1081392885,
+              64623368,
+              0,
+              13543106,
+              139,
+              17332371,
+              510
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 29.319,
+      "evidence": {
+        "status": "blocked",
+        "unexpected_readable": {},
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.memsize": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.model": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.cputype": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.byteorder": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.maxfiles": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.osrevision": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "vm.swapusage": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "unix_socket_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.151,
+      "evidence": {
+        "status": "blocked",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_mdns": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_cups": {
+            "ok": false,
+            "errno": 1
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 28.938,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 917504,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "shmget": {
+            "id": 851969,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "msgget": {
+            "id": 983040,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          }
+        },
+        "created_ids": {
+          "semget": 917504,
+          "shmget": 851969,
+          "msgget": 983040
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "posix_shm_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.359,
+      "evidence": {
+        "status": "blocked",
+        "shm": {
+          "create": {
+            "fd": -1,
+            "errno": 1
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "identity_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.131,
+      "evidence": {
+        "status": "blocked",
+        "identity": {
+          "getpwuid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getpwuid(): uid not found: 501'"
+          },
+          "getgrgid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getgrgid(): gid not found: 20'"
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.196,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 0,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 87.889,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 29.928,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.367,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 7171,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16563229,
+              7771396,
+              317891709,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              70049,
+              204443,
+              202774,
+              143975,
+              576613269,
+              111008165,
+              76011652,
+              70791,
+              1081487018,
+              64627726,
+              0,
+              13543187,
+              138,
+              17332371,
+              510
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 29.32,
+      "evidence": {
+        "status": "blocked",
+        "unexpected_readable": {},
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.memsize": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.model": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.cputype": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.byteorder": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.maxfiles": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.osrevision": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "vm.swapusage": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "unix_socket_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.409,
+      "evidence": {
+        "status": "blocked",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_mdns": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_cups": {
+            "ok": false,
+            "errno": 1
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.268,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 983040,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "shmget": {
+            "id": 917505,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "msgget": {
+            "id": 1048576,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          }
+        },
+        "created_ids": {
+          "semget": 983040,
+          "shmget": 917505,
+          "msgget": 1048576
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "posix_shm_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.668,
+      "evidence": {
+        "status": "blocked",
+        "shm": {
+          "create": {
+            "fd": -1,
+            "errno": 1
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "identity_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.835,
+      "evidence": {
+        "status": "blocked",
+        "identity": {
+          "getpwuid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getpwuid(): uid not found: 501'"
+          },
+          "getgrgid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getgrgid(): gid not found: 20'"
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.16,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 1,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 88.396,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 30.13,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.559,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 7171,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16563352,
+              7771433,
+              317892224,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              69818,
+              204512,
+              202781,
+              143982,
+              576686779,
+              111008165,
+              76012372,
+              70791,
+              1081581058,
+              64632111,
+              0,
+              13543268,
+              138,
+              17332371,
+              510
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 29.868,
+      "evidence": {
+        "status": "blocked",
+        "unexpected_readable": {},
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.memsize": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.model": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.cputype": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.byteorder": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.maxfiles": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.osrevision": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "vm.swapusage": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "unix_socket_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.359,
+      "evidence": {
+        "status": "blocked",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_mdns": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_cups": {
+            "ok": false,
+            "errno": 1
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.505,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 1048576,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "shmget": {
+            "id": 983041,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "msgget": {
+            "id": 1114112,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          }
+        },
+        "created_ids": {
+          "semget": 1048576,
+          "shmget": 983041,
+          "msgget": 1114112
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "posix_shm_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.46,
+      "evidence": {
+        "status": "blocked",
+        "shm": {
+          "create": {
+            "fd": -1,
+            "errno": 1
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "identity_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.213,
+      "evidence": {
+        "status": "blocked",
+        "identity": {
+          "getpwuid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getpwuid(): uid not found: 501'"
+          },
+          "getgrgid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getgrgid(): gid not found: 20'"
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.073,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 2,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 88.674,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 29.996,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.455,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 3331,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16563412,
+              7771453,
+              317892484,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              70019,
+              204572,
+              202786,
+              143984,
+              576760270,
+              111008165,
+              76013092,
+              70791,
+              1081675093,
+              64636485,
+              0,
+              13543349,
+              138,
+              17332371,
+              510
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 29.442,
+      "evidence": {
+        "status": "blocked",
+        "unexpected_readable": {},
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.memsize": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.model": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.cputype": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.byteorder": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.maxfiles": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.osrevision": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "vm.swapusage": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "unix_socket_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.047,
+      "evidence": {
+        "status": "blocked",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_mdns": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_cups": {
+            "ok": false,
+            "errno": 1
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 28.828,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 1114112,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "shmget": {
+            "id": 1048577,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "msgget": {
+            "id": 1179648,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          }
+        },
+        "created_ids": {
+          "semget": 1114112,
+          "shmget": 1048577,
+          "msgget": 1179648
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "posix_shm_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.759,
+      "evidence": {
+        "status": "blocked",
+        "shm": {
+          "create": {
+            "fd": -1,
+            "errno": 1
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "identity_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.39,
+      "evidence": {
+        "status": "blocked",
+        "identity": {
+          "getpwuid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getpwuid(): uid not found: 501'"
+          },
+          "getgrgid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getgrgid(): gid not found: 20'"
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.678,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 3,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 88.202,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "system_version_read",
+      "outcome": "escaped",
+      "elapsed_ms": 29.585,
+      "evidence": {
+        "status": "escaped",
+        "files": {
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "bytes": 602,
+            "snippet": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1."
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/SystemVersionCompat.plist.original": {
+            "ok": false,
+            "errno": 2
+          },
+          "/System/Library/CoreServices/PlatformVersion.plist": {
+            "ok": false,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "mach_host_statistics",
+      "outcome": "escaped",
+      "elapsed_ms": 29.576,
+      "evidence": {
+        "status": "escaped",
+        "host": {
+          "host_port": 2563,
+          "basic_info": {
+            "rc": 0,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              16563475,
+              7771472,
+              317892740,
+              0
+            ]
+          },
+          "vm_info": {
+            "rc": 0,
+            "count": 15,
+            "errno": 0,
+            "words": [
+              69938,
+              204501,
+              202980,
+              143983,
+              576833873,
+              111008165,
+              76013812,
+              70791,
+              1081769291,
+              64640861,
+              0,
+              13543430,
+              138,
+              17332371,
+              510
+            ]
+          },
+          "cpu_load": {
+            "rc": 4,
+            "count": 4,
+            "errno": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "preferred_arch": {
+            "rc": 4,
+            "count": 1,
+            "errno": 0,
+            "words": [
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "sysctl_allowlist_scan",
+      "outcome": "blocked",
+      "elapsed_ms": 29.504,
+      "evidence": {
+        "status": "blocked",
+        "unexpected_readable": {},
+        "allowlisted_missing": [],
+        "sysctls": {
+          "hw.machine": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 6
+          },
+          "kern.hostname": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 31
+          },
+          "kern.ostype": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.osrelease": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 7
+          },
+          "kern.version": {
+            "rc": 0,
+            "errno": 0,
+            "bytes": 107
+          },
+          "hw.ncpu": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.memsize": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.model": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.cputype": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.byteorder": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "hw.cpufrequency": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "machdep.cpu.brand_string": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "machdep.cpu.features": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.boottime": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.maxfiles": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.maxproc": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.osrevision": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "vm.swapusage": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "kern.proc.pid": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          },
+          "net.inet.ip.forwarding": {
+            "rc": -1,
+            "errno": 1,
+            "bytes": 512
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "unix_socket_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.48,
+      "evidence": {
+        "status": "blocked",
+        "sockets": {
+          "unix_syslog": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_mdns": {
+            "ok": false,
+            "errno": 1
+          },
+          "unix_cups": {
+            "ok": false,
+            "errno": 1
+          },
+          "inet_loopback": {
+            "ok": false,
+            "errno": 1
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "sysv_ipc_probe",
+      "outcome": "escaped",
+      "elapsed_ms": 29.628,
+      "evidence": {
+        "status": "escaped",
+        "ipc": {
+          "semget": {
+            "id": 1179648,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "shmget": {
+            "id": 1114113,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          },
+          "msgget": {
+            "id": 1245184,
+            "create_errno": 0,
+            "rm_rc": -1,
+            "rm_errno": 1
+          }
+        },
+        "created_ids": {
+          "semget": 1179648,
+          "shmget": 1114113,
+          "msgget": 1245184
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "posix_shm_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.321,
+      "evidence": {
+        "status": "blocked",
+        "shm": {
+          "create": {
+            "fd": -1,
+            "errno": 1
+          },
+          "open_existing": {
+            "fd": -1,
+            "errno": 2
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "identity_probe",
+      "outcome": "blocked",
+      "elapsed_ms": 29.404,
+      "evidence": {
+        "status": "blocked",
+        "identity": {
+          "getpwuid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getpwuid(): uid not found: 501'"
+          },
+          "getgrgid": {
+            "ok": false,
+            "blocked": true,
+            "error": "'getgrgid(): gid not found: 20'"
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "metadata_boundary_map",
+      "outcome": "escaped",
+      "elapsed_ms": 29.245,
+      "evidence": {
+        "status": "escaped",
+        "metadata": {
+          "/": {
+            "ok": true,
+            "size": 736,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library": {
+            "ok": true,
+            "size": 5344,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/lib": {
+            "ok": true,
+            "size": 1152,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/usr/share": {
+            "ok": true,
+            "size": 1440,
+            "uid": 0,
+            "mtime": 1780701186
+          },
+          "/System/Library/CoreServices/SystemVersion.plist": {
+            "ok": true,
+            "size": 602,
+            "uid": 0,
+            "mtime": 1780701186
+          }
+        }
+      }
+    },
+    {
+      "profile": "HARDENED",
+      "repeat": 4,
+      "case": "memory_exhaust_bounded",
+      "outcome": "escaped",
+      "elapsed_ms": 88.112,
+      "evidence": {
+        "status": "escaped",
+        "rlimit_as": {
+          "soft": 9223372036854775807,
+          "hard": 9223372036854775807
+        },
+        "allocated_bytes": 1073741824
+      }
+    }
+  ]
+}
