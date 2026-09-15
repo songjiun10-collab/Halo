@@ -75,6 +75,47 @@ E001~E005는 합성 정책·메타데이터·모니터 점수에 대한 연구�
 - [artifacts/sandbox_benchmark/RUST_RUNNER.ko.md](artifacts/sandbox_benchmark/RUST_RUNNER.ko.md): Rust 실행기와 반복 수치
 - [artifacts/sandbox_benchmark/CORRECTIONS.ko.md](artifacts/sandbox_benchmark/CORRECTIONS.ko.md): 탐침 판정 정정
 
+## 전체 원본 병합 목록
+
+아래 목록은 저장소에 존재하는 보안·공격·검증 보고서를 모두 포함한다.
+통합 문서의 본문은 각 원본의 결론과 현재 유효성 범위를 요약하고, 원본
+링크는 수치·실행 로그·세부 재현 절차의 보존 위치다. 원본과 통합 문서의
+역사적 수치가 충돌하면 현재 체크아웃에서 다시 실행한 결과를 우선한다.
+
+### 루트 분석·공격 보고서
+
+- [EXPLOIT_REPORT.md](EXPLOIT_REPORT.md): 초기 E001~E005 종합 분석과 당시 완화 결과. 역사적 스냅샷.
+- [EXPLOIT_REPORT_DIRECT.md](EXPLOIT_REPORT_DIRECT.md): HALO 코드 직접 공격과 경계 재현.
+- [EXPLOIT_REPORT_HALO_DIRECT4.md](EXPLOIT_REPORT_HALO_DIRECT4.md): 직접 입력·정책 경계 후속 분석.
+- [DIRECT_EXPLOIT_FINDINGS.md](DIRECT_EXPLOIT_FINDINGS.md): 직접 공격에서 확인된 입력·권한 결함.
+- [DEEP_EXPLOIT_FINDINGS.md](DEEP_EXPLOIT_FINDINGS.md): safety case와 policy의 1차 깊은 탐침.
+- [DEEP_EXPLOIT_FINDINGS_2.md](DEEP_EXPLOIT_FINDINGS_2.md): metadata subclass, generator 재사용, 비정상 평가 입력 후속 탐침.
+- [ULTRA_EXPLOIT_REPORT.md](ULTRA_EXPLOIT_REPORT.md): 고강도 정책·실험 경계 탐침. 완전성 주장을 하지 않는다.
+
+### 샌드박스·동적 검증 보고서
+
+- [artifacts/sandbox_benchmark/REPORT.ko.md](artifacts/sandbox_benchmark/REPORT.ko.md): 초기 Seatbelt 비교 기준.
+- [artifacts/sandbox_benchmark/EXPLOIT_REPORT.ko.md](artifacts/sandbox_benchmark/EXPLOIT_REPORT.ko.md): 샌드박스 공격 결과와 수정 전후 차이.
+- [artifacts/sandbox_benchmark/DIRECT_ATTACK.ko.md](artifacts/sandbox_benchmark/DIRECT_ATTACK.ko.md): 단일 직접 공격 경로와 canary 결과.
+- [artifacts/sandbox_benchmark/DYNAMIC_VERIFICATION_2026-09-13.ko.md](artifacts/sandbox_benchmark/DYNAMIC_VERIFICATION_2026-09-13.ko.md): 동적 실행 재검증과 잔여 노출.
+- [artifacts/sandbox_benchmark/ROUND4_VERIFICATION_2026-09-13.ko.md](artifacts/sandbox_benchmark/ROUND4_VERIFICATION_2026-09-13.ko.md): Round-4 검증 기록.
+- [artifacts/sandbox_benchmark/RUST_RUNNER.ko.md](artifacts/sandbox_benchmark/RUST_RUNNER.ko.md): Rust 100-case runner와 반복 결과.
+- [artifacts/sandbox_benchmark/CORRECTIONS.ko.md](artifacts/sandbox_benchmark/CORRECTIONS.ko.md): `SEM_FAILED` 오판과 잘못된 `fsgetpath` fixture 정정.
+- [REPORT_INDEX.ko.md](REPORT_INDEX.ko.md): 최신 샌드박스 수치와 원자료 우선순위 기준.
+
+### 권한·보호막 보고서
+
+- [halo/AUTHORITY.ko.md](halo/AUTHORITY.ko.md): 호스트 소유 capability와 메모리 객체 경계.
+- [halo/GATEWAY.ko.md](halo/GATEWAY.ko.md): WSGI 게이트웨이 운영 조건·API·장애 복구.
+- [halo/GATEWAY_ATTACK_REVIEW.ko.md](halo/GATEWAY_ATTACK_REVIEW.ko.md): 인증·토큰·재생·취소·감사 장애 공격 검토.
+- [rust/ENFORCEMENT.ko.md](rust/ENFORCEMENT.ko.md): Rust 보호 객체 접근 계약과 신뢰 경계.
+- [rust/SHIELD.ko.md](rust/SHIELD.ko.md): 보호막·검증기 가용성·ACL 회귀 실험.
+- [rust/SANDBOX_BOUNDARY.ko.md](rust/SANDBOX_BOUNDARY.ko.md): Rust 실행기와 OS 격리 한계.
+- [rust/ROW_AUDIT.ko.md](rust/ROW_AUDIT.ko.md): 행 단위 감사·증거 보존 규칙.
+
+원본 파일은 통합 문서에 흡수됐다고 간주해 삭제하지 않는다. 원본 삭제는
+재현 근거와 당시 환경을 잃게 하므로 별도 승인 없이는 수행하지 않는다.
+
 ## 재현 명령
 
 ```sh
