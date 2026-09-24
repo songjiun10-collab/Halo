@@ -32,4 +32,14 @@ The target correlation sanity check at `p=.05, rho=.75` measured `0.749`.
 
 ## Scope
 
+`correlation_aware` is a historical name for a fixed source-3 corroboration rule,
+not an online estimate of `rho`; it need not dominate two-source fail-closed
+voting at every error rate. `three_source_diverse` is two-of-three voting, not a
+containment guarantee. The third error stream's independence is a synthetic
+assumption, not established by merely giving real monitors different seeds.
+The unused `adaptive_redundant` expression was removed; it was not a returned
+protocol. Under this Boolean write policy, both sources allowing a write implies
+their relevant metadata agree, so the historical claim that that expression
+allowed additional disagreeing writes was unsupported (the probe measured zero).
+
 This isolates one common-cause-failure assumption in a synthetic environment. It is not evidence that HALO contains frontier or superintelligent systems.

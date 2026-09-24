@@ -1,0 +1,70 @@
+{
+  "registry": "halo-evidence-registry",
+  "schema_version": 1,
+  "seeded_at": "2026-09-23",
+  "seeded_by": "증거 레지스트리 서브에이전트 (2026-09-21 검수 개선 제안 #1)",
+  "notes": "시딩은 2026-09-23 패치 전 시점이다. halo/safety_cases.py·halo/policy.py 등의 동시 패치가 착지하면 관련 항목의 판정은 stale로 바뀌며(수용 조건의 동작), 오케스트레이터가 재검증하고 이 파일을 갱신할 때까지 유지된다. 체커(tools/check_evidence_registry.py)는 읽기 전용이므로 갱신은 별도의 명시적 단계로 한다. 역사적 수치는 현재 작업트리의 보증으로 사용하지 않는다.",
+  "entries": [
+    {
+      "claim": "현재 Python 회귀 260 통과 / 0 실패",
+      "source_doc": "REPORT_UNIFIED.ko.md",
+      "recorded_fingerprints": {
+        "halo/gateway.py": "a6fca55c42c9f3c4e14bf9be9304851430343eb39219d255c35fa54d71ba5158",
+        "halo/policy.py": "c96562b4c79a88f02fd080bf8602c03e27b687dde47d0480c80a9ba1c4c4b5e6",
+        "halo/safety_cases.py": "3de001d6eb88330bdc8026d40a592003d963df84794ee3aedde038fe2b5d612c",
+        "tests/test_gateway.py": "dd37c48ffec476bd5df86cca1510a4c234ab04e2c4b7ef207d8af70d815febac",
+        "tests/test_gateway_adversarial.py": "39b93e7436b6c5a801ca19023cb01be5c6c1c4764591a1b3619bb09da4dccebf"
+      },
+      "threat_model_scope": "로컬 저장소 회귀. 게이트웨이 승인·실행·재생 거부·취소 경로의 회귀 테스트 통과를 뜻하며 실제 실행 capability·운영 배포 승인과 다르다.",
+      "verification_command": ".venv/bin/python -m pytest -q",
+      "result_summary": "260 passed / 0 failed",
+      "verdict": "valid",
+      "recorded_at": "2026-09-23",
+      "notes": "2026-09-23 레지스트리 시딩(패치 전) 시점의 작업트리 해시다. halo/safety_cases.py·halo/policy.py에 동시 패치가 진행 중이므로 패치 착지 후 이 판정은 stale로 바뀔 것이며, 오케스트레이터가 재검증해 이 항목을 갱신할 때까지 stale가 유지된다."
+    },
+    {
+      "claim": "2026-09-21 검수 보고서의 판정(F01–F13 발견·수정 전 수치)은 해당 작업트리 스냅샷에 한정된다",
+      "source_doc": "docs/reviews/2026-09-21-review.ko.md",
+      "recorded_fingerprints": {
+        "halo/gateway.py": "9553e299a0c362f0d4bfde7462a322dd8c85cc765b91e49528fe2e4e097a1743",
+        "halo/safety_cases.py": "529133dae3c01f19474759479f9015ca56fb7c0d51d9a0f823a884a490440d03",
+        "experiments/e004_robust_evaluation/experiment.py": "14f86133c7176906fb68bb005745566f37e0ae71c402664b71613a17092963d2",
+        "rust/halo-experiments/src/e003.rs": "537bc775158d222b5341de476380a4f04cf03cae4ac5ab1e1af1300dee54db19"
+      },
+      "threat_model_scope": "수정 전 검수 스냅샷(HEAD 170587b와 검수 시작 시 미커밋 변경 포함, 2026-09-21 로컬 검증)에 한정. 이 문서의 실패 수치와 소스 해시는 현재 작업트리의 보증으로 사용하지 않는다.",
+      "verification_command": ".venv/bin/python -m pytest tests experiments -q (수정 전 스냅샷에서 실행)",
+      "result_summary": "174 passed / 9 failed (수정 전 기록)",
+      "verdict": "stale",
+      "recorded_at": "2026-09-23",
+      "notes": "fingerprint는 검수 문서의 표에 적힌 수정 전 해시 4개를 그대로 복사했다. 현재 트리는 REPORT_REMEDIATION.ko.md대로 수정되었으므로 이 판정이 stale인 것이 정직한 기록이다. 발행된 스냅샷은 사라졌으므로 재검증으로 소급해 valid로 바꾸지 않는다. 현재 상태는 REPORT_UNIFIED.ko.md의 현재 판정과 이 레지스트리의 항목 0을 따른다."
+    },
+    {
+      "claim": "E001-B/E002 README 합성 실험 수치(2026-09-22 재검증 기준)",
+      "source_doc": "README.md",
+      "recorded_fingerprints": {
+        "experiments/e001b_correlated_failure/experiment.py": "817ff9b23f077d76ff32db2dd55324506f0a90a1d5089ea6b4debe193aff905d",
+        "experiments/e002_shared_blind_spots/experiment.py": "2f3c7dc5d65f1086bf1e64bc6c3df65df1acb9df8672f538a33b8f3ecbd1f24d",
+        "README.md": "a909ad1404c4fd45d09d64e7a82605ccd6f212e685267ffe3ce40a45be8f3fa7"
+      },
+      "threat_model_scope": "합성 비교군 실험(연구 한계). 상관 실패·숨은 공격군·낮은 FPR budget에서의 TPR trade-off를 측정한 것이며 모델 containment 보장이 아니다.",
+      "verification_command": ".venv/bin/python -m pytest tests/test_report_experiment_claims.py -q",
+      "result_summary": "2026-09-22 독립 재검증 통과",
+      "verdict": "valid",
+      "recorded_at": "2026-09-23",
+      "notes": "README 수치는 2026-09-22에 재검증되었다. 합성 실험 주장(연구 한계)이며 실제 모델 containment 보장으로 확대하지 않는다. 실험 코드나 README가 바뀌면 이 판정은 stale로 바뀐다."
+    },
+    {
+      "claim": "샌드박스 벤치마크 results.json(2026-09-13 실행) — 과거 기록",
+      "source_doc": "artifacts/sandbox_benchmark/REPORT.ko.md",
+      "recorded_fingerprints": {
+        "artifacts/sandbox_benchmark/results.json": "669578b2bdfe99685a336d08aa3a5209caba7281d5d608bf3f56b2e6c740241f"
+      },
+      "threat_model_scope": "macOS Seatbelt 샌드박스 벤치마크의 과거 실행 기록(B1). 2026-09-13 시점, repeats=5 프로필의 원자료다.",
+      "verification_command": "artifacts/sandbox_benchmark/run_benchmark.py (2026-09-13 실행, repeats=5; 레지스트리 체커는 재실행하지 않는다)",
+      "result_summary": "2026-09-13 실행 기록, repeats=5, clean-launch attacks_blocked 45/45, errors=0 (당시 프로필 기준)",
+      "verdict": "unsupported",
+      "recorded_at": "2026-09-23",
+      "notes": "과거 기록이며 현재 보증으로 사용하지 않는다(unsupported는 차단 성공이 아니다). 현재 100-case 벤치마크(B1)와 별개다. 체커는 이 항목을 현재 보증으로 취급하지 않고 블록하지도 않는다."
+    }
+  ]
+}

@@ -23,7 +23,7 @@ pub fn execute(config: &Value) -> Result<Value, String> {
     let volatility = support::probability(config, "volatility", 0.05)?;
     let n = support::count(config, "n", 100_000)?;
     let window = support::integer(config, "freshness_window", 2, false)?;
-    let adaptive_window = ((window as f64 * (1.0 - volatility)).round() as u64).max(1);
+    let adaptive_window = ((window as f64 * (1.0 - volatility)).round_ties_even() as u64).max(1);
     let mut rng = StdRng::seed_from_u64(seed);
     let mut sensitive: Vec<bool> = (0..n).map(|_| rng.gen::<f64>() < 0.30).collect();
     let mut writable: Vec<bool> = (0..n).map(|_| rng.gen::<f64>() < 0.70).collect();
@@ -418,6 +418,16 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn adaptive_window_preserves_python_ties_to_even() {
+        for (window, expected) in [(3, 2), (5, 2), (7, 4)] {
+            let out = execute(&json!({"seed":3,"n":10,"delay_steps":3,
+                "volatility":0.5,"freshness_window":window})).unwrap();
+            assert_eq!(out["diagnostics"]["adaptive_window_size"], expected);
+            assert_eq!(out["diagnostics"]["progressive_revalidation_count"], 3 / (expected + 1));
+        }
+    }
+
+    #[test]
     fn zero_delay_never_expires_or_revalidates() {
         let out =
             execute(&json!({"seed": 0, "delay_steps": 0, "volatility": 0.05, "n": 2000})).unwrap();
@@ -456,8 +466,8 @@ mod tests {
                 .unwrap()
                 > 0.0
         );
-        assert_eq!(out["diagnostics"]["progressive_revalidation_count"], 2);
-        assert_eq!(out["diagnostics"]["adaptive_window_size"], 1);
+        assert_eq!(out["diagnostics"]["progressive_revalidation_count"], 1);
+        assert_eq!(out["diagnostics"]["adaptive_window_size"], 2);
         let within = execute(&json!({"seed": 4, "delay_steps": 2, "volatility": 0.05, "n": 2000, "freshness_window": 2})).unwrap();
         assert_eq!(within["diagnostics"]["fixed_window_revalidation_count"], 0);
         assert_eq!(

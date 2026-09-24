@@ -27,6 +27,10 @@ wsgiref 서버를 인터넷 서비스로 사용하지 않는다.
 
 모든 요청: POST, Content-Type application/json, Authorization Bearer 키.
 
+Content-Length는 ASCII 십진 숫자만 허용하며 부호·공백·밑줄·전각 숫자는
+거부한다. 명시적으로 같은 realm을 지정해도 승인자/실행자 키의 identity가
+다르면 기존 grant를 사용할 수 없다. 키 교체 시 pending grant 재승인이 필요하다.
+
 - `/approve` (승인자): `{"tool":"sha256","args":{"text":"hello"},"intent_id":"authenticated-request-id"}`
   응답: token, expires_in=60. 요청 필드를 모델 출력에서 자동으로 신뢰하지 않는다.
 - `/execute` (실행자): `{"tool":"sha256","args":{"text":"hello"},"token":"issued-token"}`
@@ -43,12 +47,25 @@ wsgiref 서버를 인터넷 서비스로 사용하지 않는다.
 외부 효과 어댑터는 정확한 리소스 범위·상태 버전·실행 시점 재검사를
 자체적으로 구현하고 OS 격리 경계를 갖춰야 한다. 임의 shell/eval 어댑터는 없다.
 
+자동 adapter fingerprint는 Python 코드·중첩 코드 상수·JSON 직렬화 가능한
+기본 인자를 묶는다. 같은 Python 런타임과 파일 배치에서 재시작해도 유지된다.
+closure, 전역 변수, 외부 패키지·설정까지 자동 추적하는 배포 manifest는 아니다.
+이 의존성이 바뀌면 호스트가 `revision` 또는 명시적 `fingerprint`를 변경해야 한다.
+함수가 아닌 callable이나 직렬화 불가능한 기본 인자는 명시적 fingerprint를
+지정해야 한다. 런타임·코드 배치 변경으로 기존 grant가 거부되는 것은 fail-closed다.
+
 ## 장애와 복구
 
 토큰 claim과 사전 감사는 SQLite 트랜잭션에서 함께 커밋한 뒤 도구를 호출한다.
 다중 worker가 같은 토큰을 동시에 제출해도 하나만 claim한다. 재시작 후에도
 사용된 토큰은 실행되지 않는다. 도구 실행과 SQLite 결과 기록은 분산
 트랜잭션이 아니므로 정확히 한 번 성공을 보장하지 않는다.
+
+시계 watermark 검사와 상태 전이는 같은 `BEGIN IMMEDIATE` 트랜잭션 안에서
+직렬화한다. 실행 후 clock rollback 또는 감사 기록 실패는 503이며, 실패 기록까지
+실패해도 이미 커밋한 claim을 pending으로 복구하지 않는다. rollback 허용치는
+유한한 0 이상의 값이어야 한다. 새 DB는 SQLite 연결 전 0600으로 생성한다.
+DB만 있고 realm identity가 없으면 자동으로 복구·재발급하지 않고 시작을 거부한다.
 
 claimed 또는 failed_or_uncertain 상태는 효과 발생 여부를 확인하기 전
 새 토큰을 발급하여 재시도하지 않는다. HTTP 503도 효과 미발생을 뜻하지 않는다.
@@ -66,4 +83,4 @@ pending 권한은 최대 1024개다. 과거 grant/audit 행 보존으로 디스�
 검증이 완료되지 않았으므로 인터넷 공개 운영 준비 완료로 판정하지 않는다.
 메타데이터 노출이 남은 Seatbelt 실험 결과도 이 서비스의 격리 보증이 아니다.
 
-검증 명령: `.venv/bin/python -m pytest tests/test_gateway.py tests/test_authority.py -q`
+검증 명령: `.venv/bin/python -m pytest tests/test_gateway.py tests/test_gateway_adversarial.py tests/test_authority.py -q`

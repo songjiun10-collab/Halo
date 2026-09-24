@@ -1,5 +1,7 @@
 # Rust 샌드박스 런타임 읽기 제한
 
+> 2026-09-21 후속 상태: **미완료 / B1**. [보고서별 조치 원장](../docs/reviews/REPORT_REMEDIATION.ko.md)에서 수정·재현과 잔여 범위를 구분한다. 아래 과거 수치는 현재의 전체 해결 판정이 아니다.
+
 > 현재 샌드박스 실행 결과와 보안 게이트의 기준점은 [REPORT_INDEX.ko.md](../REPORT_INDEX.ko.md)와 [최신 JSON](results/attack-100-validated-20.json)이다. 아래는 경계 원인 분리와 설계 한계를 기록한다.
 
 추가 원인 분리: `artifacts/sandbox_benchmark/seatbelt_boundary.c`는 런타임 시작 후 `(version 1)(deny default)`만 적용하고 `chdir`와 `statvfs`를 호출한다. 현재 호스트에서 sandbox 초기화 성공 후에도 두 호출이 모두 0(성공)을 반환했다. 따라서 이 두 접근을 기존 루트 허용만의 결과로 단정할 수 없고, 현재 Seatbelt 정책의 허용 목록을 줄이는 것만으로 차단했다고 주장할 수 없다. 관찰 결과는 `rust/results/seatbelt-deny-default.json`에 보존한다. 이 진단은 C API 동작을 Rust 실행기와 독립적으로 확인하기 위한 것으로 제품 경로에 연결되지 않는다.
@@ -8,7 +10,7 @@
 
 실행 보고서에는 `security_gate.passed` 및 `residual_cases`를 추가했다. 검사 테스트 자체의 통과를 보안 게이트 통과로 혼동하지 않도록 미차단 경로를 명시한다. 이 목표를 만족하려면 호스트 파일시스템을 노출하지 않는 별도 VM 같은 다른 격리 경계를 구현하고 검증해야 하며, 현재 저장소에 그러한 실행 경계는 구현되지 않았다.
 
-Rust 벤치 실행기의 macOS sandbox-exec 프로필에서 `/System/Library` 내용 및 메타데이터 허용을 제거했다. `runtime_content_read`와 `runtime_metadata_read`는 이 경계를 검사한다. 파일 내용은 보고서에 저장하지 않는다. 파일 부재나 실행 오류는 차단 성공으로 계산하지 않는다. 현재 clean-launch에서 남은 성공은 `metadata_chdir`와 `metadata_statvfs` 두 사례이며, 이 결과는 `REPORT_INDEX.ko.md`와 최신 JSON을 우선한다.
+Rust 벤치 실행기의 macOS sandbox-exec 프로필에서 `/System/Library` 내용 및 메타데이터 허용을 제거했다. `runtime_content_read`와 `runtime_metadata_read`는 이 경계를 검사한다. 파일 내용은 보고서에 저장하지 않는다. 파일 부재나 실행 오류는 차단 성공으로 계산하지 않는다. 초기 소규모 검사에서는 `metadata_chdir`와 `metadata_statvfs` 두 사례가 남았고, 이후 100-case 검사에서는 아래 9개 metadata 사례가 남는다. 두 사례만 남았다는 과거 표현은 현재 전체 결과가 아니다.
 
 실행 명령:
 

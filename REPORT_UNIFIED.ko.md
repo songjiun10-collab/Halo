@@ -1,6 +1,8 @@
 # HALO 통합 보안·권한 보고서
 
-최종 갱신: 2026-09-15
+최종 갱신: 2026-09-21
+
+> 현재 검수 기준: [2026-09-21 전체 검수 보고서](docs/reviews/2026-09-21-review.ko.md). 아래 역사적 수치와 과거 보고서의 “통과” 표현은 현재 작업트리의 보증으로 사용하지 않는다. 2026-09-21 수정 라운드 후 Python 회귀는 260개 통과·0개 실패이며 Rust 통계 워크스페이스와 CLI/reference 테스트도 통과했다.
 
 이 문서는 HALO의 실험, 직접 공격, 샌드박스, 권한 게이트웨이 결과를 한
 곳에서 확인하기 위한 기준 문서다. 개별 원본은 재현 근거로 보존하며,
@@ -9,12 +11,14 @@
 
 ## 현재 판정
 
-- Python 전체 회귀: 183개 이상 통과(게이트웨이·권한 경계 포함)
-- 게이트웨이 직접 공격: 인증 우회, 위조 capability 실행, 재생, 취소 경쟁,
-  감사 장애 경계를 재현하고 수정 후 통과
+[보고서별 조치 원장](docs/reviews/REPORT_REMEDIATION.ko.md)에 32개 문서의 수정·재현·잔여 범위를 연결했다. trace 평가기는 이제 자기신고 승인을 기본 거부하고, critical finding과 효과 있는 작업의 불확실성은 fail-closed 처리한다. 이 변경도 OS 격리나 외부 불변 감사를 대신하지 않는다.
+
+- Python 전체 회귀: 260개 통과 / 0개 실패
+- 게이트웨이: 승인·실행·재생 거부·취소 경쟁·factory 재시작·실행 후 이중 오류를 회귀 검증했다. 과거 직접 공격 스크립트 전체를 다시 실행했다는 뜻은 아니다.
 - macOS Seatbelt 직접 탐침: sysctl·네트워크·디렉터리 일부는 차단되지만
   Mach 호스트 정보와 마운트 정보 노출은 남음
 - 외부 도구·인터넷 공개 배포: 연결하지 않음
+- 수정 완료: SQLite 중첩 트랜잭션, 승인 INSERT 열 순서, factory 최초 시작, 실행 후 clock 오류 응답
 - 운영 준비도: 미완료. TLS/proxy, 사용자 인증, 도구별 TOCTOU, 외부 감사,
   OS 격리, 장애 복구 검증이 남아 있음
 
@@ -91,6 +95,7 @@ E001~E005는 합성 정책·메타데이터·모니터 점수에 대한 연구�
 - [HALO_EXPLOIT_V1_DEEP_FINDINGS.md](HALO_EXPLOIT_V1_DEEP_FINDINGS.md): safety case와 policy의 1차 깊은 탐침.
 - [HALO_EXPLOIT_V2_DEEP_FINDINGS.md](HALO_EXPLOIT_V2_DEEP_FINDINGS.md): metadata subclass, generator 재사용, 비정상 평가 입력 후속 탐침.
 - [HALO_EXPLOIT_V7_ULTRA_REPORT.md](HALO_EXPLOIT_V7_ULTRA_REPORT.md): 고강도 정책·실험 경계 탐침. 완전성 주장을 하지 않는다.
+- [HALO_EXPLOIT_V8_ISOLATED_FINDINGS.md](HALO_EXPLOIT_V8_ISOLATED_FINDINGS.md): 격리 환경 게이트웨이 직접 탐침. DB 변조·동시성·파서 퍼징·타이밍 31개 확인 전부 방어, DB 쓰기 적은 신뢰 앵커로 재확인.
 
 ### 샌드박스·동적 검증 보고서
 
@@ -100,7 +105,7 @@ E001~E005는 합성 정책·메타데이터·모니터 점수에 대한 연구�
 - [artifacts/sandbox_benchmark/HALO_SANDBOX_V2_DYNAMIC_VERIFICATION.ko.md](artifacts/sandbox_benchmark/HALO_SANDBOX_V2_DYNAMIC_VERIFICATION.ko.md): 동적 실행 재검증과 잔여 노출.
 - [artifacts/sandbox_benchmark/HALO_SANDBOX_V3_ROUND4_VERIFICATION.ko.md](artifacts/sandbox_benchmark/HALO_SANDBOX_V3_ROUND4_VERIFICATION.ko.md): Round-4 검증 기록.
 - [artifacts/sandbox_benchmark/RUST_RUNNER.ko.md](artifacts/sandbox_benchmark/RUST_RUNNER.ko.md): Rust 100-case runner와 반복 결과.
-- [artifacts/sandbox_benchmark/CORRECTIONS.ko.md](artifacts/sandbox_benchmark/CORRECTIONS.ko.md): `SEM_FAILED` 오판과 잘못된 `fsgetpath` fixture 정정.
+- [artifacts/sandbox_benchmark/HALO_SANDBOX_V4_CORRECTIONS.ko.md](artifacts/sandbox_benchmark/HALO_SANDBOX_V4_CORRECTIONS.ko.md): `SEM_FAILED` 오판과 잘못된 `fsgetpath` fixture 정정.
 - [REPORT_INDEX.ko.md](REPORT_INDEX.ko.md): 최신 샌드박스 수치와 원자료 우선순위 기준.
 
 ### 권한·보호막 보고서

@@ -27,8 +27,17 @@ class PolicyResult:
     reasons: tuple[str, ...]
 
 
-def decide(findings: Iterable[Finding], *, effectful: bool = False) -> PolicyResult:
+def decide(findings: Iterable[Finding], *, effectful: bool = True) -> PolicyResult:
+    # Single-use/lazy or overridden iterables must not clear on a second use.
+    if type(findings) not in (list, tuple) or type(effectful) is not bool or len(findings) > 100000:
+        return PolicyResult(Decision.DENY, ("A bounded plain findings snapshot is required.",))
     findings = tuple(findings)
+    if any(type(f) is not Finding or type(f.signal) is not Signal
+           or type(f.severity) is not int or not 1 <= f.severity <= 5
+           or type(f.reason) is not str or type(f.event_index) is not int for f in findings):
+        return PolicyResult(Decision.DENY, ("Invalid finding cannot establish safety.",))
+    if any(f.severity == 5 for f in findings):
+        return PolicyResult(Decision.DENY, tuple(f.reason for f in findings if f.severity == 5))
     signals = {f.signal for f in findings}
 
     hard_denies = {

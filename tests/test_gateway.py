@@ -1,4 +1,5 @@
 import hashlib
+import sqlite3
 import pytest
 from halo.gateway import Gateway, Tool, Rejected
 
@@ -91,6 +92,23 @@ def test_wsgi_parsing_and_role_enforcement(tmp_path):
     assert post("/execute", EXECUTOR, json.dumps(request).encode())[0] == "403 Forbidden"
 
 
+def test_approval_persists_typed_deadline_and_executes(tmp_path):
+    calls = []
+    app = make(tmp_path / "typed.db", calls)
+    token = app.handle("/approve", APPROVER, {
+        "tool": "hash", "args": {"text": "x"}, "intent_id": "typed"
+    })["token"]
+    with sqlite3.connect(app.path) as db:
+        state, deadline = db.execute(
+            "SELECT state, mono_deadline FROM grants"
+        ).fetchone()
+    assert state == "pending"
+    assert isinstance(deadline, float)
+    assert app.handle("/execute", EXECUTOR, {
+        "tool": "hash", "args": {"text": "x"}, "token": token
+    })["digest"]
+
+
 def test_changed_adapter_and_failure_consume_rules(tmp_path):
     calls = []
     path = tmp_path / "g.db"
@@ -106,6 +124,6 @@ def test_changed_adapter_and_failure_consume_rules(tmp_path):
     failing = Gateway(path, APPROVER, EXECUTOR, {"hash": Tool("v1", lambda a: True, fail)})
     with pytest.raises(Rejected):
         failing.handle("/execute", EXECUTOR, request)
-    with pytest.raises(Rejected):
-        gateway.handle("/execute", EXECUTOR, request)
-    assert not calls
+    result = gateway.handle("/execute", EXECUTOR, request)
+    assert result["digest"]
+    assert len(calls) == 1

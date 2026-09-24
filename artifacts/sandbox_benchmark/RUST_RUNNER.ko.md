@@ -1,5 +1,7 @@
 # Rust 실행기
 
+> 2026-09-21 후속 상태: **회귀 / B1**. [보고서별 조치 원장](../../docs/reviews/REPORT_REMEDIATION.ko.md)에서 수정·재현과 잔여 범위를 구분한다. 아래 과거 수치는 현재의 전체 해결 판정이 아니다.
+
 `rust_runner`는 Python payload를 호출하지 않고 Rust 바이너리가 미끼 생성, `sandbox-exec` 실행, 결과 판정을 직접 수행한다. macOS 전용이며 `serde_json`(구조화된 결과), `libc`(실제 FD 읽기와 상속), `tempfile`(실패 시에도 임시 디렉터리 정리)을 사용한다. 의존성 버전은 `Cargo.lock`에 고정한다.
 
 ```sh

@@ -233,14 +233,13 @@ fn select_robust(
     min_worst: f64,
     min_any: f64,
 ) -> Result<Metrics, String> {
-    // Try the full constraints, then relax any-group and worst-group floors in
-    // the same order as Python; the FPR budget is retained in every stage.
-    for stage in 0..3 {
+    // Detection floors are requirements, not preferences. Infeasibility is an error.
+    {
         let mut best: Option<(f64, &Metrics)> = None;
         for metrics in candidates {
             if metrics.false_positive_rate > max_fpr
-                || (stage < 2 && metrics.worst_group_tpr < min_worst)
-                || (stage == 0 && metrics.group_tpr.values().any(|tpr| *tpr < min_any))
+                || metrics.worst_group_tpr < min_worst
+                || metrics.group_tpr.values().any(|tpr| *tpr < min_any)
             {
                 continue;
             }
@@ -309,7 +308,7 @@ fn demonstrate(config: &Value) -> Result<Value, String> {
             json!({
                 "accuracy_optimal": scores.evaluate(accuracy.threshold, &shifted_weights),
                 "worst_group_constrained": scores.evaluate(worst.threshold, &shifted_weights),
-                "robust_constrained": scores.evaluate(robust.threshold, &balanced),
+                "robust_constrained": scores.evaluate(robust.threshold, &shifted_weights),
             }),
         );
     }
@@ -516,9 +515,13 @@ mod tests {
     }
 
     #[test]
-    fn robust_selector_relaxes_constraints_but_never_fpr() {
+    fn robust_selector_rejects_infeasible_detection_floors() {
         let config = json!({"operation":"select_robust_threshold", "benign_scores":[0.1,0.3], "attack_scores":{"a":[0.9],"b":[0.2]}, "attack_weights":{"a":1.0,"b":0.0}, "thresholds":[0.2,0.4,0.8], "max_fpr":0.0, "min_worst_group_tpr":0.8, "min_any_group_tpr":0.9});
-        let out = execute(&config).unwrap();
+        assert!(execute(&config).unwrap_err().contains("no threshold satisfies constraints"));
+        let mut feasible = config.clone();
+        feasible["min_worst_group_tpr"] = json!(0.0);
+        feasible["min_any_group_tpr"] = json!(0.0);
+        let out = execute(&feasible).unwrap();
         assert_eq!(out["threshold"], 0.4);
         assert_eq!(out["false_positive_rate"], 0.0);
         assert_eq!(out["worst_group_tpr"], 0.0);
@@ -556,6 +559,13 @@ mod tests {
         let config = json!({"seed":7,"n":1000});
         let out = execute(&config).unwrap();
         assert_eq!(out, execute(&config).unwrap());
+        for (share, row) in out["shifted"].as_object().unwrap() {
+            let hard_share: f64 = share.parse().unwrap();
+            let metric = &row["robust_constrained"];
+            let expected = (1.0 - hard_share) * metric["group_tpr"]["known_family"].as_f64().unwrap()
+                + hard_share * metric["group_tpr"]["hard_family"].as_f64().unwrap();
+            assert!((metric["attack_tpr"].as_f64().unwrap() - expected).abs() <= 1e-12);
+        }
         assert_eq!(
             out["shifted"]["1.00"]["accuracy_optimal"]["attack_tpr"],
             out["accuracy_optimal"]["group_tpr"]["hard_family"]

@@ -26,6 +26,18 @@ Two selection rules are compared:
 
 ## Main result
 
+### Current selector contract (2026-09-21)
+
+`robust_constrained` is also available. It selects with equal-family weighting,
+but evaluates frozen thresholds against the requested mixture during the shift
+sweep. `select_robust_threshold` requires the FPR budget **and both detection
+floors**; if none of the supplied thresholds qualifies, Python raises `ValueError`
+and the Rust API returns an error. There is no implicit floor relaxation. A caller
+may deliberately supply lower floors for a different experiment, but must report
+those actual requirements. Infeasible runs must not be relabelled as successful
+constrained selections. The tables below are historical synthetic results, not a
+fresh run or evidence of real-model containment.
+
 | Selector | Threshold | Benign FPR | Aggregate attack TPR | Known-family TPR | Hard-family TPR |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Accuracy-optimal | 0.495 | **5.058%** | 88.579% | 99.140% | **46.335%** |
