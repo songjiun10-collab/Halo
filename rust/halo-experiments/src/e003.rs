@@ -1,5 +1,5 @@
 //! Verdict freshness simulation, ported from the Python experiment.
-//! Python experiment.py SHA-256: e404120f2f99ee439e73aadecaf3b3f2dcc6aa4ff1918c0a9749cad6e232a4a0
+//! Python experiment.py SHA-256: a99f7647ea709bbf7bfaa807f66c16a3645f1cf153546f310c45209e55ff9b98
 //! Python run_sweep.py SHA-256: e5271555b0a1df945d7612dc894fff5e9b41b7e1a65c78a6a19336b950eb78f1
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -23,7 +23,11 @@ pub fn execute(config: &Value) -> Result<Value, String> {
     let volatility = support::probability(config, "volatility", 0.05)?;
     let n = support::count(config, "n", 100_000)?;
     let window = support::integer(config, "freshness_window", 2, false)?;
-    let adaptive_window = ((window as f64 * (1.0 - volatility)).round_ties_even() as u64).max(1);
+    // No floor at 1: forcing one step of reuse aliased the periodic refresh
+    // onto the state's own oscillation period at high volatility, and
+    // silently overrode an explicit freshness_window of 0. See the Python
+    // reference's adaptive_window() for the full rationale.
+    let adaptive_window = (window as f64 * (1.0 - volatility)).round_ties_even() as u64;
     let mut rng = StdRng::seed_from_u64(seed);
     let mut sensitive: Vec<bool> = (0..n).map(|_| rng.gen::<f64>() < 0.30).collect();
     let mut writable: Vec<bool> = (0..n).map(|_| rng.gen::<f64>() < 0.70).collect();
@@ -473,6 +477,39 @@ mod tests {
         assert_eq!(
             within["results"]["fixed_window_revalidation"],
             within["results"]["cached_verdict"]
+        );
+    }
+
+    #[test]
+    fn progressive_refresh_does_not_alias_at_full_volatility() {
+        // Regression: a floor of 1 on adaptive_window used to force one step
+        // of reuse even when volatility=1.0 flips state every step. The
+        // periodic refresh schedule then aliased onto that 2-step
+        // oscillation, so every odd delay_steps used a verdict that was
+        // deterministically the opposite of truth. The window must reach 0
+        // (revalidate every step) instead.
+        let out = execute(&json!({"seed": 5, "delay_steps": 3, "volatility": 1.0,
+            "n": 50000, "freshness_window": 2}))
+        .unwrap();
+        assert_eq!(out["diagnostics"]["adaptive_window_size"], 0);
+        assert_eq!(
+            out["results"]["progressive_refresh"]["containment_failure_rate"],
+            0.0
+        );
+        assert_eq!(
+            out["results"]["progressive_refresh"],
+            out["results"]["use_time_revalidation"]
+        );
+
+        // An explicit freshness_window=0 must bound progressive reuse too,
+        // not just the fixed-window comparison group.
+        let zero_window = execute(&json!({"seed": 6, "delay_steps": 8,
+            "volatility": 0.05, "n": 2000, "freshness_window": 0}))
+        .unwrap();
+        assert_eq!(zero_window["diagnostics"]["progressive_revalidation_count"], 8);
+        assert_eq!(
+            zero_window["results"]["progressive_refresh"],
+            zero_window["results"]["use_time_revalidation"]
         );
     }
 

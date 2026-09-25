@@ -3,6 +3,11 @@
 2026-09-23 후속: [doctor/verify CLI 구현 및 현재 검증](2026-09-23-doctor-cli.ko.md).
 Python 383개 통과. 과거 증거 2개가 stale이므로 통합 verify는 exit 1이다.
 
+2026-09-25 후속: [E003 progressive_refresh adaptive window 수정](2026-09-25-e003-progressive-refresh-fix.ko.md).
+아래 R3의 "미해결 취약점 #1"(EVALUATION.md 표) 중 floor 로직 결함이던 부분을
+수정했다 — 통계적 trade-off 부분은 그대로 유지. Python 395개 통과.
+증거 레지스트리 상태는 변경 없음(valid 1 / stale 2 / unsupported 1).
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
@@ -87,6 +92,11 @@ B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별�
   현재 production run을 호출하는 재검증기로 교체했다. 20개 조건에서 adaptive/use-time
   breach cell=0, progressive=11이었다. progressive의 허용된 reuse 기간 내 stale 위험은
   비교군의 성질이며 감추지 않는다. 읽기가 안전하다는 합성 정의는 실제 기밀성을 증명하지 않는다.
+  **2026-09-25 후속:** 그 11건 중 `volatility≥0.75` 부근에서 나타난 실패는 trade-off가
+  아니라 `adaptive_window()` floor 버그(항상 최소 1을 강제해 고변동성에서 refresh
+  주기가 상태의 parity와 aliasing됨)였다. floor를 0으로 낮춰 수정했고, 수식대로
+  정당하게 window=1인 나머지 경우의 stale 위험은 그대로 유지했다.
+  [상세](2026-09-25-e003-progressive-refresh-fix.ko.md).
 - **R4 E005/Shield:** moving-target의 큰 분산, sensor-loss의 전부 Revalidate,
   shift에서 FPR 예산 초과는 잔여 연구 한계다. 출력 이름·평가 기준을 바꿔 성공으로 만들지 않는다.
 
