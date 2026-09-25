@@ -121,6 +121,17 @@ def validate_entry(entry, index):
     for rel_path, recorded in fingerprints.items():
         if not isinstance(rel_path, str) or not rel_path.strip():
             raise RegistryError(f"{where}: fingerprint 경로는 비어 있지 않은 문자열이어야 한다")
+        # repo_root / rel_path silently discards repo_root when rel_path is
+        # absolute (pathlib join semantics), and ".." components escape it
+        # regardless — either lets recorded_fingerprints hash and report on
+        # an arbitrary filesystem path outside the repository. Reject both
+        # here so a malformed or malicious path is the same fail-closed
+        # schema violation as any other structural problem in this entry.
+        if Path(rel_path).is_absolute() or ".." in Path(rel_path).parts:
+            raise RegistryError(
+                f"{where}: fingerprint 경로는 저장소 루트 안의 상대 경로여야 한다"
+                f" (허용되지 않음: {rel_path!r})"
+            )
         if not isinstance(recorded, str):
             raise RegistryError(f"{where}: {rel_path}의 fingerprint는 문자열이어야 한다")
         normalized = recorded.strip().lower()

@@ -305,6 +305,18 @@ MALFORMED_CASES = [
         "valid_entry_without_attached_state",
         {"entries": [make_entry({}, claim="첨부 상태 없는 valid")]},
     ),
+    (
+        "fingerprint_path_is_absolute",
+        {"entries": [make_entry({"/etc/hosts": "0" * 64})]},
+    ),
+    (
+        "fingerprint_path_escapes_repo_root",
+        {"entries": [make_entry({"../../../../etc/hosts": "0" * 64})]},
+    ),
+    (
+        "fingerprint_path_has_embedded_parent_component",
+        {"entries": [make_entry({"src/../../../etc/hosts": "0" * 64})]},
+    ),
 ]
 
 
@@ -371,6 +383,20 @@ def test_compute_verdict_unit_rules(checker_module):
     assert checker_module.compute_verdict(stale_marked, drifted) == "stale"
     unsupported = make_entry({"a.py": "0" * 64}, verdict="unsupported")
     assert checker_module.compute_verdict(unsupported, missing) == "unsupported"
+
+
+@pytest.mark.parametrize(
+    "escaping_path",
+    ["/etc/hosts", "../../../../etc/hosts", "src/../../../etc/hosts"],
+)
+def test_validate_entry_rejects_paths_outside_repo_root(checker_module, escaping_path):
+    """repo_root / rel_path silently drops repo_root for an absolute rel_path
+    (pathlib join semantics), and a '..' component escapes it regardless —
+    either would let compute_file_states hash and report on an arbitrary
+    filesystem path. validate_entry must reject both before any hashing."""
+    entry = make_entry({escaping_path: "0" * 64})
+    with pytest.raises(checker_module.RegistryError, match=re.escape(escaping_path)):
+        checker_module.validate_entry(entry, 0)
 
 
 def test_validate_entry_accepts_task_shape(checker_module):

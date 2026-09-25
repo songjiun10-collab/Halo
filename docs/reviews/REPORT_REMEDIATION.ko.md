@@ -31,6 +31,14 @@ marshal하는 대신 반복 상수의 백레퍼런스 문제가 생길 수 없�
 구버전의 불안정성을 재확인했고, 동일 스크립트로 되돌린 코드에서 신규 회귀
 테스트가 실패함을 확인한 뒤 수정판에서 통과함을 확인했다. Python 402개 통과.
 
+2026-09-25 후속 5: [tools/check_evidence_registry.py fingerprint 경로 탈출 수정](2026-09-25-evidence-registry-path-confinement-fix.ko.md).
+`recorded_fingerprints`의 경로 키가 검증 없이 `repo_root / rel_path`로
+결합되어, 절대경로(pathlib join이 repo_root를 버림)나 `..` 상위 탈출로
+`repo_root` 밖 임의 파일을 해시해 리포트에 노출할 수 있었다 — `halo doctor
+verify`가 항상 실행하는 검증 진입점의 실제 코드 결함. `validate_entry`에서
+두 경우 모두 다른 스키마 위반과 동일하게 fail-closed(exit 1)로 차단하도록
+수정. Python 408개 통과.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
