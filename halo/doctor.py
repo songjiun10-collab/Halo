@@ -233,9 +233,14 @@ def verify(root=None, scope="python"):
     gates = []
     runner_bin = (root / "artifacts" / "sandbox_benchmark" / "rust_runner"
                   / "target" / "debug" / "halo-sandbox-runner")
-    if scope in ("sandbox", "all") and runner_bin.is_file():
+    if scope in ("sandbox", "all"):
+        # Always emit a gate row for a requested sandbox scope, even when the
+        # runner binary is not built — an absent gates entry is indistinguishable
+        # from "checked and fine", contradicting this module's own not-installed
+        # reporting convention (see rust-tests/sandbox-tests above).
         gates.append(_report_security_gate(
-            "macOS 샌드박스 security_gate", [str(runner_bin), "--repeats", "1"],
+            "macOS 샌드박스 security_gate",
+            [str(runner_bin), "--repeats", "1"] if runner_bin.is_file() else None,
             cwd=str(root)))
 
     ok = all(check["ok"] is not False for check in checks)

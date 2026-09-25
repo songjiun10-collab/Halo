@@ -109,6 +109,26 @@ def test_verify_is_side_effect_free_and_json_cli_output_is_pure(monkeypatch, cap
     assert json.loads(out) == canned
 
 
+@pytest.mark.parametrize("scope", ["sandbox", "all"])
+def test_verify_reports_unbuilt_sandbox_gate_explicitly_not_silently(monkeypatch, tmp_path, scope):
+    """Regression: when the sandbox scope was requested but the runner binary
+    wasn't built yet, security_gates was silently [] — indistinguishable from
+    "gate checked, no issue". This module's own convention elsewhere (e.g.
+    rust-tests/sandbox-tests "not installed") reports missing tooling
+    explicitly; the gate must do the same rather than going silent."""
+    monkeypatch.setattr(doctor, "_pytest_check",
+        lambda root: {"name": "pytest", "ok": True, "output": ""})
+    monkeypatch.setattr(doctor, "_evidence_check",
+        lambda root: {"name": "evidence", "ok": True, "output": ""})
+    report = doctor.verify(tmp_path, scope=scope)
+    assert len(report["security_gates"]) == 1
+    gate = report["security_gates"][0]
+    assert gate["ok"] is None
+    assert gate["detail"] == "not built"
+    # A not-built gate is informational, never a test failure.
+    assert report["ok"] is True
+
+
 def test_doctor_missing_registry_is_failure(tmp_path):
     report = doctor.diagnose(tmp_path)
     assert not report["ok"]

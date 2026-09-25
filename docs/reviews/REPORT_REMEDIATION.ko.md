@@ -39,6 +39,15 @@ verify`가 항상 실행하는 검증 진입점의 실제 코드 결함. `valida
 두 경우 모두 다른 스키마 위반과 동일하게 fail-closed(exit 1)로 차단하도록
 수정. Python 408개 통과.
 
+2026-09-25 후속 6: [halo doctor verify()의 sandbox security_gate 침묵 누락 수정](2026-09-25-doctor-verify-sandbox-gate-silent-gap-fix.ko.md).
+`verify --scope sandbox/all`에서 러너 바이너리가 아직 빌드되지 않았으면
+`security_gates`가 조용히 빈 배열이 되어 "확인 안 함"과 "문제 없음"을
+구분할 수 없었다 — 이 모듈의 다른 곳(rust-tests/sandbox-tests)이 지키는
+"환경 미설치는 not-installed로 명시 보고" 관례를 게이트만 어겼다. 항상
+게이트 항목을 내도록 수정(바이너리 없으면 `{"ok": None, "detail": "not
+built"}`). `security_gate=false` 자체는 이미 문서화된 B1 환경 한계이며 이
+수정으로 바뀌지 않는다. Python 418개 통과.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
