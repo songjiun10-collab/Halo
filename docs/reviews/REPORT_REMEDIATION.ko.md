@@ -21,6 +21,16 @@ handle()을 뚫고 나감, report-only로 기록되고 gateway.py는 안 고쳐�
 `Rejected("clock unavailable")`로 정규화. 발견 2(marshal 지문 불안정)는
 별도 범위로 남김. Python 401개 통과.
 
+2026-09-25 후속 4: [halo/gateway.py 어댑터 지문의 로드 모드 불안정성 수정](2026-09-25-e006-fingerprint-fix.ko.md).
+E006 fault-injection의 "발견 2"(marshal 기반 어댑터 지문이 fresh-compile과
+`.pyc` 캐시 로드 사이에서 달라져 유효한 capability가 거짓 거부될 수 있음,
+높음 심각도, report-only로 기록되고 gateway 수정은 별도 범위로 남겨져
+있었음)를 실제로 수정 — `_code_fingerprint`가 코드 객체를 통째로
+marshal하는 대신 반복 상수의 백레퍼런스 문제가 생길 수 없는 평탄한 필드
+튜플(`_canonical_code`)로 분해한 뒤 marshal한다. 서브프로세스 기반 재현으로
+구버전의 불안정성을 재확인했고, 동일 스크립트로 되돌린 코드에서 신규 회귀
+테스트가 실패함을 확인한 뒤 수정판에서 통과함을 확인했다. Python 402개 통과.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

@@ -234,6 +234,46 @@ def test_nested_code_fingerprint_is_stable_across_processes():
     assert fingerprints[0] == fingerprints[1]
 
 
+def test_code_fingerprint_stable_across_pyc_cache_and_fresh_compile(tmp_path):
+    """Regression (e006 fault-injection finding 2): marshal.dumps(code)
+    directly produced DIFFERENT bytes for byte-identical source depending on
+    whether the code object was freshly compiled or reconstructed from a
+    .pyc cache in a *different* process (marshal deduplicates repeated
+    constants via object-identity backreferences, and interning state for
+    those constants differs across processes). The two `-c` invocations in
+    test_nested_code_fingerprint_is_stable_across_processes above never
+    actually exercise this: both always freshly compile from a string with
+    no .pyc cache involved. This test instead imports a real file twice —
+    the second run loads from the .pyc the first run just wrote — which is
+    exactly the axis that caused a real worker restart to reject a valid
+    capability. _canonical_code() must make this stable.
+
+    The function body matters: an earlier version of this test used a
+    nested closure with a list comprehension, which on Python 3.12+ (PEP
+    709 inlines comprehensions) never actually hit the unstable
+    constant-backreference path and passed even against the old, buggy
+    marshal.dumps(code)-direct implementation. A flat function with a
+    plain loop (mirroring the exact shape that reproduced the instability
+    via ad hoc repro scripts) is what actually exercises the bug."""
+    module_path = tmp_path / "advmod.py"
+    module_path.write_text(
+        "def adapter(args):\n"
+        "    tag = 'adapter'\n"
+        "    total = 0\n"
+        "    for x in args:\n"
+        "        total += x + 2\n"
+        "    return total\n"
+    )
+    script = (f"import sys; sys.path.insert(0, {str(tmp_path)!r})\n"
+              "import advmod\n"
+              "from halo.gateway import Gateway\n"
+              "print(Gateway._code_fingerprint(advmod.adapter))\n")
+    fresh = subprocess.check_output([sys.executable, "-c", script], text=True)
+    assert (tmp_path / "__pycache__").is_dir()  # confirms the second run loads from cache
+    cached = subprocess.check_output([sys.executable, "-c", script], text=True)
+    assert fresh == cached
+
+
 def test_fingerprint_distinguishes_constants_and_defaults():
     def adapter(args, offset=1):
         return offset + 1

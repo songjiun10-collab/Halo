@@ -15,6 +15,7 @@ import secrets
 import sqlite3
 import stat
 import time
+from types import CodeType
 from typing import Callable
 
 
@@ -43,6 +44,29 @@ def _encode(value):
     if len(data) > 65536:
         raise Rejected("request too large")
     return data
+
+
+def _canonical_code(code):
+    """A load-mode-stable decomposition of a code object's semantic content.
+
+    marshal.dumps(code) directly is NOT stable across module-load modes for
+    byte-identical source: marshal deduplicates repeated constants via
+    object-identity backreferences, and whether two structurally equal
+    constants happen to BE the same (interned) object differs between a
+    freshly compiled code object and one reconstructed from a .pyc cache in
+    another process. That made a valid capability's fingerprint depend on
+    which process happened to compile the adapter first, causing false
+    rejections (found via experiments/e006_fault_injection, "발견 2").
+
+    Recursing manually into nested code objects (closures/comprehensions)
+    and marshaling only flat, non-repeating fields (raw bytecode, plain
+    tuples of names/constants) avoids that ambiguity while still changing
+    whenever the actual bytecode, constants, or signature shape changes.
+    """
+    consts = tuple(_canonical_code(c) if type(c) is CodeType else c for c in code.co_consts)
+    return (code.co_argcount, code.co_posonlyargcount, code.co_kwonlyargcount,
+            code.co_nlocals, code.co_flags, code.co_code, consts,
+            code.co_names, code.co_varnames, code.co_freevars, code.co_cellvars)
 
 
 class Gateway:
@@ -173,11 +197,10 @@ class Gateway:
         code = getattr(func, "__code__", None)
         if code is None:
             raise Rejected("non-function adapters require an explicit fingerprint")
-        # marshal includes nested code/constants without repr's process-local
-        # memory addresses. This is a code identity, not a dependency manifest:
-        # hosts must bump revision/fingerprint for closure/global/config changes.
+        # This is a code identity, not a dependency manifest: hosts must bump
+        # revision/fingerprint for closure/global/config changes.
         defaults = _encode([func.__defaults__, func.__kwdefaults__])
-        return hashlib.sha256(marshal.dumps(code) + defaults).hexdigest()
+        return hashlib.sha256(marshal.dumps(_canonical_code(code)) + defaults).hexdigest()
 
     def _adapter_fingerprint(self, tool):
         if type(tool.fingerprint) is str and tool.fingerprint:

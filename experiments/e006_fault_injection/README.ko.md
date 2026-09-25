@@ -90,3 +90,20 @@ crash한 서브에이전트가 설계한 매트릭스를 오케스트레이터�
 (`report-only findings: 0`). 발견 2(marshal 지문 불안정)는 손대지 않았다 —
 gateway 지문 방식 자체를 바꿔야 하는 별도 범위다. 상세는
 [docs/reviews/2026-09-25-e006-mono-clock-fix.ko.md](../../docs/reviews/2026-09-25-e006-mono-clock-fix.ko.md).
+
+## 2026-09-25 후속 — 발견 2 수정
+
+위 발견 2(marshal 기반 어댑터 지문의 로드 모드 불안정)도 수정했다.
+`halo/gateway.py`의 `_code_fingerprint`가 `marshal.dumps(code)`로 코드
+객체 전체를 그대로 덤프하던 것을, 반복 상수를 marshal이 객체-동일성
+백레퍼런스로 다루는 문제 자체가 생길 수 없도록 코드 객체를 평탄한 필드
+튜플로 먼저 분해하는 `_canonical_code()`를 거치도록 바꿨다. 서브프로세스로
+같은 파일을 fresh-import한 경우와 `.pyc` 캐시에서 cached-import한 경우의
+지문을 비교하는 방식으로 구버전 코드의 불안정성을 재확인했고, 동일 조건의
+신규 pytest 회귀 테스트가 구버전 코드에서는 실패하고 수정판에서는 통과함을
+`git stash`로 직접 검증했다. 이 실험의 `worker_restart_after_effect_subprocess`
+시나리오는 부모/워커가 같은 `_tool_spec` 팩토리를 import로 공유하도록
+설계되어 있어(주석 참고) 표준 실행 경로(import 기반)에서는 이 finding이
+수정 전에도 발화하지 않았으므로, 실험 재실행으로는 수정 효과를 보일 수
+없다 — `report-only findings: 0`은 수정 전후 동일하다. 상세는
+[docs/reviews/2026-09-25-e006-fingerprint-fix.ko.md](../../docs/reviews/2026-09-25-e006-fingerprint-fix.ko.md).
