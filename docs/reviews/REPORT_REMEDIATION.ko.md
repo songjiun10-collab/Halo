@@ -14,6 +14,13 @@ Python 383개 통과. 과거 증거 2개가 stale이므로 통합 verify는 exit
 "CLI 회귀 포함 전체 pytest 383 통과"는 `--scope python`만 검증된 것이었다 —
 rust/sandbox 스코프는 이번에 처음 실제로 통과 확인. Python 399개 통과.
 
+2026-09-25 후속 3: [halo/gateway.py clock 호출 예외 처리 수정](2026-09-25-e006-mono-clock-fix.ko.md).
+E006 fault-injection의 "발견 1"(mono clock 실패 시 raw ValueError가
+handle()을 뚫고 나감, report-only로 기록되고 gateway.py는 안 고쳐진 상태였음)을
+실제로 수정 — wall/mono 양쪽 다 clock 호출 자체가 raise하는 경우를
+`Rejected("clock unavailable")`로 정규화. 발견 2(marshal 지문 불안정)는
+별도 범위로 남김. Python 401개 통과.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

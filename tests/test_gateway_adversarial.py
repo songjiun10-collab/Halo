@@ -169,6 +169,40 @@ def test_invalid_clock_tolerance_creates_no_state(tmp_path, tolerance):
     assert list(tmp_path.iterdir()) == []
 
 
+class _ToggleClock:
+    """Starts healthy so Gateway construction succeeds, then can be made to
+    raise like a monotonic clock becoming unavailable mid-run."""
+
+    def __init__(self, value=1000.0):
+        self.value = value
+        self.enabled = True
+
+    def __call__(self):
+        if not self.enabled:
+            raise ValueError("clock unavailable at the OS level")
+        return self.value
+
+
+@pytest.mark.parametrize("clock_kwarg", ["clock", "mono_clock"])
+def test_raising_clock_callable_is_rejected_not_uncaught(tmp_path, clock_kwarg):
+    """Regression (e006 fault-injection finding 1): a clock callable that
+    itself raises (e.g. a monotonic clock becoming unavailable) used to
+    propagate that raw exception straight out of handle() — neither Rejected
+    nor ExecutionUncertain, an error-handling contract inconsistency for any
+    caller that uses .handle() directly rather than through the WSGI
+    __call__ wrapper. _wall()/_mono_now() only guarded against a clock
+    returning a bad *value*, not the call itself raising."""
+    failing = _ToggleClock()
+    kwargs = {"clock": lambda: 1000.0, "mono_clock": lambda: 1000.0, clock_kwarg: failing}
+    tools = {"echo": Tool("1", lambda args: True, lambda args: {"ok": True})}
+    app = Gateway(tmp_path / "g.db", A, E, tools, **kwargs)
+    failing.enabled = False
+    with pytest.raises(Rejected) as excinfo:
+        app.handle("/approve", A, {"tool": "echo", "args": {}, "intent_id": "x"})
+    assert type(excinfo.value) is Rejected
+    assert "clock unavailable" in str(excinfo.value)
+
+
 def test_database_is_private_before_sqlite_connect(tmp_path, monkeypatch):
     connect = sqlite3.connect
     def checked_connect(path, *args, **kwargs):

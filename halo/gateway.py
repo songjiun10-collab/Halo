@@ -151,13 +151,19 @@ class Gateway:
             db.execute("INSERT INTO meta(key,value) VALUES('max_wall',?)", (repr(now),))
 
     def _wall(self):
-        value = self._clock()
+        try:
+            value = self._clock()
+        except Exception as exc:
+            raise Rejected("clock unavailable") from exc
         if type(value) not in (int, float) or not math.isfinite(value):
             raise Rejected("clock unavailable")
         return float(value)
 
     def _mono_now(self):
-        value = self._mono_clock()
+        try:
+            value = self._mono_clock()
+        except Exception as exc:
+            raise Rejected("clock unavailable") from exc
         if type(value) not in (int, float) or not math.isfinite(value):
             raise Rejected("clock unavailable")
         return float(value)

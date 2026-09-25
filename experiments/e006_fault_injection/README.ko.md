@@ -75,3 +75,18 @@ crash한 서브에이전트가 설계한 매트릭스를 오케스트레이터�
 외부 서비스·네트워크 리스너·실제 자격 증명은 연결하지 않았다. 이 실험은
 `halo/gateway.py`를 수정하지 않는다 — 발견은 위에 기록되고 별도 검증 후
 수정한다.
+
+## 2026-09-25 후속 — 발견 1 수정
+
+위 표와 발견 1은 2026-09-23 당시 원자료다(수정 전 상태로 보존). 발견 1
+(mono clock 오류 처리 불일치)은 `halo/gateway.py`의 `_wall()`/`_mono_now()`가
+"clock이 나쁜 값을 반환하는 경우"만 감싸고 "clock 호출 자체가 raise하는
+경우"는 감싸지 않던 결함이었다 — wall/mono 양쪽 모두 동일한 구조라 실제로는
+대칭적인 결함이었고, 이 실험이 mono 쪽만 우연히 노출시켰을 뿐이다. 두 메서드
+모두 클록 호출을 `try/except`로 감싸 `Rejected("clock unavailable")`로
+정규화하도록 수정했다. 이 실험 스크립트를 현재 트리에서 다시 실행하면
+`clock_unavailable_before_claim`의 `response_type`이 `uncaught:ValueError`
+대신 `Rejected`이고, `_collect_findings()`가 발견 1을 더 이상 만들지 않는다
+(`report-only findings: 0`). 발견 2(marshal 지문 불안정)는 손대지 않았다 —
+gateway 지문 방식 자체를 바꿔야 하는 별도 범위다. 상세는
+[docs/reviews/2026-09-25-e006-mono-clock-fix.ko.md](../../docs/reviews/2026-09-25-e006-mono-clock-fix.ko.md).
