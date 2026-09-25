@@ -6,6 +6,9 @@ The project is intentionally empirical. Claims are limited to explicit threat mo
 
 ## Research workflow
 
+Local gateway development with Docker Compose is described in
+[the Docker guide](docs/DOCKER.ko.md), including key setup and an HTTP smoke check.
+
 1. Check the closest prior work first.
 2. State the trusted assumptions and threat model.
 3. Build the smallest experiment that can falsify the claim.
