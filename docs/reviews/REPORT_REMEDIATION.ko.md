@@ -8,6 +8,12 @@ Python 383개 통과. 과거 증거 2개가 stale이므로 통합 verify는 exit
 수정했다 — 통계적 trade-off 부분은 그대로 유지. Python 395개 통과.
 증거 레지스트리 상태는 변경 없음(valid 1 / stale 2 / unsupported 1).
 
+2026-09-25 후속 2: [halo doctor/verify 버그 2건 수정](2026-09-25-doctor-verify-fixes.ko.md).
+`verify --scope rust/sandbox/all`이 env 누락으로 항상 실패하던 문제와
+`verify --json`이 순수 JSON을 내지 않던 문제. 2026-09-23-doctor-cli.ko.md의
+"CLI 회귀 포함 전체 pytest 383 통과"는 `--scope python`만 검증된 것이었다 —
+rust/sandbox 스코프는 이번에 처음 실제로 통과 확인. Python 399개 통과.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

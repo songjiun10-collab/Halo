@@ -42,15 +42,16 @@ EXPECTED_SCHEMA = {
 
 # --- check runner -----------------------------------------------------------
 
-def run_check(name, command, root=None):
+def run_check(name, command, root=None, env=None):
     """명령을 root에서 실행하고 결과를 설명과 함께 반환한다 (fail-closed).
 
     launch 오류와 timeout은 예외로 통과시키지 않고 ok=False, returncode=None
-    으로 반환한다. output에는 stdout과 stderr가 모두 들어간다.
+    으로 반환한다. output에는 stdout과 stderr가 모두 들어간다. env가 None이면
+    현재 프로세스 환경을 그대로 물려받는다(subprocess.run 기본 동작).
     """
     try:
         proc = subprocess.run(command, cwd=str(root) if root is not None else None,
-                              capture_output=True, text=True, timeout=600)
+                              capture_output=True, text=True, timeout=600, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"name": name, "ok": False, "returncode": None,
                 "output": f"launch failed: {type(exc).__name__}"}
@@ -170,28 +171,26 @@ def _pytest_check(root):
 
 
 def _report_security_gate(label, command, cwd=None):
-    """보안 gate 결과를 테스트 결과와 별개로 게시한다 (ok가 아니어도 테스트 실패가 아니다)."""
+    """보안 gate 결과를 계산해 반환한다 (테스트 결과와 별개, ok가 아니어도 테스트
+    실패가 아니다). 출력하지 않는다 — print_verify가 --json과 분리해 게시한다."""
     if command is None:
-        print(f"  [보안 gate] {label}: runner 미빌드/미준비 — 별도 빌드 후 게시")
         return {"label": label, "ok": None, "detail": "not built"}
     try:
         proc = subprocess.run(command, cwd=cwd, capture_output=True, text=True,
                               timeout=600)
         gate_false = proc.returncode != 0
-        print(f"  [보안 gate] {label}: exit {proc.returncode} — "
-              f"{'실패 gate (잔여 접근 존재)' if gate_false else '통과'} (테스트 결과와 별개)")
         return {"label": label, "ok": not gate_false,
                 "detail": f"exit {proc.returncode}"}
     except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"  [보안 gate] {label}: 실행 실패 ({exc})")
         return {"label": label, "ok": None, "detail": str(exc)}
 
 
 def verify(root=None, scope="python"):
-    """스코프의 테스트 + 증거 레지스트리를 실행한다.
-
-    기본 스코프(python)는 pytest와 증거 레지스트리 두 검사다. rust/sandbox는
-    확장 검사이고, 보안 gate는 항상 검사 결과와 별개로 게시된다.
+    """스코프의 테스트 + 증거 레지스트리를 실행하고 {"ok", "checks",
+    "security_gates"} 보고서를 반환한다. 출력하지 않는다(diagnose처럼 순수
+    계산) — 호출자(main)가 print_verify 또는 json.dumps로 게시 형식을
+    고른다. 기본 스코프(python)는 pytest와 증거 레지스트리 두 검사다.
+    rust/sandbox는 확장 검사이고, 보안 gate는 항상 검사 결과와 별개다.
     """
     root = Path(root) if root is not None else REPO_ROOT
     if scope not in SCOPES:
@@ -206,7 +205,6 @@ def verify(root=None, scope="python"):
     if scope in ("rust", "all"):
         cargo = root / ".venv" / "cargo" / "bin" / "cargo"
         if not cargo.is_file():
-            print("  [테스트] rust: not-installed — 환경 미설치는 코드 실패가 아니다")
             checks.append({"name": "rust-tests", "ok": None, "returncode": None,
                            "output": "not installed"})
         else:
@@ -214,16 +212,14 @@ def verify(root=None, scope="python"):
                        CARGO_HOME=str(root / ".venv" / "cargo"))
             checks.append(run_check("rust-tests",
                                     [str(cargo), "test", "--locked",
-                                     "--manifest-path", "rust/Cargo.toml"], root))
+                                     "--manifest-path", "rust/Cargo.toml"], root, env=env))
     if scope in ("sandbox", "all"):
         runner_manifest = root / "artifacts" / "sandbox_benchmark" / "rust_runner" / "Cargo.toml"
         cargo = root / ".venv" / "cargo" / "bin" / "cargo"
         if not runner_manifest.is_file():
-            print("  [테스트] sandbox: rust_runner가 없다 — 건너뛴다")
             checks.append({"name": "sandbox-tests", "ok": None, "returncode": None,
                            "output": "runner manifest missing"})
         elif not cargo.is_file():
-            print("  [테스트] sandbox: not-installed — 환경 미설치는 코드 실패가 아니다")
             checks.append({"name": "sandbox-tests", "ok": None, "returncode": None,
                            "output": "not installed"})
         else:
@@ -232,7 +228,7 @@ def verify(root=None, scope="python"):
             checks.append(run_check("sandbox-tests",
                                     [str(cargo), "test", "--locked",
                                      "--manifest-path",
-                                     str(runner_manifest.relative_to(root))], root))
+                                     str(runner_manifest.relative_to(root))], root, env=env))
 
     gates = []
     runner_bin = (root / "artifacts" / "sandbox_benchmark" / "rust_runner"
@@ -242,22 +238,26 @@ def verify(root=None, scope="python"):
             "macOS 샌드박스 security_gate", [str(runner_bin), "--repeats", "1"],
             cwd=str(root)))
 
+    ok = all(check["ok"] is not False for check in checks)
+    return {"ok": ok, "checks": checks, "security_gates": gates}
+
+
+def print_verify(report):
+    checks = report["checks"]
     for check in checks:
         state = "통과" if check["ok"] is True else ("실패" if check["ok"] is False else "정보")
-        detail = check.get("output", "").strip().splitlines()
+        detail = (check.get("output") or "").strip().splitlines()
         summary = detail[-1] if detail else check.get("output", "")
         print(f"  [{state}] {check['name']}: {summary}")
-    ok = all(check["ok"] is not False for check in checks)
     failed = [c["name"] for c in checks if c["ok"] is False]
     print()
     print(f"테스트 요약: {len(checks)}개 — 실패 {len(failed)}개"
           + (f": {', '.join(failed)}" if failed else " — 전부 통과 또는 not-installed"))
-    for gate in gates:
+    for gate in report["security_gates"]:
         state = "실패 gate" if gate["ok"] is False else ("통과" if gate["ok"] else "미빌드")
         print(f"보안 gate (별개): {gate['label']} — {state}")
     print("보안 gate는 테스트 결과와 별개다 — gate 실패는 운영 준비도 항목이지 "
           "테스트 실패가 아니다.")
-    return {"ok": ok, "checks": checks, "security_gates": gates}
 
 
 # --- CLI --------------------------------------------------------------------
@@ -296,6 +296,8 @@ def main(argv=None):
             return 2
         if args.json:
             print(json.dumps(report, ensure_ascii=False))
+        else:
+            print_verify(report)
         return 0 if report["ok"] else 1
     # 서브커맨드 없으면 doctor를 기본 실행한다 (신입 기여자의 최초 진입점).
     report = diagnose()

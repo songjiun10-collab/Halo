@@ -42,6 +42,73 @@ def test_verify_runs_both_checks_and_propagates_failure(monkeypatch, tmp_path, o
     assert calls[0][1][0] == sys.executable
 
 
+def test_run_check_forwards_env_to_subprocess(monkeypatch, tmp_path):
+    """Regression: env used to be computed by verify() but silently dropped,
+    since run_check() had no env parameter — cargo invocations then failed
+    with 'could not execute process `rustc -vV`' whenever RUSTUP_HOME/
+    CARGO_HOME weren't already in the ambient environment."""
+    captured = {}
+    def fake_run(command, cwd, capture_output, text, timeout, env):
+        captured["env"] = env
+        class Proc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return Proc()
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    sentinel_env = {"RUSTUP_HOME": "/fake/rustup", "CARGO_HOME": "/fake/cargo"}
+    doctor.run_check("probe", ["probe"], tmp_path, env=sentinel_env)
+    assert captured["env"] == sentinel_env
+
+
+@pytest.mark.parametrize("scope", ["rust", "sandbox"])
+def test_verify_passes_rustup_and_cargo_home_env_for_cargo_scopes(monkeypatch, tmp_path, scope):
+    """The RUSTUP_HOME/CARGO_HOME env verify() builds must actually reach the
+    cargo subprocess, not just be constructed and discarded."""
+    cargo = tmp_path / ".venv" / "cargo" / "bin" / "cargo"
+    cargo.parent.mkdir(parents=True)
+    cargo.write_text("#!/bin/sh\n")
+    if scope == "sandbox":
+        manifest = tmp_path / "artifacts" / "sandbox_benchmark" / "rust_runner" / "Cargo.toml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("")
+
+    calls = []
+    def run(name, command, root, env=None):
+        calls.append({"name": name, "command": command, "root": root, "env": env})
+        return {"name": name, "ok": True, "output": ""}
+    monkeypatch.setattr(doctor, "run_check", run)
+    monkeypatch.setattr(doctor, "_evidence_check",
+        lambda root: {"name": "evidence", "ok": True, "output": ""})
+
+    doctor.verify(tmp_path, scope=scope)
+
+    test_calls = [c for c in calls if c["name"] in ("rust-tests", "sandbox-tests")]
+    assert len(test_calls) == 1
+    env = test_calls[0]["env"]
+    assert env is not None
+    assert env["RUSTUP_HOME"] == str(tmp_path / ".venv" / "rustup")
+    assert env["CARGO_HOME"] == str(tmp_path / ".venv" / "cargo")
+
+
+def test_verify_is_side_effect_free_and_json_cli_output_is_pure(monkeypatch, capsys):
+    """Regression: verify() and _report_security_gate() used to print()
+    human-readable lines unconditionally, so `halo verify --json` emitted
+    those lines before the JSON object instead of a single parseable
+    document, contradicting its own documented contract."""
+    canned = {"ok": True, "checks": [{"name": "pytest", "ok": True, "output": "ok"}],
+              "security_gates": []}
+    monkeypatch.setattr(doctor, "verify", lambda root, scope: canned)
+    captured_direct = capsys.readouterr()  # drain setup noise, if any
+    doctor.verify(None, scope="python")
+    assert capsys.readouterr().out == ""
+
+    assert doctor.main(["verify", "--json"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("\n") == 1
+    assert json.loads(out) == canned
+
+
 def test_doctor_missing_registry_is_failure(tmp_path):
     report = doctor.diagnose(tmp_path)
     assert not report["ok"]
