@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>HALO // Computer Use</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="shell" id="shell">
+      <header class="chrome">
+        <div class="brand" aria-label="HALO computer use">
+          <span class="brand-mark">H</span>
+          <span class="brand-name">HALO <span>/ COMPUTER USE</span></span>
+        </div>
+        <div class="connection" id="connection" data-state="checking">
+          <i aria-hidden="true"></i><span id="connection-label">CHECKING BRIDGE</span>
+        </div>
+        <div class="chrome-actions">
+          <button class="icon-button" id="pause-button" type="button" disabled aria-label="Pause task" title="Pause task">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3v10M11 3v10" /></svg>
+          </button>
+          <button class="stop-button" id="stop-button" type="button" disabled><span class="stop-square"></span> STOP</button>
+        </div>
+      </header>
+
+      <nav class="navigation" aria-label="Browser navigation">
+        <button class="nav-icon" id="back-button" type="button" disabled aria-label="Back" title="Back">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11.5 4 5.5 10l6 6M6 10h9" /></svg>
+        </button>
+        <button class="nav-icon" id="forward-button" type="button" disabled aria-label="Forward" title="Forward">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m8.5 4 6 6-6 6M14 10H5" /></svg>
+        </button>
+        <button class="nav-icon" id="reload-button" type="button" disabled aria-label="Reload" title="Reload">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 9a6.1 6.1 0 0 0-10.8-3L4 7M4 4v3h3M4 11a6.1 6.1 0 0 0 10.8 3L16 13m0 3v-3h-3" /></svg>
+        </button>
+        <form class="address-form" id="address-form" autocomplete="off">
+          <span class="address-lock" aria-hidden="true">
+            <svg viewBox="0 0 16 16"><path d="M4 7V5a4 4 0 0 1 8 0v2m-9 0h10v7H3z" /></svg>
+          </span>
+          <label class="sr-only" for="address">Address or search</label>
+          <input id="address" name="address" type="text" spellcheck="false" placeholder="Enter URL or search" />
+          <span class="origin-label" id="origin-label">NO PAGE</span>
+        </form>
+        <button class="nav-icon tab-button" id="new-tab-button" type="button" disabled aria-label="New tab" title="New tab">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+        </button>
+      </nav>
+
+      <main class="workspace">
+        <section class="page-column" aria-label="Browser page">
+          <div class="page-strip">
+            <div class="page-tab"><span class="tab-indicator"></span><span id="page-title">New tab</span><span class="tab-close">×</span></div>
+            <span class="page-meta" id="page-meta">RENDERER READY</span>
+          </div>
+          <div class="web-surface" id="web-surface" aria-label="Web content viewport">
+            <div class="empty-state" id="empty-state">
+              <div class="empty-rule"><span>HALO / CONTROLLED SESSION</span><span>01</span></div>
+              <div class="empty-content">
+                <div class="empty-kicker">COMPUTER USE RUNTIME</div>
+                <h1>Human intent.<br />Recorded actions.</h1>
+                <p>The browser surface will appear here when the native runtime is connected. Page content is treated as untrusted input.</p>
+                <div class="empty-status"><i></i><span id="empty-status-text">WAITING FOR SECURE BRIDGE</span></div>
+              </div>
+              <div class="empty-footer"><span>HALO RESEARCH BUILD</span><span>LOCAL SESSION · NO CLOUD SYNC</span></div>
+            </div>
+          </div>
+          <footer class="page-footer">
+            <span id="security-origin">ORIGIN: —</span>
+            <span id="page-load-state">IDLE</span>
+            <span id="zoom-indicator">100%</span>
+          </footer>
+        </section>
+
+        <aside class="side-panel" aria-label="Agent controls and decision record">
+          <section class="task-section">
+            <div class="section-heading"><span>01 / TASK</span><span class="section-state" id="task-state">IDLE</span></div>
+            <label class="sr-only" for="task-prompt">Describe a browser task</label>
+            <textarea id="task-prompt" rows="3" maxlength="2000" placeholder="Describe one task for the agent…" spellcheck="false"></textarea>
+            <div class="task-controls"><span class="char-count" id="char-count">0 / 2000</span><button class="run-button" id="run-button" type="button" disabled><span>START TASK</span><span class="keycap">⌘ ↵</span></button></div>
+            <div class="task-note"><span class="signal amber"></span><span>REVIEW waits for a person. ALLOW runs; DENY is blocked.</span></div>
+          </section>
+
+          <section class="queue-section">
+            <div class="section-heading"><span>02 / APPROVAL QUEUE</span><span class="count-pill" id="queue-count">00</span></div>
+            <div class="queue-list" id="queue-list"><div class="empty-row">No actions awaiting review.</div></div>
+          </section>
+
+          <section class="timeline-section">
+            <div class="section-heading"><span>03 / EVENT LOG</span><span class="live-label"><i></i> LIVE</span></div>
+            <ol class="timeline" id="timeline"><li class="empty-row">Session events will be recorded here.</li></ol>
+          </section>
+
+          <div class="panel-foot"><span>POLICY BOUNDARY</span><span>APPROVAL ≠ EXECUTION</span></div>
+        </aside>
+      </main>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+    <script src="./renderer.js" defer></script>
+  </body>
+</html>

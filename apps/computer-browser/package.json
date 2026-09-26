@@ -1,0 +1,14 @@
+{
+  "name": "halo-computer-browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Computer-use browser research extension for Halo. main/preload/approver are owned by Claude (runtime + approve/execute boundary); renderer/ is owned by Codex (UI). See docs/superpowers/specs/2026-09-26-computer-use-browser-design.md.",
+  "main": "main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "electron": "44.4.5"
+  }
+}

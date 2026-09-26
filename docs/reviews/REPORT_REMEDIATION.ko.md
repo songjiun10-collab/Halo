@@ -165,6 +165,41 @@ CSS/JS 단일 정적 파일, 기본값이 `api.mode='simulation'`이라 fetch를
 승인 없이는 구현하지 않는다. Python 코드 변경 없음(설정 파일과
 `docs/DEPLOY.ko.md`만 갱신), 회귀 473개 그대로 통과.
 
+2026-09-26 후속 8: [computer-use 전용 브라우저 — 승인·실행 경계를 실제
+Chromium 제어에 적용](../superpowers/specs/2026-09-26-computer-use-browser-design.md).
+사용자가 "이제 우리는 브라우저를 만든다, 컴퓨터 유즈 전용 브라우저"를
+요청했고, 업계 조사(ceLLMate·AIRGuard·Perplexity Comet 제로클릭 파일 유출
+사고·ChatGPT Atlas의 다운로드 전면 금지 등)를 거쳐 이 프로젝트가 이미
+연구해온 승인-실행 분리를 처음으로 실제 웹 공격 표면(간접 프롬프트 주입)에
+적용하는 확장으로 확정했다. Codex와 역할을 분담해(Claude: Electron
+main/preload/승인자 프로세스·승인-실행 경계·통합 테스트, Codex: renderer
+UI·UI 테스트) `apps/computer-browser/`를 새로 만들었다. Electron main을
+실행자(`HALO_EXECUTOR_KEY` 없음 — Gateway HTTP를 호출하지 않으므로 그
+키 자체가 무의미해 도입하지 않았다)로, 별도 상시 구동 Python 프로세스를
+승인자로 분리하고 E007의 `UnixSocketChannel`을 그대로 재사용했다. 승인
+판단은 전적으로 `halo.policy.decide()` + `halo.safety_cases.evaluate_trace()`
+이며, 에이전트가 "방금 읽은 페이지 내용"에서 나온 행동은 호스트 규칙으로
+독립적으로 untrusted로 분류돼 자기 신고("trusted")와 불일치하면 DENY —
+Comet 사고와 정확히 같은 위협 패턴을 겨냥한다. 구현 중 halo의 기존 action
+어휘(`read/.../post_web/...`)에 브라우저 동작이 하나도 없어 매핑 없이는
+모든 요청이 항상 거부된다는 것을 발견해 매핑 테이블을 추가했고, 그 결과
+`submit_form`/`download`는 독립 텔레메트리가 없어 이 참조 구현에서
+provenance와 무관하게 항상 거부됨을 확인했다(의도된 보수적 동작). 실제
+`npm install && electron .`로 앱을 띄우고 CDP로 `startTask()`를 호출해
+실행자→승인자(Unix 소켓)→실제 `WebContentsView` 페이지 로드까지 종단
+간으로 검증했고, 그 과정에서 진짜 버그 3개(IPC 직렬화 예외, bounds 캐시로
+인한 미적용, macOS `/var` 심링크로 인한 승인자 소켓 바인딩 무한 실패)를
+찾아 고쳤다. Python 21개 신규(`tests/test_computer_browser_approver.py`)
+포함 494개, JS 12개(`node --test`) 통과. `halo/authority.py`·
+`halo/gateway.py`·`halo/gateway_app.py`·`halo/dev_server.py`는 전혀
+수정하지 않았다. **정직한 한계**: 이 버전의 `startTask` 데모 경로는 항상
+`source="user_prompt"`만 만들어, 이 프로젝트의 핵심 시나리오(REVIEW·
+provenance mismatch DENY)는 UI로 직접 트리거되지 않고 Python 유닛
+테스트에서만 검증됐다 — 실제 페이지 콘텐츠를 읽고 그로부터 행동을
+제안하는 멀티스텝 에이전트 루프는 아직 없다(설계 문서 참고). `click`/
+`type`을 halo의 `read` 어휘로 매핑한 것도 근사치이며 상태 변경 클릭과
+무해한 클릭을 구분하지 못한다.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
