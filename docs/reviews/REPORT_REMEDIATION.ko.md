@@ -390,10 +390,42 @@ Electron+approver 실행 통합(Task 4), host/UI 수명주기(Task 5), 종단 �
 검증: `node --test` 72/72 통과(신규 15개 포함), 전체 Python 회귀 494/494
 통과 유지 확인.
 
+2026-09-27 후속 17: 장기 브라우저 하네스에 전체 프로세스 메모리 예산(<1GB) 추가,
+Task 1 journal 재생을 스트리밍으로 수정. 사용자가 "메모리 1기가 미만으로 먹게
+만들어"를 새 확정 요구로 이양했다 — Electron main·renderer·GPU/utility·Python
+approver·local planner worker와 그 자식 전체 합계가 decimal 1,000,000,000 바이트
+미만이어야 하며, V8 heap만 재거나 worker를 합계에서 빼서 통과시키는 방식은 금지다.
+Codex가 이 조건으로 설계/계획 문서를 아직 수정하지 않아 Claude가 직접 설계서
+[§10](../superpowers/specs/2026-09-27-long-horizon-browser-harness-design.md)과
+[계획서](../superpowers/plans/2026-09-27-long-horizon-browser-harness.md)에
+추가했다(커밋 `70db97b`) — 측정은 `app.getAppMetrics()`(KB 단위) + 등록된 외부
+자식의 OS 메모리를 `(pid, creationTime)`으로 중복 제거·합산, macOS의
+`residentSet` 미지원/압축 메모리 값은 0이 아니라 측정 불가로 표시, 700/800/900MB
+3단계 압력 정책(캐시 해제 → dispatch 정지+durable checkpoint+`paused:
+memory_pressure` → 소유 renderer/worker 정리, 재로드 폭주 금지), 폴링으로는
+실제 macOS에서 순간 피크까지 절대 차단할 수 없다는 정직한 한계를 명시했다.
+
+사용자가 직접 코드 근거로 지적한 부분도 같은 요청에 포함되어 있었다 — 이미 커밋된
+`b60a94c`의 `task-store.js` `readJournal()`이 journal 전체를 하나의 배열로 읽어
+들이는 구조였다. 직접 확인 후 `streamJournalReplay()`로 교체했다(커밋 `bb9b3fa`):
+64KB 청크로 스트리밍하며 seq·단일 in-flight action id(같은 설계의 "한 task에 한
+action dispatch" 불변식을 이용해 Map 대신 스칼라 하나로 충분)만 O(1)로 추적하고,
+checkpoint 이후 이벤트는 §5의 "최근 10쌍" 상한과 동일하게 최근
+`MAX_RECENT_EVENTS_IN_CONTEXT`(10)개로만 제한한다. 부수 효과로 겹치는
+action_started나 actionId가 안 맞는 action_outcome도 이제 storage_corrupt로
+더 엄격하게 잡는다. 기존 15개 테스트는 수정 없이 그대로 통과했고(스트리밍 전환이
+관측 가능한 동작을 바꾸지 않았다는 뜻), eventsSinceCheckpoint 10개 상한·300-action/
+600-event journal 복구·in-flight 위반 2건을 회귀 테스트 4개로 추가했다. **정직한
+한계**: 300-action 재생 테스트는 구조적/기능적 증거(배열을 들고 있지 않음을
+증명)일 뿐 실제 RSS 측정이 아니다 — 실제 프로세스 메모리 실측은 Task 5(memory
+monitor)·Task 6(실제 Electron 통합) 몫으로 아직 구현하지 않았다. 검증: `node
+--test` 87/87 통과, 전체 Python 회귀 494/494 통과 유지 확인(Python 미변경).
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
-장기 브라우저 하네스(위 후속 16) 역시 Task 1/6만 완료된 상태다.
+장기 브라우저 하네스는 Task 1(+메모리 스트리밍 수정) 완료, Task 2 진행 중, Task
+3~6 미착수 상태다. 실제 프로세스 메모리 실측(<1GB 확인)도 아직 없다.
 
 ## 판정 기준
 
