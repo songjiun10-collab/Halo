@@ -26,10 +26,10 @@ The page is the product. Halo stays quiet while the agent works, and appears onl
 
 - **A browser first.** There is no permanent side panel: the page takes the full width. Tabs and the address field are full browser size.
 - **Who is driving lives in the address field.** A chip at the end of the address field says *Agent is browsing*, *Agent is waiting for you* or *Resume agent*. One click hands control over (**Take over**). The chrome says "Agent"; the agent's name ("Claude") appears only in details, so the UI works for any agent.
-- **Signature: the halo.** While the agent drives a tab, the page wears a thin ice ring. When you drive, there is no ring.
+- **The halo edge.** While the agent drives a tab, the page has a faint 1px ice edge. When you drive, there is none. It's a quiet cue; the chip in the address field says it in words.
 - **One place per state.** An approval is a permission sheet dropped from the address bar. It's the only place the pending decision is described: the action, the amount (large), the card, the destination, then **Deny** / **Approve $84.20**, and the exact request in small mono text. Focus goes to the question, not to Approve.
-- **Blocks are brief.** A Halo block is a short notice in the same spot: a 2px red bar, the blocked host in red, and **Details**. It disappears after 6 seconds and stays in Activity.
-- **Activity on request.** The Halo ring button in the toolbar shows a count of new notable events. Opening it lists only what mattered: blocks, asks, answers, handoffs and finishing. The agent's step-by-step trace is folded under **All steps**. Policy verdicts are in tooltips and screen-reader text. Esc closes the list.
+- **Blocks are brief.** A Halo block is a small notice in the same spot, with a light shadow: a 2px red bar, the blocked host in red, and **Details**. It disappears after 6 seconds and stays in Activity.
+- **Activity on request.** The Halo ring button in the toolbar shows a count of new notable events. It has a tooltip ("Halo events · 1 new") on hover and keyboard focus. Opening it lists only what mattered: blocks, asks, answers, handoffs and finishing. The agent's step-by-step trace is folded under **All steps**. Policy verdicts are in tooltips and screen-reader text. Esc closes the list.
 - **Colour:** near-black neutrals with flat layers. The web page keeps its own look.
 
   | Role | Value |

@@ -27,7 +27,7 @@ export function Activity({ session, onClose }: Props) {
   const notable = session.timeline.filter((e) => e.notable)
   const steps = session.timeline
   return (
-    <section id="hx-activity" className="hx-activity" role="dialog" aria-label="Halo activity" tabIndex={-1} ref={ref}>
+    <section id="hx-activity" className="hx-activity" role="dialog" aria-label="Halo events" tabIndex={-1} ref={ref}>
       <p className="hx-activity__task">{session.task}<span className="hx-demo">Demo</span></p>
       {notable.length === 0 ? (
         <p className="hx-activity__empty">Nothing needed you so far.</p>
