@@ -28,6 +28,10 @@ const MAX_TASK_STORE_BYTES = 100 * 1024 * 1024;
 const MAX_CONTEXT_PACKET_BYTES = 64 * 1024; // section 5: "구조화된 packet 상한 64 KiB"
 const MAX_RECENT_EVENTS_IN_CONTEXT = 10; // section 5: "최근 action/result 10쌍"
 const MAX_ACTIONS_PER_PROPOSAL = 3; // section 8: "최대 3개 observe/scroll만 순차 묶음"
+const MAX_PLANNER_FRAME_BYTES = 64 * 1024; // section 6: JSONL stdio wire frame cap (envelope + payload)
+const PLANNER_RESPONSE_TIMEOUT_MS = 60 * 1000; // section 6: "응답 timeout 60초"
+const SEGMENT_ROTATION_CALLS = 25; // section 5: "25회 planner 호출마다 새 segment"
+const NO_PROGRESS_REPLAN_THRESHOLD = 3; // section 5: "3회 연속 같은 (action,target,observationHash)"
 
 const DEFAULT_LIMITS = Object.freeze({
   maxActions: 1000,
@@ -47,7 +51,14 @@ const DEFAULT_CRITERION_C1 = Object.freeze({
 
 // Extend this list as later tasks introduce new journal event kinds; never
 // remove/rename an existing entry, since old journals must keep replaying.
-const EVENT_TYPES = Object.freeze(["goal_created", "goal_amended", "action_started", "action_outcome", "note"]);
+const EVENT_TYPES = Object.freeze([
+  "goal_created",
+  "goal_amended",
+  "action_started",
+  "action_outcome",
+  "evidence_recorded",
+  "note",
+]);
 
 const VERIFICATION_KINDS = Object.freeze(["host", "user"]);
 const AMENDMENT_AUTHORITY = Object.freeze(["user"]); // pages/models can never author an amendment
@@ -309,6 +320,9 @@ function validateJournalEvent(event, label = "event") {
   if (event.type === "action_started" || event.type === "action_outcome") {
     assertId(event.payload.actionId, `${label}.payload.actionId`);
   }
+  if (event.type === "evidence_recorded") {
+    validateEvidence(event.payload.evidence, `${label}.payload.evidence`);
+  }
   assertIsoTimestamp(event.at, `${label}.at`);
   const size = Buffer.byteLength(JSON.stringify(event), "utf8");
   if (size > MAX_EVENT_BYTES) {
@@ -444,6 +458,10 @@ module.exports = {
   MAX_CONTEXT_PACKET_BYTES,
   MAX_RECENT_EVENTS_IN_CONTEXT,
   MAX_ACTIONS_PER_PROPOSAL,
+  MAX_PLANNER_FRAME_BYTES,
+  PLANNER_RESPONSE_TIMEOUT_MS,
+  SEGMENT_ROTATION_CALLS,
+  NO_PROGRESS_REPLAN_THRESHOLD,
   DEFAULT_LIMITS,
   DEFAULT_CRITERION_C1,
   EVENT_TYPES,

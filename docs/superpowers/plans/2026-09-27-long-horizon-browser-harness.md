@@ -62,7 +62,7 @@ Interfaces: `buildContext({goal,state,observation,recentEvents}) -> ContextPacke
 
 ### Task 3: Long-running controller and planner protocol
 
-Files: create `main/harness/task-controller.js`, `main/harness/planner-stdio.js`, `test/task-controller.test.js`, `test/planner-stdio.test.js`, `test/fixtures/scripted-planner.js`.
+Files: create `main/harness/task-controller.js`, `main/harness/planner-stdio.js`, `test/task-controller.test.js`, `test/planner-stdio.test.js`, `fixtures/scripted-planner.js` (**not** under `test/` -- `node --test`'s default discovery treats any file under a `test`/`tests` directory as a test to run, and this is a long-running stdio worker that blocks on stdin forever; placing it there hangs the whole suite, confirmed by reproduction).
 Interfaces: spec의 Planner.next/TaskController.start,pause,resume,stop,amend 사용. dependencies는 store/planner/browser/approver/verifier/clock으로 주입.
 
 - [ ] 실패 시험: 100 action/최소 10 context reset, stop 이후 늦은 planner 무시, 25-call rotation 누적 budget 유지, 3회 무진척→replan 1회→다시 반복 시 pause.
