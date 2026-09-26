@@ -200,6 +200,64 @@ class TaskController {
     return nextGoal;
   }
 
+  // Task 5: the trusted-IPC-only path (main/ipc.js gates the caller with
+  // trusted-sender.js) that lets a human satisfy a "user"-verification
+  // criterion. progress.js's verifyCriterion() only ever honors a
+  // PRE-EXISTING verified/rejected evidence entry for a "user"-kind
+  // criterion -- nothing in the planner/browser loop can set that itself.
+  // Rejects a stale goalVersion or an evidenceId that doesn't match the
+  // currently pending one, so a confirmation the UI queued against an old
+  // amendment or an old pending item can never be silently applied to
+  // whatever is current now.
+  async confirmCriterion({ criterionId, goalVersion, evidenceId, outcome } = {}) {
+    if (this._task.state === "stopped") {
+      throw new TaskControllerError("invalid_state", "cannot confirm a criterion on a stopped task");
+    }
+    if (outcome !== "verified" && outcome !== "rejected") {
+      throw new TaskControllerError("invalid_field", "outcome must be 'verified' or 'rejected'");
+    }
+    if (goalVersion !== this._goal.goalVersion) {
+      throw new TaskControllerError(
+        "stale_goal_version",
+        `confirmCriterion targets goalVersion ${goalVersion}, current is ${this._goal.goalVersion}`,
+      );
+    }
+    const criterion = this._goal.criteria.find((c) => c.id === criterionId);
+    if (!criterion) {
+      throw new TaskControllerError("unknown_criterion", `unknown criterionId ${criterionId}`);
+    }
+    const current = this._criteriaStatus.get(criterionId);
+    if (!current || current.goalVersion !== goalVersion || current.evidenceId !== evidenceId) {
+      throw new TaskControllerError(
+        "stale_evidence",
+        `no pending evidence ${evidenceId} for criterion ${criterionId} at goalVersion ${goalVersion}`,
+      );
+    }
+
+    const confirmed = {
+      id: randomUUID(),
+      taskId: this._goal.taskId,
+      goalVersion,
+      criterionId,
+      kind: "user_confirmation",
+      at: new Date(this._now()).toISOString(),
+      verification: outcome,
+      verifierId: "user",
+      details: { confirmsEvidenceId: evidenceId },
+    };
+    await this._store.append({ type: "evidence_recorded", payload: { evidence: confirmed } });
+    this._criteriaStatus.set(criterionId, { status: outcome, evidenceId: confirmed.id, goalVersion });
+
+    if (outcome === "verified" && this._task.state === "awaiting_verification") {
+      const completion = canComplete(this._goal, this._evidenceForCompletionCheck());
+      if (completion.complete) {
+        this._task = { state: "completed", pauseReason: null };
+        await this._checkpoint();
+      }
+    }
+    return this.getSnapshot();
+  }
+
   async approve(requestId) {
     const index = this._approvalQueue.findIndex((item) => item.id === requestId);
     if (index === -1) return this.getSnapshot();
@@ -289,9 +347,16 @@ class TaskController {
         try {
           proposal = await this._planner.next(context, { signal: undefined });
           this._budgets.plannerCallsUsed += 1;
-        } catch {
+        } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
-          await this._pauseWith("planner_error");
+          // planner-stdio.js's PlannerTransportError distinguishes "no
+          // worker command is configured at all" (code "planner_unavailable")
+          // from a genuine transport failure (timeout, malformed response,
+          // etc.) -- the design doc requires the former to surface honestly
+          // as its own pause reason rather than the generic planner_error,
+          // so a host UI can tell "nothing is wired up" apart from "the
+          // configured planner broke".
+          await this._pauseWith(error && error.code === "planner_unavailable" ? "planner_unavailable" : "planner_error");
           break;
         }
         if (this._stopHappenedSince(epoch)) break;

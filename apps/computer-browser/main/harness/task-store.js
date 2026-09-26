@@ -449,6 +449,25 @@ class TaskStore {
     }
   }
 
+  // listTasks() (Task 5's task-host.js) needs to enumerate saved tasks
+  // without loading each one's full journal. Tolerates a storageRoot with
+  // no tasks/ directory at all (a fresh install) and ignores any entry that
+  // isn't a valid task UUID -- a stray file dropped next to the tasks dir
+  // must never be treated as a task id.
+  static async listTaskIds({ storageRoot } = {}) {
+    if (!storageRoot) throw new TaskStoreError("invalid_field", "storageRoot is required");
+    const root = path.resolve(storageRoot);
+    const tasksRoot = path.join(root, "tasks");
+    let entries;
+    try {
+      entries = await fsp.readdir(tasksRoot, { withFileTypes: true });
+    } catch (err) {
+      if (err.code === "ENOENT") return [];
+      throw err;
+    }
+    return entries.filter((e) => e.isDirectory() && contracts.UUID_RE.test(e.name)).map((e) => e.name);
+  }
+
   static async load(taskId, { storageRoot } = {}) {
     if (!storageRoot) throw new TaskStoreError("invalid_field", "storageRoot is required");
     const root = path.resolve(storageRoot);

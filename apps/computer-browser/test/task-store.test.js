@@ -373,3 +373,39 @@ test("harness-contracts rejects an oversized journal event", () => {
     (err) => err.code === "event_too_large",
   );
 });
+
+// --- Task 5: listTaskIds() -- the enumeration listTasks()'s IPC handler
+// needs (main/harness/task-host.js). Must return only real task
+// directories, tolerate a storageRoot with no tasks/ directory yet at all
+// (a fresh install), and never include anything that isn't a valid task
+// UUID (e.g. stray files someone dropped next to the tasks dir).
+
+test("listTaskIds() lists every created task's id", async () => {
+  const storageRoot = await mkTempRoot();
+  const a = await TaskStore.create({ originalRequest: "a" }, { storageRoot });
+  const b = await TaskStore.create({ originalRequest: "b" }, { storageRoot });
+  await a.close();
+  await b.close();
+
+  const ids = await TaskStore.listTaskIds({ storageRoot });
+
+  assert.deepEqual(ids.sort(), [a.taskId, b.taskId].sort());
+});
+
+test("listTaskIds() returns an empty array when no task has ever been created", async () => {
+  const storageRoot = await mkTempRoot();
+  const ids = await TaskStore.listTaskIds({ storageRoot });
+  assert.deepEqual(ids, []);
+});
+
+test("listTaskIds() ignores non-UUID entries under the tasks directory", async () => {
+  const storageRoot = await mkTempRoot();
+  const a = await TaskStore.create({ originalRequest: "a" }, { storageRoot });
+  await a.close();
+  await fs.mkdir(path.join(storageRoot, "tasks", "not-a-task-uuid"));
+  await fs.writeFile(path.join(storageRoot, "tasks", "stray-file.txt"), "hello");
+
+  const ids = await TaskStore.listTaskIds({ storageRoot });
+
+  assert.deepEqual(ids, [a.taskId]);
+});

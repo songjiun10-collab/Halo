@@ -183,6 +183,29 @@ test("pauses with planner_error (does not crash or auto-retry) when the planner 
   await store.close();
 });
 
+test("pauses with the more specific planner_unavailable when the planner is simply not configured (PlannerTransportError code planner_unavailable)", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) };
+  class FakeTransportError extends Error {
+    constructor(code, message) {
+      super(message);
+      this.code = code;
+    }
+  }
+  const planner = {
+    next: async () => {
+      throw new FakeTransportError("planner_unavailable", "no planner worker is configured");
+    },
+  };
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true });
+  await controller.start();
+
+  const snapshot = controller.getSnapshot();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "planner_unavailable", "an unconfigured planner must surface honestly as planner_unavailable, not a generic planner_error");
+  await store.close();
+});
+
 test("discards a planner response that resolves after stop() was already called", async () => {
   const { store } = await makeStore({ originalRequest: "goal" });
   let resolvePlanner;
@@ -553,5 +576,100 @@ test("TaskController + a real BrowserAdapter: navigate dispatches for real and b
 
   assert.equal(controller.getSnapshot().state, "completed");
   assert.equal(browser.getDocumentEpoch(), 1, "the real navigate() executed against the real BrowserAdapter must have bumped documentEpoch");
+  await store.close();
+});
+
+// --- Task 5: confirmCriterion() -- the trusted-IPC-only path that lets a
+// human satisfy a "user"-verification criterion. progress.js's
+// verifyCriterion() only ever accepts a PRE-EXISTING verified/rejected
+// evidence entry for a "user"-kind criterion; nothing in the planner/browser
+// loop can set that itself. confirmCriterion() is that trusted path, and
+// must reject a stale goalVersion/evidenceId rather than blindly trust
+// whatever the caller (main/ipc.js, ultimately the renderer) sends.
+
+async function driveToAwaitingVerification({ criterionVerification = "user" } = {}) {
+  const { store } = await makeStore({
+    originalRequest: "goal needing a human look",
+    criteria: [{ id: "c1", text: "human confirms", required: true, verification: criterionVerification }],
+  });
+  const browser = {
+    observe: async () => ({ id: "obs" }),
+    execute: async () => ({ status: "ok", evidenceCandidate: { kind: "artifact", observationId: "obs" } }),
+  };
+  let plannerCalls = 0;
+  const planner = {
+    next: async (context) => {
+      plannerCalls += 1;
+      if (plannerCalls === 1) {
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: ["c1"], kind: "actions", actions: [{ type: "observe" }] };
+      }
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: ["c1"], kind: "finish", evidenceIds: [] };
+    },
+  };
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true });
+  await controller.start();
+  assert.equal(controller.getSnapshot().state, "awaiting_verification");
+  const pending = controller.getSnapshot().criteriaStatus.find((c) => c.criterionId === "c1");
+  assert.equal(pending.status, "pending");
+  return { controller, store, pending };
+}
+
+test("confirmCriterion(verified) unblocks a task stuck in awaiting_verification and completes it", async () => {
+  const { controller, store, pending } = await driveToAwaitingVerification();
+
+  const snapshot = await controller.confirmCriterion({
+    criterionId: "c1",
+    goalVersion: controller.getGoal().goalVersion,
+    evidenceId: pending.evidenceId,
+    outcome: "verified",
+  });
+
+  assert.equal(snapshot.state, "completed");
+  await store.close();
+});
+
+test("confirmCriterion(rejected) records the rejection but does not complete the task", async () => {
+  const { controller, store, pending } = await driveToAwaitingVerification();
+
+  const snapshot = await controller.confirmCriterion({
+    criterionId: "c1",
+    goalVersion: controller.getGoal().goalVersion,
+    evidenceId: pending.evidenceId,
+    outcome: "rejected",
+  });
+
+  assert.equal(snapshot.state, "awaiting_verification");
+  assert.equal(snapshot.criteriaStatus.find((c) => c.criterionId === "c1").status, "rejected");
+  await store.close();
+});
+
+test("confirmCriterion rejects a stale goalVersion instead of confirming against an amended goal", async () => {
+  const { controller, store, pending } = await driveToAwaitingVerification();
+  await controller.amend({ text: "changed my mind slightly" });
+
+  await assert.rejects(
+    () => controller.confirmCriterion({ criterionId: "c1", goalVersion: 1, evidenceId: pending.evidenceId, outcome: "verified" }),
+    TaskControllerError,
+  );
+  await store.close();
+});
+
+test("confirmCriterion rejects an evidenceId that doesn't match the currently pending one", async () => {
+  const { controller, store } = await driveToAwaitingVerification();
+
+  await assert.rejects(
+    () => controller.confirmCriterion({ criterionId: "c1", goalVersion: controller.getGoal().goalVersion, evidenceId: "not-the-real-one", outcome: "verified" }),
+    TaskControllerError,
+  );
+  await store.close();
+});
+
+test("confirmCriterion rejects an unknown criterionId", async () => {
+  const { controller, store } = await driveToAwaitingVerification();
+
+  await assert.rejects(
+    () => controller.confirmCriterion({ criterionId: "does-not-exist", goalVersion: controller.getGoal().goalVersion, evidenceId: "x", outcome: "verified" }),
+    TaskControllerError,
+  );
   await store.close();
 });
