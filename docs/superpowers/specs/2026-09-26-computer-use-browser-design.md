@@ -390,6 +390,38 @@ CAPTCHA를 유발하는 빈도 자체를 낮추라"고 요청했다 — anti-bot
 에 pacing 2개 + CAPTCHA 핸드오프 7개 추가 — `node --test` 38/38 통과,
 전체 Python 회귀 494/494 통과 유지 확인.
 
+**후속 업데이트 5 (2026-09-27) — 재개가 실제로 이어지지 않던 문제 수정
+(이전 "정직한 한계" 정정).** 위 "후속 업데이트 4"와 "후속 업데이트 2/3"에서
+"`resumeTask()`가 보류된 결정을 적용해도 이미 반환된 `startTask()`의
+1→2단계 흐름 자체를 재개하지는 않는다"고 적었는데, 이 내용을 검증 요청
+받아 직접 재현해보니 CAPTCHA로 일시정지된 뒤 `resumeAfterCaptcha()`를
+불러도 `_task.state`만 `"running"`으로 바뀔 뿐 `_findFirstOutboundLink()`도
+후속 승인 흐름도 전혀 재실행되지 않아, 작업이 "실행 중"이라고 표시된 채
+조용히 멈춰 있는 상태였다(재현: `startTask()`의 1단계 `navigate`가 CAPTCHA를
+유발하도록 만든 뒤 `resumeAfterCaptcha()` 호출 → `_findFirstOutboundLink`
+호출 횟수가 0에서 그대로 멈춤). 이건 "일시정지"보다 나쁘다 — UI에 "진행
+중"이라고 보이지만 실제로는 아무 일도 일어나지 않기 때문이다.
+
+수정: `_taskCursor`(`{ step: "step1"|"step2", trimmed, epoch }`)를 도입해
+`startTask()`가 각 단계의 게이티드 호출 직전에 "이 단계가 끝나면 다음에
+뭘 해야 하는지"를 기록해 둔다. 단계 완료 후 처리 로직을 `_afterStepOutcome()`
+로, 2단계 자체를 `_runStepTwo()`로 뽑아내 `startTask()`의 최초 실행 경로와
+`resumeTask()`의 재개 경로가 완전히 같은 함수를 공유한다. 판정이 실행 전에
+보류된 경우(`_deferredDecision`, 사람이 미리 `pauseTask()`한 경우)든 판정이
+이미 ALLOW로 실행된 뒤 보류된 경우(CAPTCHA 감지, 또는 실행 도중 겹친
+`pauseTask()`)든, 재개 시 커서가 가리키는 단계의 결과를 그대로
+`_afterStepOutcome()`에 넘겨 실제로 다음 단계(2단계 링크 탐색 → 후속
+게이티드 이동, REVIEW면 승인 대기열 적재까지)를 계속 실행한다. 2단계 자체가
+끊긴 경우는 이 고정 2단계 데모의 마지막 단계이므로 재개는 그냥
+`"completed"`로 정리한다. `stopTask()`는 `_taskCursor`도 함께 초기화한다.
+`startTask()`를 거치지 않은 단발 `performGatedAction()` 호출(기존 pause
+테스트들)은 커서가 없으므로 기존 동작(재개 후 단순 완료 처리) 그대로
+유지된다 — 하위 호환. 검증: 재현 절차를 그대로 회귀 테스트 3개로 추가(
+CAPTCHA로 멈춘 뒤 재개가 실제로 2단계까지 이어져 완료/REVIEW에 도달하는지,
+그리고 실행 전 보류(pauseTask)의 경우도 동일하게 이어지는지) —
+`test/control-api.test.js` 최종 23개, `node --test` 41/41 통과, 전체
+Python 회귀 494/494 통과 유지 확인.
+
 ## 정직한 한계
 
 - 이 문서 작성 시점까지 Electron 앱을 실제로 빌드·실행해 검증하지 않았다 —

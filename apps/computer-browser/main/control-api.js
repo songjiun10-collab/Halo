@@ -68,6 +68,13 @@ class ControlApi {
     // before issuing the next), so a single slot is enough to hold a
     // decision that arrived while paused.
     this._deferredDecision = null;
+    // { step: "step1"|"step2", trimmed, epoch } | null -- set by startTask()/
+    // _runStepTwo() right before a gated call that has a further step after
+    // it, so a pause/CAPTCHA interruption (before OR after that call's
+    // execute() runs) can genuinely be resumed into the rest of the SAME
+    // task via _afterStepOutcome(), instead of resuming just flipping
+    // _task.state back to "running" with nothing left to actually do.
+    this._taskCursor = null;
   }
 
   onChange(listener) {
@@ -368,6 +375,7 @@ class ControlApi {
       throw new RangeError(`startTask requires a prompt of 1..${MAX_PROMPT_LENGTH} characters`);
     }
     this._task = { id: randomUUID(), state: "running", pauseReason: null };
+    this._taskCursor = null;
     this._pushTimeline("task", `Task started: ${prompt.slice(0, 120)}`, "info");
     this._emit();
     // Captured once: every await below is a point where a concurrent
@@ -390,7 +398,13 @@ class ControlApi {
     // Step 1: navigate where the user's own prompt pointed. source is
     // honestly "user_prompt" here, so this can only ever resolve to allow
     // or deny -- never review (agreement between self-claim and the host
-    // rule is guaranteed for a genuine user-typed destination).
+    // rule is guaranteed for a genuine user-typed destination). _taskCursor
+    // records that "step2 comes next" *before* the gated call, so that if a
+    // pause/CAPTCHA interrupts it (before OR after its execute() runs -- see
+    // performGatedAction/_applyDecision), resumeTask()/resumeAfterCaptcha()
+    // can actually continue into step 2 instead of just flipping the task
+    // back to "running" with nothing left to do.
+    this._taskCursor = { step: "step1", trimmed, epoch };
     const initialOutcome = await this.performGatedAction(
       {
         requestId: randomUUID(),
@@ -403,36 +417,69 @@ class ControlApi {
       },
       () => this.navigate(trimmed),
     );
-    // this._stopHappenedSince(epoch) covers both a decision discarded before
-    // execute() ran ("cancelled") AND stopTask() landing while navigate()
-    // itself was still in flight (still "allow", but stale by the time we
-    // get here) -- either way stopTask() already owns _task.state ("stopped")
-    // and this must not overwrite it. "paused" is a separate, epoch-unchanged
-    // case: pauseTask()/resumeTask() own _task.state for that one.
-    if (this._stopHappenedSince(epoch) || initialOutcome === "paused") {
-      return this.getSnapshot();
-    }
-    if (initialOutcome !== "allow") {
-      this._task = { ...this._task, state: "completed" };
-      this._emit();
-      return this.getSnapshot();
-    }
+    return this._afterStepOutcome("step1", initialOutcome, trimmed, epoch);
+  }
 
-    // Step 2: this is the part of the demo that actually exercises review —
-    // the agent looks at the page it just loaded (untrusted content it did
-    // not author) and proposes ONE follow-up hop, honestly labeled
-    // source="page_content". A well-behaved placeholder agent reports this
-    // truthfully, which is exactly what reaches review rather than being
-    // silently auto-executed. Still not a real planner: exactly one hop,
-    // no loop, no step budget, no LLM call — see design doc.
+  // Shared continuation point for both a step's *normal* completion (called
+  // directly from startTask()/_runStepTwo) and a *resumed* one (called from
+  // resumeTask() once a pause/CAPTCHA interruption has cleared) -- so both
+  // paths behave identically instead of resuming being a second, drifting
+  // copy of this logic.
+  async _afterStepOutcome(step, outcome, trimmed, epoch) {
+    // this._stopHappenedSince(epoch) covers both a decision discarded before
+    // execute() ran ("cancelled") AND stopTask() landing while execute()
+    // itself was still in flight (still "allow", but stale by the time we
+    // get here) -- either way stopTask() already owns _task.state
+    // ("stopped") and this must not overwrite it. "paused" is separate and
+    // epoch-unchanged: _taskCursor (still set to this same step) stays put
+    // so a later resume can pick up exactly here.
+    if (this._stopHappenedSince(epoch) || outcome === "paused") {
+      return this.getSnapshot();
+    }
+    this._taskCursor = null;
+    if (outcome === "review") {
+      // _applyDecision already queued it and set state to "awaiting_approval".
+      // Not reachable for step1 in practice (user_prompt source only ever
+      // resolves allow/deny), but handled rather than assumed impossible.
+      // Chaining a REVIEW'd step1 into step2 after approve() is out of scope
+      // for this fixed-script reference implementation -- see design doc.
+      return this.getSnapshot();
+    }
+    if (step === "step1") {
+      if (outcome !== "allow") {
+        this._task = { ...this._task, state: "completed" };
+        this._emit();
+        return this.getSnapshot();
+      }
+      return this._runStepTwo(trimmed, epoch);
+    }
+    // step === "step2": the last step in this fixed 2-step demo -- there is
+    // nothing further to run regardless of outcome.
+    this._task = { ...this._task, state: "completed" };
+    this._emit();
+    return this.getSnapshot();
+  }
+
+  // Step 2: this is the part of the demo that actually exercises review —
+  // the agent looks at the page it just loaded (untrusted content it did
+  // not author) and proposes ONE follow-up hop, honestly labeled
+  // source="page_content". A well-behaved placeholder agent reports this
+  // truthfully, which is exactly what reaches review rather than being
+  // silently auto-executed. Still not a real planner: exactly one hop, no
+  // loop, no step budget, no LLM call — see design doc. Called both from
+  // startTask() directly and from a resume that just completed step 1.
+  async _runStepTwo(trimmed, epoch) {
     const link = await this._findFirstOutboundLink();
     // Another await, another point stopTask() could have landed in the
     // meantime -- check again before deciding whether there's a link to
-    // follow or the task is simply done.
+    // follow or the task is simply done. No _taskCursor is set for this
+    // particular await: there's no gated action in flight yet to resume
+    // into, just a plain page read.
     if (this._stopHappenedSince(epoch)) {
       return this.getSnapshot();
     }
     if (link && typeof link.href === "string") {
+      this._taskCursor = { step: "step2", trimmed, epoch };
       const followOutcome = await this.performGatedAction(
         {
           requestId: randomUUID(),
@@ -445,13 +492,10 @@ class ControlApi {
         },
         () => this.navigate(link.href),
       );
-      if (!this._stopHappenedSince(epoch) && followOutcome !== "review" && followOutcome !== "paused") {
-        this._task = { ...this._task, state: "completed" };
-      }
-    } else if (!this._stopHappenedSince(epoch)) {
-      this._pushTimeline("task", "No outbound link found on the page; task complete.", "info");
-      this._task = { ...this._task, state: "completed" };
+      return this._afterStepOutcome("step2", followOutcome, trimmed, epoch);
     }
+    this._pushTimeline("task", "No outbound link found on the page; task complete.", "info");
+    this._task = { ...this._task, state: "completed" };
     this._emit();
     return this.getSnapshot();
   }
@@ -483,25 +527,39 @@ class ControlApi {
     this._pushTimeline("task", "Task resumed", "info");
     this._emit();
 
+    const cursor = this._taskCursor;
+
     if (this._deferredDecision) {
+      // Pre-execute pause: pauseTask() (or a CAPTCHA -- though CAPTCHA
+      // detection only ever fires from a page already loaded, so it cannot
+      // land here) held the decision before its execute() ran.
       const { descriptor, execute, decision } = this._deferredDecision;
       this._deferredDecision = null;
-      const epoch = this._stopEpoch;
-      // Applying the held decision does not re-enter startTask()'s own
-      // control flow (that async call already returned when it saw
-      // "paused") -- a deferred step 1 "allow" navigates but the task ends
-      // there rather than continuing to step 2. No real multi-step loop
-      // exists to resume into yet; see design doc, "정직한 한계".
+      const epoch = cursor ? cursor.epoch : this._stopEpoch;
       const outcome = await this._applyDecision(descriptor, execute, decision, epoch);
-      // stopTask() can land while execute() (inside _applyDecision) is still
-      // running -- same guard as startTask(). "paused" covers a fresh
-      // pauseTask() call OR a new CAPTCHA detection landing during this very
-      // execute() (see _applyDecision) -- either way this resume must not
-      // overwrite that with "completed".
+      if (cursor) {
+        // Genuinely continue startTask()'s own sequence from wherever this
+        // step now resolves to -- e.g. a resumed step1 "allow" actually
+        // proceeds into step 2's link lookup, instead of resuming just
+        // reporting "running" with nothing further happening.
+        return this._afterStepOutcome(cursor.step, outcome, cursor.trimmed, epoch);
+      }
+      // Not part of startTask()'s own step sequence (e.g. a bare
+      // performGatedAction() call) -- no further step to chain into.
       if (!this._stopHappenedSince(epoch) && outcome !== "review" && outcome !== "paused") {
         this._task = { ...this._task, state: "completed" };
         this._emit();
       }
+      return this.getSnapshot();
+    }
+
+    if (cursor) {
+      // Post-execute pause: the gated action already ran for real (e.g. a
+      // CAPTCHA detected mid-navigate, or a manual pauseTask() landing in
+      // that same window -- see _applyDecision's post-execute check, which
+      // only returns "paused" from its "allow" branch). Continue
+      // startTask()'s sequence as if that step had just resolved "allow".
+      return this._afterStepOutcome(cursor.step, "allow", cursor.trimmed, cursor.epoch);
     }
     return this.getSnapshot();
   }
@@ -532,6 +590,7 @@ class ControlApi {
   async stopTask() {
     this._stopEpoch += 1;
     this._deferredDecision = null;
+    this._taskCursor = null;
     this._approvalQueue = [];
     this._task = { ...this._task, state: "stopped", pauseReason: null };
     this._pushTimeline("task", "Task stopped", "info");

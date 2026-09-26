@@ -431,3 +431,98 @@ test("a CAPTCHA detected while an already-approved execute() is running pauses i
   assert.equal(snapshot.task.state, "paused");
   assert.equal(snapshot.task.pauseReason, "captcha");
 });
+
+// Independently flagged during review: an earlier version of
+// resumeAfterCaptcha()/resumeTask() only flipped _task.state back to
+// "running" without ever re-entering startTask()'s remaining steps -- a
+// CAPTCHA-paused task would silently dead-end at "running" forever with no
+// further navigation, review, or completion. These tests drive the
+// continuation all the way through to prove it's a real resume, not just a
+// state flip. See _taskCursor / _afterStepOutcome / _runStepTwo.
+
+test("resumeAfterCaptcha() actually continues into step 2, not just flips the state to running", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  let findLinkCalls = 0;
+  api._findFirstOutboundLink = async () => {
+    findLinkCalls += 1;
+    return null; // no outbound link -> step 2 concludes the task on its own
+  };
+  api.navigate = async () => {
+    if (findLinkCalls === 0) {
+      // step 1's real navigate() triggers a CAPTCHA mid-flight, exactly like
+      // a real did-navigate handler would report it.
+      api._syncPageState({ url: "https://example.com/checkpoint", title: "Just a moment..." });
+    }
+  };
+
+  const paused = await api.startTask("https://example.com");
+  assert.equal(paused.task.state, "paused");
+  assert.equal(paused.task.pauseReason, "captcha");
+  assert.equal(findLinkCalls, 0, "step 2 must not have run yet");
+
+  // The human solved it directly in the browser; the page moved on.
+  api._syncPageState({ url: "https://example.com/welcome", title: "Welcome" });
+  const resumed = await api.resumeAfterCaptcha();
+
+  assert.equal(findLinkCalls, 1, "resuming must actually re-enter step 2, not just flip the state");
+  assert.equal(resumed.task.state, "completed");
+});
+
+test("resumeAfterCaptcha() continues all the way into a real step-2 REVIEW after step 1 was CAPTCHA-paused", async () => {
+  let decisionCall = 0;
+  const api = makeApi(async () => {
+    decisionCall += 1;
+    // Step 1 (user_prompt) -> allow; step 2 (page_content) -> review,
+    // matching how the real approver actually classifies these two sources.
+    return decisionCall === 1
+      ? { decision: "allow", reasons: [] }
+      : { decision: "review", reasons: ["untrusted source"] };
+  });
+  let navigateCalls = 0;
+  api._findFirstOutboundLink = async () => ({ href: "https://example.com/next", text: "Next" });
+  api.navigate = async () => {
+    navigateCalls += 1;
+    if (navigateCalls === 1) {
+      api._syncPageState({ url: "https://example.com/checkpoint", title: "Just a moment..." });
+    }
+  };
+
+  const paused = await api.startTask("https://example.com");
+  assert.equal(paused.task.state, "paused");
+
+  api._syncPageState({ url: "https://example.com/welcome", title: "Welcome" });
+  const resumed = await api.resumeAfterCaptcha();
+
+  assert.equal(resumed.task.state, "awaiting_approval");
+  assert.equal(resumed.approvalQueue.length, 1);
+  assert.equal(resumed.approvalQueue[0].origin, "https://example.com/welcome");
+});
+
+test("resumeTask() continues into step 2 after step 1 was paused before its decision executed", async () => {
+  const { promise, resolve } = deferredDecision();
+  const api = makeApi(async () => promise);
+  let executedStep1 = false;
+  let findLinkCalls = 0;
+  api._findFirstOutboundLink = async () => {
+    findLinkCalls += 1;
+    return null;
+  };
+  api.navigate = async () => {
+    executedStep1 = true;
+  };
+
+  const startPromise = api.startTask("https://example.com");
+  await new Promise((r) => setImmediate(r));
+  await api.pauseTask();
+  resolve({ decision: "allow", reasons: [] });
+  const paused = await startPromise;
+
+  assert.equal(paused.task.state, "paused");
+  assert.equal(executedStep1, false, "the decision was held before its execute() ran");
+
+  const resumed = await api.resumeTask();
+
+  assert.equal(executedStep1, true);
+  assert.equal(findLinkCalls, 1, "resuming a pre-execute pause of step 1 must still continue into step 2");
+  assert.equal(resumed.task.state, "completed");
+});
