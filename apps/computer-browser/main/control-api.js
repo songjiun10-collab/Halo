@@ -3,12 +3,20 @@
 const { randomUUID } = require("crypto");
 const { WebContentsView } = require("electron");
 const { clampBrowserBounds } = require("../shared/clamp-bounds");
+const { looksLikeCaptcha } = require("../shared/captcha-heuristics");
 const { requestDecision } = require("./approver-client");
 
 const URL_LIKE = /^https?:\/\/\S+$/i;
 const MAX_PROMPT_LENGTH = 2000;
 const MAX_TIMELINE = 200;
 const MAX_QUEUE = 50;
+// Pacing floor between agent-initiated (gated) actions ONLY -- never applied
+// to a human's own direct navigate/back/forward/reload/newTab. This is about
+// being a slow, low-volume automated client (fewer, spaced-out requests), not
+// about evading a site's bot detection. If a real CAPTCHA still shows up
+// despite this, the response is to pause and hand off to a human (see
+// looksLikeCaptcha() below), never to solve, bypass, or spoof around it.
+const MIN_AGENT_ACTION_INTERVAL_MS = 2000;
 
 /**
  * The executor. Owns the real embedded Chromium surface (WebContentsView)
@@ -26,16 +34,27 @@ const MAX_QUEUE = 50;
  * control surface, not an autonomous browsing brain.
  */
 class ControlApi {
-  constructor({ window, socketPath, requestDecision: requestDecisionOverride } = {}) {
+  constructor({ window, socketPath, requestDecision: requestDecisionOverride, minAgentActionIntervalMs } = {}) {
     this._window = window;
     this._socketPath = socketPath;
-    // Injectable seam for tests only (default is the real Unix-socket
-    // client). Production callers never pass this.
+    // Injectable seams for tests only (defaults are the real Unix-socket
+    // client / the real pacing floor). Production callers never pass these.
     this._requestDecision = requestDecisionOverride || requestDecision;
+    this._minAgentActionIntervalMs =
+      typeof minAgentActionIntervalMs === "number" ? minAgentActionIntervalMs : MIN_AGENT_ACTION_INTERVAL_MS;
+    this._lastAgentActionAt = -Infinity;
     this._view = null;
     this._hasPage = false;
-    this._page = { url: "", title: "", loadState: "idle", canGoBack: false, canGoForward: false, hasPage: false };
-    this._task = { id: null, state: "idle" };
+    this._page = {
+      url: "", title: "", loadState: "idle", canGoBack: false, canGoForward: false, hasPage: false,
+      // Best-effort, informational only -- see shared/captcha-heuristics.js.
+      captchaSuspected: false,
+    };
+    // pauseReason distinguishes a human's own pauseTask() ("user") from an
+    // automatic pause because the current page looks like a CAPTCHA/anti-bot
+    // challenge ("captcha") -- the two need different resume UX (see
+    // resumeTask() vs resumeAfterCaptcha()).
+    this._task = { id: null, state: "idle", pauseReason: null };
     this._approvalQueue = [];
     this._timeline = [];
     this._listeners = new Set();
@@ -123,7 +142,34 @@ class ControlApi {
       canGoForward: wc ? wc.navigationHistory.canGoForward() : this._page.canGoForward,
       hasPage: this._hasPage,
     };
+    this._page.captchaSuspected = looksLikeCaptcha(this._page.url, this._page.title);
+    // Never solved, clicked through, or routed around here -- see
+    // shared/captcha-heuristics.js. The only response to a suspected
+    // challenge is to stop advancing an active task and hand the (already
+    // human-interactive) browser surface to the user. A task that isn't
+    // actively trying to make progress (idle/paused/stopped/completed) has
+    // nothing to preserve, so it's left alone.
+    if (this._page.captchaSuspected && ["running", "awaiting_approval"].includes(this._task.state)) {
+      this._task = { ...this._task, state: "paused", pauseReason: "captcha" };
+      this._pushTimeline(
+        "task",
+        "A CAPTCHA/anti-bot challenge was detected. Task paused -- please solve it directly in the browser, then resume.",
+        "info",
+      );
+    }
     this._emit();
+  }
+
+  // Pacing floor for agent-initiated (gated) actions -- see
+  // MIN_AGENT_ACTION_INTERVAL_MS. The very first agent action is never
+  // delayed (_lastAgentActionAt starts at -Infinity); only a second action
+  // arriving too soon after the last one waits out the remainder.
+  async _paceAgentAction() {
+    const wait = this._minAgentActionIntervalMs - (Date.now() - this._lastAgentActionAt);
+    if (wait > 0) {
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+    this._lastAgentActionAt = Date.now();
   }
 
   // --- Free actions: direct human intent via UI controls. No approval gate. ---
@@ -245,6 +291,7 @@ class ControlApi {
 
   async _applyDecision(descriptor, execute, decision, epoch) {
     if (decision.decision === "allow") {
+      await this._paceAgentAction();
       this._pushTimeline(descriptor.action, descriptor.summary, "allow");
       await execute();
       // stopTask() can run while execute() itself is in flight (e.g. a real
@@ -255,6 +302,14 @@ class ControlApi {
       if (this._stopHappenedSince(epoch)) {
         this._pushTimeline(descriptor.action, `${descriptor.summary} (task was stopped while this action was executing)`, "info");
         return "cancelled";
+      }
+      // Symmetric case: execute() (e.g. the navigate() this action just ran)
+      // can itself be what triggers _syncPageState() to auto-pause for a
+      // suspected CAPTCHA -- or a human's own pauseTask() can land in this
+      // same window. Either way execute() already ran for real; the caller
+      // must not advance to a further step or overwrite the paused state.
+      if (this._task.state === "paused") {
+        return "paused";
       }
       return "allow";
     }
@@ -312,7 +367,7 @@ class ControlApi {
     if (typeof prompt !== "string" || prompt.trim().length === 0 || prompt.length > MAX_PROMPT_LENGTH) {
       throw new RangeError(`startTask requires a prompt of 1..${MAX_PROMPT_LENGTH} characters`);
     }
-    this._task = { id: randomUUID(), state: "running" };
+    this._task = { id: randomUUID(), state: "running", pauseReason: null };
     this._pushTimeline("task", `Task started: ${prompt.slice(0, 120)}`, "info");
     this._emit();
     // Captured once: every await below is a point where a concurrent
@@ -403,7 +458,7 @@ class ControlApi {
 
   async pauseTask() {
     if (["running", "awaiting_approval"].includes(this._task.state)) {
-      this._task = { ...this._task, state: "paused" };
+      this._task = { ...this._task, state: "paused", pauseReason: "user" };
       this._pushTimeline("task", "Task paused", "info");
       this._emit();
     }
@@ -412,7 +467,19 @@ class ControlApi {
 
   async resumeTask() {
     if (this._task.state !== "paused") return this.getSnapshot();
-    this._task = { ...this._task, state: "running" };
+    // A CAPTCHA-triggered pause needs its own safety re-check (has the
+    // challenge actually been solved?) before resuming -- route it through
+    // resumeAfterCaptcha() instead of silently resuming here.
+    if (this._task.pauseReason === "captcha") {
+      this._pushTimeline(
+        "task",
+        "Task is paused for a suspected CAPTCHA; call resumeAfterCaptcha() once it's solved, not the generic resume.",
+        "info",
+      );
+      this._emit();
+      return this.getSnapshot();
+    }
+    this._task = { ...this._task, state: "running", pauseReason: null };
     this._pushTimeline("task", "Task resumed", "info");
     this._emit();
 
@@ -426,10 +493,12 @@ class ControlApi {
       // there rather than continuing to step 2. No real multi-step loop
       // exists to resume into yet; see design doc, "정직한 한계".
       const outcome = await this._applyDecision(descriptor, execute, decision, epoch);
-      // stopTask() can land while execute() (inside _applyDecision) is
-      // still running -- same guard as startTask(), so a stop mid-resume
-      // isn't silently overwritten back to "completed".
-      if (!this._stopHappenedSince(epoch) && outcome !== "review") {
+      // stopTask() can land while execute() (inside _applyDecision) is still
+      // running -- same guard as startTask(). "paused" covers a fresh
+      // pauseTask() call OR a new CAPTCHA detection landing during this very
+      // execute() (see _applyDecision) -- either way this resume must not
+      // overwrite that with "completed".
+      if (!this._stopHappenedSince(epoch) && outcome !== "review" && outcome !== "paused") {
         this._task = { ...this._task, state: "completed" };
         this._emit();
       }
@@ -437,11 +506,34 @@ class ControlApi {
     return this.getSnapshot();
   }
 
+  // Dedicated resume path for a CAPTCHA-triggered pause. Never solves,
+  // clicks through, or routes around anything -- it only re-checks the
+  // SAME read-only heuristic against the page's current state and refuses
+  // to resume (staying paused, no retry loop) if it still looks unresolved.
+  // The actual solving happens only through the human directly interacting
+  // with the already-visible, already-interactive browser surface.
+  async resumeAfterCaptcha() {
+    if (this._task.state !== "paused" || this._task.pauseReason !== "captcha") {
+      return this.getSnapshot();
+    }
+    if (looksLikeCaptcha(this._page.url, this._page.title)) {
+      this._pushTimeline(
+        "task",
+        "Still looks like an unresolved CAPTCHA/challenge; staying paused. Solve it in the browser, then try again.",
+        "info",
+      );
+      this._emit();
+      return this.getSnapshot();
+    }
+    this._task = { ...this._task, pauseReason: null };
+    return this.resumeTask();
+  }
+
   async stopTask() {
     this._stopEpoch += 1;
     this._deferredDecision = null;
     this._approvalQueue = [];
-    this._task = { ...this._task, state: "stopped" };
+    this._task = { ...this._task, state: "stopped", pauseReason: null };
     this._pushTimeline("task", "Task stopped", "info");
     this._emit();
     return this.getSnapshot();
@@ -452,13 +544,15 @@ class ControlApi {
     if (index === -1) return this.getSnapshot();
     const [item] = this._approvalQueue.splice(index, 1);
     this._pushTimeline(item.action, `${item.summary} (approved by reviewer)`, "allow");
+    await this._paceAgentAction();
     const epoch = this._stopEpoch;
     await item._execute();
     // Same class of race as startTask()/resumeTask(): stopTask() can run
-    // while this execute() is in flight. stopTask() already cleared
+    // while this execute() is in flight, and this execute() can itself
+    // trigger a CAPTCHA-detection auto-pause. stopTask() already cleared
     // _approvalQueue, so the length-zero check below would otherwise still
-    // be true and overwrite "stopped" with "completed".
-    if (!this._stopHappenedSince(epoch) && this._approvalQueue.length === 0) {
+    // be true and overwrite "stopped"/"paused" with "completed".
+    if (!this._stopHappenedSince(epoch) && this._task.state !== "paused" && this._approvalQueue.length === 0) {
       this._task = { ...this._task, state: "completed" };
     }
     this._emit();

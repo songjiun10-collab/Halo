@@ -21,9 +21,18 @@ function deferredDecision() {
   return { promise, resolve };
 }
 
-function makeApi(requestDecisionStub) {
-  const api = new ControlApi({ window: {}, socketPath: "/tmp/fake.sock", requestDecision: requestDecisionStub });
-  api._task = { id: "t1", state: "running" };
+function makeApi(requestDecisionStub, options = {}) {
+  const api = new ControlApi({
+    window: {},
+    socketPath: "/tmp/fake.sock",
+    requestDecision: requestDecisionStub,
+    // 0 by default so unrelated tests never trip over the real pacing floor
+    // (MIN_AGENT_ACTION_INTERVAL_MS) -- pacing itself is exercised by tests
+    // further down that explicitly pass a small nonzero interval.
+    minAgentActionIntervalMs: 0,
+    ...options,
+  });
+  api._task = { id: "t1", state: "running", pauseReason: null };
   return api;
 }
 
@@ -278,4 +287,147 @@ test("stopTask after pause discards the held decision too", async () => {
 
   assert.equal(executed, false);
   assert.equal(api.getSnapshot().task.state, "stopped");
+});
+
+// --- Pacing floor for agent-initiated actions (requested to reduce how
+// often automated browsing trips a site's CAPTCHA/rate-limit heuristics --
+// pure request pacing, never detection bypass or fingerprint spoofing). ---
+
+test("paces a second agent-initiated allow, but never the first", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 40 });
+  const timestamps = [];
+  const execute = async () => {
+    timestamps.push(Date.now());
+  };
+
+  const start = Date.now();
+  await api.performGatedAction({ requestId: "r1", action: "navigate", summary: "go" }, execute);
+  assert.ok(timestamps[0] - start < 20, "the very first agent action must not wait for the pacing floor");
+
+  await api.performGatedAction({ requestId: "r2", action: "navigate", summary: "go" }, execute);
+  assert.ok(
+    timestamps[1] - timestamps[0] >= 40,
+    `expected at least a 40ms gap between consecutive agent actions, got ${timestamps[1] - timestamps[0]}ms`,
+  );
+});
+
+test("approve() shares the same pacing clock as agent-initiated allows", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 40 });
+  const firstAt = [];
+  await api.performGatedAction({ requestId: "seed", action: "navigate", summary: "seed" }, async () => {
+    firstAt.push(Date.now());
+  });
+
+  let approvedAt = null;
+  api._approvalQueue.push({
+    id: "r2",
+    summary: "go",
+    origin: "",
+    action: "navigate",
+    reason: "test",
+    createdAt: new Date().toISOString(),
+    _execute: async () => {
+      approvedAt = Date.now();
+    },
+  });
+  await api.approve("r2");
+  assert.ok(
+    approvedAt - firstAt[0] >= 40,
+    "approve() must respect the same pacing floor as an agent-initiated allow",
+  );
+});
+
+// --- CAPTCHA handoff: detect (read-only heuristic), preserve state, pause,
+// and require an explicit, re-checked human resume. Never solve, click
+// through, or route around a challenge. ---
+
+test("_syncPageState auto-pauses an active task when the page looks like a CAPTCHA", () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._task = { id: "t1", state: "running", pauseReason: null };
+
+  api._syncPageState({ url: "https://example.com/", title: "Just a moment..." });
+
+  const snapshot = api.getSnapshot();
+  assert.equal(snapshot.page.captchaSuspected, true);
+  assert.equal(snapshot.task.state, "paused");
+  assert.equal(snapshot.task.pauseReason, "captcha");
+});
+
+test("_syncPageState does not touch an idle/completed/stopped task even if the page looks like a CAPTCHA", () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._task = { id: "t1", state: "completed", pauseReason: null };
+
+  api._syncPageState({ url: "https://example.com/", title: "Just a moment..." });
+
+  const snapshot = api.getSnapshot();
+  assert.equal(snapshot.page.captchaSuspected, true, "the informational flag is always computed");
+  assert.equal(snapshot.task.state, "completed", "nothing to preserve for a task that isn't active");
+});
+
+test("resumeTask() refuses a CAPTCHA-paused task and points at resumeAfterCaptcha()", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._task = { id: "t1", state: "running", pauseReason: null };
+  api._syncPageState({ url: "https://example.com/", title: "Just a moment..." });
+  assert.equal(api.getSnapshot().task.state, "paused");
+
+  await api.resumeTask();
+
+  const snapshot = api.getSnapshot();
+  assert.equal(snapshot.task.state, "paused", "resumeTask() must not resume a CAPTCHA-paused task");
+  assert.equal(snapshot.task.pauseReason, "captcha");
+});
+
+test("resumeAfterCaptcha() refuses to resume while the page still looks like a CAPTCHA", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._task = { id: "t1", state: "running", pauseReason: null };
+  api._syncPageState({ url: "https://example.com/", title: "Just a moment..." });
+
+  await api.resumeAfterCaptcha();
+
+  const snapshot = api.getSnapshot();
+  assert.equal(snapshot.task.state, "paused", "must stay paused -- no auto-retry while unresolved");
+  assert.equal(snapshot.task.pauseReason, "captcha");
+});
+
+test("resumeAfterCaptcha() resumes once the page no longer looks like a CAPTCHA", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._task = { id: "t1", state: "running", pauseReason: null };
+  api._syncPageState({ url: "https://example.com/checkpoint", title: "Just a moment..." });
+  assert.equal(api.getSnapshot().task.state, "paused");
+
+  // The human solved it directly in the browser; the page moved on.
+  api._syncPageState({ url: "https://example.com/welcome", title: "Welcome" });
+  // A plain page-state update while paused must not itself trigger a resume.
+  assert.equal(api.getSnapshot().task.state, "paused");
+
+  await api.resumeAfterCaptcha();
+
+  const snapshot = api.getSnapshot();
+  assert.equal(snapshot.task.state, "running");
+  assert.equal(snapshot.task.pauseReason, null);
+});
+
+test("resumeAfterCaptcha() is a no-op when the task isn't CAPTCHA-paused", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._task = { id: "t1", state: "running", pauseReason: null };
+
+  await api.resumeAfterCaptcha();
+
+  assert.equal(api.getSnapshot().task.state, "running");
+});
+
+test("a CAPTCHA detected while an already-approved execute() is running pauses instead of completing the task", async () => {
+  // Simulates a real navigate() whose did-navigate handler calls
+  // _syncPageState() with the challenge page's url/title before loadURL()
+  // itself resolves -- exactly the ordering a real WebContentsView produces.
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._findFirstOutboundLink = async () => null;
+  api.navigate = async () => {
+    api._syncPageState({ url: "https://example.com/checkpoint", title: "Just a moment..." });
+  };
+
+  const snapshot = await api.startTask("https://example.com");
+
+  assert.equal(snapshot.task.state, "paused");
+  assert.equal(snapshot.task.pauseReason, "captcha");
 });

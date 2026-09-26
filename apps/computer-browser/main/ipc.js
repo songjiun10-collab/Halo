@@ -6,7 +6,7 @@ const { ipcMain } = require("electron");
 // channel here accepts a raw path/eval/shell string -- every argument is
 // whatever ControlApi's own method signature validates.
 const METHODS = [
-  "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "stopTask",
+  "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask",
   "goBack", "goForward", "reload", "newTab", "approve", "deny", "setBrowserBounds",
 ];
 

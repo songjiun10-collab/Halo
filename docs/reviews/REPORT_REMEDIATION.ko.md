@@ -248,6 +248,31 @@ ALLOW·수동 resolve하는 navigate·링크 없음 반환 후 `execute()` 대�
 `test/control-api.test.js` 최종 11개, `node --test` 24/24 통과, 전체
 Python 회귀 494/494 통과 유지 확인.
 
+2026-09-27 후속 12: computer-use 브라우저에 요청 pacing 기본값과 CAPTCHA
+감지·보존·핸드오프 추가(같은 [설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트 4" 절). 사용자가 Codex·Claude 모두에게 "자동 브라우징이
+CAPTCHA를 유발하는 빈도 자체를 낮추라"(anti-bot 우회가 아니라 정상 이용
+pacing으로), 그리고 별도로 "CAPTCHA 때문에 작업이 사라지거나 실패
+처리되지 않게 하되, 포괄적 허락만으로 자동 해결하지는 말라"고 요청했다
+— 둘 다 이 프로젝트의 기존 원칙(CAPTCHA 자동 해결·우회 금지)과 일치한다.
+사람이 직접 하는 free action은 건드리지 않고, 에이전트가 개시해 실제
+실행되는 탐색에만 최소 간격(`MIN_AGENT_ACTION_INTERVAL_MS`, 기본
+2000ms)을 강제했다. CAPTCHA 쪽은 `shared/captcha-heuristics.js`의
+순수 문자열 대조 함수(`looksLikeCaptcha`)로 감지하며 DOM을 읽거나
+챌린지에 손대지 않는다 — 감지되면 진행 중인 작업만 자동으로
+일시정지(`task.pauseReason: "captcha"`)하고, 이미 항상 사람이 직접
+쓸 수 있는 `WebContentsView`를 통해 사람이 직접 풀도록 남긴다. 재개는
+`resumeAfterCaptcha()`로 분리해 재개 직전 같은 휴리스틱을 다시 확인하고,
+여전히 CAPTCHA로 보이면 자동 재시도 없이 거부·유지한다. IPC 계약에
+`resumeAfterCaptcha()`와 `page.captchaSuspected`/`task.pauseReason`
+필드를 추가했다(렌더러 UI 자체는 범위 밖 — 렌더러는 별도로 다시 만들어지는
+중). **정직한 한계**: 감지는 알려진 문자열 몇 개만 대조하는 최선-노력
+휴리스틱이라 완전한 감지를 보장하지 않는다(위음성 쪽으로 보수적 — 놓치면
+그냥 평소 페이지로 보일 뿐이라 안전 방향은 동일). 검증:
+`test/captcha-heuristics.test.js`(순수 함수 5개), `test/control-api.test.js`
+에 pacing 2개 + CAPTCHA 핸드오프 7개 추가, `node --test` 38/38 통과,
+전체 Python 회귀 494/494 통과 유지 확인.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

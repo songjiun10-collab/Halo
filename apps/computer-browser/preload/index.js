@@ -22,7 +22,7 @@ function readLayoutFromArgv() {
 // itself, which would hand the renderer every internal channel including
 // ones only meant for main<->main coordination.
 const METHODS = [
-  "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "stopTask",
+  "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask",
   "goBack", "goForward", "reload", "newTab", "approve", "deny", "setBrowserBounds",
 ];
 

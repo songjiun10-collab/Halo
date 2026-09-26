@@ -149,6 +149,7 @@ navigate(url: string): Promise<Snapshot>
 startTask(prompt: string): Promise<Snapshot>
 pauseTask(): Promise<Snapshot>
 resumeTask(): Promise<Snapshot>
+resumeAfterCaptcha(): Promise<Snapshot>   // (2026-09-27 추가, "후속 업데이트 4" 참고)
 stopTask(): Promise<Snapshot>
 goBack(): Promise<Snapshot>
 goForward(): Promise<Snapshot>
@@ -164,8 +165,11 @@ layout: Readonly<{ headerHeight, footerHeight, sidePanelWidth, mobileBreakpoint 
 `Snapshot` 형태:
 ```
 {
-  page: { url, title, loadState, canGoBack, canGoForward, hasPage },
-  task: { id, state },   // state: idle|running|awaiting_approval|paused|stopped|completed|error
+  page: { url, title, loadState, canGoBack, canGoForward, hasPage,
+          captchaSuspected },  // (2026-09-27 추가) 읽기 전용 휴리스틱, 항상 계산됨
+  task: { id, state, pauseReason },
+    // state: idle|running|awaiting_approval|paused|stopped|completed|error
+    // pauseReason(2026-09-27 추가): null|"user"|"captcha" -- state가 "paused"일 때만 의미 있음
   approvalQueue: [{ id, summary, origin, action, reason, createdAt }],
   timeline: [{ id, at, kind, message, status }],  // status: allow|deny|review|error|info
 }
@@ -326,6 +330,66 @@ ALLOW가 그대로 통과해 `_task.state`를 `"completed"`로 덮어썼다.
 각각의 실행-중-정지 경로), `test/control-api.test.js` 최종 11개, `node
 --test` 24/24 통과, 전체 Python 회귀 494/494 통과 유지 확인.
 
+**후속 업데이트 4 (2026-09-27) — 요청 pacing 기본값 + CAPTCHA 감지·보존·
+핸드오프.** 사용자가 Codex와 Claude 모두에게 "자동 브라우징이 사이트의
+CAPTCHA를 유발하는 빈도 자체를 낮추라"고 요청했다 — anti-bot 우회가
+아니라 정상 이용 pacing만으로. 별도로 "CAPTCHA 때문에 사용자의 작업이
+사라지거나 실패 처리되지 않게 해달라"는 요청도 있었고, 뒤이어 "포괄적
+허락만으로 자동 해결하지 말라"는 정정이 왔다 — 두 요청 모두 이 프로젝트의
+기존 원칙(CAPTCHA 판정 우회·자동 해결 금지)과 정확히 일치한다.
+
+*Pacing (요청 빈도 낮추기).* 사람이 직접 하는 free action(주소창 입력·
+뒤로가기·앞으로가기·새로고침·새 탭)에는 전혀 적용하지 않는다 — 에이전트가
+개시해 실제로 실행되는 탐색(ALLOW 즉시 실행 + REVIEW 후 사람이 승인한
+실행)에만 공통 pacing 시계(`_lastAgentActionAt`)를 적용해, 연속된
+에이전트 액션 사이에 최소 간격(`MIN_AGENT_ACTION_INTERVAL_MS`, 기본
+2000ms, 테스트에서는 생성자 옵션 `minAgentActionIntervalMs`로 낮춰
+검증)을 강제한다. 첫 액션은 지연되지 않는다. 이미 구조적으로 만족되는
+것도 확인했다: 동시성은 원래 1(`WebContentsView` 하나, 순차 `await`),
+실패한 탐색에 대한 자동 재시도 로직 자체가 없음(=이미 0회), 에이전트
+경로는 `newTab()`/`reload()`를 자동 호출하지 않음, `startTask()`는 여전히
+고정 2단계라 요청 폭주 자체가 구조적으로 불가능함 — 새 코드가 필요했던
+부분은 이 pacing 하한뿐이다.
+
+*CAPTCHA 감지·보존·핸드오프.* `shared/captcha-heuristics.js`의
+`looksLikeCaptcha(url, title)`는 알려진 CAPTCHA/anti-bot 벤더 호스트
+문자열과 인터스티셜 제목 문자열만 대조하는 순수 함수다 — DOM을 읽지
+않고, 챌린지를 풀거나 클릭하거나 우회하는 코드는 어디에도 없다. 모든
+페이지 상태 갱신(`_syncPageState`, `did-navigate` 등에서 호출)마다
+계산돼 `page.captchaSuspected`로 항상 노출되고, 그 시점에 작업이
+`"running"`/`"awaiting_approval"`(=진행 중)이면 자동으로
+`pauseTask()`와 같은 방식으로 일시정지하되 `task.pauseReason: "captcha"`
+를 남겨 사람이 직접 손댄 일시정지(`"user"`)와 구분한다(idle·완료·정지된
+작업은 보존할 게 없으므로 건드리지 않는다). `WebContentsView`는 원래도
+항상 사람에게 보이고 입력을 받는 실제 네이티브 뷰라 "브라우저 조작권을
+넘기는" 별도 접근 제어 코드는 필요 없었다 — 이미 그 자리에서 사람이
+직접 풀 수 있다.
+
+재개는 두 경로로 분리했다: `resumeTask()`는 `pauseReason === "captcha"`
+이면 거부하고(계속 일시정지, 재시도 없음) `resumeAfterCaptcha()`를
+쓰라고 안내한다. `resumeAfterCaptcha()`는 재개 직전 같은 휴리스틱으로
+현재 페이지를 다시 확인해 여전히 CAPTCHA로 보이면 거부·유지하고(자동
+재시도 없음), 아니면 `pauseReason`을 지우고 정상 재개 경로로 넘어간다.
+`execute()`가 실제로 실행되는 도중(예: 실제 `navigate()`의 `loadURL`
+대기 중) 그 탐색 자체가 CAPTCHA를 유발하는 경우도 다뤘다 —
+`_applyDecision`이 `execute()` 직후 `_task.state === "paused"`를 다시
+확인해(정지 세대 확인과 같은 자리), 이미 실행된 ALLOW를 "완료"가 아니라
+"일시정지"로 보고하도록 해 위 "후속 업데이트 2/3"에서 고친 상태 장부
+가드를 그대로 재사용한다. IPC 계약에 `resumeAfterCaptcha()`와
+스냅샷의 `page.captchaSuspected`/`task.pauseReason` 필드를 추가했다
+(`main/ipc.js`, `preload/index.js`) — 렌더러 쪽 UI 문구·배지·재개 버튼은
+이 문서의 범위 밖이며(렌더러는 별도로 다시 만들어지는 중), 위 필드/메서드
+계약만 맞으면 어떤 렌더러든 연결할 수 있다.
+
+**정직한 한계(이번 추가분)**: `looksLikeCaptcha`는 알려진 문자열 몇 개만
+대조하는 최선-노력 휴리스틱이다 — 목록에 없는 CAPTCHA 서비스나 커스텀
+문구는 놓친다(위양성보다 위음성 쪽으로 보수적으로 설계했다: 놓치면
+그냥 페이지가 평소처럼 보일 뿐이고, 잘못 걸리면 불필요하게 한 번
+일시정지할 뿐이라 안전 방향이 같다). 완전한 감지 보장이 아니다. 검증:
+`test/captcha-heuristics.test.js`(순수 함수 5개), `test/control-api.test.js`
+에 pacing 2개 + CAPTCHA 핸드오프 7개 추가 — `node --test` 38/38 통과,
+전체 Python 회귀 494/494 통과 유지 확인.
+
 ## 정직한 한계
 
 - 이 문서 작성 시점까지 Electron 앱을 실제로 빌드·실행해 검증하지 않았다 —
@@ -334,8 +398,10 @@ ALLOW가 그대로 통과해 `_task.state`를 `"completed"`로 덮어썼다.
 - Electron 기본 프로세스 격리(contextIsolation+sandbox) 이상의 OS 수준 격리는
   없다 — Halo의 기존 "배포 판정"이 이미 밝힌 한계(외부 불변 감사, 백업/복구)가
   여기에도 그대로 적용된다.
-- 에이전트 루프 자체의 폭주(무한 루프, 과도한 요청 빈도)에 대한 rate
-  limit·리소스 상한은 아직 설계에 없다.
+- 개별 에이전트 액션 사이의 최소 간격(pacing floor)은 있지만(위 "후속
+  업데이트 4"), 작업당 최대 액션 수·시간 예산 같은 전체 상한은 없다 —
+  지금은 `startTask()`가 고정 2단계라 무한 루프 자체가 불가능해서 아직
+  필요하지 않지만, 실제 멀티스텝 루프가 생기면 반드시 함께 추가해야 한다.
 - `classify_provenance`/`host_provenance`는 이번에도 실제 독립 텔레메트리
   채널이 아니라 호스트가 설정하는 규칙 기반 판별이다(E007과 동일한 정직한
   한계) — 진짜 web content는 실제로 신뢰할 수 없는 소스이므로 프로세스
