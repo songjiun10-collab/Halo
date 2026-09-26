@@ -1,6 +1,6 @@
 # Design System Master File
 
-> **LOGIC:** When building a specific page, first check `design-system/pages/[page-name].md`.
+> **LOGIC:** When building a specific page, first check `pages/[page-name].md` next to this file.
 > If that file exists, its rules **override** this Master file.
 > If not, strictly follow the rules below.
 

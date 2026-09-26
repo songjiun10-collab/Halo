@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { Activity } from './components/Activity'
 import { ControllerChip } from './components/ControllerChip'
 import { HaloButton } from './components/HaloButton'
@@ -9,16 +9,20 @@ import { TabStrip } from './components/TabStrip'
 import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
 import { usePresence } from './hooks/usePresence'
-import { AGENT, claudeHolds, currentUrl, demoSession, reducer } from './session/session'
+import { AGENT, approvalFor, canCloseTab, claudeHolds, currentUrl, demoSession, reducer } from './session/session'
 import { pageTitle } from './session/pages'
 import type { SessionState, TimelineEvent } from './session/types'
 
 const STEP_MS = 1600
 const NOTICE_MS = 6000
 
-/** One sentence per control change for the polite live region. */
-function announcement(s: SessionState) {
-  if (s.control === 'approval' && s.pending?.approval) return `Halo paused ${AGENT}: approve ${s.pending.approval.action.toLowerCase()} for ${s.pending.approval.amount}?`
+/** One sentence per change for the polite live region, including Halo's blocks. */
+function announcement(s: SessionState, notice: TimelineEvent | null) {
+  if (s.control === 'approval' && s.pending) {
+    const a = approvalFor(s.pending)
+    return `Halo paused ${AGENT}: approve ${a.action.toLowerCase()}${a.amount ? ` for ${a.amount}` : ''}?`
+  }
+  if (notice) return `Halo ${notice.text.charAt(0).toLowerCase()}${notice.text.slice(1)}${notice.detail ? ` to ${notice.detail}` : ''}.`
   if (s.control === 'you') return s.finished ? `${AGENT} finished. You are browsing.` : 'You are browsing.'
   return `${AGENT} is browsing.`
 }
@@ -45,9 +49,9 @@ export default function App() {
     return () => window.clearTimeout(id)
   }, [s.control, s.timeline.length])
 
-  // A Halo block needs no answer: show it briefly, then it lives in Activity.
-  const last = s.timeline[s.timeline.length - 1]
-  const notice: TimelineEvent | null = last && last.actor === 'halo' && last.id !== dismissedNotice ? last : null
+  // A Halo block needs no answer: show it for NOTICE_MS (even as the agent keeps working), then it lives in Activity.
+  const lastBlock = useMemo(() => [...s.timeline].reverse().find((e) => e.actor === 'halo') ?? null, [s.timeline])
+  const notice: TimelineEvent | null = lastBlock && lastBlock.id !== dismissedNotice ? lastBlock : null
   useEffect(() => {
     if (!notice) return
     const id = window.setTimeout(() => setDismissedNotice(notice.id), NOTICE_MS)
@@ -55,7 +59,7 @@ export default function App() {
   }, [notice])
 
   const notableCount = s.timeline.filter((e) => e.notable).length
-  const openActivity = useCallback(() => { setActivityOpen(true); setSeen(notableCount); if (last) setDismissedNotice(last.id) }, [notableCount, last])
+  const openActivity = useCallback(() => { setActivityOpen(true); setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id) }, [notableCount, lastBlock])
   const closeOverview = useCallback(() => setOverviewOpen(false), [])
   const closeActivity = useCallback(() => { setActivityOpen(false); setSeen(notableCount) }, [notableCount])
 
@@ -77,26 +81,42 @@ export default function App() {
   const tab = s.tabs.find((t) => t.id === s.activeTabId) ?? s.tabs[0]
   const pendingHere = s.control === 'approval' && s.pending && s.tabKeys[s.pending.tab] === tab.id
   const driven = s.control !== 'you' && (tab.claude === 'working' || tab.claude === 'waiting')
-  const approval = s.control === 'approval' ? s.pending?.approval : undefined
+  // Every review step gets a usable sheet, with or without payment details.
+  const approval = useMemo(() => (s.control === 'approval' && s.pending ? approvalFor(s.pending) : undefined), [s.control, s.pending])
+
+  // The approval sheet is modal: while it's open the rest of the window is inert, and focus
+  // returns to where it was once the decision is made.
+  const beforeSheet = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!approval) return
+    beforeSheet.current = document.activeElement as HTMLElement | null
+    return () => {
+      // Back to where you were; if that was nowhere, to the control that now matters (Resume) or the page.
+      const back = beforeSheet.current
+      const usable = back && back !== document.body && back.isConnected && !back.closest('.hx-sheet')
+      const target = usable ? back : document.querySelector<HTMLElement>('.hx-chip') ?? document.getElementById('hx-page')
+      target?.focus()
+    }
+  }, [approval])
 
   // Overlays stay mounted briefly after they're dismissed so they can animate out.
   const sheet = usePresence(approval ?? null)
-  const noticeShown = usePresence(!approval && notice && !activityOpen ? notice : null)
+  const noticeShown = usePresence(notice && !activityOpen ? notice : null)
   const activityShown = usePresence(activityOpen ? true : null)
   const toastShown = usePresence(toast)
   const overviewShown = usePresence(overviewOpen ? true : null)
 
   return (
     <div className="hx-app">
-      <a className="hx-skip" href="#hx-page">Skip to page</a>
+      <a className="hx-skip" href="#hx-page" inert={!!approval}>Skip to page</a>
       <h1 className="hx-sr">HALO</h1>
-      <p className="hx-sr" role="status" aria-live="polite">{announcement(s)}</p>
+      <p className="hx-sr" role="status" aria-live="polite">{announcement(s, notice)}</p>
       <div className="hx-window">
-        <header className="hx-chrome" inert={overviewOpen}>
+        <header className="hx-chrome" inert={overviewOpen || !!approval}>
           <TabStrip
             tabs={s.tabs}
             activeTabId={tab.id}
-            canClose={(t) => !claudeHolds(s, t)}
+            canClose={(t) => canCloseTab(s, t)}
             onSelect={(id) => dispatch({ type: 'selectTab', id })}
             onClose={(id) => dispatch({ type: 'closeTab', id })}
             onNew={() => dispatch({ type: 'newTab' })}
@@ -130,11 +150,13 @@ export default function App() {
           />
         </header>
         <div className="hx-body" inert={overviewOpen}>
-          <Viewport tab={tab} target={pendingHere ? s.pending?.target : undefined} driven={driven && !folded} />
-          <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
+          <div className="hx-page" inert={!!approval}>
+            <Viewport tab={tab} target={pendingHere ? s.pending?.target : undefined} driven={driven && !folded} />
+            <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
+          </div>
           <div className="hx-overlays">
-            {sheet.item && <HaloSheet approval={sheet.item} leaving={sheet.leaving} onApprove={() => dispatch({ type: 'approve' })} onDeny={() => dispatch({ type: 'deny' })} />}
-            {noticeShown.item && <Notice event={noticeShown.item} leaving={noticeShown.leaving} onOpen={openActivity} />}
+            {sheet.item && <HaloSheet approval={sheet.item} leaving={sheet.leaving} onApprove={() => dispatch({ type: 'approve' })} onDeny={() => dispatch({ type: 'deny' })} onTakeOver={() => dispatch({ type: 'takeControl' })} />}
+            {noticeShown.item && <Notice event={noticeShown.item} leaving={noticeShown.leaving} blocked={!!approval} onOpen={openActivity} />}
             {activityShown.item && <Activity session={s} leaving={activityShown.leaving} onClose={closeActivity} />}
             {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}
           </div>

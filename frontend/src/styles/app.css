@@ -155,6 +155,7 @@ code { font-family: var(--font-mono); }
 /* ---------- The page ---------- */
 
 .hx-body { position: relative; flex: 1; min-height: 0; display: flex; }
+.hx-page { position: relative; flex: 1; min-width: 0; display: flex; }
 .hx-site {
   flex: 1; min-width: 0; overflow: auto; padding: 40px 48px;
   background: var(--site-bg); color: var(--site-fg); font: 400 16px/1.5 var(--font-body);
@@ -204,7 +205,10 @@ code { font-family: var(--font-mono); }
 .hx-sheet__facts dt { color: var(--muted-foreground); }
 .hx-sheet__facts dd { margin: 0; font-weight: 600; text-align: end; }
 .hx-sheet__facts dd.hx-sheet__dest { font-family: var(--font-mono); font-weight: 500; }
-.hx-sheet__actions { display: flex; justify-content: flex-end; gap: var(--space-sm); }
+.hx-sheet__actions { display: flex; justify-content: flex-end; align-items: center; gap: var(--space-sm); }
+/* Doing it yourself is a quieter third option, set apart on the left. */
+.hx-sheet__takeover { margin-inline-end: auto; padding: 6px 2px; border: 0; background: none; color: var(--muted-foreground); font-size: 13px; font-weight: 500; cursor: pointer; }
+.hx-sheet__takeover:hover { color: var(--foreground); }
 .hx-sheet__request { display: block; margin-top: 12px; color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
 
 .hx-notice {

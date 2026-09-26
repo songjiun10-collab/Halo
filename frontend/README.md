@@ -32,10 +32,14 @@ The page is the product. Halo stays quiet while the agent works, and appears onl
   - unseen events.
 
   Hovering the toolbar or moving keyboard focus into it also unfolds it, so **Take over** is always one step away. ⌘/Ctrl + . keeps it unfolded.
+- **The address field emphasises the real site:** the registrable domain comes from the Public Suffix List (`tldts`), so `shop.example.co.uk` highlights `example.co.uk`. localhost and IP addresses are shown whole.
 - **Who is driving lives in the address field.** A chip at the end of the address field says *Agent is browsing*, *Agent is waiting for you* or *Resume agent*. One click hands control over (**Take over**). The chrome says "Agent"; the agent's name ("Claude") appears only in details, so the UI works for any agent.
 - **The halo edge.** While the agent drives a tab, the page has a faint 1px ice edge. When you drive, there is none. It's a quiet cue; the chip in the address field says it in words.
-- **One place per state.** An approval is a permission sheet dropped from the address bar. It's the only place the pending decision is described: the action, the amount (large), the card, the destination, then **Deny** / **Approve $84.20**, and the exact request in small mono text. Focus goes to the question, not to Approve.
-- **Blocks are brief.** A Halo block is a small notice in the same spot, with a light shadow: a 2px red bar, the blocked host in red, and **Details**. It disappears after 6 seconds and stays in Activity.
+- **One place per state.** An approval is a permission sheet dropped from the address bar. It's the only place the pending decision is described: the action, the amount (large), the card, the destination, then **Take over** / **Deny** / **Approve $84.20**, and the exact request in small mono text.
+  - The sheet is modal. The chrome and the page are inert until you decide.
+  - Focus goes to the question, not to Approve, and returns afterwards. After **Take over** it goes to **Resume**.
+  - A review step without payment details still gets a sheet, built from the step: the action, the destination, **Allow once**.
+- **Blocks are brief.** A Halo block is a small notice in the same spot, with a light shadow: a 2px red bar, the blocked host in red, and **Details**. It stays for 6 seconds even as the agent keeps working, is announced to screen readers, and then stays in Activity. A blocked step never runs: it opens no tab and navigates nowhere.
 - **Activity on request.** The Halo ring button in the toolbar shows a count of new notable events. It has a tooltip ("Halo events · 1 new") on hover and keyboard focus. Opening it lists only what mattered: blocks, asks, answers, handoffs and finishing. The agent's step-by-step trace is folded under **All steps**. Policy verdicts are in tooltips and screen-reader text. Esc closes the list.
 - **Colour:** near-black neutrals with flat layers. The web page keeps its own look.
 
@@ -54,7 +58,7 @@ The page is the product. Halo stays quiet while the agent works, and appears onl
 
   Status is shown with a dot, a glyph or a few words. The primary button is a neutral light fill.
 - **Type:** SF / Inter sans. Monospace is used only for URLs and log detail.
-- **Per-tab status:** each tab the agent has used shows a mark beside its favicon: working (ice dot), waiting (Ⅱ amber), paused (Ⅱ) or done (✓). The agent opens research tabs in the background, so your view stays put.
+- **Per-tab status:** each tab the agent has used shows a mark beside its favicon: working (ice dot), waiting (Ⅱ amber), paused (Ⅱ) or done (✓). The agent opens research tabs in the background, so your view stays put. Tabs the unfinished task still uses can't be closed, even after you take over.
 - **Keyboard and screen reader**
   - Every control is a native `<button>`.
   - Tabs follow the ARIA tabs pattern: ← → Home End move between tabs, and Delete closes one.

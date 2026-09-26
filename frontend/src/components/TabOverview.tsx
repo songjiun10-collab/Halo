@@ -21,9 +21,12 @@ interface Props {
 /** Every open tab as a card, like Safari's tab overview. Pick one to switch to it. */
 export function TabOverview({ tabs, leaving, activeTabId, onPick, onClose }: Props) {
   const firstRef = useRef<HTMLButtonElement>(null)
+  // Remember what opened the overview so focus can go back there when it closes.
+  const opener = useRef<HTMLElement | null>(null)
   // Runs on open and again if it's reopened while still animating out.
   useEffect(() => {
-    if (leaving) return
+    if (leaving) { opener.current?.focus?.(); return }
+    if (!opener.current || !opener.current.isConnected) opener.current = document.activeElement as HTMLElement | null
     firstRef.current?.focus()
     const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)

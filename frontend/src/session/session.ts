@@ -1,4 +1,5 @@
-import type { Actor, Control, PlannedStep, SessionState, Tab, TabActivity, TimelineEvent } from './types'
+import { getDomain } from 'tldts'
+import type { Actor, Approval, Control, PlannedStep, SessionState, Tab, TabActivity, TimelineEvent } from './types'
 
 /** The agent's name: shown in details, never as the chrome's visual language. */
 export const AGENT = 'Claude'
@@ -33,16 +34,53 @@ export const currentUrl = (tab: Tab) => tab.history[tab.index]
 /** Claude holds a tab while it is working or waiting in it; you can't navigate or close it then. */
 export const claudeHolds = (s: SessionState, tab: Tab) => s.control !== 'you' && (tab.claude === 'working' || tab.claude === 'waiting')
 
-/** Splits a URL so the registrable domain (last two host labels) can be emphasised. */
-export function splitUrl(url: string): { before: string; domain: string; after: string } {
-  const m = /^(https?:\/\/)([^/]+)(.*)$/.exec(url)
-  if (!m) return { before: '', domain: url, after: '' }
-  const labels = m[2].split('.')
-  const sub = labels.slice(0, -2).join('.')
-  return { before: m[1] + (sub ? sub + '.' : ''), domain: labels.slice(-2).join('.'), after: m[3] }
+/**
+ * A tab the unfinished task still refers to can't be closed, even while you have control:
+ * closing it would leave the remaining steps pointing at a tab that no longer exists.
+ */
+export const canCloseTab = (s: SessionState, tab: Tab) =>
+  !claudeHolds(s, tab) && (s.finished || !Object.values(s.tabKeys).includes(tab.id))
+
+function parse(url: string): URL | null {
+  try { return new URL(url) } catch { return null }
 }
 
-export const host = (url: string) => /^https?:\/\/([^/]+)/.exec(url)?.[1] ?? url
+/** Hostname, or the input itself when it isn't a URL. */
+export const host = (url: string) => parse(url)?.hostname || url
+
+/**
+ * Splits a URL around its registrable domain (public-suffix aware: shop.example.co.uk
+ * → example.co.uk) so the address bar can emphasise the real site identity.
+ * Hosts without one (localhost, IP addresses) are emphasised whole.
+ */
+export function splitUrl(url: string): { before: string; domain: string; after: string } {
+  const u = parse(url)
+  if (!u || !/^https?:$/.test(u.protocol)) return { before: '', domain: url, after: '' }
+  const hostname = u.host
+  const domain = getDomain(u.hostname) ?? hostname
+  const at = hostname.lastIndexOf(domain)
+  const start = u.protocol + '//'
+  const sub = at > 0 ? hostname.slice(0, at) : ''
+  const rest = at >= 0 ? hostname.slice(at + domain.length) : ''
+  return { before: start + sub, domain: at >= 0 ? domain + rest : hostname, after: url.slice(url.indexOf(hostname) + hostname.length) }
+}
+
+/**
+ * What the approval sheet shows for a review step. Payment steps carry their own
+ * facts; any other review still gets a usable prompt built from the step.
+ */
+export function approvalFor(step: PlannedStep): Approval {
+  if (step.approval) return step.approval
+  const action = step.text.replace(/^Wants to /, '')
+  return {
+    action: action.charAt(0).toUpperCase() + action.slice(1),
+    doneText: step.text,
+    amount: '',
+    paymentMethod: '',
+    destination: host(step.target),
+    request: step.target,
+  }
+}
 
 function navigate(tab: Tab, url: string): Tab {
   const history = [...tab.history.slice(0, tab.index + 1), url]
@@ -75,15 +113,19 @@ const mapTabs = (s: SessionState, fn: (t: Tab) => Tab): SessionState => ({ ...s,
 /** Runs one of Claude's steps that the gateway let through or stopped. */
 function runStep(s: SessionState, step: PlannedStep): SessionState {
   let next = s
-  if (step.opensTab && !next.tabKeys[step.tab]) {
-    // Claude opens its own tab in the background; your view stays where it is.
-    const tab = makeTab(step.navigatesTo ?? NEW_TAB_URL)
-    next = { ...next, tabs: [...next.tabs, tab], tabKeys: { ...next.tabKeys, [step.tab]: tab.id } }
-  } else if (step.navigatesTo && step.verdict === 'allow') {
-    const id = next.tabKeys[step.tab]
-    next = mapTabs(next, (t) => (t.id === id ? navigate(t, step.navigatesTo!) : t))
+  // Nothing runs unless the gateway allowed it: a blocked step opens no tab and navigates nowhere.
+  if (step.verdict === 'allow') {
+    if (step.opensTab && !next.tabKeys[step.tab]) {
+      // Claude opens its own tab in the background; your view stays where it is.
+      const tab = makeTab(step.navigatesTo ?? NEW_TAB_URL)
+      next = { ...next, tabs: [...next.tabs, tab], tabKeys: { ...next.tabKeys, [step.tab]: tab.id } }
+    } else if (step.navigatesTo) {
+      const id = next.tabKeys[step.tab]
+      next = mapTabs(next, (t) => (t.id === id ? navigate(t, step.navigatesTo!) : t))
+    }
   }
-  next = setActivity(next, next.tabKeys[step.tab], 'working')
+  const tabId = next.tabKeys[step.tab]
+  if (tabId) next = setActivity(next, tabId, 'working')
   if (step.verdict === 'allow') return log(next, 'claude', step.text, { detail: step.target, outcome: 'done', policy: 'allow' })
   return log(next, 'halo', step.haloText ?? `Blocked: ${step.text}`, { detail: step.target, outcome: 'blocked', policy: step.verdict, notable: true })
 }
@@ -100,20 +142,20 @@ export function reducer(s: SessionState, action: Action): SessionState {
       if (!step) return finish(log(s, 'claude', 'Finished the task', { notable: true }))
       if (step.verdict === 'review') {
         const waiting = setActivity({ ...s, plan, pending: step, control: 'approval' }, s.tabKeys[step.tab], 'waiting')
-        return log(waiting, 'claude', step.text, { detail: step.approval?.destination, outcome: 'approval', policy: 'review', notable: true })
+        return log(waiting, 'claude', step.text, { detail: approvalFor(step).destination, outcome: 'approval', policy: 'review', notable: true })
       }
       return { ...runStep(s, step), plan }
     }
     case 'approve': {
       if (s.control !== 'approval' || !s.pending) return s
       const step = s.pending
-      const approved = log({ ...settleAsk(s), pending: undefined, control: 'claude' }, 'you', `Approved ${step.approval?.amount ?? step.text}`, { outcome: 'approved', notable: true })
+      const approved = log({ ...settleAsk(s), pending: undefined, control: 'claude' }, 'you', `Approved ${step.approval?.amount || approvalFor(step).action.toLowerCase()}`, { outcome: 'approved', notable: true })
       return runStep(approved, { ...step, verdict: 'allow', text: step.approval?.doneText ?? step.text })
     }
     case 'deny': {
       if (s.control !== 'approval' || !s.pending) return s
-      const denied = log({ ...settleAsk(s), pending: undefined, plan: [] }, 'you', `Denied: ${s.pending.approval?.action.toLowerCase() ?? s.pending.text}`, { outcome: 'denied', notable: true })
-      return finish(log(denied, 'claude', 'Stopped without placing the order', { notable: true }))
+      const denied = log({ ...settleAsk(s), pending: undefined, plan: [] }, 'you', `Denied: ${approvalFor(s.pending).action.toLowerCase()}`, { outcome: 'denied', notable: true })
+      return finish(log(denied, 'claude', 'Stopped after you denied the request', { notable: true }))
     }
     case 'takeControl': {
       if (s.control === 'you') return s
@@ -131,7 +173,7 @@ export function reducer(s: SessionState, action: Action): SessionState {
       return { ...s, activeTabId: action.id }
     case 'closeTab': {
       const i = s.tabs.findIndex((t) => t.id === action.id)
-      if (i < 0 || claudeHolds(s, s.tabs[i])) return s
+      if (i < 0 || !canCloseTab(s, s.tabs[i])) return s
       let tabs = s.tabs.filter((t) => t.id !== action.id)
       if (tabs.length === 0) tabs = [makeTab(NEW_TAB_URL)]
       const activeTabId = s.activeTabId === action.id ? tabs[Math.max(0, Math.min(i - 1, tabs.length - 1))].id : s.activeTabId

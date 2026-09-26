@@ -1,6 +1,7 @@
 import { useRef, type KeyboardEvent } from 'react'
 import { pageTitle } from '../session/pages'
-import { AGENT, currentUrl } from '../session/session'
+import { getDomain } from 'tldts'
+import { AGENT, currentUrl, host } from '../session/session'
 import type { Tab, TabActivity } from '../session/types'
 import { Check, Close, Pause, Plus } from './Icons'
 
@@ -13,9 +14,11 @@ interface Props {
   onNew: () => void
 }
 
+/** Favicon stand-in: the first letter of the site name; works for localhost, IPs and plain words. */
 function initial(url: string) {
-  const host = /^https?:\/\/([^/]+)/.exec(url)?.[1]
-  return host ? host.split('.').slice(-2, -1)[0][0].toUpperCase() : '·'
+  const domain = getDomain(url) ?? host(url)
+  const name = domain.split('.')[0].replace(/[^\p{L}\p{N}]/gu, '')
+  return name ? name[0].toUpperCase() : '·'
 }
 
 const activityText: Record<TabActivity, string> = {

@@ -1093,7 +1093,8 @@ def format_master_md(design_system: dict) -> str:
     # Logic header
     lines.append("# Design System Master File")
     lines.append("")
-    lines.append("> **LOGIC:** When building a specific page, first check `design-system/pages/[page-name].md`.")
+    # Page overrides live beside this file (design-system/<project-slug>/pages/), so refer to them relatively.
+    lines.append("> **LOGIC:** When building a specific page, first check `pages/[page-name].md` next to this file.")
     lines.append("> If that file exists, its rules **override** this Master file.")
     lines.append("> If not, strictly follow the rules below.")
     lines.append("")
@@ -1395,7 +1396,7 @@ def format_page_override_md(design_system: dict, page_name: str, page_query: str
     lines.append(f"> **Generated:** {timestamp}")
     lines.append(f"> **Page Type:** {page_overrides.get('page_type', 'General')}")
     lines.append("")
-    lines.append("> ⚠️ **IMPORTANT:** Rules in this file **override** the Master file (`design-system/MASTER.md`).")
+    lines.append("> ⚠️ **IMPORTANT:** Rules in this file **override** the Master file (`../MASTER.md`).")
     lines.append("> Only deviations from the Master are documented here. For all other rules, refer to the Master.")
     lines.append("")
     lines.append("---")
@@ -1611,8 +1612,9 @@ def _detect_page_type(context: str, style_results: list) -> str:
         (["empty", "404", "error", "not found", "zero"], "Empty State"),
     ]
     
+    # Match whole words only: "browser" must not match "browse", "stored" must not match "store".
     for keywords, page_type in page_patterns:
-        if any(kw in context_lower for kw in keywords):
+        if any(re.search(r"\b" + re.escape(kw) + r"\b", context_lower) for kw in keywords):
             return page_type
     
     # Fallback: try to infer from style results
