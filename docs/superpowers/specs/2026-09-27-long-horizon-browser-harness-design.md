@@ -253,9 +253,75 @@ Codex: 이 설계/계획 작성과 검토. 실제 product code는 Claude가 구�
 다른 Claude frontend 세션의 frontend/ 또는 UI 디자인 작업을 가져오거나 덮어쓰지 않는다.
 기존 halo/gateway.py와 E007 channel 인터페이스는 이번 구현에서 변경하지 않는다.
 
+## 10. 메모리 예산과 프로세스 합계 상한 (2026-09-27 후속 추가, 사용자 확정 요구)
+
+**추가 배경**: 사용자가 이 하네스에 별도로 "메모리 1기가 미만" 요구를 확정해 이양했다.
+아래는 설계 원문에 없던 신규 제약이며, Task 1 커밋(`b60a94c`) 이후 추가되었다.
+기존 1~9절의 goal-preservation 요구는 이 절과 병행 조건이지 대체되지 않는다 —
+메모리를 줄이려고 원본 목표·증거·재시작 복구를 약화하지 않는다.
+
+**예산**: HALO 앱이 실제로 띄우는 프로세스 합계가 decimal 1,000,000,000 바이트(1 GB) 미만이어야
+한다. 포함 대상은 Electron main, shell/page renderer, GPU/utility 프로세스, Python
+approver 프로세스, 로컬 planner worker와 그 자식 전부다. 별도로 실행 중인 Claude 개발
+앱이나 원격 모델 서버는 이 합계에서 제외한다. V8 heap 크기만 재거나 worker 프로세스를
+합계에서 빼는 방식으로 통과시키지 않는다 — 실제 OS 프로세스 메모리 합계여야 한다.
+
+**측정 방법**: Electron `app.getAppMetrics()`로 Electron이 관리하는 모든 프로세스(main/
+renderer/GPU/utility 등)의 메모리를 얻는다(KB 단위, [Electron MemoryInfo 문서](https://www.electronjs.org/docs/latest/api/structures/memory-info)).
+Python approver·로컬 planner worker처럼 Electron이 직접 관리하지 않는 자식은 호스트가
+`spawn()` 시점에 pid를 등록해두고, OS 메모리 조회로 별도 합산한다. `(pid, creationTime)`
+쌍으로 중복 제거해, 재사용된 pid를 다른 프로세스로 잘못 합산하지 않는다.
+macOS에서는 `process.getProcessMemoryInfo()`의 `residentSet`이 지원되지 않거나 압축
+메모리 의미가 다를 수 있음을 [Electron process 문서](https://www.electronjs.org/docs/latest/api/process)가
+명시한다 — 이런 경우 해당 프로세스의 값을 0으로 대체하지 않고 "측정 불가"로 별도 표시한다
+(측정 불가 항목이 있으면 합계도 그 사실과 함께 보고한다).
+
+**압력 정책** (호스트 전용 상수, 실측으로 더 보수적으로 낮출 수 있으나 사용자가 정한
+1 GB 상한 자체는 올리지 않는다):
+- 700 MB: 캐시·불필요한 보관 관측(예: 지금 단계에 필요 없는 이전 observation/DOM 캡처)을
+  해제한다.
+- 800 MB: 새 action dispatch와 새 planner 호출을 멈추고, durable checkpoint를 먼저
+  기록한 뒤 `paused: memory_pressure`로 전환한다.
+- 900 MB(비상): 하네스가 직접 띄운 소유 page renderer/worker 프로세스를 정리한다.
+  자동 재시작/재로드를 반복하는 폭주(reload storm)는 금지한다.
+- 정리 이후에도 GoalSpec, 검증된 진척(evidence), 마지막 uncertain 기록은 디스크에
+  그대로 남아야 하며, 재개 시 이전 관측을 재사용하지 않고 새로 관측한다.
+
+**정직한 한계**: 실제 macOS에서 폴링 기반 측정은 표본 간격(sampling interval) 사이의
+순간적 피크를 포착하지 못할 수 있다 — 즉 임의의(특히 악의적인) 웹페이지가 폴링 주기
+사이에 짧게 메모리를 크게 튀게 만드는 경우까지 절대적으로 차단하는 hard cap을 이
+설계만으로 보장할 수는 없다. 이 한계는 실측·압력 대응 구현을 생략할 이유가 아니라,
+최종 보고서에 sampling interval과 함께 명시해야 하는 사실이다. 외부/악의적 페이지에서
+무제한 작업이 가능하다고 약속하지 않는다.
+
+**저장/컨텍스트 메모리 규율**: Task 1의 journal 재생은 전체 파일을 하나의 배열로 읽어
+들이지 않고, 줄 단위 스트리밍 + 누적 리듀서로 구현한다(seq 순서·펜딩 action 상태만
+O(1)로 유지하고, 체크포인트 이후 이벤트는 §5의 "최근 10쌍" 상한과 동일하게 최근
+`MAX_RECENT_EVENTS_IN_CONTEXT`개만 보관한다). 원본 목표와 증거는 디스크에 보존하고,
+RAM에는 현재 목표/제약, 현재 작업, 위 bounded 최근 결과만 둔다 — 전체 로그·스크린샷·
+DOM 원문·과거 완료 작업 본문을 RAM에 누적하지 않는다. checkpoint는 매 이벤트가 아니라
+주기적/중요 경계에서만 쓰되, §4의 durable action_started/outcome 저널 보장은 그대로
+유지한다(체크포인트를 줄이는 것이지 저널 durability를 낮추는 것이 아니다).
+
+**Planner 프롬프트 규율**: 매 호출마다 전체 amendment/로그 이력을 중복 전달하지 않는다.
+상태를 유지하는 provider adapter는 "이미 확인된 context + delta"만 보내고, stateless
+provider adapter는 안정적인 goal prefix로 caching을 활용할 수 있다. 다만 어느 방식이든
+모델에게 실제로 보이지 않는 해시/참조만 전달해 목표 내용 자체를 못 보게 만드는 구현은
+금지한다 — §5의 "GoalSpec 원문/모든 amendment/제약/필수 완료 조건을 절대 요약·삭제하지
+않는다"는 규칙은 caching/delta 최적화 이후에도 그대로 유지된다.
+
+**검증 근거 구분**: (a) 주입한 가짜 메모리 수치로 700/800/900 전이·체크포인트-후-정지·
+재로드 폭주 금지를 확인하는 결정론적 테스트는 정책 로직의 증거이며 실제 RSS 측정이
+아니다. (b) 실제 Electron+Python approver+로컬 worker 전체를 기동해 시작 피크·안정
+상태·100단계/10회 컨텍스트 초기화·pause/restart·대용량 journal 복구·의도적 메모리
+압력 상황에서 실측한 프로세스 합계는 별도의 실측 증거로 (a)와 구분해 보고한다. 두
+증거 모두에서 1 GB 미만 통과와 목표 보존(원문/증거/재개)이 함께 확인되어야 완료로
+본다.
+
 ## 참고 근거
 
 - [Anthropic: long-running harnesses](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents): 컨텍스트 창 사이에 진척·작업 목록·검증 기록을 남기는 구조. 브라우저 목표 원장 설계는 이 문서 자체의 구현이 아니라 HALO 적용안이다.
 - [Anthropic: context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents): compaction과 외부 구조화 메모리. 본 설계는 요약을 권위 있는 목표 대신 쓰지 않는다.
 - [OSWorld-Human](https://arxiv.org/abs/2506.16042): 모델 왕복과 과다 단계의 비용. HALO 실측치로 인용하지 않는다.
 - [Electron webContents](https://www.electronjs.org/docs/latest/api/web-contents): navigation readiness·stop·원격 콘텐츠 실행 경계 구현 참고.
+- [Electron MemoryInfo](https://www.electronjs.org/docs/latest/api/structures/memory-info)·[Electron process](https://www.electronjs.org/docs/latest/api/process): `app.getAppMetrics()` 단위(KB)와 macOS `residentSet` 미지원/압축 메모리 의미 — §10 메모리 예산 구현 근거.
