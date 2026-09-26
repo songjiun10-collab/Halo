@@ -293,10 +293,38 @@ Codex가 런타임 경계를 검수하던 중 실제 경쟁 상태 2건을 발�
 일시정지된 뒤 재개하면 그 결정(ALLOW/REVIEW)은 적용되지만 2단계(링크
 추적 제안)로는 이어지지 않고 작업이 그대로 끝난다. 이는 기존에 문서화된
 "진짜 멀티스텝 루프 없음" 한계의 연장선이다. 검증: `apps/computer-browser
-/test/control-api.test.js`에 8개 회귀 테스트 추가(정지 후 늦은
+/test/control-api.test.js`에 7개 회귀 테스트 추가(정지 후 늦은
 ALLOW/REVIEW 폐기, 일시정지 중 보류·재개 시 적용, 일시정지 후 정지 시
 보류분까지 폐기 등) — `node --test` 20/20 통과, 전체 Python 회귀
 `.venv/bin/python -m pytest -q` 494/494 통과 유지 확인.
+
+**후속 업데이트 3 (2026-09-27) — 실행 중 정지 레이스 추가 수정.** Codex가
+독립적으로 재현해 알려왔다: 위 수정은 "판정이 아직 안 왔는데 정지/일시정지"
+경우만 막고, "판정은 ALLOW로 이미 왔고 `execute()`(예: 실제 `navigate()`의
+`loadURL` 대기)가 진행 중인 동안 `stopTask()`가 오는" 경우는 여전히 놓쳤다.
+재현: `requestDecision`은 즉시 ALLOW, `navigate`는 수동 resolve Promise,
+`_findFirstOutboundLink`는 `null` 반환으로 대체한 뒤 `startTask(...)`
+실행 → `navigate`가 대기 중일 때 `stopTask()` 호출 → `navigate` resolve →
+최종 스냅샷이 `{state: "completed"}`로 나왔다(직접 재실행해 확인).
+원인은 `startTask()`가 `_findFirstOutboundLink()` 이후("링크 없음" 분기
+포함) 및 `_applyDecision`의 `await execute()` 이후 지점에서 정지 세대를
+다시 확인하지 않은 것 — `execute()`가 실행되는 동안에는 이미 유효했던
+ALLOW가 그대로 통과해 `_task.state`를 `"completed"`로 덮어썼다.
+
+수정: `_applyDecision(descriptor, execute, decision, epoch)`가 `execute()`
+직후 `_stopHappenedSince(epoch)`를 다시 확인해, 정지가 있었으면(이미
+`execute()`는 실제로 실행됐지만) 호출자에게 `"cancelled"`를 돌려줘
+`"completed"`로 덮어쓰지 못하게 한다. `startTask()`는 함수 맨 위에서 한
+번 세대를 캡처해 이후 모든 await 지점(1단계 판정 후, `_findFirstOutboundLink`
+후, 2단계 판정 후 — "링크 없음" 분기 포함)에서 같은 세대로 재확인한다.
+`resumeTask()`(보류된 결정의 `execute()` 도중 정지)와 `approve()`(승인된
+항목의 `execute()` 도중 정지)에도 동일한 가드를 추가했다 — 이 둘도 같은
+클래스의 구멍이었다. `execute()` 자체를 중단시키지는 않는다(이미 시작된
+탐색을 안전하게 되돌릴 방법이 없음) — 고치는 것은 그 이후의 상태
+장부 기록이지, 진행 중인 실행 자체가 아니다. 검증: 위 재현을 그대로
+회귀 테스트 4개로 추가(performGatedAction·startTask·resumeTask·approve
+각각의 실행-중-정지 경로), `test/control-api.test.js` 최종 11개, `node
+--test` 24/24 통과, 전체 Python 회귀 494/494 통과 유지 확인.
 
 ## 정직한 한계
 

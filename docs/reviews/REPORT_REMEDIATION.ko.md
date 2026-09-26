@@ -227,8 +227,26 @@ provenance mismatch DENY)는 UI로 직접 트리거되지 않고 Python 유닛
 으로 적용하도록 고쳤다. **정직한 한계**: `resumeTask()`가 보류된 결정을
 적용해도 이미 반환된 `startTask()`의 1→2단계 흐름 자체를 재개하지는
 않는다 — 진짜 루프가 아니라 정해진 2단계 스크립트이기 때문이다. 검증:
-`test/control-api.test.js`에 회귀 테스트 8개 추가, `node --test` 20/20
+`test/control-api.test.js`에 회귀 테스트 7개 추가, `node --test` 20/20
 통과, 전체 Python 회귀 494/494 통과 유지 확인.
+
+2026-09-27 후속 11: 위 수정의 사각지대를 Codex가 독립적으로 재현·보고해
+추가 수정(같은 설계서의 "후속 업데이트 3" 절). 후속 10의 수정은 "판정이
+오기 전"에 정지/일시정지되는 경우만 막았고, "판정은 이미 ALLOW로 왔고
+`execute()`(예: 실제 `navigate()`)가 진행 중인 동안 `stopTask()`가 오는"
+경우는 여전히 놓쳤다 — `startTask()`가 `_findFirstOutboundLink()` 이후
+("링크 없음" 분기 포함)와 `execute()` 이후 지점에서 정지 세대를 다시
+확인하지 않아, 이미 유효했던 ALLOW가 그대로 통과해 `_task.state`를
+`"stopped"`에서 `"completed"`로 덮어썼다. Codex가 제시한 재현 절차(즉시
+ALLOW·수동 resolve하는 navigate·링크 없음 반환 후 `execute()` 대기 중
+`stopTask()` 호출)로 먼저 직접 재현해 확인한 뒤 수정했다. `_applyDecision`
+이 `execute()` 직후 정지 세대를 재확인해 `"cancelled"`를 반환하도록
+하고, `startTask()`/`resumeTask()`/`approve()` 세 곳 모두에 같은 가드를
+추가했다(세 곳 다 같은 클래스의 구멍이었다). `execute()` 자체를 중단시키지는
+않는다 — 이미 시작된 실행을 되돌릴 방법이 없으므로, 고치는 것은 그 이후의
+상태 장부 기록이다. 검증: 재현 절차를 그대로 회귀 테스트 4개로 추가,
+`test/control-api.test.js` 최종 11개, `node --test` 24/24 통과, 전체
+Python 회귀 494/494 통과 유지 확인.
 
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.

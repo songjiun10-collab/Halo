@@ -189,6 +189,16 @@ class ControlApi {
 
   // --- Gated pipeline ---
 
+  // True if stopTask() has run since `epoch` was captured. Every await point
+  // in the gated pipeline (waiting on the approver, waiting on execute()
+  // itself, waiting on page reads) is a place stopTask() can interleave;
+  // each such point must re-check this before writing a terminal _task.state,
+  // or a stop that happened mid-flight gets silently overwritten back to
+  // "completed" once the in-flight work finally resolves.
+  _stopHappenedSince(epoch) {
+    return epoch !== this._stopEpoch;
+  }
+
   async performGatedAction(descriptor, execute) {
     // No `effect` field here: whether an action counts as a policy-relevant
     // effect (e.g. submit_form -> external_write) is derived server-side from
@@ -213,8 +223,9 @@ class ControlApi {
     // arrives after the user already stopped the task -- including "allow"
     // -- would still execute, and a "review" would re-populate the queue
     // stopTask() just cleared, silently undoing the stop. Discard instead.
-    if (stopEpoch !== this._stopEpoch) {
+    if (this._stopHappenedSince(stopEpoch)) {
       this._pushTimeline(descriptor.action, `${descriptor.summary} (decision arrived after stop; discarded)`, "info");
+      this._emit();
       return "cancelled";
     }
 
@@ -225,16 +236,26 @@ class ControlApi {
     if (this._task.state === "paused") {
       this._deferredDecision = { descriptor, execute, decision };
       this._pushTimeline(descriptor.action, `${descriptor.summary} (decision held: task is paused)`, "info");
+      this._emit();
       return "paused";
     }
 
-    return this._applyDecision(descriptor, execute, decision);
+    return this._applyDecision(descriptor, execute, decision, stopEpoch);
   }
 
-  async _applyDecision(descriptor, execute, decision) {
+  async _applyDecision(descriptor, execute, decision, epoch) {
     if (decision.decision === "allow") {
       this._pushTimeline(descriptor.action, descriptor.summary, "allow");
       await execute();
+      // stopTask() can run while execute() itself is in flight (e.g. a real
+      // navigate() awaiting loadURL()) -- the decision was legitimately
+      // "allow" and execute() already ran for real, but the *caller* must
+      // not treat this as a clean "allow" and go on to overwrite _task.state
+      // with "completed" once stopTask() already set it to "stopped".
+      if (this._stopHappenedSince(epoch)) {
+        this._pushTimeline(descriptor.action, `${descriptor.summary} (task was stopped while this action was executing)`, "info");
+        return "cancelled";
+      }
       return "allow";
     }
     if (decision.decision === "review") {
@@ -294,6 +315,10 @@ class ControlApi {
     this._task = { id: randomUUID(), state: "running" };
     this._pushTimeline("task", `Task started: ${prompt.slice(0, 120)}`, "info");
     this._emit();
+    // Captured once: every await below is a point where a concurrent
+    // stopTask() can run, so every terminal _task.state write in this
+    // function must check against this same epoch first.
+    const epoch = this._stopEpoch;
 
     const trimmed = prompt.trim();
     if (!URL_LIKE.test(trimmed)) {
@@ -323,10 +348,13 @@ class ControlApi {
       },
       () => this.navigate(trimmed),
     );
-    // "cancelled"/"paused" mean stopTask()/pauseTask() already own _task.state
-    // (stopped / paused-with-a-held-decision) -- overwriting it with
-    // "completed" here would silently undo the stop or pause.
-    if (initialOutcome === "cancelled" || initialOutcome === "paused") {
+    // this._stopHappenedSince(epoch) covers both a decision discarded before
+    // execute() ran ("cancelled") AND stopTask() landing while navigate()
+    // itself was still in flight (still "allow", but stale by the time we
+    // get here) -- either way stopTask() already owns _task.state ("stopped")
+    // and this must not overwrite it. "paused" is a separate, epoch-unchanged
+    // case: pauseTask()/resumeTask() own _task.state for that one.
+    if (this._stopHappenedSince(epoch) || initialOutcome === "paused") {
       return this.getSnapshot();
     }
     if (initialOutcome !== "allow") {
@@ -343,6 +371,12 @@ class ControlApi {
     // silently auto-executed. Still not a real planner: exactly one hop,
     // no loop, no step budget, no LLM call — see design doc.
     const link = await this._findFirstOutboundLink();
+    // Another await, another point stopTask() could have landed in the
+    // meantime -- check again before deciding whether there's a link to
+    // follow or the task is simply done.
+    if (this._stopHappenedSince(epoch)) {
+      return this.getSnapshot();
+    }
     if (link && typeof link.href === "string") {
       const followOutcome = await this.performGatedAction(
         {
@@ -356,10 +390,10 @@ class ControlApi {
         },
         () => this.navigate(link.href),
       );
-      if (followOutcome !== "review" && followOutcome !== "cancelled" && followOutcome !== "paused") {
+      if (!this._stopHappenedSince(epoch) && followOutcome !== "review" && followOutcome !== "paused") {
         this._task = { ...this._task, state: "completed" };
       }
-    } else {
+    } else if (!this._stopHappenedSince(epoch)) {
       this._pushTimeline("task", "No outbound link found on the page; task complete.", "info");
       this._task = { ...this._task, state: "completed" };
     }
@@ -385,13 +419,17 @@ class ControlApi {
     if (this._deferredDecision) {
       const { descriptor, execute, decision } = this._deferredDecision;
       this._deferredDecision = null;
+      const epoch = this._stopEpoch;
       // Applying the held decision does not re-enter startTask()'s own
       // control flow (that async call already returned when it saw
       // "paused") -- a deferred step 1 "allow" navigates but the task ends
       // there rather than continuing to step 2. No real multi-step loop
       // exists to resume into yet; see design doc, "정직한 한계".
-      const outcome = await this._applyDecision(descriptor, execute, decision);
-      if (outcome !== "review") {
+      const outcome = await this._applyDecision(descriptor, execute, decision, epoch);
+      // stopTask() can land while execute() (inside _applyDecision) is
+      // still running -- same guard as startTask(), so a stop mid-resume
+      // isn't silently overwritten back to "completed".
+      if (!this._stopHappenedSince(epoch) && outcome !== "review") {
         this._task = { ...this._task, state: "completed" };
         this._emit();
       }
@@ -414,8 +452,15 @@ class ControlApi {
     if (index === -1) return this.getSnapshot();
     const [item] = this._approvalQueue.splice(index, 1);
     this._pushTimeline(item.action, `${item.summary} (approved by reviewer)`, "allow");
+    const epoch = this._stopEpoch;
     await item._execute();
-    if (this._approvalQueue.length === 0) this._task = { ...this._task, state: "completed" };
+    // Same class of race as startTask()/resumeTask(): stopTask() can run
+    // while this execute() is in flight. stopTask() already cleared
+    // _approvalQueue, so the length-zero check below would otherwise still
+    // be true and overwrite "stopped" with "completed".
+    if (!this._stopHappenedSince(epoch) && this._approvalQueue.length === 0) {
+      this._task = { ...this._task, state: "completed" };
+    }
     this._emit();
     return this.getSnapshot();
   }

@@ -139,6 +139,124 @@ test("pauseTask holds a late review; resumeTask queues it for approval", async (
   assert.equal(snapshot.task.state, "awaiting_approval");
 });
 
+// Independently reproduced and reported by Codex: the fix above only guards
+// the window *before* execute() runs (waiting on the approver). It missed
+// stopTask() landing *while an already-approved* execute() is still in
+// flight (e.g. a real navigate() awaiting loadURL()) -- in that case the
+// decision was legitimately "allow" and execute() genuinely ran, but every
+// caller that turns "allow" into `_task.state = "completed"` was still doing
+// so unconditionally, silently overwriting the "stopped" state stopTask()
+// had already set. Fixed by threading the captured epoch into
+// _applyDecision() and re-checking it after execute() resolves, and by
+// capturing one epoch at the top of startTask() and re-checking it at every
+// subsequent await (including the previously-unchecked _findFirstOutboundLink
+// await and its "no link found" branch, which is exactly what this repro
+// hits).
+
+test("performGatedAction reports a stale allow (but still runs execute()) if stopTask() lands mid-execute", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  let resolveExecute;
+  const executePromise = new Promise((res) => {
+    resolveExecute = res;
+  });
+  let executed = false;
+
+  const pending = api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go" },
+    async () => {
+      await executePromise;
+      executed = true;
+    },
+  );
+
+  // Let performGatedAction actually reach the awaited execute() call before
+  // stopping -- otherwise stopTask()'s synchronous epoch bump (it has no
+  // internal await) would land before performGatedAction's very first
+  // continuation ever runs, catching it at the pre-execute check instead of
+  // the one this test targets.
+  await new Promise((r) => setImmediate(r));
+  await api.stopTask();
+  resolveExecute();
+
+  const outcome = await pending;
+  assert.equal(outcome, "cancelled", "the caller must not be told this was a clean allow once stop happened mid-flight");
+  assert.equal(executed, true, "execute() already genuinely ran; this guard is about not misreporting the outcome afterwards");
+  assert.equal(api.getSnapshot().task.state, "stopped");
+});
+
+test("startTask leaves the task stopped, not completed, if stopTask() lands while step 1's navigate is still running", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  let resolveNavigate;
+  const navigatePromise = new Promise((res) => {
+    resolveNavigate = res;
+  });
+  api.navigate = async () => {
+    await navigatePromise;
+  };
+  api._findFirstOutboundLink = async () => null;
+
+  const pending = api.startTask("https://example.com");
+  await new Promise((r) => setImmediate(r));
+  await api.stopTask();
+  resolveNavigate();
+  await pending;
+
+  assert.equal(api.getSnapshot().task.state, "stopped");
+});
+
+test("resumeTask leaves the task stopped, not completed, if stopTask() lands while the held decision's execute() is still running", async () => {
+  const { promise, resolve } = deferredDecision();
+  const api = makeApi(async () => promise);
+
+  let resolveExecute;
+  const executePromise = new Promise((res) => {
+    resolveExecute = res;
+  });
+  const pending = api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go" },
+    async () => {
+      await executePromise;
+    },
+  );
+
+  await api.pauseTask();
+  resolve({ decision: "allow", reasons: [] });
+  await pending; // now "paused" with the decision held, execute() not yet called
+
+  const resumePending = api.resumeTask();
+  await new Promise((r) => setImmediate(r));
+  await api.stopTask();
+  resolveExecute();
+  await resumePending;
+
+  assert.equal(api.getSnapshot().task.state, "stopped");
+});
+
+test("approve leaves the task stopped, not completed, if stopTask() lands while the approved item's execute() is still running", async () => {
+  const api = makeApi(async () => ({ decision: "review", reasons: ["needs a human"] }));
+  let resolveExecute;
+  const executePromise = new Promise((res) => {
+    resolveExecute = res;
+  });
+
+  await api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go" },
+    async () => {
+      await executePromise;
+    },
+  );
+  assert.equal(api.getSnapshot().approvalQueue.length, 1);
+
+  const approvePending = api.approve("r1");
+  await new Promise((r) => setImmediate(r));
+  await api.stopTask();
+  resolveExecute();
+  await approvePending;
+
+  assert.equal(api.getSnapshot().task.state, "stopped");
+  assert.equal(api.getSnapshot().approvalQueue.length, 0);
+});
+
 test("stopTask after pause discards the held decision too", async () => {
   const { promise, resolve } = deferredDecision();
   const api = makeApi(async () => promise);
