@@ -19,6 +19,9 @@ export function Activity({ session, leaving, onClose }: Props) {
   const [showAll, setShowAll] = useState(false)
   // Remember what opened Activity so focus can go back there when it closes.
   const opener = useRef<HTMLElement | null>(null)
+  // Latest onClose without re-running the focus effect: its identity changes with every notable event.
+  const closeRef = useRef(onClose)
+  useEffect(() => { closeRef.current = onClose }, [onClose])
   // Runs on open and again if it's reopened while still animating out.
   useEffect(() => {
     const el = ref.current
@@ -34,10 +37,10 @@ export function Activity({ session, leaving, onClose }: Props) {
     const active = document.activeElement as HTMLElement | null
     if (active && active !== document.body && !el?.contains(active)) opener.current = active
     el?.focus()
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeRef.current() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [leaving, onClose])
+  }, [leaving])
 
   const notable = session.timeline.filter((e) => e.notable)
   const steps = session.timeline

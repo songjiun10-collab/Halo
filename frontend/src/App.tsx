@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { Activity } from './components/Activity'
 import { ControllerChip } from './components/ControllerChip'
 import { HaloButton } from './components/HaloButton'
@@ -86,8 +86,9 @@ export default function App() {
 
   // The approval sheet is modal: while it's open the rest of the window is inert, and focus
   // returns to where it was once the decision is made.
+  // A layout effect, so this reads focus before HaloSheet's own effect moves it to the sheet title.
   const beforeSheet = useRef<HTMLElement | null>(null)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!approval) return
     beforeSheet.current = document.activeElement as HTMLElement | null
     return () => {
@@ -98,6 +99,10 @@ export default function App() {
       target?.focus()
     }
   }, [approval])
+
+  // An approval takes precedence over the tab overview: the sheet lives in .hx-body, which the overview makes inert.
+  // Adjusted during render (like usePresence) so the overview never commits on top of a new sheet.
+  if (approval && overviewOpen) setOverviewOpen(false)
 
   // Overlays stay mounted briefly after they're dismissed so they can animate out.
   const sheet = usePresence(approval ?? null)
