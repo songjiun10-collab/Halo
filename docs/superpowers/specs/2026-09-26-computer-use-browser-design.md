@@ -496,6 +496,68 @@ queue_wait     count=14    p50=11163 ms p95=14896 ms outcomes={"approved":14}
 DOM 상한 회귀 테스트 7개 추가 — `node --test` 54/54 통과, 전체 Python
 회귀 494/494 통과 유지 확인.
 
+**후속 업데이트 7 (2026-09-27) — computer-use 속도/효율 연구 반영, navigation
+readiness 옵션 추가.** 사용자가 추가 웹 근거(OSWorld-Human: 37개 task
+분해에서 planning+reflection LLM 호출이 전체 지연의 75–94%; WABER:
+성공률뿐 아니라 reliability·시간/비용 효율까지 측정 필요; D2Snap: DOM
+downsampling 실험, 연구 환경 한정이라 일반화 금지; Anthropic
+latency/prompt-caching/tool-caching/computer-use 문서; OpenAI
+computer-use 가이드; Playwright의 networkidle 비권장; Electron
+`loadURL()`이 `did-finish-load`까지 기다린다는 공식 문서)를 근거로 7가지
+속도 개선안을 제시하고, "보안 게이트를 약화시키지 않는 조건"과 "벤치마크
+수치 근거 없는 개선 주장 금지"를 명시했다.
+
+**항목별 적용 가능성 판정(정직하게 가려냄)** — 대부분의 제안은 이
+코드베이스에 아직 없는 것을 전제로 한다: 항목 1(LLM wait 등 지연
+decomposition), 4(스크린샷/DOM downsampling), 5(모델 한 스텝에서 독립
+저위험 액션 배치), 6(안정적 system/task/action 스키마의 prompt
+caching)은 모두 실제 LLM 모델 호출·스크린샷·모델 왕복이 존재해야
+의미가 있는데, `startTask()`는 여전히 고정 2단계 스크립트일 뿐 어디에도
+모델 호출이나 스크린샷이 없다(설계 문서 상단의 "정직한 한계" 참고). 이
+넷을 "구현"한다고 하면 존재하지 않는 파이프라인을 벤치마크했다고
+주장하는 셈이라 하지 않았다. 항목 2(`MIN_AGENT_ACTION_INTERVAL_MS`
+고정값 조정)는 사용자가 직접 "봇/사이트 우회 목적으로 올리거나 내리지
+말고, 정당한 근거 없이는 조정하지 말라"고 명시했고 실측 근거가 없으므로
+그대로 두었다. 항목 7(불필요 action 수 지표)은 지난 커밋의
+`getMetricsSummary()`가 이미 종류별 `count`로 일부 커버한다(고정
+2단계라 "불필요한" 액션 자체가 아직 없다). **실제로 새로 구현 가능했던
+것은 항목 3(navigation readiness) 하나뿐이다.**
+
+*Navigation readiness.* Electron의 `loadURL()`은 `did-finish-load`(전체
+로드, 서브리소스 포함)까지 promise가 끝나지 않는다 — Playwright가
+`networkidle` 대기를 권장하지 않는 것과 같은 맥락에서, 이 앱의 유일한
+페이지 콘텐츠 읽기(`_findFirstOutboundLink()`)엔 그보다 이른
+`dom-ready`(DOMContentLoaded 상당) 시점으로도 충분할 수 있다.
+`navigationWaitUntil` 생성자 옵션(`"load"`(기본, 기존 동작 그대로) |
+`"dom-ready"`)을 추가했다 — `_loadWithTimeout()`이 `dom-ready` 모드일
+때는 `loadURL()` 자체의 promise 대신 `dom-ready` 이벤트를 기다리고,
+기존 timeout/abort(`webContents.stop()`)와 `did-fail-load` 처리 경로는
+그대로 유지된다. **기본값은 바꾸지 않았다** — 스크립트로 주입된 링크가
+DOMContentLoaded 이후 시점에 나타나는 페이지(SPA 등)에서는 `dom-ready`가
+일부 링크를 놓칠 수 있어, 실제 페이지로 측정한 근거 없이 기본 동작을
+바꾸는 건 이번 요청의 "근거 없는 개선 주장 금지"에 위배된다고 판단했다.
+
+*결정론적 벤치 근거(동일 fixture, before/after).*
+`bench/navigation-readiness-bench.js`(신규)가 가짜 `WebContentsView`로
+동일한 모의 페이지 로드 모양(dom-ready 50ms, 전체 로드 400ms)에 대해
+`"load"` vs `"dom-ready"` 두 모드를 각각 측정한다 — 30회 반복 예시:
+```
+waitUntil="load"      p50=402ms  p95=403ms  outcomes={"ok":30}
+waitUntil="dom-ready" p50=52ms   p95=53ms   outcomes={"ok":30}
+```
+이 수치는 **만든 시나리오에 대한 통제된 비교**이지 실제 페이지 측정치가
+아니다 — 실제 페이지에서 두 모드 중 무엇이 안전하고 빠른지는 살아있는
+Electron 앱으로 측정해야 알 수 있고, 이번 세션엔 그런 환경이 없다.
+
+**정직한 한계(이번 추가분)**: 항목 1/4/5/6은 코드에 대응물이 없어
+구현하지 않았다 — LLM 루프가 생기면 그때 다시 검토해야 한다. `dom-ready`
+모드는 완전성(페이지가 늦게 그리는 콘텐츠를 놓칠 수 있음)과 속도의
+트레이드오프이며 승인 게이트나 pacing에는 영향을 주지 않는다. 검증:
+`test/control-api.test.js`에 회귀 테스트 3개 추가(기본값이 실제로
+`dom-ready`를 구독하지 않음, `dom-ready`가 실제로 더 이른 시점에
+풀림, `dom-ready` 모드에서도 timeout/abort가 그대로 동작함) —
+`node --test` 57/57 통과, 전체 Python 회귀 494/494 통과 유지 확인.
+
 ## 정직한 한계
 
 - 이 문서 작성 시점까지 Electron 앱을 실제로 빌드·실행해 검증하지 않았다 —

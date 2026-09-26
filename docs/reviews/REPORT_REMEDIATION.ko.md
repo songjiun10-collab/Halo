@@ -324,6 +324,34 @@ bounded agent loop는 "설계부터", (5) 렌더러 증분 렌더링은 "실측 
 에 계측·타임아웃·DOM 상한 회귀 테스트 7개 추가 — `node --test` 54/54
 통과, 전체 Python 회귀 494/494 통과 유지 확인.
 
+2026-09-27 후속 15: computer-use 속도/효율 연구(OSWorld-Human, WABER,
+D2Snap, Anthropic/OpenAI computer-use·latency·caching 문서, Playwright
+networkidle 비권장) 반영 — navigation readiness 옵션 추가(같은
+[설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트 7" 절). 사용자가 제시한 7가지 속도 개선안 중 4개(LLM
+지연 decomposition, 스크린샷/DOM downsampling, 모델 배치 실행, prompt
+caching)는 이 코드베이스에 아직 LLM 모델 호출·스크린샷·모델 왕복 자체가
+없어(고정 2단계 스크립트) 적용 대상이 없다고 정직하게 판정하고
+구현하지 않았다 — 없는 파이프라인을 벤치마크했다고 주장하지 않기
+위해서다. 1개(pacing 상수 조정)는 사용자가 직접 "근거 없이 조정하지
+말라"고 지시해 그대로 두었다. 1개(불필요 action 수 지표)는 지난 커밋의
+`getMetricsSummary()` 카운트가 이미 일부 커버한다. 실제로 새로 구현
+가능했던 것은 navigation readiness(항목 3) 하나였다 — Electron
+`loadURL()`은 전체 로드(`did-finish-load`)까지 기다리는데, 이 앱의
+유일한 페이지 읽기(`_findFirstOutboundLink()`)엔 더 이른 `dom-ready`
+시점으로 충분할 수 있어(Playwright의 networkidle 비권장과 같은 맥락)
+`navigationWaitUntil`(`"load"` 기본 | `"dom-ready"`) 옵션을 추가했다.
+기존 timeout/abort·`did-fail-load` 경로는 그대로 유지된다. **기본값은
+바꾸지 않았다** — 스크립트로 뒤늦게 그려지는 링크를 놓칠 수 있는
+완전성 트레이드오프가 있고, 실제 페이지로 측정한 근거가 없기
+때문이다. `bench/navigation-readiness-bench.js`(신규)로 동일한 모의
+페이지 로드 모양에 대해 두 모드를 직접 비교했다(30회, "load"
+p50=402ms vs "dom-ready" p50=52ms) — **이 수치는 만든 시나리오에 대한
+통제된 비교이지 실제 페이지 측정치가 아니다.** 검증: `test/control-api
+.test.js`에 회귀 테스트 3개 추가(기본값 미변경 확인, dom-ready 조기
+해소 확인, dom-ready 모드에서도 timeout/abort 유지 확인) — `node
+--test` 57/57 통과, 전체 Python 회귀 494/494 통과 유지 확인.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

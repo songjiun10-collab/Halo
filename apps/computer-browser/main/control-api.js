@@ -52,6 +52,7 @@ class ControlApi {
     requestDecision: requestDecisionOverride,
     minAgentActionIntervalMs,
     navigationTimeoutMs,
+    navigationWaitUntil,
     maxDomLinksScanned,
     now,
   } = {}) {
@@ -65,6 +66,9 @@ class ControlApi {
       typeof minAgentActionIntervalMs === "number" ? minAgentActionIntervalMs : MIN_AGENT_ACTION_INTERVAL_MS;
     this._navigationTimeoutMs =
       typeof navigationTimeoutMs === "number" ? navigationTimeoutMs : NAVIGATION_TIMEOUT_MS;
+    // "load" (default, unchanged behavior) or "dom-ready" -- see
+    // _loadWithTimeout()'s comment for the tradeoff.
+    this._navigationWaitUntil = navigationWaitUntil === "dom-ready" ? "dom-ready" : "load";
     this._maxDomLinksScanned =
       typeof maxDomLinksScanned === "number" ? maxDomLinksScanned : MAX_DOM_LINKS_SCANNED;
     this._now = typeof now === "function" ? now : Date.now;
@@ -254,7 +258,10 @@ class ControlApi {
     this._view.setVisible(true);
     const start = this._now();
     const timedOut = await this._loadWithTimeout(target);
-    this._recordMetric("navigation", this._now() - start, { outcome: timedOut ? "timeout" : "ok" });
+    this._recordMetric("navigation", this._now() - start, {
+      outcome: timedOut ? "timeout" : "ok",
+      waitUntil: this._navigationWaitUntil,
+    });
     if (timedOut) {
       this._pushTimeline(
         "navigation",
@@ -269,27 +276,46 @@ class ControlApi {
   }
 
   // loadURL() has no built-in bound (see Electron's webContents docs -- its
-  // promise only settles on the page's own completion/failure event). A
-  // slow or hanging page would otherwise keep performGatedAction()'s caller
-  // (startTask(), or a resume) waiting indefinitely. This races it against
-  // a timer; on timeout it calls webContents.stop() to actually abort the
-  // in-flight load rather than just walking away from it. A genuine fast
-  // failure (bad DNS, refused connection, etc.) is unaffected -- it settles
-  // via loadURL()'s own rejection (already surfaced by the did-fail-load
+  // promise only settles on did-finish-load, i.e. the FULL page including
+  // subresources). A slow or hanging page would otherwise keep
+  // performGatedAction()'s caller (startTask(), or a resume) waiting
+  // indefinitely. This races the chosen readiness signal against a timer;
+  // on timeout it calls webContents.stop() to actually abort the in-flight
+  // load rather than just walking away from it. A genuine fast failure (bad
+  // DNS, refused connection, etc.) is unaffected -- it settles via
+  // loadURL()'s own rejection (already surfaced by the did-fail-load
   // listener wired up in _ensureView()) well before the timer fires.
+  //
+  // _navigationWaitUntil ("load" by default, or "dom-ready"): Electron's
+  // loadURL() promise only resolves at did-finish-load, which -- per
+  // Playwright's own guidance against waiting on networkidle -- is often a
+  // stricter readiness bar than an automation step actually needs. For a
+  // step that only reads the DOM for outbound links (this app's only
+  // page-content read), the earlier "dom-ready" event (DOMContentLoaded)
+  // is frequently enough and measurably faster, at the honest cost of
+  // possibly missing anchors a page injects via script AFTER DOMContentLoaded
+  // (a completeness/speed tradeoff, not a security one -- the approval gate
+  // and pacing floor are unaffected either way). Left at "load" by default:
+  // there is no real measured evidence yet that switching the default is
+  // safe for this app's actual pages (see bench/navigation-readiness-bench.js
+  // for the deterministic, simulated comparison this is based on).
   async _loadWithTimeout(target) {
     let timer;
     const timedOut = new Promise((resolve) => {
       timer = setTimeout(() => resolve(true), this._navigationTimeoutMs);
     });
-    const loaded = this._view.webContents
-      .loadURL(target)
-      .then(() => false)
-      .catch(() => false);
-    const result = await Promise.race([loaded, timedOut]);
+    const wc = this._view.webContents;
+    let ready;
+    if (this._navigationWaitUntil === "dom-ready") {
+      ready = new Promise((resolve) => wc.once("dom-ready", () => resolve(false)));
+      wc.loadURL(target).catch(() => {}); // failure still reported via did-fail-load
+    } else {
+      ready = wc.loadURL(target).then(() => false).catch(() => false);
+    }
+    const result = await Promise.race([ready, timedOut]);
     clearTimeout(timer);
     if (result) {
-      this._view.webContents.stop();
+      wc.stop();
     }
     return result;
   }

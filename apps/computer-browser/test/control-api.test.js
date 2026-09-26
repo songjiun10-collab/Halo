@@ -49,7 +49,7 @@ function makeFakeClock(startAt = 0) {
 // directly to api._view makes _ensureView() a no-op (it only constructs a
 // real WebContentsView when this._view is falsy), so these tests never
 // touch Electron.
-function makeFakeView({ loadURL, executeJavaScript, stop } = {}) {
+function makeFakeView({ loadURL, executeJavaScript, stop, once } = {}) {
   return {
     webContents: {
       loadURL: loadURL || (async () => {}),
@@ -57,6 +57,7 @@ function makeFakeView({ loadURL, executeJavaScript, stop } = {}) {
       executeJavaScript: executeJavaScript || (async () => null),
       navigationHistory: { canGoBack: () => false, canGoForward: () => false },
       on: () => {},
+      once: once || (() => {}),
     },
     setVisible: () => {},
     setBounds: () => {},
@@ -659,6 +660,82 @@ test("navigate() does not abort a load that finishes well within the timeout", a
   assert.equal(stopped, false);
   const metrics = api.getMetricsSummary();
   assert.deepEqual(metrics.navigation.outcomes, { ok: 1 });
+});
+
+// --- Navigation readiness mode ("load" default vs "dom-ready"). Default
+// stays "load" (unchanged behavior) -- "dom-ready" is an opt-in for callers
+// who've verified their pages don't need full-load completeness.
+
+test("navigationWaitUntil defaults to \"load\": navigate() only resolves once loadURL() itself settles", async () => {
+  const clock = makeFakeClock();
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { now: clock.now });
+  let domReadyFired = false;
+  api._view = makeFakeView({
+    loadURL: () =>
+      new Promise((resolve) => {
+        clock.advance(300);
+        resolve();
+      }),
+    once: (event, cb) => {
+      if (event === "dom-ready") {
+        domReadyFired = true;
+        cb(); // fires "early", but must be ignored in "load" mode
+      }
+    },
+  });
+
+  await api.navigate("https://example.com");
+
+  // Whether or not the fake ever calls the dom-ready callback is irrelevant
+  // in "load" mode -- navigate() must not have registered for it at all.
+  assert.equal(domReadyFired, false, "\"load\" mode must not listen for dom-ready");
+  assert.equal(api.getMetricsSummary().navigation.p50, 300);
+});
+
+test("navigationWaitUntil: \"dom-ready\" resolves at the earlier event instead of waiting for full load", async () => {
+  const clock = makeFakeClock();
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), {
+    now: clock.now,
+    navigationWaitUntil: "dom-ready",
+  });
+  api._view = makeFakeView({
+    // loadURL() itself would take 400ms to fully settle...
+    loadURL: () => new Promise((resolve) => setTimeout(resolve, 0)).then(() => clock.advance(400)),
+    // ...but dom-ready is reported as firing much earlier, at 50ms.
+    once: (event, cb) => {
+      if (event === "dom-ready") {
+        clock.advance(50);
+        cb();
+      }
+    },
+  });
+
+  await api.navigate("https://example.com");
+
+  assert.equal(api.getMetricsSummary().navigation.p50, 50, "dom-ready mode must not wait for the full 400ms load");
+});
+
+test("navigationWaitUntil \"dom-ready\" still respects the timeout/abort if dom-ready never fires", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), {
+    navigationWaitUntil: "dom-ready",
+    navigationTimeoutMs: 20,
+  });
+  let stopped = false;
+  api._view = makeFakeView({
+    loadURL: () => new Promise(() => {}),
+    once: () => {}, // dom-ready never fires -- e.g. a page that never finishes parsing
+    stop: () => {
+      stopped = true;
+    },
+  });
+
+  const start = Date.now();
+  const snapshot = await api.navigate("https://example.com");
+  const elapsed = Date.now() - start;
+
+  assert.ok(elapsed < 300, `expected the timeout to fire near 20ms, took ${elapsed}ms`);
+  assert.equal(stopped, true);
+  assert.equal(snapshot.page.loadState, "error");
 });
 
 // --- Bounded DOM scan for the outbound-link read (prevents a pathological
