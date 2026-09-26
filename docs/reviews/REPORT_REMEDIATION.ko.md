@@ -352,9 +352,48 @@ p50=402ms vs "dom-ready" p50=52ms) — **이 수치는 만든 시나리오에 �
 해소 확인, dom-ready 모드에서도 timeout/abort 유지 확인) — `node
 --test` 57/57 통과, 전체 Python 회귀 494/494 통과 유지 확인.
 
+2026-09-27 후속 16: 장기 브라우저 작업 하네스(goal-preserving long-horizon
+harness) 구현 착수 — Task 1: durable goal/task store. Codex가 작성해 커밋
+(07c9887)한 새 [설계서](../superpowers/specs/2026-09-27-long-horizon-browser-harness-design.md)/
+[계획서](../superpowers/plans/2026-09-27-long-horizon-browser-harness.md)의
+6단계 계획 중 첫 단계를 구현했다. 핵심은 컨텍스트 교체·재시작을 거쳐도
+최초 목표·제약·완료조건·검증된 진척을 잃지 않는 실행기이며, 속도 최적화가
+아니다.
+
+이번 커밋 범위(Task 1)는 다음과 같다: `shared/harness-contracts.js`(신규)는
+GoalSpec/Amendment/Constraint/Criterion/Limits/JournalEvent/Checkpoint의
+런타임 검증기로, 모르는 필드·스키마 버전·enum을 전부 거부한다.
+`main/harness/task-store.js`(신규)는 태스크별 `<storageRoot>/tasks/<uuid>/`
+저장소로, `goal-vNNNN.json`(불변, 절대 덮어쓰지 않음)·`events.jsonl`
+(append+fsync)·`checkpoint.json`(tmp+fsync+원자적 rename+부모 디렉터리
+fsync)·`writer.lock`(배타적, 죽은 pid만 회수)을 구현했다. taskId는 UUID
+정규식으로만 경로에 연결하고, 디렉터리/파일은 O_NOFOLLOW로 열어 심볼릭
+링크 task 디렉터리를 거부한다.
+
+검증한 안전 속성(`test/task-store.test.js`, 신규 15개): goal-v1 원문이
+`amendGoal()` 이후에도 바이트 단위로 불변, 대체 대상이 명시된 제약만
+amendment가 대체, 같은 task를 두 번째 writer가 열면 거부(죽은 프로세스의
+lock은 회수), 잘못된 taskId·미래 스키마 버전·심볼릭 링크 task 디렉터리
+거부, 체크포인트 이후 재생이 정확히 그 이후 이벤트만 반환, 크래시로 생긴
+마지막 미완성 JSONL 줄만 조용히 버려지고 그 앞의 유효한 줄은 보존, 중간
+줄 손상은 즉시 storage_corrupt로 중단, 저널 쓰기가 한 번 실패하면 그
+인스턴스는 원인이 나중에 해결돼도 계속 거부하는 fail-closed 래치,
+action_started만 있고 대응하는 action_outcome이 없으면
+execution_uncertain으로 복구.
+
+**정직한 한계**: 이 단계는 저장소 계층뿐이다 — ContextBuilder·진척/완료
+게이트(Task 2), TaskController·Planner stdio 경계(Task 3), 실제
+Electron+approver 실행 통합(Task 4), host/UI 수명주기(Task 5), 종단 간
+실제 fixture 검증(Task 6)은 아직 구현하지 않았다. 100단계·10회 컨텍스트
+재구성 보존이라는 필수 검증 기준은 Task 3에서 TaskController가 만들어진
+뒤에야 테스트할 수 있다. 이 커밋은 Node 코드만 추가했다(Python 미변경).
+검증: `node --test` 72/72 통과(신규 15개 포함), 전체 Python 회귀 494/494
+통과 유지 확인.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
+장기 브라우저 하네스(위 후속 16) 역시 Task 1/6만 완료된 상태다.
 
 ## 판정 기준
 
