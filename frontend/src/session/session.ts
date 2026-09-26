@@ -1,12 +1,14 @@
 import type { Actor, Control, PlannedStep, SessionState, Tab, TabActivity, TimelineEvent } from './types'
 
-/** Display name of the agent. */
+/** The agent's name: shown in details, never as the chrome's visual language. */
 export const AGENT = 'Claude'
+/** What the chrome calls whoever is driving when it isn't you. Multi-agent safe. */
+export const AGENT_ROLE = 'Agent'
 
 export const controlLabel: Record<Control, string> = {
-  claude: `${AGENT} has control`,
-  approval: `${AGENT} has control`, // it waits for you in the confirmation, not in the chrome
-  you: 'You have control',
+  claude: `${AGENT_ROLE} is browsing`,
+  approval: `${AGENT_ROLE} is waiting for you`,
+  you: 'You are browsing',
 }
 
 export type Action =
@@ -83,7 +85,7 @@ function runStep(s: SessionState, step: PlannedStep): SessionState {
   }
   next = setActivity(next, next.tabKeys[step.tab], 'working')
   if (step.verdict === 'allow') return log(next, 'claude', step.text, { detail: step.target, outcome: 'done', policy: 'allow' })
-  return log(next, 'halo', step.haloText ?? `Blocked: ${step.text}`, { detail: step.target, outcome: 'blocked', policy: step.verdict })
+  return log(next, 'halo', step.haloText ?? `Blocked: ${step.text}`, { detail: step.target, outcome: 'blocked', policy: step.verdict, notable: true })
 }
 
 function finish(s: SessionState): SessionState {
@@ -95,35 +97,35 @@ export function reducer(s: SessionState, action: Action): SessionState {
     case 'tick': {
       if (s.control !== 'claude') return s
       const [step, ...plan] = s.plan
-      if (!step) return finish(log(s, 'claude', 'Finished the task'))
+      if (!step) return finish(log(s, 'claude', 'Finished the task', { notable: true }))
       if (step.verdict === 'review') {
         const waiting = setActivity({ ...s, plan, pending: step, control: 'approval' }, s.tabKeys[step.tab], 'waiting')
-        return log(waiting, 'claude', step.text, { detail: step.approval?.destination, outcome: 'approval', policy: 'review' })
+        return log(waiting, 'claude', step.text, { detail: step.approval?.destination, outcome: 'approval', policy: 'review', notable: true })
       }
       return { ...runStep(s, step), plan }
     }
     case 'approve': {
       if (s.control !== 'approval' || !s.pending) return s
       const step = s.pending
-      const approved = log({ ...settleAsk(s), pending: undefined, control: 'claude' }, 'you', `Approved ${step.approval?.amount ?? step.text}`, { outcome: 'approved' })
+      const approved = log({ ...settleAsk(s), pending: undefined, control: 'claude' }, 'you', `Approved ${step.approval?.amount ?? step.text}`, { outcome: 'approved', notable: true })
       return runStep(approved, { ...step, verdict: 'allow', text: step.approval?.doneText ?? step.text })
     }
     case 'deny': {
       if (s.control !== 'approval' || !s.pending) return s
-      const denied = log({ ...settleAsk(s), pending: undefined, plan: [] }, 'you', `Denied: ${s.pending.approval?.action.toLowerCase() ?? s.pending.text}`, { outcome: 'denied' })
-      return finish(log(denied, 'claude', 'Stopped without placing the order'))
+      const denied = log({ ...settleAsk(s), pending: undefined, plan: [] }, 'you', `Denied: ${s.pending.approval?.action.toLowerCase() ?? s.pending.text}`, { outcome: 'denied', notable: true })
+      return finish(log(denied, 'claude', 'Stopped without placing the order', { notable: true }))
     }
     case 'takeControl': {
       if (s.control === 'you') return s
       // A pending approval goes back into the plan; Claude asks again when you hand control back.
       const plan = s.pending ? [s.pending, ...s.plan] : s.plan
       const paused = mapTabs({ ...settleAsk(s), plan, pending: undefined, control: 'you' }, (t) => (t.claude === 'working' || t.claude === 'waiting' ? { ...t, claude: 'paused' } : t))
-      return log(paused, 'you', 'Took control')
+      return log(paused, 'you', 'Took over', { notable: true })
     }
     case 'resume': {
       if (s.control !== 'you' || s.finished) return s
       const resumed = mapTabs({ ...s, control: 'claude' }, (t) => (t.claude === 'paused' ? { ...t, claude: 'working' } : t))
-      return log(resumed, 'you', `Handed control back to ${AGENT}`)
+      return log(resumed, 'you', `Handed back to ${AGENT}`, { notable: true })
     }
     case 'selectTab':
       return { ...s, activeTabId: action.id }

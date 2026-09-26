@@ -18,62 +18,46 @@ npm run lint
 | `src/styles/tokens.css` | Design tokens (colours, type, spacing, radii, shadows). Mirrors the design system's `tokens.json`. |
 | `src/styles/app.css` | Component styles, ported from the design system's `bundle.css`. |
 | `src/session/` | Session model and reducer: who has control, tabs with per-tab history and Claude's per-tab state, the shared timeline, the pending approval; stand-in page titles. |
-| `src/components/` | `TabStrip`, `ControlBar`, `Toolbar`, `Viewport` (with Claude's target outline), `SessionPanel`, `Timeline`, `Confirmation`, `Logo`, `Icons`. |
+| `src/components/` | `TabStrip`, `Toolbar`, `ControllerChip`, `HaloButton`, `Viewport` (halo ring, target outline), `HaloSheet`, `Notice`, `Activity`, `Logo`, `Icons`. |
 
 ## Interface rules
 
-These rules come from the repository's `better-*` and `emil-design-eng` skills.
+The page is the product. Halo stays quiet while the agent works, and appears only when something needs a person: something was blocked, an approval is needed, or control changes hands. These rules come from the repository's `better-*` and `emil-design-eng` skills.
 
-What's on screen is the web page, a quiet activity list, and a confirmation when one is needed. Everything else was removed; no function went with it.
-
-- **Control, at the top:** *Claude has control* or *You have control*, with **Take control** or **Resume Claude**. While Claude waits for you it still has control, so the top row doesn't announce the wait. The confirmation in the panel does.
-- **Activity:** one list of what Claude, You and Halo did.
-  - Each row names the actor in bold text and says what happened in plain words: "Claude Filled shipping address", "Halo Blocked a tracking request", "You Approved $84.20". There are no avatars and no panel title.
-  - "Done" is implicit. Only a pending ask gets a word ("Waiting").
-  - Halo's rows are quieter system text. A blocked row has a 2px red bar and red text.
-  - The policy verdict (`allow`, `review`, `quarantine`) is not printed; it's in the row's tooltip and in screen-reader text.
-- **Confirmation:** a compact strip at the bottom of the panel, shown only while a decision is open.
-  - "Place order for **$84.20**?", then the card and destination, then **Approve** and **Deny**.
-  - The activity above it dims while it's open.
-  - Focus goes to the question, not to Approve.
-- **Claude's target on the page:** a thin muted-blue outline, with no label and no glow.
-- **Per-tab status:** each tab Claude has worked in shows working / waiting / paused / done beside its favicon. Claude opens research tabs in the background.
-- **Colour: near-black neutrals.** Layers are flat and separated by 1px lines. The web page keeps its own look.
+- **A browser first.** There is no permanent side panel: the page takes the full width. Tabs and the address field are full browser size.
+- **Who is driving lives in the address field.** A chip at the end of the address field says *Agent is browsing*, *Agent is waiting for you* or *Resume agent*. One click hands control over (**Take over**). The chrome says "Agent"; the agent's name ("Claude") appears only in details, so the UI works for any agent.
+- **Signature: the halo.** While the agent drives a tab, the page wears a thin ice ring. When you drive, there is no ring.
+- **One place per state.** An approval is a permission sheet dropped from the address bar. It's the only place the pending decision is described: the action, the amount (large), the card, the destination, then **Deny** / **Approve $84.20**, and the exact request in small mono text. Focus goes to the question, not to Approve.
+- **Blocks are brief.** A Halo block is a short notice in the same spot: a 2px red bar, the blocked host in red, and **Details**. It disappears after 6 seconds and stays in Activity.
+- **Activity on request.** The Halo ring button in the toolbar shows a count of new notable events. Opening it lists only what mattered: blocks, asks, answers, handoffs and finishing. The agent's step-by-step trace is folded under **All steps**. Policy verdicts are in tooltips and screen-reader text. Esc closes the list.
+- **Colour:** near-black neutrals with flat layers. The web page keeps its own look.
 
   | Role | Value |
   | --- | --- |
-  | App background, tab bar | `#0C0E0D` |
-  | Toolbar, activity panel, confirmation | `#151816` |
+  | App background, tab bar, address field | `#0C0E0D` |
+  | Toolbar, selected tab, sheets | `#151816` |
   | Separators, tiles | `#292D2A` |
   | Control edges (3.1:1 or better) | `#666D67` |
   | Primary text | `#E7E8E4` |
   | Secondary text | `#858C86` |
-  | Halo accent, ice: brand, focus, Claude's cursor | `#A8C7FA` (`#3B6FC4` on the light page) |
-  | Approval (dot only) | `#B99752` |
-  | Blocked (2px left bar plus text, never a filled surface) | `#C86A64` |
-  | Success (glyph) | `#72A982` |
+  | Halo accent, ice: the ring, the halo, focus | `#A8C7FA` (`#3B6FC4` for the target outline on the light page) |
+  | Waiting for approval (dot) | `#B99752` |
+  | Blocked (2px bar and text) | `#C86A64` |
+  | Success | `#72A982` |
 
-  - Status is carried by a small dot, a glyph or a few words of text.
-  - The primary button is a neutral light fill, not a hue.
-- **Type:**
-  - SF / Inter sans everywhere.
-  - Monospace is used only for URLs and log detail: selectors, hosts and requests.
-  - Uppercase appears only on the small policy labels.
+  Status is shown with a dot, a glyph or a few words. The primary button is a neutral light fill.
+- **Type:** SF / Inter sans. Monospace is used only for URLs and log detail.
+- **Per-tab status:** each tab the agent has used shows a mark beside its favicon: working (ice dot), waiting (Ⅱ amber), paused (Ⅱ) or done (✓). The agent opens research tabs in the background, so your view stays put.
 - **Keyboard and screen reader**
   - Every control is a native `<button>`.
   - Tabs follow the ARIA tabs pattern: ← → Home End move between tabs, and Delete closes one.
   - A skip link jumps to the page.
-  - A polite live region announces control changes.
-  - When a confirmation appears, focus goes to its question, never to the approve button.
-- **Motion:** only when the user hasn't asked for reduced motion; animates only transform and opacity; buttons press to `scale(0.96)`; new rows and the confirmation fade in over 220ms.
-- **Layout**
-  - The activity panel is 340–400px wide on desktop.
-  - Below 45rem it stacks under the page.
-  - Below 40rem the control row takes the top line on its own.
-  - At 320px there is no horizontal scroll.
+  - A polite live region announces who is browsing and when Halo pauses for an approval.
+- **Motion:** only when the user hasn't asked for reduced motion; animates only transform and opacity. Sheets drop in over 220ms; buttons press to `scale(0.96)`.
+- **Layout:** below 40rem the chip shows only **Take over**, sheets span the width, and 320px has no horizontal scroll.
 
 ## Demo data
 
-The UI runs on a scripted session (`demoSession` in `src/session/session.ts`), labelled **Demo** in the Session panel. It isn't connected to the HALO gateway yet. To connect it, feed gateway steps and verdicts in as `PlannedStep`s and send Approve and Deny to the gateway's `/approve` endpoint.
+The UI runs on a scripted session (`demoSession` in `src/session/session.ts`), labelled **Demo** in Activity. It isn't connected to the HALO gateway yet. To connect it, feed gateway steps and verdicts in as `PlannedStep`s and send Approve and Deny to the gateway's `/approve` endpoint.
 
 The viewport is a stand-in for a real page engine. It draws a sample checkout page and Claude's cursor on the element Claude is about to use.

@@ -29,6 +29,8 @@ export interface TimelineEvent {
   detail?: string
   outcome?: Outcome
   policy?: Verdict
+  /** Worth a person's attention: blocks, asks, answers, handoffs, finishing. Everything else is trace. */
+  notable?: boolean
 }
 
 export interface Approval {

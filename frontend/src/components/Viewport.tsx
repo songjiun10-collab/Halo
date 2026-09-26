@@ -6,7 +6,7 @@ import type { Tab } from '../session/types'
  * Stand-in for the page engine's surface. The page keeps the site's own look;
  * HALO draws only where Claude is about to act.
  */
-export function Viewport({ tab, target }: { tab: Tab; target?: string }) {
+export function Viewport({ tab, target, driven }: { tab: Tab; target?: string; driven: boolean }) {
   const url = currentUrl(tab)
   let body
   if (url.endsWith('/done')) {
@@ -48,8 +48,9 @@ export function Viewport({ tab, target }: { tab: Tab; target?: string }) {
     )
   }
   return (
-    <main id="hx-page" className="hx-site" role="tabpanel" aria-labelledby={`tab-${tab.id}`} tabIndex={-1}>
+    <main id="hx-page" className="hx-site" role="tabpanel" aria-labelledby={`tab-${tab.id}`} tabIndex={-1} data-driven={driven || undefined}>
       {body}
+      {driven && <p className="hx-sr">{AGENT} is driving this tab.</p>}
     </main>
   )
 }

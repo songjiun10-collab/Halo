@@ -1,5 +1,6 @@
-/* HALO browser UI. Rules: better-* skills (accessibility, layout, typography, colors, UI)
-   and emil-design-eng (motion). Tokens live in tokens.css. */
+/* HALO browser UI. The page is the product; Halo stays quiet until a person is needed.
+   Rules: better-* skills (accessibility, layout, typography, colours, UI) and
+   emil-design-eng (motion). Tokens live in tokens.css. */
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body, #root { height: 100%; }
@@ -19,84 +20,66 @@ code { font-family: var(--font-mono); }
 
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
-.hx-sr {
-  position: absolute; width: 1px; height: 1px; overflow: hidden;
-  clip-path: inset(50%); white-space: nowrap;
-}
+.hx-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .hx-skip {
-  position: absolute; inset-inline-start: var(--space-md); top: var(--space-md); z-index: 10;
+  position: absolute; inset-inline-start: var(--space-md); top: var(--space-md); z-index: 20;
   padding: var(--space-sm) var(--space-md); border-radius: var(--radius-md);
-  background: var(--foreground); color: var(--chrome); font-weight: 600;
+  background: var(--foreground); color: var(--backdrop); font-weight: 600;
   transform: translateY(-200%);
 }
 .hx-skip:focus { transform: none; }
 
-.hx-ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.hx-meta { font: 500 12px/1.4 var(--font-body); color: var(--muted-foreground); }
+.hx-ic { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---------- Controls ---------- */
 
-.hx-btn, .hx-icbtn {
+.hx-btn, .hx-icbtn, .hx-chip, .hx-halo {
   cursor: pointer;
   transition: transform var(--press) var(--ease-out), background-color 150ms ease, color 150ms ease;
 }
-.hx-btn:active:not(:disabled), .hx-icbtn:active:not(:disabled) { transform: scale(0.96); }
+.hx-btn:active:not(:disabled), .hx-icbtn:active:not(:disabled), .hx-chip:active, .hx-halo:active { transform: scale(0.96); }
 
 .hx-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--space-sm);
-  min-height: 40px; padding: 0 var(--space-md);
-  border: 1px solid transparent; border-radius: var(--radius-md);
+  min-height: 36px; padding: 0 16px; border: 1px solid transparent; border-radius: var(--radius-md);
   font: 600 14px/1.2 var(--font-body); white-space: nowrap;
 }
-.hx-btn .hx-ic { width: 16px; height: 16px; stroke-width: 2; }
 .hx-btn--primary { background: var(--primary-fill); color: var(--on-primary); }
 .hx-btn--secondary { background: transparent; color: var(--foreground); border-color: var(--border-strong); }
-.hx-btn--compact { min-height: 32px; padding: 0 12px; font-size: 13px; }
 
 .hx-icbtn {
-  display: inline-grid; place-items: center; flex: none;
-  width: 40px; height: 40px; padding: 0;
+  display: inline-grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0;
   border: 0; border-radius: var(--radius-md); background: transparent; color: var(--muted-foreground);
 }
-.hx-icbtn:disabled { color: var(--text-muted); cursor: default; }
-.hx-icbtn--sm { width: 24px; height: 24px; border-radius: var(--radius-sm); }
-.hx-icbtn--sm .hx-ic { width: 14px; height: 14px; }
+.hx-icbtn:disabled { color: var(--well); cursor: default; }
+.hx-icbtn--sm { width: 22px; height: 22px; border-radius: var(--radius-sm); }
+.hx-icbtn--sm .hx-ic { width: 13px; height: 13px; }
 
 @media (hover: hover) and (pointer: fine) {
-  .hx-icbtn:hover:not(:disabled) { background: var(--hover); color: var(--foreground); }
+  .hx-icbtn:hover:not(:disabled), .hx-halo:hover { background: var(--hover); color: var(--foreground); }
   .hx-btn--secondary:hover { background: var(--hover); }
-  .hx-confirm .hx-btn--secondary:hover { background: var(--well); }
   .hx-btn--primary:hover { background: color-mix(in oklab, var(--primary-fill), black 12%); }
+  .hx-chip:hover { background: var(--hover); }
 }
 
-/* ---------- Window ---------- */
+/* ---------- Window and chrome: a browser first ---------- */
 
-.hx-app { height: 100%; padding: var(--space-md); }
+.hx-app { height: 100%; padding: 12px; }
 .hx-window {
-  display: flex; flex-direction: column; height: 100%;
-  border-radius: var(--radius-lg); overflow: hidden;
-  background: var(--chrome); box-shadow: var(--shadow-window);
+  position: relative; display: flex; flex-direction: column; height: 100%;
+  border-radius: var(--radius-lg); overflow: hidden; background: var(--backdrop); box-shadow: var(--shadow-window);
 }
+.hx-chrome { background: var(--chrome); }
 
-.hx-chrome { background: var(--chrome); border-bottom: 1px solid var(--border); }
-.hx-strip {
-  display: flex; align-items: center; gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-sm) 0 var(--space-md);
-}
-.hx-logo { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-inline-end: var(--space-sm); color: var(--foreground); }
-.hx-logo__mark { width: 18px; height: 18px; color: var(--brand); }
-.hx-logo__word { font: 600 13px/1 var(--font-body); letter-spacing: 0.02em; }
-.hx-tabs { display: flex; align-items: flex-end; align-self: stretch; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.hx-tab:not([data-selected="true"]) { margin-bottom: 4px; }
-.hx-tabs > .hx-icbtn { align-self: center; }
+.hx-strip { display: flex; align-items: flex-end; gap: var(--space-xs); height: 42px; padding: 0 var(--space-sm); }
+.hx-tabs { display: flex; align-items: flex-end; gap: 2px; flex: 1; min-width: 0; align-self: stretch; overflow-x: auto; scrollbar-width: none; }
+.hx-tabs > .hx-icbtn { align-self: center; width: 30px; height: 30px; }
 .hx-tab {
-  position: relative;
-  display: flex; align-items: center; flex: 0 1 220px; min-width: 120px; height: 34px;
-  padding-inline-end: 5px; border-radius: var(--radius-md);
-  color: var(--muted-foreground);
-  transition: background-color 150ms ease, color 150ms ease;
+  position: relative; display: flex; align-items: center; flex: 0 1 240px; min-width: 120px; height: 34px;
+  margin-bottom: 4px; padding-inline-end: 6px; border-radius: var(--radius-md);
+  color: var(--muted-foreground); transition: background-color 150ms ease, color 150ms ease;
 }
-.hx-tab[data-selected="true"] { background: var(--toolbar); color: var(--foreground); border-radius: var(--radius-md) var(--radius-md) 0 0; align-self: flex-end; height: 36px; }
+.hx-tab[data-selected="true"] { margin-bottom: 0; height: 38px; border-radius: var(--radius-md) var(--radius-md) 0 0; background: var(--toolbar); color: var(--foreground); }
 .hx-tab__main {
   display: flex; align-items: center; gap: var(--space-sm); flex: 1; min-width: 0; align-self: stretch;
   padding-inline: 12px 6px; border: 0; background: none; cursor: pointer; text-align: start;
@@ -108,149 +91,149 @@ code { font-family: var(--font-mono); }
   background: var(--well); color: var(--foreground); font: 700 10px/1 var(--font-body);
 }
 @media (hover: hover) and (pointer: fine) {
-  .hx-tab:not([data-selected="true"]):hover { color: var(--foreground); }
+  .hx-tab:not([data-selected="true"]):hover { background: var(--hover); color: var(--foreground); }
 }
+/* The agent's state per tab: a mark beside the favicon, nothing more. */
+.hx-act { display: inline-grid; place-items: center; width: 12px; height: 12px; flex: none; }
+.hx-act .hx-ic { width: 12px; height: 12px; stroke-width: 2; }
+.hx-act i { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); }
+.hx-act[data-state="waiting"] { color: var(--warning); }
+.hx-act[data-state="paused"], .hx-act[data-state="done"] { color: var(--muted-foreground); }
 
-.hx-toolbar {
-  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm);
-  padding: var(--space-sm); background: var(--toolbar);
-}
+.hx-toolbar { display: flex; align-items: center; gap: var(--space-sm); height: 52px; padding: 0 var(--space-sm); background: var(--toolbar); border-bottom: 1px solid var(--border); }
 .hx-nav { display: flex; gap: 2px; }
 .hx-omni {
-  display: flex; align-items: center; gap: var(--space-sm); flex: 1 1 320px; min-width: 0; height: 40px;
-  padding-inline: 14px 6px; border-radius: 20px;
-  background: var(--chrome); border: 1px solid var(--border);
-  font: 400 13px/1 var(--font-mono); color: var(--muted-foreground);
+  display: flex; align-items: center; gap: var(--space-sm); flex: 1; min-width: 0; height: 38px;
+  padding-inline: 14px 4px; border-radius: 19px; background: var(--backdrop); border: 1px solid var(--border);
+  font: 400 14px/1 var(--font-mono); color: var(--muted-foreground);
 }
 .hx-omni__lock { display: inline-grid; }
-.hx-omni__lock .hx-ic { width: 16px; height: 16px; }
+.hx-omni__lock .hx-ic { width: 15px; height: 15px; }
 .hx-omni__url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hx-omni__url b { color: var(--foreground); font-weight: 400; }
 
-/* Narrow: who has control moves to its own row at the very top. */
-@media (max-width: 40rem) {
-  .hx-strip { flex-wrap: wrap; padding-inline-start: var(--space-sm); }
-  .hx-control { order: -1; flex-basis: 100%; justify-content: space-between; }
-  .hx-logo__word { display: none; }
+/* Who is driving: part of the address field, like a site-permission icon. */
+.hx-chip {
+  display: inline-flex; align-items: center; gap: 8px; flex: none; height: 30px; padding: 0 12px;
+  border: 0; border-radius: 15px; background: var(--toolbar); color: var(--muted-foreground);
+  font: 500 13px/1 var(--font-body); white-space: nowrap;
+}
+.hx-chip__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); }
+.hx-chip[data-control="approval"] .hx-chip__dot { background: var(--warning); }
+.hx-chip[data-control="you"] .hx-chip__dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-foreground); }
+.hx-chip[data-control="you"] { color: var(--foreground); }
+.hx-chip__action { padding-inline-start: 8px; border-inline-start: 1px solid var(--border); color: var(--foreground); font-weight: 600; }
+
+/* Halo's one permanent mark: the ring, with a count of events worth a look. */
+.hx-halo {
+  position: relative; display: inline-grid; place-items: center; flex: none; width: 38px; height: 38px;
+  padding: 0; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--brand);
+}
+.hx-halo[aria-expanded="true"] { background: var(--hover); }
+.hx-halo__mark { width: 20px; height: 20px; }
+.hx-halo__badge {
+  position: absolute; top: 3px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--foreground); color: var(--backdrop); font: 700 10px/16px var(--font-body); text-align: center;
 }
 
-.hx-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 400px); }
-@media (max-width: 45rem) {
-  .hx-app { padding: 0; }
-  .hx-window { border-radius: 0; }
-  .hx-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; overflow-y: auto; }
-}
+/* ---------- The page ---------- */
 
-/* ---------- The web page (site's own look) ---------- */
-
+.hx-body { position: relative; flex: 1; min-height: 0; display: flex; }
 .hx-site {
-  min-width: 0; overflow: auto; padding: var(--space-lg);
-  background: var(--site-bg); color: var(--site-fg);
-  font: 400 16px/1.5 var(--font-body);
+  flex: 1; min-width: 0; overflow: auto; padding: 40px 48px;
+  background: var(--site-bg); color: var(--site-fg); font: 400 16px/1.5 var(--font-body);
 }
 .hx-site:focus { outline: none; }
-.hx-site h2 { margin: 0 0 var(--space-md); font-size: 22px; line-height: 1.2; font-weight: 700; }
+/* Halo's signature: while the agent drives this tab, the page wears a thin ice ring. You drive: no ring. */
+.hx-site[data-driven] { box-shadow: inset 0 0 0 3px var(--brand); }
+.hx-site h2 { margin: 0 0 var(--space-md); font-size: 24px; line-height: 1.2; font-weight: 700; }
 .hx-site__rows { margin: 0; max-width: 40rem; }
 .hx-site__rows div { display: flex; justify-content: space-between; gap: var(--space-md); padding: 10px 0; border-bottom: 1px solid var(--site-line); }
 .hx-site__rows dd { margin: 0; }
 .hx-site__rows .total { font-weight: 700; }
-.hx-site__btn {
-  position: relative; display: inline-block; margin-top: var(--space-xl);
-  padding: 10px 20px; border-radius: var(--radius-md);
-  background: var(--site-button); color: var(--site-on-button); font-weight: 600;
-}
-/* Where Claude is about to act: a thin muted-blue outline. No label, no glow. */
+.hx-site__btn { position: relative; display: inline-block; margin-top: var(--space-xl); padding: 10px 20px; border-radius: var(--radius-md); background: var(--site-button); color: var(--site-on-button); font-weight: 600; }
+/* What the agent is about to touch: a thin muted-blue outline. */
 .hx-site__btn[data-claude-target] { outline: 1.5px solid var(--brand-on-site); outline-offset: 3px; }
-.hx-site__empty { max-width: 28rem; margin: 10vh auto 0; text-align: center; color: var(--site-muted); }
+.hx-site__empty { max-width: 28rem; margin: 12vh auto 0; text-align: center; color: var(--site-muted); }
 .hx-site__empty-title { margin: 0 0 var(--space-xs); color: var(--site-fg); font-weight: 600; }
 
-/* ---------- Control: who drives the browser ---------- */
+/* ---------- Halo's interruptions: dropped from the address bar, over the page ---------- */
 
-.hx-control { display: flex; align-items: center; gap: 12px; flex: none; }
-.hx-control__state { display: inline-flex; align-items: center; gap: var(--space-sm); font-weight: 600; white-space: nowrap; }
-.hx-control__dot { width: 10px; height: 10px; border-radius: 50%; background: var(--foreground); }
-.hx-control[data-control="claude"] .hx-control__dot { background: var(--foreground); }
-.hx-control[data-control="you"] .hx-control__dot { background: transparent; box-shadow: inset 0 0 0 2px var(--foreground); }
-.hx-control[data-control="approval"] .hx-control__dot { background: var(--foreground); }
-.hx-control__note { color: var(--muted-foreground); font-size: 13px; }
+.hx-overlays {
+  position: absolute; top: 10px; right: 12px; z-index: 5; width: min(380px, calc(100% - 24px));
+  display: flex; flex-direction: column; gap: var(--space-sm); pointer-events: none;
+}
+.hx-overlays > * { pointer-events: auto; }
+
+.hx-sheet, .hx-notice, .hx-activity {
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--toolbar); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+.hx-sheet__mark { width: 14px; height: 14px; flex: none; color: var(--brand); }
+
+/* The one description of a pending decision. Amount first, then how, then where. */
+.hx-sheet { padding: var(--space-md) 18px 14px; }
+.hx-sheet__from { display: flex; align-items: center; gap: var(--space-sm); margin: 0 0 12px; color: var(--muted-foreground); font-size: 13px; }
+.hx-sheet__title { display: grid; margin: 0 0 12px; font-size: 15px; font-weight: 500; color: var(--foreground); }
+.hx-sheet__title:focus { outline: none; }
+.hx-sheet__amount { margin-top: 2px; font-size: 34px; line-height: 1.1; font-weight: 700; letter-spacing: -0.02em; }
+.hx-sheet__facts { display: grid; gap: 6px; margin: 0 0 var(--space-md); }
+.hx-sheet__facts div { display: flex; justify-content: space-between; gap: var(--space-md); }
+.hx-sheet__facts dt { color: var(--muted-foreground); }
+.hx-sheet__facts dd { margin: 0; font-weight: 600; text-align: end; }
+.hx-sheet__facts dd.hx-sheet__dest { font-family: var(--font-mono); font-weight: 500; }
+.hx-sheet__actions { display: flex; justify-content: flex-end; gap: var(--space-sm); }
+.hx-sheet__request { display: block; margin-top: 12px; color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
+
+.hx-notice {
+  display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 14px;
+  box-shadow: inset 2px 0 0 var(--danger), 0 16px 40px rgba(0, 0, 0, 0.35); font-size: 13px;
+}
+.hx-notice__text { flex: 1; min-width: 0; color: var(--muted-foreground); }
+.hx-notice__text b { color: var(--foreground); font-weight: 600; }
+.hx-notice__text code { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+.hx-notice__more { flex: none; height: 28px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: transparent; font-size: 12px; font-weight: 600; cursor: pointer; }
+
+/* Activity on request: what mattered, with the full trace folded away. */
+.hx-activity { max-height: calc(100% - 20px); overflow: auto; padding: 14px var(--space-md); }
+.hx-activity:focus { outline: none; }
+.hx-activity__task { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-sm); margin: 0 0 10px; font-weight: 600; }
+.hx-demo { flex: none; padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); font: 500 11px/1.4 var(--font-body); color: var(--muted-foreground); }
+.hx-activity__empty { margin: 0 0 10px; color: var(--muted-foreground); }
+.hx-events, .hx-steps { display: grid; gap: 2px; margin: 0 0 10px; padding: 0; list-style: none; }
+.hx-ev { display: grid; gap: 1px; padding: 6px 10px; line-height: 1.45; }
+.hx-ev__actor { font-weight: 600; }
+.hx-ev__detail { font-size: 12px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.hx-ev[data-actor="halo"] .hx-ev__what { color: var(--muted-foreground); }
+.hx-ev[data-outcome="blocked"], .hx-ev[data-outcome="denied"] { box-shadow: inset 2px 0 0 var(--danger); }
+.hx-ev[data-outcome="blocked"] .hx-ev__what, .hx-ev[data-outcome="denied"] .hx-ev__what { color: var(--danger); }
+.hx-activity__toggle { padding: 4px 0; border: 0; background: none; color: var(--muted-foreground); font-size: 13px; font-weight: 500; cursor: pointer; }
+.hx-activity__toggle:hover { color: var(--foreground); }
+.hx-steps { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 13px; }
+.hx-steps li { display: grid; gap: 1px; padding: 3px 10px; }
+.hx-steps .hx-ev__actor { color: var(--foreground); }
+
+/* ---------- Narrow ---------- */
+
 @media (max-width: 40rem) {
-  .hx-control { flex: 1 0 100%; min-width: 0; gap: var(--space-sm); flex-wrap: wrap; }
-  .hx-control__state { white-space: normal; }
-}
-
-/* Claude's state per tab, beside the favicon. */
-.hx-act { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; }
-.hx-act .hx-ic { width: 14px; height: 14px; stroke-width: 2; }
-.hx-act i { width: 8px; height: 8px; border-radius: 50%; background: var(--foreground); }
-.hx-act[data-state="waiting"] { color: var(--warning); }
-.hx-act[data-state="paused"] { color: var(--muted-foreground); }
-.hx-act[data-state="done"] { color: var(--success); }
-
-/* ---------- Session panel ---------- */
-
-.hx-panel {
-  display: flex; flex-direction: column; gap: 12px; min-height: 0;
-  padding: var(--space-md); background: var(--sidebar);
-  border-inline-start: 1px solid var(--border);
-}
-.hx-demo { flex: none; padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); font: 500 12px/1.4 var(--font-body); color: var(--muted-foreground); }
-.hx-panel__task { display: flex; gap: var(--space-sm); align-items: baseline; justify-content: space-between; margin: 0; font-size: 14px; font-weight: 500; }
-.hx-panel__state { margin: 0; color: var(--muted-foreground); }
-.hx-typing { display: inline-flex; gap: 3px; margin-inline-start: 6px; vertical-align: middle; }
-.hx-typing i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
-
-/* Scroll shadows: a cue that more events sit past either edge. */
-.hx-timeline {
-  flex: 1; min-height: 120px; overflow-y: auto; margin: 0; padding: 0; list-style: none;
-  display: flex; flex-direction: column; gap: 2px;
-  background:
-    linear-gradient(var(--sidebar) 30%, transparent) top / 100% 24px no-repeat local,
-    linear-gradient(transparent, var(--sidebar) 70%) bottom / 100% 24px no-repeat local,
-    radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.5), transparent) top / 100% 10px no-repeat scroll,
-    radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.5), transparent) bottom / 100% 10px no-repeat scroll;
-}
-.hx-event { display: grid; gap: 1px; padding: 6px 10px; }
-.hx-event__text { line-height: 1.45; }
-.hx-event__actor { font-weight: 600; }
-.hx-event__detail { font-size: 12px; line-height: 1.4; color: var(--muted-foreground); overflow-wrap: anywhere; }
-.hx-event__outcome { color: var(--muted-foreground); }
-/* Halo's interventions read as system events: quieter text. Blocked keeps a 2px red bar and red word. */
-.hx-event[data-actor="halo"] .hx-event__text { color: var(--muted-foreground); }
-.hx-event[data-actor="halo"] .hx-event__actor { color: var(--foreground); }
-.hx-event[data-outcome="blocked"], .hx-event[data-outcome="denied"] { box-shadow: inset 2px 0 0 var(--danger); }
-.hx-event[data-outcome="blocked"] .hx-event__what, .hx-event[data-outcome="denied"] .hx-event__what { color: var(--danger); }
-.hx-timeline[data-dim] .hx-event__text, .hx-timeline[data-dim] .hx-event__actor { color: var(--muted-foreground); }
-
-/* The confirmation: a compact strip at the panel's bottom edge, only while a decision is open. */
-.hx-confirm {
-  flex: none; margin: 0 calc(-1 * var(--space-md)) calc(-1 * var(--space-md));
-  padding: 12px var(--space-md) var(--space-md); border-top: 1px solid var(--border-strong); background: var(--surface);
-}
-.hx-confirm__question { margin: 0; font-size: 15px; font-weight: 500; }
-.hx-confirm__question:focus { outline: none; }
-.hx-confirm__question b { font-weight: 700; }
-.hx-confirm__facts { margin: 2px 0 12px; color: var(--muted-foreground); font-size: 13px; }
-.hx-confirm__dest { font-family: var(--font-mono); color: var(--foreground); }
-.hx-confirm__actions { display: flex; gap: var(--space-sm); }
-
-/* Stacked: the whole body scrolls, so the timeline flows instead of nesting a second scroller. */
-@media (max-width: 45rem) {
-  .hx-panel { border-inline-start: 0; border-top: 1px solid var(--border); }
-  .hx-timeline { flex: none; overflow: visible; background: none; }
+  .hx-app { padding: 0; }
+  .hx-window { border-radius: 0; }
+  .hx-toolbar { gap: 4px; padding: 0 6px; }
+  .hx-nav .hx-icbtn { width: 32px; }
+  .hx-chip__state { display: none; }
+  .hx-chip__action { padding-inline-start: 0; border-inline-start: 0; }
+  .hx-site { padding: 24px 20px; }
+  .hx-overlays { top: 8px; right: 8px; width: calc(100% - 16px); }
 }
 
 /* ---------- Motion: opt-in, transform and opacity only ---------- */
 
 @media (prefers-reduced-motion: no-preference) {
-  .hx-event, .hx-confirm {
+  .hx-sheet, .hx-notice, .hx-activity {
     transition: opacity var(--enter) var(--ease-out), transform var(--enter) var(--ease-out);
-    @starting-style { opacity: 0; transform: translateY(6px); }
+    @starting-style { opacity: 0; transform: translateY(-6px); }
   }
-  .hx-control[data-control="claude"] .hx-control__dot, .hx-act[data-state="working"] i { animation: hx-breathe 1.6s ease-in-out infinite; }
-  .hx-typing i { animation: hx-breathe 1.2s ease-in-out infinite; }
-  .hx-typing i:nth-child(2) { animation-delay: 0.15s; }
-  .hx-typing i:nth-child(3) { animation-delay: 0.3s; }
+  .hx-act[data-state="working"] i { animation: hx-breathe 1.6s ease-in-out infinite; }
   .hx-skip { transition: transform 150ms var(--ease-out); }
 }
 @keyframes hx-breathe { 50% { opacity: 0.35; } }
-

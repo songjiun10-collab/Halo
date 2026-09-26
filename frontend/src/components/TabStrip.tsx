@@ -1,9 +1,8 @@
-import { useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { useRef, type KeyboardEvent } from 'react'
 import { pageTitle } from '../session/pages'
 import { AGENT, currentUrl } from '../session/session'
 import type { Tab, TabActivity } from '../session/types'
 import { Check, Close, Pause, Plus } from './Icons'
-import { Logo } from './Logo'
 
 interface Props {
   tabs: Tab[]
@@ -12,7 +11,6 @@ interface Props {
   onSelect: (id: string) => void
   onClose: (id: string) => void
   onNew: () => void
-  trailing: ReactNode
 }
 
 function initial(url: string) {
@@ -36,7 +34,7 @@ function Activity({ state }: { state: TabActivity }) {
   )
 }
 
-export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew, trailing }: Props) {
+export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew }: Props) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   // APG tabs: arrows move and select, Home/End jump, Delete closes.
@@ -55,7 +53,6 @@ export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew
 
   return (
     <div className="hx-strip">
-      <Logo />
       <div className="hx-tabs" role="tablist" aria-label="Tabs">
         {tabs.map((tab, i) => {
           const selected = tab.id === activeTabId
@@ -89,7 +86,6 @@ export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew
         })}
         <button className="hx-icbtn" aria-label="New tab" onClick={onNew}><Plus /></button>
       </div>
-      {trailing}
     </div>
   )
 }
