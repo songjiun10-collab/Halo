@@ -1,0 +1,65 @@
+/* HALO design tokens. Near-black neutrals; hue only as small dots, glyphs and short text:
+   ice = Halo (brand, focus), amber = needs approval, red = blocked, green = success. */
+:root {
+  color-scheme: dark;
+
+  /* Neutrals: near-black with a faint green cast, flat layers separated by 1px lines. */
+  --backdrop: #0c0e0d;         /* app background and tab bar */
+  --chrome: #0c0e0d;           /* tab bar (flat with the backdrop; the window is outlined) */
+  --toolbar: #151816;          /* toolbar; the selected tab joins it */
+  --sidebar: #151816;          /* Session panel */
+  --surface: #151816;          /* approval sheet */
+  --hover: #1d201e;
+  --well: #292d2a;             /* favicon and avatar tiles */
+  --foreground: #e7e8e4;       /* primary text: >=11.3:1 everywhere */
+  --muted-foreground: #858c86; /* secondary text: >=4.8:1 on backdrop, panels and hover */
+  --text-muted: #858c86;
+  --border: #292d2a;           /* 1px separators only */
+  --border-strong: #666d67;    /* control edges: >=3.1:1 on backdrop, panels and hover */
+
+  /* The primary action is neutral, not a hue. */
+  --primary-fill: #e7e8e4;
+  --on-primary: #0c0e0d;
+
+  /* Halo accent (ice): brand, focus. */
+  --brand: #a8c7fa;
+  --brand-on-site: #3b6fc4;    /* ice deepened for the light web page (4.7:1) */
+  --on-brand: #ffffff;
+  --ring: var(--brand);
+
+  /* Status, desaturated: small dots, glyphs and short text only. */
+  --warning: #b99752;          /* approval needed */
+  --danger: #c86a64;           /* blocked: a 2px bar plus text, never a filled surface */
+  --success: #72a982;
+
+  /* The web page inside the viewport keeps the site's own light look. */
+  --site-bg: #f8fafc;
+  --site-fg: #0f172a;
+  --site-muted: #475569;
+  --site-line: #e2e8f0;
+  --site-button: #1e293b;
+  --site-on-button: #ffffff;
+
+  /* Sans everywhere; mono only for URLs and log detail. */
+  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --shadow-window: 0 0 0 1px #292d2a;
+  --shadow-raised: 0 -12px 24px rgba(0, 0, 0, 0.35);
+
+  /* Motion (emil-design-eng): strong ease-out, UI under 300ms. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --press: 160ms;
+  --enter: 220ms;
+  --exit: 150ms;   /* exits are quicker than entrances; matches EXIT_MS in usePresence */
+}
