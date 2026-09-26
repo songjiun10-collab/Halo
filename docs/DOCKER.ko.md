@@ -65,6 +65,48 @@ DB만 복사하거나 sidecar를 삭제하지 않는다. 전체 상태 복사도
 이 Compose 구성은 SHA-256 게이트웨이 개발용이다. 기존 B1 샌드박스의 metadata
 노출이나 B2 외부 감사·복구 문제를 해결했다는 증거가 아니다.
 
+## 개발자 도구: Claude Code CLI 내장 (2026-09-26, 미검증)
+
+게이트웨이 이미지의 런타임(`CMD`, `halo/dev_server.py`)은 Claude Code를 전혀
+쓰지 않는다. 다만 이 컨테이너 안에서 사람이나 에이전트가 직접 작업할 때
+호스트와 동일한 안전 후크·사고 스킬을 쓸 수 있도록, 이미지 빌드 단계에
+다음을 추가로 설치한다.
+
+- Node.js/npm과 `npm install -g @anthropic-ai/claude-code`.
+- `songjiun10-collab/hook` 마켓플레이스의 guard-hook 플러그인
+  (`claude plugin marketplace add` 후 `claude plugin install`)과, 그 MCP
+  서버가 요구하는 `mcp==2.0.0`, `pyotp==2.10.0`.
+- `songjiun10-collab/Senior-thinking-skills`의 스킬 디렉터리 전체를
+  `halo` 사용자 홈(`/home/halo/.claude/skills`)에 clone.
+
+이를 위해 `halo` 사용자를 `--no-create-home`에서 `--create-home`으로
+바꿔 실제 `$HOME`을 만들고 `HOME=/home/halo` 환경 변수를 추가했으며,
+플러그인 설치·clone 단계는 `USER halo:halo`로 전환한 뒤 실행해 홈 디렉터리
+소유권과 실행 사용자가 일치하도록 했다. 이 계층만 빌드 중 npm
+레지스트리·GitHub에 접근한다 — 이 저장소의 다른 모든 빌드 단계가 지키는
+"네트워크 없는 재현 가능한 빌드" 원칙에 대한 의도적이고 범위가 한정된
+예외다. `docker compose up --build`는 Compose의 런타임 네트워크 설정
+(`networks.gateway.internal: true`)과 무관하게 Docker의 일반 빌드
+네트워크를 쓰므로 이 단계 자체가 막히지는 않을 것으로 예상하지만, 이 역시
+로컬에서 실행해보지 못했다.
+
+**미검증 — 실제 빌드 결과가 다를 수 있다.** 이 환경에는 Docker 데몬이 없어
+`docker build`를 한 번도 실행해보지 못했다. 특히 다음은 추정이며 확인이
+필요하다.
+
+- `claude plugin marketplace add`/`claude plugin install`의 정확한
+  비대화형 동작. 현재는 확인 프롬프트를 방어적으로 우회하는 표준 기법인
+  `yes | claude ...`를 썼을 뿐, 이 CLI가 실제로 그런 프롬프트를 내는지,
+  또는 전용 비대화형 플래그를 요구하는지 확인하지 못했다.
+- Debian bookworm 기본 저장소의 `nodejs`/`npm` 패키지 버전이 Claude Code
+  CLI가 요구하는 Node.js 18+ 조건을 만족하는지.
+- `git clone`이 `/home/halo/.claude/skills`에 스킬 디렉터리를 예상한 형태로
+  배치하는지(하위 각 디렉터리가 `SKILL.md`를 담은 구조라고 가정했다).
+
+`docker compose up --build`를 직접 실행해보고, 위 세 가지 중 어느 하나라도
+실패하면 정확한 오류 메시지를 알려주기 바란다 — 그에 맞춰 Dockerfile을
+수정한다.
+
 ## 검증 상태
 
 2026-09-25 로컬에서는 HTTP 승인→실행→재생 거부, 파일 키 입력 검증,
@@ -72,3 +114,9 @@ private DB·sidecar, 기존 Gateway 회귀 24개를 확인했다.
 Docker 실행 파일이 설치되어 있지 않아 이미지 빌드·Compose 실행은 미검증이다.
 추가한 GitHub Actions `Docker development gateway`는 Linux에서 빌드·기동·
 권한·스모크·재시작을 검사한다. 해당 CI 결과도 아직 확인하지 않았다.
+
+2026-09-26 Claude Code CLI·플러그인·스킬 내장 추가분은 위 "개발자 도구"
+절의 미검증 항목 그대로다. 이미지 빌드 시간·크기가 늘어나며, CI
+워크플로도 이제 빌드 단계에서 npm·GitHub 네트워크 접근이 필요해진다는
+점을 반영해 CI가 아직 이 변경 이후로 재실행되지 않았다면 결과를 다시
+확인해야 한다.

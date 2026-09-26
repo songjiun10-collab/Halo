@@ -79,6 +79,18 @@ SYS_fstatfs64 SYS_pathconf SYS_fpathconf))`를 추가해 경로·파일서술자
 호스트 메타데이터 기밀성을 주장하지 않는다. Rust 17개 + Python 418개
 통과.
 
+2026-09-26 후속 3: [Docker 게이트웨이 이미지에 Claude Code CLI·guard-hook·
+사고 스킬 내장](2026-09-26-docker-embed-claude-cli-hook-skills.ko.md).
+버그 수정이 아니라 사용자가 명시적으로 요청한 기능 추가 — 게이트웨이
+컨테이너 안에서 작업할 때 호스트와 동일한 안전 후크·스킬을 쓸 수 있도록
+Dockerfile 빌드 단계에 Node.js·Claude Code CLI·`songjiun10-collab/hook`
+플러그인·`songjiun10-collab/Senior-thinking-skills`를 추가했다. `halo`
+사용자를 `--no-create-home`에서 `--create-home`으로 바꿔 `$HOME`이 없어
+플러그인 설정이 깨지는 문제를 먼저 막았다. **미검증**: 로컬에 Docker
+데몬이 없어 실제 빌드로 확인하지 못했다 — `claude plugin` CLI의 정확한
+비대화형 인자 계약이 특히 불확실하다. 게이트웨이 런타임 자체는 건드리지
+않아 Python 418개는 이 변경과 무관하다.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
