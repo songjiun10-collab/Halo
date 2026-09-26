@@ -60,7 +60,13 @@ The page is the product. Halo stays quiet while the agent works, and appears onl
   - Tabs follow the ARIA tabs pattern: ← → Home End move between tabs, and Delete closes one.
   - A skip link jumps to the page.
   - A polite live region announces who is browsing and when Halo pauses for an approval.
-- **Motion:** only when the user hasn't asked for reduced motion; animates only transform and opacity. Sheets drop in over 220ms; buttons press to `scale(0.96)`.
+- **Motion:** transform and opacity only, with a strong ease-out: 220ms in, 150ms out (exits are quicker).
+  - The approval sheet and Activity grow from their anchor at the top right of the address bar (`scale(0.97)`, 6px). The block notice and toast drop in 4px.
+  - All overlays animate out instead of vanishing: `usePresence` keeps them mounted for 150ms, inert.
+  - Show all tabs settles in, and its cards arrive 30ms apart (capped at 8).
+  - The page edge fades on and off. Halo folding in the toolbar is a near-imperceptible 150ms fade and `scale(0.96)`, because it happens often.
+  - Buttons press to `scale(0.96)`.
+  - With reduced motion, only the opacity fades remain; movement, scale and stagger are dropped.
 - **Layout:** below 40rem, Share and New window are hidden, the chip shows only **Take over**, sheets span the width, and 320px has no horizontal scroll.
 
 ## Demo data

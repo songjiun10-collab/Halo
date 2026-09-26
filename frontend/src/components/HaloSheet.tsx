@@ -5,6 +5,7 @@ import { HaloMark } from './Logo'
 
 interface Props {
   approval: Approval
+  leaving?: boolean
   onApprove: () => void
   onDeny: () => void
 }
@@ -13,12 +14,12 @@ interface Props {
  * Halo's interruption: a permission sheet dropped from the address bar, the one
  * place the pending decision is described. The amount leads; then how, then where.
  */
-export function HaloSheet({ approval, onApprove, onDeny }: Props) {
+export function HaloSheet({ approval, leaving, onApprove, onDeny }: Props) {
   const ref = useRef<HTMLHeadingElement>(null)
   // Focus the question, never the approve button: a stray Enter must not approve.
   useEffect(() => { ref.current?.focus() }, [approval])
   return (
-    <section className="hx-sheet" role="alertdialog" aria-labelledby="hx-sheet-title" aria-describedby="hx-sheet-facts">
+    <section className="hx-sheet" data-leaving={leaving || undefined} inert={leaving} role="alertdialog" aria-labelledby="hx-sheet-title" aria-describedby="hx-sheet-facts">
       <p className="hx-sheet__from"><HaloMark className="hx-sheet__mark" />Halo paused {AGENT} for your approval</p>
       <h2 className="hx-sheet__title" id="hx-sheet-title" tabIndex={-1} ref={ref}>
         {approval.action}

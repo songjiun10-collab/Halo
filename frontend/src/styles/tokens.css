@@ -61,4 +61,5 @@
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --press: 160ms;
   --enter: 220ms;
+  --exit: 150ms;   /* exits are quicker than entrances; matches EXIT_MS in usePresence */
 }

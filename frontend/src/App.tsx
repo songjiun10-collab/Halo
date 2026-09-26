@@ -8,6 +8,7 @@ import { TabOverview } from './components/TabOverview'
 import { TabStrip } from './components/TabStrip'
 import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
+import { usePresence } from './hooks/usePresence'
 import { AGENT, claudeHolds, currentUrl, demoSession, reducer } from './session/session'
 import { pageTitle } from './session/pages'
 import type { SessionState, TimelineEvent } from './session/types'
@@ -55,6 +56,7 @@ export default function App() {
 
   const notableCount = s.timeline.filter((e) => e.notable).length
   const openActivity = useCallback(() => { setActivityOpen(true); setSeen(notableCount); if (last) setDismissedNotice(last.id) }, [notableCount, last])
+  const closeOverview = useCallback(() => setOverviewOpen(false), [])
   const closeActivity = useCallback(() => { setActivityOpen(false); setSeen(notableCount) }, [notableCount])
 
   useEffect(() => {
@@ -71,10 +73,18 @@ export default function App() {
   const needsYou = s.control === 'approval' || (s.control === 'you' && !s.finished)
   const folded = !pinned && !activityOpen && !notice && unseen === 0 && !needsYou
 
+
   const tab = s.tabs.find((t) => t.id === s.activeTabId) ?? s.tabs[0]
   const pendingHere = s.control === 'approval' && s.pending && s.tabKeys[s.pending.tab] === tab.id
   const driven = s.control !== 'you' && (tab.claude === 'working' || tab.claude === 'waiting')
   const approval = s.control === 'approval' ? s.pending?.approval : undefined
+
+  // Overlays stay mounted briefly after they're dismissed so they can animate out.
+  const sheet = usePresence(approval ?? null)
+  const noticeShown = usePresence(!approval && notice && !activityOpen ? notice : null)
+  const activityShown = usePresence(activityOpen ? true : null)
+  const toastShown = usePresence(toast)
+  const overviewShown = usePresence(overviewOpen ? true : null)
 
   return (
     <div className="hx-app">
@@ -121,20 +131,22 @@ export default function App() {
         </header>
         <div className="hx-body" inert={overviewOpen}>
           <Viewport tab={tab} target={pendingHere ? s.pending?.target : undefined} driven={driven && !folded} />
+          <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
           <div className="hx-overlays">
-            {approval && <HaloSheet approval={approval} onApprove={() => dispatch({ type: 'approve' })} onDeny={() => dispatch({ type: 'deny' })} />}
-            {!approval && notice && !activityOpen && <Notice event={notice} onOpen={openActivity} />}
-            {activityOpen && <Activity session={s} onClose={closeActivity} />}
-            {toast && <p className="hx-toast" role="status">{toast}</p>}
+            {sheet.item && <HaloSheet approval={sheet.item} leaving={sheet.leaving} onApprove={() => dispatch({ type: 'approve' })} onDeny={() => dispatch({ type: 'deny' })} />}
+            {noticeShown.item && <Notice event={noticeShown.item} leaving={noticeShown.leaving} onOpen={openActivity} />}
+            {activityShown.item && <Activity session={s} leaving={activityShown.leaving} onClose={closeActivity} />}
+            {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}
           </div>
 
         </div>
-        {overviewOpen && (
+        {overviewShown.item && (
           <TabOverview
+            leaving={overviewShown.leaving}
             tabs={s.tabs}
             activeTabId={tab.id}
             onPick={(id) => { dispatch({ type: 'selectTab', id }); setOverviewOpen(false) }}
-            onClose={() => setOverviewOpen(false)}
+            onClose={closeOverview}
           />
         )}
       </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import { pageTitle } from '../session/pages'
 import { AGENT, currentUrl, host } from '../session/session'
 import type { Tab, TabActivity } from '../session/types'
@@ -12,18 +12,25 @@ const activityText: Record<TabActivity, string> = {
 
 interface Props {
   tabs: Tab[]
+  leaving?: boolean
   activeTabId: string
   onPick: (id: string) => void
   onClose: () => void
 }
 
 /** Every open tab as a card, like Safari's tab overview. Pick one to switch to it. */
-export function TabOverview({ tabs, activeTabId, onPick, onClose }: Props) {
+export function TabOverview({ tabs, leaving, activeTabId, onPick, onClose }: Props) {
   const firstRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => { firstRef.current?.focus() }, [])
-  const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+  // Runs on open and again if it's reopened while still animating out.
+  useEffect(() => {
+    if (leaving) return
+    firstRef.current?.focus()
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [leaving, onClose])
   return (
-    <div className="hx-overview" role="dialog" aria-modal="true" aria-label="All tabs" onKeyDown={onKeyDown}>
+    <div className="hx-overview" data-leaving={leaving || undefined} inert={leaving} role="dialog" aria-modal="true" aria-label="All tabs">
       <div className="hx-overview__bar">
         <h2 className="hx-overview__title">{tabs.length} tabs</h2>
         <button className="hx-btn hx-btn--secondary hx-btn--compact" onClick={onClose}>Done</button>
@@ -32,7 +39,7 @@ export function TabOverview({ tabs, activeTabId, onPick, onClose }: Props) {
         {tabs.map((tab, i) => {
           const url = currentUrl(tab)
           return (
-            <li key={tab.id}>
+            <li key={tab.id} style={{ '--i': Math.min(i, 8) } as CSSProperties}>
               <button
                 ref={tab.id === activeTabId || (i === 0 && !tabs.some((t) => t.id === activeTabId)) ? firstRef : undefined}
                 className="hx-card"
