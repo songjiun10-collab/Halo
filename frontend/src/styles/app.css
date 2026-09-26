@@ -35,7 +35,7 @@ code { font-family: var(--font-mono); }
 
 .hx-btn, .hx-icbtn, .hx-chip, .hx-halo {
   cursor: pointer;
-  transition: transform var(--press) var(--ease-out), background-color 150ms ease, color 150ms ease;
+  transition: transform var(--press) var(--ease-out), background-color 150ms ease, color 150ms ease, opacity 150ms ease;
 }
 .hx-btn:active:not(:disabled), .hx-icbtn:active:not(:disabled), .hx-chip:active, .hx-halo:active { transform: scale(0.96); }
 
@@ -46,6 +46,7 @@ code { font-family: var(--font-mono); }
 }
 .hx-btn--primary { background: var(--primary-fill); color: var(--on-primary); }
 .hx-btn--secondary { background: transparent; color: var(--foreground); border-color: var(--border-strong); }
+.hx-btn--compact { min-height: 30px; padding: 0 12px; font-size: 13px; }
 
 .hx-icbtn {
   display: inline-grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0;
@@ -143,6 +144,14 @@ code { font-family: var(--font-mono); }
   background: var(--foreground); color: var(--backdrop); font: 700 10px/16px var(--font-body); text-align: center;
 }
 
+/* Folded: when nothing needs a person, Halo's chip and ring take no space and show nothing.
+   They stay in the tab order; hovering the toolbar or focusing into it unfolds them,
+   so Take over is always one step away. */
+.hx-toolbar[data-folded]:not(:hover):not(:focus-within) :is(.hx-chip, .hx-halo) {
+  width: 0; min-width: 0; padding: 0; margin: 0; opacity: 0; overflow: hidden;
+}
+.hx-toolbar[data-folded]:not(:hover):not(:focus-within) .hx-omni { padding-inline-end: 14px; }
+
 /* ---------- The page ---------- */
 
 .hx-body { position: relative; flex: 1; min-height: 0; display: flex; }
@@ -222,6 +231,38 @@ code { font-family: var(--font-mono); }
 .hx-steps li { display: grid; gap: 1px; padding: 3px 10px; }
 .hx-steps .hx-ev__actor { color: var(--foreground); }
 
+/* A short confirmation, e.g. "Link copied". */
+.hx-toast {
+  align-self: flex-end; margin: 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--toolbar); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18); font-size: 12px;
+}
+
+/* ---------- All tabs ---------- */
+
+.hx-overview {
+  position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column; gap: var(--space-md);
+  padding: var(--space-md) 20px 24px; overflow: auto; background: var(--backdrop);
+}
+.hx-overview__bar { display: flex; align-items: center; justify-content: space-between; }
+.hx-overview__title { margin: 0; font-size: 15px; font-weight: 600; }
+.hx-overview__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-md); margin: 0; padding: 0; list-style: none; }
+.hx-card {
+  display: grid; gap: 4px; width: 100%; padding: 0 0 10px; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--toolbar); text-align: start; cursor: pointer; overflow: hidden;
+  transition: transform var(--press) var(--ease-out), border-color 150ms ease;
+}
+.hx-card[data-selected] { border-color: var(--brand); }
+.hx-card:active { transform: scale(0.98); }
+@media (hover: hover) and (pointer: fine) { .hx-card:hover { border-color: var(--border-strong); } .hx-card[data-selected]:hover { border-color: var(--brand); } }
+.hx-card__thumb {
+  display: flex; align-items: flex-start; height: 120px; margin-bottom: 6px; padding: 14px;
+  background: var(--site-bg); color: var(--site-fg); font-weight: 700; font-size: 14px;
+}
+.hx-card__title { padding: 0 12px; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hx-card__meta { display: flex; justify-content: space-between; gap: var(--space-sm); padding: 0 12px; color: var(--muted-foreground); font-size: 12px; }
+.hx-card__meta code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hx-card__agent { flex: none; }
+
 /* ---------- Narrow ---------- */
 
 @media (max-width: 40rem) {
@@ -229,6 +270,7 @@ code { font-family: var(--font-mono); }
   .hx-window { border-radius: 0; }
   .hx-toolbar { gap: 4px; padding: 0 6px; }
   .hx-nav .hx-icbtn { width: 32px; }
+  .hx-nav .hx-icbtn[aria-label="Share"], .hx-nav .hx-icbtn[aria-label="New window"] { display: none; }
   .hx-chip__state { display: none; }
   .hx-chip__action { padding-inline-start: 0; border-inline-start: 0; }
   .hx-site { padding: 24px 20px; }

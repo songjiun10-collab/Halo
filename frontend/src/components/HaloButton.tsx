@@ -10,7 +10,7 @@ interface Props {
 export function HaloButton({ unseen, open, onToggle }: Props) {
   const label = unseen ? `Halo events, ${unseen} new` : 'Halo events'
   return (
-    <button className="hx-halo" aria-label={label} aria-expanded={open} aria-controls="hx-activity" onClick={onToggle}>
+    <button className="hx-halo" aria-label={label} aria-expanded={open} aria-controls="hx-activity" aria-keyshortcuts="Control+Period Meta+Period" onClick={onToggle}>
       <HaloMark className="hx-halo__mark" />
       <span className="hx-halo__tip" aria-hidden="true">{unseen ? `Halo events · ${unseen} new` : 'Halo events'}</span>
       {unseen > 0 && <span className="hx-halo__badge num" aria-hidden="true">{unseen}</span>}

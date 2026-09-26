@@ -18,13 +18,20 @@ npm run lint
 | `src/styles/tokens.css` | Design tokens (colours, type, spacing, radii, shadows). Mirrors the design system's `tokens.json`. |
 | `src/styles/app.css` | Component styles, ported from the design system's `bundle.css`. |
 | `src/session/` | Session model and reducer: who has control, tabs with per-tab history and Claude's per-tab state, the shared timeline, the pending approval; stand-in page titles. |
-| `src/components/` | `TabStrip`, `Toolbar`, `ControllerChip`, `HaloButton`, `Viewport` (halo ring, target outline), `HaloSheet`, `Notice`, `Activity`, `Logo`, `Icons`. |
+| `src/components/` | `TabStrip`, `Toolbar`, `TabOverview`, `ControllerChip`, `HaloButton`, `Viewport` (halo ring, target outline), `HaloSheet`, `Notice`, `Activity`, `Logo`, `Icons`. |
 
 ## Interface rules
 
 The page is the product. Halo stays quiet while the agent works, and appears only when something needs a person: something was blocked, an approval is needed, or control changes hands. These rules come from the repository's `better-*` and `emil-design-eng` skills.
 
-- **A browser first.** There is no permanent side panel: the page takes the full width. Tabs and the address field are full browser size.
+- **A browser first.** There is no permanent side panel: the page takes the full width. Tabs and the address field are full browser size. The toolbar has Back, Forward, the address field, **Share** (the system share sheet, or copies the link where sharing isn't available), **Show all tabs** (a Safari-style grid of tab cards that shows the agent's state per tab; Esc closes it) and **New window**.
+- **Folded by default.** When nothing needs a person, Halo shows nothing: no chip, no Halo button, no page edge. The agent's tab keeps only its small mark beside the favicon. Halo unfolds for:
+  - a block,
+  - an approval,
+  - control you took over (so **Resume** is visible),
+  - unseen events.
+
+  Hovering the toolbar or moving keyboard focus into it also unfolds it, so **Take over** is always one step away. ⌘/Ctrl + . keeps it unfolded.
 - **Who is driving lives in the address field.** A chip at the end of the address field says *Agent is browsing*, *Agent is waiting for you* or *Resume agent*. One click hands control over (**Take over**). The chrome says "Agent"; the agent's name ("Claude") appears only in details, so the UI works for any agent.
 - **The halo edge.** While the agent drives a tab, the page has a faint 1px ice edge. When you drive, there is none. It's a quiet cue; the chip in the address field says it in words.
 - **One place per state.** An approval is a permission sheet dropped from the address bar. It's the only place the pending decision is described: the action, the amount (large), the card, the destination, then **Deny** / **Approve $84.20**, and the exact request in small mono text. Focus goes to the question, not to Approve.
@@ -54,7 +61,7 @@ The page is the product. Halo stays quiet while the agent works, and appears onl
   - A skip link jumps to the page.
   - A polite live region announces who is browsing and when Halo pauses for an approval.
 - **Motion:** only when the user hasn't asked for reduced motion; animates only transform and opacity. Sheets drop in over 220ms; buttons press to `scale(0.96)`.
-- **Layout:** below 40rem the chip shows only **Take over**, sheets span the width, and 320px has no horizontal scroll.
+- **Layout:** below 40rem, Share and New window are hidden, the chip shows only **Take over**, sheets span the width, and 320px has no horizontal scroll.
 
 ## Demo data
 
