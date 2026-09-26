@@ -128,7 +128,7 @@ fn os_error(error: io::Error) -> Value {
 }
 
 fn payload(case: &str, outside: &Path, work: &Path, port: u16, fd: i32) -> Value {
-        if extra_probes::CASES.contains(&case) {
+    if extra_probes::CASES.contains(&case) {
         return extra_probes::run(case, outside, work, fd).unwrap_or_else(os_error);
     }
     let result: io::Result<Value> = (|| {
@@ -227,17 +227,21 @@ fn payload(case: &str, outside: &Path, work: &Path, port: u16, fd: i32) -> Value
 }
 
 // Runtime read exceptions remain; this is not complete host isolation.
-fn profile(work: &Path, exe: &Path) -> String {
+fn profile(work: &Path, exe: &Path, outside: &Path) -> String {
     let work = json!(work.to_string_lossy()).to_string();
     let exe = json!(exe.to_string_lossy()).to_string();
+    let outside = json!(outside.to_string_lossy()).to_string();
     format!(
         r#"(version 1)
 (deny default)
 (allow process-exec (literal {exe}))
 (allow sysctl-read (sysctl-name "hw.pagesize") (sysctl-name "hw.pagesize_compat"))
-(allow file-read* (literal {exe}) (subpath {work})
+(allow file-read-data (literal {exe}) (subpath {work})
     (subpath "/usr/lib")
     (literal "/") (literal "/dev/null"))
+(allow file-read-metadata (literal {exe}) (subpath {work})
+    (subpath "/usr/lib") (literal "/dev/null"))
+(deny file-read-metadata (subpath {outside}))
 (allow file-write* (subpath {work}) (literal "/dev/null"))
 (deny process-info*)
 "#
@@ -259,20 +263,52 @@ fn classify(case: &str, result: &Value, secret: &str, target: &Path) -> &'static
         };
     }
     if extra_probes::CASES.contains(&case) {
-        let expected = if case.starts_with("read_") || case.starts_with("exec_") {
-            secret
-        } else {
-            "probe-succeeded"
-        };
-        return if result["status"] == "ok" && result["value"] == expected {
-            "escaped"
-        } else if result["status"] == "os_error"
+        if result["status"] == "os_error"
             && (result["errno"] == libc::EPERM
                 || result["errno"] == libc::EACCES
                 || (matches!(case, "read_dev_fd" | "read_dup_fd" | "metadata_fstat_fd")
                     && result["errno"] == libc::EBADF))
         {
-            "blocked"
+            return "blocked";
+        };
+        if result["status"] != "ok" {
+            return "error";
+        }
+        if case.starts_with("read_") || case.starts_with("exec_") || case == "metadata_chdir" {
+            return if result["value"] == secret {
+                "escaped"
+            } else {
+                "error"
+            };
+        }
+        // These operations expose no protected canary: cwd is already the
+        // supplied work path, PID is the caller's own pid, and F_OK on '/'
+        // reveals only the public existence of the filesystem root.
+        if case == "metadata_getcwd"
+            || case == "metadata_getpid"
+            || case == "metadata_access_parent"
+        {
+            return "informational";
+        }
+        // statfs/statvfs/pathconf data concern the outside fixture and are
+        // independently surfaced by macOS here despite denied metadata reads.
+        if matches!(
+            case,
+            "metadata_statvfs" | "metadata_pathconf" | "metadata_statfs"
+        ) {
+            return if result["value"].is_number() || result["value"].is_object() {
+                "escaped"
+            } else {
+                "error"
+            };
+        }
+        if matches!(case, "metadata_fstatat_root" | "metadata_lstat_root")
+            && result["value"] == "probe-succeeded"
+        {
+            return "escaped";
+        }
+        return if result["value"] == "probe-succeeded" {
+            "escaped"
         } else {
             "error"
         };
@@ -480,12 +516,27 @@ fn report_passes(report: &Value) -> bool {
         ) else {
             return false;
         };
-        if escaped.checked_add(blocked) != Some(total) {
+        let informational = s["attacks_informational"].as_u64().unwrap_or(0);
+        if escaped
+            .checked_add(blocked)
+            .and_then(|n| n.checked_add(informational))
+            != Some(total)
+        {
             return false;
         }
     }
-    summaries[MODES[0]]["attacks_escaped"] == summaries[MODES[0]]["attack_total"]
-        && summaries[MODES[2]]["attacks_blocked"] == summaries[MODES[2]]["attack_total"]
+    summaries[MODES[0]]["attacks_escaped"].as_u64().unwrap_or(0)
+        + summaries[MODES[0]]["attacks_informational"]
+            .as_u64()
+            .unwrap_or(0)
+        == summaries[MODES[0]]["attack_total"]
+        && summaries[MODES[0]]["attacks_blocked"] == 0
+        && summaries[MODES[2]]["attacks_escaped"] == 0
+        && summaries[MODES[2]]["attacks_blocked"].as_u64().unwrap_or(0)
+            + summaries[MODES[2]]["attacks_informational"]
+                .as_u64()
+                .unwrap_or(0)
+            == summaries[MODES[2]]["attack_total"]
 }
 
 fn benchmark(repeats: usize) -> Result<Value, Box<dyn std::error::Error>> {
@@ -530,7 +581,7 @@ fn benchmark(repeats: usize) -> Result<Value, Box<dyn std::error::Error>> {
     // SAFETY: fcntl returned a new owned descriptor.
     let inherited_handle = unsafe { File::from_raw_fd(raw) };
     let exe = env::current_exe()?.canonicalize()?;
-    let profile_text = profile(&work, &exe);
+    let profile_text = profile(&work, &exe, &outside);
     let mut rows = Vec::new();
     for mode in MODES {
         let inherited = mode != "sandbox_clean_launch";
@@ -614,7 +665,7 @@ fn benchmark(repeats: usize) -> Result<Value, Box<dyn std::error::Error>> {
     for mode in MODES {
         let subset: Vec<_> = rows.iter().filter(|r| r["mode"] == mode).collect();
         let count = |outcome: &str| subset.iter().filter(|r| r["outcome"] == outcome).count();
-        summary.insert(mode.into(), json!({"benign_allowed":count("allowed"),"benign_total":BENIGN.len()*repeats,"attacks_escaped":count("escaped"),"attacks_blocked":count("blocked"),"attack_total":ATTACKS.len()*repeats,"errors":count("error")}));
+        summary.insert(mode.into(), json!({"benign_allowed":count("allowed"),"benign_total":BENIGN.len()*repeats,"attacks_escaped":count("escaped"),"attacks_blocked":count("blocked"),"attacks_informational":count("informational"),"attack_total":ATTACKS.len()*repeats,"errors":count("error")}));
     }
     drop(inherited_handle);
     drop(handle);
@@ -916,6 +967,80 @@ mod tests {
         report["summary"][MODES[2]]["errors"] = json!(0);
         report["summary"][MODES[2]]["attacks_blocked"] = json!(8);
         assert!(!report_passes(&report));
+    }
+
+    #[test]
+    fn profile_keeps_loader_data_but_not_root_metadata_access() {
+        let text = profile(
+            Path::new("/tmp/work"),
+            Path::new("/tmp/runner"),
+            Path::new("/tmp/outside"),
+        );
+        assert!(text.contains("(allow file-read-data"));
+        assert!(text.contains("(literal \"/\")"));
+        assert!(text.contains("(allow file-read-metadata"));
+        assert!(!text.contains("(allow file-read*"));
+        assert!(!text
+            .lines()
+            .any(|line| line.contains("file-read-metadata") && line.contains("(literal \"/\")")));
+        assert!(text.contains("(deny file-read-metadata (subpath \"/tmp/outside\"))"));
+    }
+
+    #[test]
+    fn classifier_distinguishes_inert_metadata_from_exposed_data() {
+        for (case, value) in [
+            ("metadata_getpid", json!(123)),
+            ("metadata_getcwd", json!("/tmp/halo/work")),
+            ("metadata_access_parent", json!("root-exists")),
+        ] {
+            assert_eq!(
+                classify(
+                    case,
+                    &json!({"status":"ok","value":value}),
+                    "secret",
+                    Path::new("unused")
+                ),
+                "informational"
+            );
+        }
+        for case in ["metadata_statfs", "metadata_statvfs"] {
+            assert_eq!(
+                classify(
+                    case,
+                    &json!({"status":"ok","value":{"blocks":42}}),
+                    "secret",
+                    Path::new("unused")
+                ),
+                "escaped"
+            );
+        }
+        assert_eq!(
+            classify(
+                "metadata_pathconf",
+                &json!({"status":"ok","value":255}),
+                "secret",
+                Path::new("unused")
+            ),
+            "escaped"
+        );
+        assert_eq!(
+            classify(
+                "metadata_chdir",
+                &json!({"status":"os_error","errno":libc::EACCES}),
+                "secret",
+                Path::new("unused")
+            ),
+            "blocked"
+        );
+        assert_eq!(
+            classify(
+                "metadata_fstatat_root",
+                &json!({"status":"os_error","errno":libc::EPERM}),
+                "secret",
+                Path::new("unused")
+            ),
+            "blocked"
+        );
     }
 
     #[test]

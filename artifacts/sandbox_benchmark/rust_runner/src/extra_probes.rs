@@ -103,7 +103,6 @@ fn cpath(path: &Path) -> io::Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other)
 }
 
-
 fn check(rc: libc::c_int) -> io::Result<()> {
     if rc < 0 {
         Err(io::Error::last_os_error())
@@ -313,10 +312,20 @@ pub fn run(case: &str, outside: &Path, work: &Path, fd: i32) -> io::Result<Value
         }
         "metadata_chdir" => {
             std::env::set_current_dir(&fixture)?;
+            // Prove whether changing cwd grants useful access, rather than
+            // treating chdir success alone as a data escape.
+            let contents = fs::read_to_string("../canary.txt")?;
+            return Ok(json!({"status":"ok", "value":contents}));
         }
         "metadata_statvfs" => {
-            let mut stat = std::mem::MaybeUninit::uninit();
+            let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
             check(unsafe { libc::statvfs(ctarget.as_ptr(), stat.as_mut_ptr()) })?;
+            let stat = unsafe { stat.assume_init() };
+            return Ok(json!({"status":"ok", "value": {
+                "block_size":stat.f_bsize, "blocks":stat.f_blocks,
+                "blocks_free":stat.f_bfree, "blocks_available":stat.f_bavail,
+                "files":stat.f_files, "files_free":stat.f_ffree
+            }}));
         }
         "metadata_xattr_list" => {
             let rc = unsafe { libc::listxattr(ctarget.as_ptr(), std::ptr::null_mut(), 0, 0) };
@@ -329,9 +338,7 @@ pub fn run(case: &str, outside: &Path, work: &Path, fd: i32) -> io::Result<Value
             check(unsafe { libc::fstat(fd, stat.as_mut_ptr()) })?;
         }
         "metadata_faccessat" => {
-            check(unsafe {
-                libc::faccessat(libc::AT_FDCWD, ctarget.as_ptr(), libc::R_OK, 0)
-            })?;
+            check(unsafe { libc::faccessat(libc::AT_FDCWD, ctarget.as_ptr(), libc::R_OK, 0) })?;
         }
         "metadata_fstatat" => {
             let mut stat = std::mem::MaybeUninit::uninit();
@@ -344,15 +351,20 @@ pub fn run(case: &str, outside: &Path, work: &Path, fd: i32) -> io::Result<Value
             if value < 0 {
                 return Err(io::Error::last_os_error());
             }
+            return Ok(json!({"status":"ok", "value":value}));
         }
         "metadata_getcwd" => {
             let mut buffer = [0i8; 4096];
             if unsafe { libc::getcwd(buffer.as_mut_ptr(), buffer.len()) }.is_null() {
                 return Err(io::Error::last_os_error());
             }
+            let path = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
+            return Ok(json!({"status":"ok", "value":path}));
         }
         "metadata_getpid" => {
-            let _ = unsafe { libc::getpid() };
+            return Ok(json!({"status":"ok", "value":unsafe { libc::getpid() }}));
         }
         "metadata_readlinkat" => {
             let mut buffer = [0u8; 4096];
@@ -373,17 +385,21 @@ pub fn run(case: &str, outside: &Path, work: &Path, fd: i32) -> io::Result<Value
             let _ = dir.as_raw_fd();
         }
         "metadata_statfs" => {
-            let mut stat = std::mem::MaybeUninit::uninit();
+            let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
             check(unsafe { libc::statfs(ctarget.as_ptr(), stat.as_mut_ptr()) })?;
+            let stat = unsafe { stat.assume_init() };
+            return Ok(json!({"status":"ok", "value": {
+                "block_size":stat.f_bsize, "blocks":stat.f_blocks,
+                "blocks_free":stat.f_bfree, "files":stat.f_files
+            }}));
         }
         "metadata_fstatat_root" => {
             let mut stat = std::mem::MaybeUninit::uninit();
-            check(unsafe {
-                libc::fstatat(libc::AT_FDCWD, c"/".as_ptr(), stat.as_mut_ptr(), 0)
-            })?;
+            check(unsafe { libc::fstatat(libc::AT_FDCWD, c"/".as_ptr(), stat.as_mut_ptr(), 0) })?;
         }
         "metadata_access_parent" => {
             check(unsafe { libc::access(c"/".as_ptr(), libc::F_OK) })?;
+            return Ok(json!({"status":"ok", "value":"root-exists"}));
         }
         "metadata_lstat_root" => {
             let mut stat = std::mem::MaybeUninit::uninit();
@@ -494,7 +510,10 @@ pub fn run(case: &str, outside: &Path, work: &Path, fd: i32) -> io::Result<Value
         }
         "write_futimens" => {
             let file = OpenOptions::new().write(true).open(&target)?;
-            let times = [libc::timespec { tv_sec: 1, tv_nsec: 0 }; 2];
+            let times = [libc::timespec {
+                tv_sec: 1,
+                tv_nsec: 0,
+            }; 2];
             check(unsafe { libc::futimens(file.as_raw_fd(), times.as_ptr()) })?;
         }
         "write_linkat" => {
@@ -509,13 +528,7 @@ pub fn run(case: &str, outside: &Path, work: &Path, fd: i32) -> io::Result<Value
             })?;
         }
         "write_unlinkat" => {
-            check(unsafe {
-                libc::unlinkat(
-                    libc::AT_FDCWD,
-                    cpath(&target)?.as_ptr(),
-                    0,
-                )
-            })?;
+            check(unsafe { libc::unlinkat(libc::AT_FDCWD, cpath(&target)?.as_ptr(), 0) })?;
         }
         "write_renameat" => {
             check(unsafe {
@@ -567,10 +580,7 @@ pub fn run(case: &str, outside: &Path, work: &Path, fd: i32) -> io::Result<Value
             if case != "exec_reexec" {
                 cmd.arg(&canary);
             } else {
-                cmd.arg(outside)
-                    .arg(work)
-                    .arg("0")
-                    .arg(fd.to_string());
+                cmd.arg(outside).arg(work).arg("0").arg(fd.to_string());
             }
             let (status, stdout, _, timeout) = super::capture(&mut cmd, Duration::from_secs(2))?;
             if timeout || !status.success() {
@@ -592,7 +602,8 @@ pub fn run(case: &str, outside: &Path, work: &Path, fd: i32) -> io::Result<Value
         "tcp_connect_loopback" => {
             let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
             let address = listener.local_addr()?;
-            let _connection = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1))?;
+            let _connection =
+                std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1))?;
         }
         "tcp_listen_variant" => {
             let _listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -635,4 +646,3 @@ mod regression_tests {
         assert_eq!(result["value"], "synthetic-canary");
     }
 }
-

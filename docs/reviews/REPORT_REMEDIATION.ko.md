@@ -48,6 +48,20 @@ verify`가 항상 실행하는 검증 진입점의 실제 코드 결함. `valida
 built"}`). `security_gate=false` 자체는 이미 문서화된 B1 환경 한계이며 이
 수정으로 바뀌지 않는다. Python 418개 통과.
 
+2026-09-26 후속: [macOS 샌드박스 clean-launch 메타데이터 잔여 사례 9→3건 축소](../../artifacts/sandbox_benchmark/RUST_RUNNER.ko.md).
+`rust_runner`의 sandbox-exec 프로파일을 `file-read-data`/`file-read-metadata`로
+분리해 `/`에 대한 metadata 허용을 제거하고 outside 경로의 metadata read를
+명시적으로 deny했다. 판정기도 강화해 `metadata_chdir`이 실제로 canary를
+읽는지 확인하고(단순 syscall 성공만으로 escaped 처리하지 않음),
+`getcwd`/`getpid`/`access("/", F_OK)`처럼 민감하지 않은 자기 프로세스 정보는
+새 `informational` 분류로 분리했다 — 이 분류는 판정 게이트를 통과시키지
+않는다. 그 결과 root `fstatat`/`lstat` 2건은 실제로 차단되고, 3건은
+informational로 재분류됐다. 실제 `--repeats 1` 실행으로 clean-launch 잔여
+사례가 9건에서 3건(`statvfs`/`statfs`/`pathconf`, 여전히 escaped)으로 줄었음을
+확인했다 — `security_gate.passed`는 여전히 `false`이며 통합 테스트
+(`tests/runner.rs`)가 이를 명시적으로 단언한다. B1(별도 격리 환경 필요) 자체를
+해결했다고 주장하지 않는다. Rust 16개 + Python 418개 통과.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

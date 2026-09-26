@@ -25,7 +25,11 @@ fn one_hundred_probes_report_residual_access_without_hiding_gate_failure() {
     assert_eq!(report["trials"].as_array().unwrap().len(), 309);
     assert_eq!(
         report["summary"]["unconfined_control"]["attacks_escaped"],
-        100
+        97
+    );
+    assert_eq!(
+        report["summary"]["unconfined_control"]["attacks_informational"],
+        3
     );
     assert_eq!(
         report["summary"]["sandbox_inherited_capabilities"]["attack_total"],
@@ -45,7 +49,10 @@ fn one_hundred_probes_report_residual_access_without_hiding_gate_failure() {
     let clean_blocked = report["summary"]["sandbox_clean_launch"]["attacks_blocked"]
         .as_u64()
         .unwrap();
-    assert_eq!(clean_escaped + clean_blocked, 100);
+    let clean_informational = report["summary"]["sandbox_clean_launch"]["attacks_informational"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(clean_escaped + clean_blocked + clean_informational, 100);
     let escaped: Vec<_> = report["trials"]
         .as_array()
         .unwrap()
@@ -53,13 +60,17 @@ fn one_hundred_probes_report_residual_access_without_hiding_gate_failure() {
         .filter(|r| r["mode"] == "sandbox_clean_launch" && r["outcome"] == "escaped")
         .map(|r| r["case"].as_str().unwrap())
         .collect();
-    assert!(escaped.contains(&"metadata_chdir"));
-    assert!(escaped.contains(&"metadata_statvfs"));
+    assert!(!escaped.contains(&"metadata_fstatat_root"));
+    assert!(!escaped.contains(&"metadata_lstat_root"));
+    assert!(!escaped.contains(&"metadata_getcwd"));
+    assert!(!escaped.contains(&"metadata_getpid"));
+    assert!(!escaped.contains(&"metadata_access_parent"));
     assert_eq!(output.status.code(), Some(1), "{report}");
     assert_eq!(report["security_gate"]["passed"], false);
     let residual = report["security_gate"]["residual_cases"]
         .as_array()
         .unwrap();
-    assert!(residual.iter().any(|c| c == "metadata_chdir"));
     assert!(residual.iter().any(|c| c == "metadata_statvfs"));
+    assert!(residual.iter().any(|c| c == "metadata_pathconf"));
+    assert!(residual.iter().any(|c| c == "metadata_statfs"));
 }
