@@ -5,8 +5,9 @@ export type AgentState = 'idle' | 'acting' | 'waiting' | 'stopped'
 
 export interface Tab {
   id: string
-  title: string
-  url: string
+  /** Visited URLs, oldest first; `index` points at the current one. */
+  history: string[]
+  index: number
   /** True while the agent is working in this tab. */
   agent: boolean
 }
@@ -22,15 +23,23 @@ export interface Step {
   resolution?: 'approved' | 'denied'
 }
 
+/** What the approval prompt asks the person for a `review` step. */
+export interface ReviewPrompt {
+  title: string
+  consequence: string
+  request: string
+  /** Primary button label; repeats the consequence ("Place order"). */
+  approveLabel: string
+}
+
 /** A step the agent wants to take, with the gateway's verdict for it. */
 export interface PlannedStep {
   title: string
   target: string
   verdict: Verdict
-  /** For `review` steps: what the ApprovalPrompt tells the person. */
-  prompt?: { title: string; consequence: string; request: string }
-  /** Tab URL after the step runs, if it navigates. */
-  navigatesTo?: { url: string; title: string }
+  prompt?: ReviewPrompt
+  /** URL the agent's tab moves to once the step runs. */
+  navigatesTo?: string
 }
 
 export interface SessionState {

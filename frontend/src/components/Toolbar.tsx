@@ -1,43 +1,40 @@
-import { agentLabel, splitUrl } from '../session/session'
-import type { AgentState, Tab, Verdict } from '../session/types'
-import { AgentDot } from './AgentDot'
-import { Back, Forward, Lock, Play, Reload, Stop } from './Icons'
-import { VerdictBadge } from './VerdictBadge'
+import { currentUrl, splitUrl } from '../session/session'
+import type { AgentState, Tab } from '../session/types'
+import { AgentStatus } from './AgentStatus'
+import { Back, Forward, Lock, PauseCircle, Play } from './Icons'
 
 interface Props {
   tab: Tab
-  pageVerdict?: Verdict
+  locked: boolean
   agent: AgentState
-  onStop: () => void
+  onBack: () => void
+  onForward: () => void
+  onPause: () => void
   onResume: () => void
 }
 
-export function Toolbar({ tab, pageVerdict, agent, onStop, onResume }: Props) {
-  const url = splitUrl(tab.url)
-  const secure = tab.url.startsWith('https://')
+export function Toolbar({ tab, locked, agent, onBack, onForward, onPause, onResume }: Props) {
+  const url = currentUrl(tab)
+  const parts = splitUrl(url)
   const running = agent === 'acting' || agent === 'waiting'
   return (
     <div className="hx-toolbar">
-      <button className="hx-icbtn" aria-label="Back"><Back /></button>
-      <button className="hx-icbtn" aria-label="Forward" disabled><Forward /></button>
-      <button className="hx-icbtn" aria-label="Reload"><Reload /></button>
-      <div className="hx-omni">
-        {secure && <span role="img" aria-label="Secure connection"><Lock /></span>}
-        <span className="hx-omni__url" title={tab.url}>
-          <span className="hx-sr">Address: </span>
-          {url.before}<b>{url.domain}</b>{url.after}
-        </span>
-        {pageVerdict && <VerdictBadge verdict={pageVerdict} />}
+      <div className="hx-nav">
+        <button className="hx-icbtn" aria-label="Back" disabled={locked || tab.index === 0} onClick={onBack}><Back /></button>
+        <button className="hx-icbtn" aria-label="Forward" disabled={locked || tab.index === tab.history.length - 1} onClick={onForward}><Forward /></button>
       </div>
-      <span className="hx-pill" role="status">
-        <AgentDot state={agent} />
-        <span>{agentLabel[agent]}</span>
-      </span>
-      {running ? (
-        <button className="hx-btn hx-btn--danger hx-stop" onClick={onStop}><Stop /> Stop agent</button>
-      ) : agent === 'stopped' ? (
-        <button className="hx-btn hx-btn--secondary hx-stop" onClick={onResume}><Play /> Resume</button>
-      ) : null}
+      <div className="hx-omni" title={url}>
+        {url.startsWith('https://') && <span className="hx-omni__lock" role="img" aria-label="Secure connection"><Lock /></span>}
+        <span className="hx-omni__url">
+          <span className="hx-sr">Address </span>
+          {parts.before}<b>{parts.domain}</b>{parts.after}
+        </span>
+      </div>
+      <div className="hx-agentctl">
+        <AgentStatus state={agent} />
+        {running && <button className="hx-btn hx-btn--secondary hx-btn--compact" onClick={onPause}><PauseCircle />Pause agent</button>}
+        {agent === 'stopped' && <button className="hx-btn hx-btn--secondary hx-btn--compact" onClick={onResume}><Play />Resume agent</button>}
+      </div>
     </div>
   )
 }

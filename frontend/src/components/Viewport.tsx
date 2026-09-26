@@ -1,43 +1,52 @@
+import { pageTitle } from '../session/pages'
+import { currentUrl } from '../session/session'
 import type { Tab } from '../session/types'
 
 /**
- * Stand-in for the rendered web page. In the real browser this is the page
- * engine's surface; HALO only draws the agent-target outline over it.
+ * Stand-in for the page engine's surface. The page keeps the site's own look;
+ * HALO draws only the outline around the element the agent is about to use.
  */
 export function Viewport({ tab, target }: { tab: Tab; target?: string }) {
-  const onPlaceOrder = target?.startsWith('button[type=submit]')
-  let page
-  if (tab.url.includes('/done')) {
-    page = (
+  const url = currentUrl(tab)
+  const targetsOrder = target === 'button[type=submit]'
+  let body
+  if (url.endsWith('/done')) {
+    body = (
       <>
-        <h4>Order placed</h4>
-        <p>Order #4471 · Noise-cancelling headphones · $84.20</p>
+        <h2>Order placed</h2>
+        <p>Order #4471 · Noise-cancelling headphones · <span className="num">$84.20</span></p>
       </>
     )
-  } else if (tab.url.includes('checkout.')) {
-    page = (
+  } else if (url.includes('checkout.')) {
+    body = (
       <>
-        <h4>Your order</h4>
-        <div className="row"><span>Noise-cancelling headphones</span><span>$79.00</span></div>
-        <div className="row"><span>Shipping</span><span>$5.20</span></div>
-        <div className="row" style={{ fontWeight: 700 }}><span>Total</span><span>$84.20</span></div>
-        <span className={`buy${onPlaceOrder ? ' hx-target' : ''}`}>Place order</span>
+        <h2>Your order</h2>
+        <dl className="hx-site__rows">
+          <div><dt>Noise-cancelling headphones</dt><dd className="num">$79.00</dd></div>
+          <div><dt>Shipping</dt><dd className="num">$5.20</dd></div>
+          <div className="total"><dt>Total</dt><dd className="num">$84.20</dd></div>
+        </dl>
+        <span className="hx-site__btn" data-agent-target={targetsOrder || undefined}>Place order</span>
       </>
     )
-  } else if (tab.url.startsWith('halo://')) {
-    page = <div className="hx-empty">New tab</div>
+  } else if (url.startsWith('halo://')) {
+    body = (
+      <div className="hx-site__empty">
+        <p className="hx-site__empty-title">New tab</p>
+        <p>The agent works in its own tab. Pages you open here aren’t shared with it.</p>
+      </div>
+    )
   } else {
-    page = (
+    body = (
       <>
-        <h4>{tab.title}</h4>
-        <div className="row"><span>Noise-cancelling headphones</span><span>$79.00</span></div>
-        <span className="buy">Checkout</span>
+        <h2>{pageTitle(url).split(' — ')[0]}</h2>
+        <p>Sample page content.</p>
       </>
     )
   }
   return (
-    <main id="hx-viewport" className="hx-view" role="tabpanel" aria-label={`Page: ${tab.title}`}>
-      {page}
+    <main id="hx-page" className="hx-site" role="tabpanel" aria-labelledby={`tab-${tab.id}`} tabIndex={-1}>
+      {body}
     </main>
   )
 }

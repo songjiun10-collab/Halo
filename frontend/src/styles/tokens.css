@@ -1,26 +1,37 @@
-/* HALO design tokens — mirrors tokens.json of the HALO design system
+/* HALO design tokens — the used subset of the HALO design system's tokens.json
    (ui-ux-pro-max: Developer Tool / Dark Mode OLED). Edit there first. */
 :root {
+  color-scheme: dark;
+
+  /* Surfaces and text */
   --background: #0f172a;
   --card: #1b2336;
   --muted: #272f42;
   --foreground: #f8fafc;
-  --card-foreground: var(--foreground);
   --muted-foreground: #94a3b8;
-  --primary: #1e293b;
-  --on-primary: #ffffff;
   --secondary: #334155;
   --on-secondary: #ffffff;
-  --accent: #22c55e;
-  --on-accent: #0f172a;
+
+  /* Lines: `border` is decorative (2.4:1); controls use `border-strong` (3.8:1). */
   --border: #475569;
   --border-strong: #64748b;
-  --destructive: #ef4444;
-  --on-destructive: #000000;
-  --destructive-text: #f87171;
   --ring: #ffffff;
+
+  /* Meaning: green = go (agent working, allow, the one primary action), amber = needs you,
+     red = denied, violet = held back. */
+  --accent: #22c55e;
+  --on-accent: #0f172a;
   --warning: #fbbf24;
+  --destructive-text: #f87171;
   --hold: #c4b5fd;
+
+  /* The web page inside the viewport keeps the site's own light look. */
+  --site-bg: #f8fafc;
+  --site-fg: #0f172a;
+  --site-muted: #475569;
+  --site-line: #e2e8f0;
+  --site-button: #1e293b;
+  --site-on-button: #ffffff;
 
   --font-heading: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
   --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -30,19 +41,16 @@
   --space-md: 16px;
   --space-lg: 24px;
   --space-xl: 32px;
-  --space-2xl: 48px;
-  --space-3xl: 64px;
 
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-full: 999px;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
-  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.15);
+  --shadow-window: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 20px 25px rgba(0, 0, 0, 0.15);
+  --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 10px 15px rgba(0, 0, 0, 0.1);
 
-  --hit: 44px;
+  /* Motion (emil-design-eng): strong ease-out, UI under 300ms. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --press: 160ms;
+  --enter: 220ms;
 }
