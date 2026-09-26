@@ -448,11 +448,65 @@ Task 4가 붙여야 한다 — 이 모듈은 자연어 의미 이해를 determin
 주장하지 않는다. 검증: `node --test` 93/93 통과(신규 progress 11개 + context-builder
 6개), 전체 Python 회귀 494/494 통과 유지 확인(Python 미변경).
 
+2026-09-27 후속 19: 장기 브라우저 하네스 Task 3(long-running controller +
+planner stdio 경계) 구현. `main/harness/planner-stdio.js`(신규)는 모델
+독립적인 JSONL stdio 어댑터다 — argv는 trusted host config에서만 받고
+`shell:false`로 spawn, 환경변수는 명시적 allowlist만 통과시켜(로컬
+worker에 `HALO_APPROVER_KEY`/`HALO_EXECUTOR_KEY`류가 절대 전달되지 않음을
+테스트로 확인) 1개 in-flight·프레임 64KiB(양방향)·60초 timeout을 강제하고,
+requestId가 다르거나 늦게/중복으로 온 응답은 현재 요청의 답으로 절대
+받아들이지 않는다. worker 미설정 시 가짜 완료를 지어내지 않고 정직하게
+`planner_unavailable`을 던진다. `fixtures/scripted-planner.js`(신규,
+예제 JSONL worker)를 실제 자식 프로세스로 띄워 실제 stdio pipe로 종단 간
+검증했다. **이 파일은 계획서가 지정한 `test/fixtures/scripted-planner.js`
+경로가 아니라 `fixtures/scripted-planner.js`에 뒀다** — `node --test`의
+기본 파일 탐색이 `test`/`tests` 디렉터리 아래 모든 파일을 테스트로 실행
+시도한다는 것을 직접 재현으로 확인했고(이 worker는 stdin을 영원히 기다리는
+장기 실행 프로세스라 그대로 두면 전체 테스트 스위트가 멈춘다), 계획서에도
+같은 이유와 경로를 기록해 정정했다.
+
+`main/harness/task-controller.js`(신규)는 observe→plan→approve→execute→
+verify→checkpoint 상태기계다. 모든 await 직후 정지 세대를 재확인해 `stop()`
+이후 늦게 도착한 planner 응답을 폐기하고, 매 action 전 durable
+`action_started`·결과 후 `action_outcome`(+검증된 evidence는
+`evidence_recorded`)을 journal에 기록한다. `verifyCriterion`/`canComplete`
+(Task 2)를 그대로 사용해 모델의 자기 신고만으로는 criterion이 verified되지
+않는다. 25(테스트 주입 시 10)회 planner 호출마다 segment를 회전시키되
+누적 budget(action/planner call 수)은 회전과 무관하게 계속 쌓인다 — 100회
+action·10회 이상 segment 회전을 실제로 구동해 원문 목표가 바뀌지 않음을
+확인했다. 동일 (action, observation) 3연속 무진척에 재계획 1회를 무료로
+허용하고, 다시 반복되면 `paused: no_progress`로 멈춘다. `awaiting_approval`
+동안의 사용자 대기 시간은 activeMs 예산에서 제외된다(1시간 대기를 주입해
+확인). planner transport 오류는 자동 재시도 없이 `paused: planner_error`로
+남는다. `execution_uncertain`으로 복구된 task는 `resume({confirmed:true})`
+로 명시적으로 확인해야만 재개되며, 그 전까지는 planner도 browser.execute도
+전혀 호출되지 않는다(둘 다 0회임을 확인) — 걸려 있던 action은 재생하지
+않고 새 관측부터 다시 시작한다.
+
+**자체 재현·수정한 버그**: 구현 도중 `amend()`로 목표를 버전업한 뒤에도
+이전 버전에서 이미 verified였던 criterion이 새 버전의 완료 판정에 그대로
+카운트되는 문제를 직접 찾아 고쳤다 — `_criteriaStatus`에 검증 당시의
+goalVersion을 함께 저장하지 않고 완료 확인 시 컨트롤러의 "현재" goalVersion을
+잘못 덧씌우고 있었다. 검증 당시 goalVersion을 그대로 보존하도록 고치고,
+"host-check criterion을 v1에서 verified시킨 뒤 amend()로 v2로 올리면 finish가
+awaiting_verification으로 남는다"는 회귀 테스트를 추가해 확인했다.
+
+**정직한 한계**: `browser`/`approve`는 이 단계에서 주입된 fake이며 실제
+Electron/실제 Python approver 연결은 Task 4의 몫이다. 승인 요청의
+source/selfProvenance는 이 컨트롤러가 항상 `page_content`/`untrusted`로
+고정한다 — 사용자가 직접 입력한 최초 URL을 `user_prompt`로 분류하는 구분은
+Task 4의 browser-adapter 통합에서 다룬다. 형식이 잘못된(예: 필수 필드
+누락) proposal이 반복돼도 즉시 감지해 멈추지 않고 `maxPlannerCalls`
+예산 소진까지는 계속 재시도한다 — 무한 루프는 아니지만(예산으로
+bounded) no_progress 감지만큼 빠르지 않다는 점은 남은 한계로 기록한다.
+검증: `node --test` 113/113 통과(신규 planner-stdio 11개 + task-controller
+9개), 전체 Python 회귀 494/494 통과 유지 확인(Python 미변경).
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
-장기 브라우저 하네스는 Task 1(+메모리 스트리밍 수정)·Task 2 완료, Task 3~6
-미착수 상태다. 실제 프로세스 메모리 실측(<1GB 확인)도 아직 없다.
+장기 브라우저 하네스는 Task 1(+메모리 스트리밍 수정)·Task 2·Task 3 완료, Task
+4~6 미착수 상태다. 실제 프로세스 메모리 실측(<1GB 확인)도 아직 없다.
 
 ## 판정 기준
 
