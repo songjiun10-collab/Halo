@@ -36,6 +36,33 @@ function makeApi(requestDecisionStub, options = {}) {
   return api;
 }
 
+// A manually-advanced clock for deterministic latency-metric assertions --
+// no real sleeping, no timing tolerance windows.
+function makeFakeClock(startAt = 0) {
+  let current = startAt;
+  return { now: () => current, advance: (ms) => { current += ms; } };
+}
+
+// Minimal fake WebContentsView for the handful of tests that exercise the
+// real navigate()/_findFirstOutboundLink() bodies (navigation timeout, DOM
+// scan cap) rather than replacing them with a mock closure. Assigning this
+// directly to api._view makes _ensureView() a no-op (it only constructs a
+// real WebContentsView when this._view is falsy), so these tests never
+// touch Electron.
+function makeFakeView({ loadURL, executeJavaScript, stop } = {}) {
+  return {
+    webContents: {
+      loadURL: loadURL || (async () => {}),
+      stop: stop || (() => {}),
+      executeJavaScript: executeJavaScript || (async () => null),
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      on: () => {},
+    },
+    setVisible: () => {},
+    setBounds: () => {},
+  };
+}
+
 test("performGatedAction executes immediately on allow (baseline, no stop/pause)", async () => {
   const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
   let executed = false;
@@ -525,4 +552,147 @@ test("resumeTask() continues into step 2 after step 1 was paused before its deci
   assert.equal(executedStep1, true);
   assert.equal(findLinkCalls, 1, "resuming a pre-execute pause of step 1 must still continue into step 2");
   assert.equal(resumed.task.state, "completed");
+});
+
+// --- Latency instrumentation (bottleneck-analysis follow-up: no real
+// latency measurements existed before this). Uses an injectable clock so
+// durations are asserted exactly, not within a real-time tolerance window.
+
+test("records decision_wait and execute durations with an injectable clock", async () => {
+  const clock = makeFakeClock();
+  const api = makeApi(async () => {
+    clock.advance(15); // simulated approver round-trip
+    return { decision: "allow", reasons: [] };
+  }, { now: clock.now });
+
+  await api.performGatedAction({ requestId: "r1", action: "navigate", summary: "go" }, async () => {
+    clock.advance(40); // simulated execute() cost
+  });
+
+  const metrics = api.getMetricsSummary();
+  assert.equal(metrics.decision_wait.count, 1);
+  assert.equal(metrics.decision_wait.p50, 15);
+  assert.deepEqual(metrics.decision_wait.outcomes, { allow: 1 });
+  assert.equal(metrics.execute.count, 1);
+  assert.equal(metrics.execute.p50, 40);
+});
+
+test("records queue_wait from when an item is queued to when it's approved or denied", async () => {
+  const clock = makeFakeClock();
+  const api = makeApi(async () => ({ decision: "review", reasons: ["needs a human"] }), { now: clock.now });
+
+  await api.performGatedAction({ requestId: "r1", action: "navigate", summary: "go" }, async () => {});
+  clock.advance(500); // simulated reviewer response time
+  await api.approve("r1");
+
+  await api.performGatedAction({ requestId: "r2", action: "navigate", summary: "go" }, async () => {});
+  clock.advance(120);
+  await api.deny("r2");
+
+  const metrics = api.getMetricsSummary();
+  assert.equal(metrics.queue_wait.count, 2);
+  assert.deepEqual(metrics.queue_wait.outcomes, { approved: 1, denied: 1 });
+});
+
+test("records task_total on a completed task and on an explicit stop, with matching outcomes", async () => {
+  const clock = makeFakeClock();
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { now: clock.now });
+  api.navigate = async () => {
+    clock.advance(10);
+  };
+  api._findFirstOutboundLink = async () => {
+    clock.advance(5);
+    return null;
+  };
+
+  await api.startTask("https://example.com");
+  assert.deepEqual(api.getMetricsSummary().task_total.outcomes, { completed: 1 });
+
+  api._task = { id: "t2", state: "running", pauseReason: null };
+  api._taskStartedAt = clock.now();
+  clock.advance(20);
+  await api.stopTask();
+
+  const metrics = api.getMetricsSummary();
+  assert.equal(metrics.task_total.count, 2);
+  assert.deepEqual(metrics.task_total.outcomes, { completed: 1, stopped: 1 });
+});
+
+// --- Navigation timeout/abort (a hanging loadURL() previously had no bound
+// at all -- performGatedAction()'s caller would wait forever).
+
+test("navigate() aborts and reports a timeout instead of hanging forever on a stuck loadURL()", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { navigationTimeoutMs: 20 });
+  let stopped = false;
+  api._view = makeFakeView({
+    loadURL: () => new Promise(() => {}), // never resolves -- simulates a hung page load
+    stop: () => {
+      stopped = true;
+    },
+  });
+
+  const start = Date.now();
+  const snapshot = await api.navigate("https://example.com");
+  const elapsed = Date.now() - start;
+
+  assert.ok(elapsed < 300, `expected navigate() to resolve near the 20ms timeout, took ${elapsed}ms`);
+  assert.equal(stopped, true, "a hung load must be actively aborted via webContents.stop(), not just abandoned");
+  assert.equal(snapshot.page.loadState, "error");
+
+  const metrics = api.getMetricsSummary();
+  assert.equal(metrics.navigation.count, 1);
+  assert.deepEqual(metrics.navigation.outcomes, { timeout: 1 });
+});
+
+test("navigate() does not abort a load that finishes well within the timeout", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { navigationTimeoutMs: 5000 });
+  let stopped = false;
+  api._view = makeFakeView({
+    loadURL: async () => {},
+    stop: () => {
+      stopped = true;
+    },
+  });
+
+  await api.navigate("https://example.com");
+
+  assert.equal(stopped, false);
+  const metrics = api.getMetricsSummary();
+  assert.deepEqual(metrics.navigation.outcomes, { ok: 1 });
+});
+
+// --- Bounded DOM scan for the outbound-link read (prevents a pathological
+// page's anchor count from turning one page read into an unbounded walk).
+
+test("_findFirstOutboundLink bounds the anchor scan to maxDomLinksScanned and records a dom_read metric", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { maxDomLinksScanned: 7 });
+  let receivedScript = null;
+  api._view = makeFakeView({
+    executeJavaScript: async (script) => {
+      receivedScript = script;
+      return { href: "https://example.com/next", text: "Next" };
+    },
+  });
+
+  const link = await api._findFirstOutboundLink();
+
+  assert.deepEqual(link, { href: "https://example.com/next", text: "Next" });
+  assert.match(receivedScript, /Math\.min\(anchors\.length, 7\)/);
+  const metrics = api.getMetricsSummary();
+  assert.equal(metrics.dom_read.count, 1);
+  assert.deepEqual(metrics.dom_read.outcomes, { found: 1 });
+});
+
+test("_findFirstOutboundLink records a dom_read error outcome when the page read itself throws", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._view = makeFakeView({
+    executeJavaScript: async () => {
+      throw new Error("boom");
+    },
+  });
+
+  const link = await api._findFirstOutboundLink();
+
+  assert.equal(link, null);
+  assert.deepEqual(api.getMetricsSummary().dom_read.outcomes, { error: 1 });
 });

@@ -23,7 +23,7 @@ function readLayoutFromArgv() {
 // ones only meant for main<->main coordination.
 const METHODS = [
   "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask",
-  "goBack", "goForward", "reload", "newTab", "approve", "deny", "setBrowserBounds",
+  "goBack", "goForward", "reload", "newTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
 ];
 
 const api = {};

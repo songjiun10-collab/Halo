@@ -7,7 +7,7 @@ const { ipcMain } = require("electron");
 // whatever ControlApi's own method signature validates.
 const METHODS = [
   "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask",
-  "goBack", "goForward", "reload", "newTab", "approve", "deny", "setBrowserBounds",
+  "goBack", "goForward", "reload", "newTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
 ];
 
 module.exports = function registerIpc(win, controlApi) {

@@ -294,6 +294,36 @@ pacing으로), 그리고 별도로 "CAPTCHA 때문에 작업이 사라지거나 
 실행 전 보류 재개 후 2단계 완료) — `test/control-api.test.js` 최종
 23개, `node --test` 41/41 통과, 전체 Python 회귀 494/494 통과 유지 확인.
 
+2026-09-27 후속 14: computer-use 브라우저에 지연 계측 + navigation
+timeout/abort + DOM 스캔 상한 추가(같은 [설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트 6" 절). 사용자가 웹 근거(Anthropic computer-use 문서,
+WebArena 논문, Electron `loadURL()` 공식 문서)와 로컬 코드 병목 분석을
+근거로 5가지 우선순위를 제시했고, 그중 (1) 지연·실패 사유 계측
+(p50/p95, 테스트 가능한 fixture), (2) navigation timeout/abort 연동,
+(4) DOM 스캔 상한을 구현했다 — (1)은 나머지 판단의 증거이므로 먼저,
+(2)는 `navigate()`가 `loadURL()`을 무기한 대기하던 실제 안전 공백이라
+가장 구체적인 병목, (4)는 (2)를 손보는 김에 저비용으로 추가했다. (3)
+bounded agent loop는 "설계부터", (5) 렌더러 증분 렌더링은 "실측 후에만"
+이라는 지시대로 이번 범위에서 제외했다. `shared/metrics.js`(신규)의
+순수 함수가 `{kind, ms, outcome}` 기록을 종류별 `count/p50/p95/outcomes`
+로 요약하고, `ControlApi`는 승인 왕복·실행·탐색·DOM 읽기·대기열 체류·
+작업 전체 시간 6종류를 기록해 `getMetricsSummary()`(IPC 노출)로
+조회한다. `navigate()`는 `loadURL()`을 타이머와 경쟁시켜 기본 30초 안에
+끝나지 않으면 `webContents.stop()`으로 실제 중단하고 `loadState:
+"error"`로 보고한다(예외를 던지지 않아 게이티드 파이프라인에 새 미처리
+예외를 만들지 않음). `_findFirstOutboundLink()`의 앵커 순회는
+`maxDomLinksScanned`(기본 500)로 상한을 두었다. `bench/latency-bench.js`
+(신규)로 계측이 실제로 의미 있는 수치를 만드는지 시연했다 — **시뮬레이션
+수치이며 실제 운영 측정치가 아니다**(실제 측정은 살아있는 Electron
+앱·실제 승인자·실제 외부 사이트가 필요해 범위 밖). **정직한 한계**:
+`MAX_METRICS=500`은 종류 구분 없는 공유 롤링 윈도우라 드문 종류의 표본이
+상대적으로 더 빨리 밀려날 수 있다; navigation timeout 기본값(30초)은
+실측 없이 고른 정적 추정치다; `executeJavaScript` 자체엔 타임아웃이
+없다(앵커 개수만 상한); 렌더러 페인트/스냅샷 지연은 계측 범위 밖이다.
+검증: `test/metrics.test.js`(순수 함수 6개), `test/control-api.test.js`
+에 계측·타임아웃·DOM 상한 회귀 테스트 7개 추가 — `node --test` 54/54
+통과, 전체 Python 회귀 494/494 통과 유지 확인.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

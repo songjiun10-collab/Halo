@@ -4,12 +4,14 @@ const { randomUUID } = require("crypto");
 const { WebContentsView } = require("electron");
 const { clampBrowserBounds } = require("../shared/clamp-bounds");
 const { looksLikeCaptcha } = require("../shared/captcha-heuristics");
+const { summarizeMetrics } = require("../shared/metrics");
 const { requestDecision } = require("./approver-client");
 
 const URL_LIKE = /^https?:\/\/\S+$/i;
 const MAX_PROMPT_LENGTH = 2000;
 const MAX_TIMELINE = 200;
 const MAX_QUEUE = 50;
+const MAX_METRICS = 500;
 // Pacing floor between agent-initiated (gated) actions ONLY -- never applied
 // to a human's own direct navigate/back/forward/reload/newTab. This is about
 // being a slow, low-volume automated client (fewer, spaced-out requests), not
@@ -17,6 +19,16 @@ const MAX_QUEUE = 50;
 // despite this, the response is to pause and hand off to a human (see
 // looksLikeCaptcha() below), never to solve, bypass, or spoof around it.
 const MIN_AGENT_ACTION_INTERVAL_MS = 2000;
+// navigate()'s loadURL() has no built-in bound -- a hanging/slow-loading
+// page would otherwise wait forever, wedging performGatedAction()'s caller
+// (startTask()) and any pending resume indefinitely. Past this, the load is
+// actively aborted via webContents.stop() rather than just given up on, so
+// it doesn't keep running in the background.
+const NAVIGATION_TIMEOUT_MS = 30000;
+// _findFirstOutboundLink() reads the page's own DOM -- bound how many
+// anchors it walks so a pathological page (huge or adversarially large
+// anchor count) can't turn a "read one link" op into an unbounded scan.
+const MAX_DOM_LINKS_SCANNED = 500;
 
 /**
  * The executor. Owns the real embedded Chromium surface (WebContentsView)
@@ -34,15 +46,34 @@ const MIN_AGENT_ACTION_INTERVAL_MS = 2000;
  * control surface, not an autonomous browsing brain.
  */
 class ControlApi {
-  constructor({ window, socketPath, requestDecision: requestDecisionOverride, minAgentActionIntervalMs } = {}) {
+  constructor({
+    window,
+    socketPath,
+    requestDecision: requestDecisionOverride,
+    minAgentActionIntervalMs,
+    navigationTimeoutMs,
+    maxDomLinksScanned,
+    now,
+  } = {}) {
     this._window = window;
     this._socketPath = socketPath;
     // Injectable seams for tests only (defaults are the real Unix-socket
-    // client / the real pacing floor). Production callers never pass these.
+    // client / the real pacing floor / the real clock). Production callers
+    // never pass these.
     this._requestDecision = requestDecisionOverride || requestDecision;
     this._minAgentActionIntervalMs =
       typeof minAgentActionIntervalMs === "number" ? minAgentActionIntervalMs : MIN_AGENT_ACTION_INTERVAL_MS;
+    this._navigationTimeoutMs =
+      typeof navigationTimeoutMs === "number" ? navigationTimeoutMs : NAVIGATION_TIMEOUT_MS;
+    this._maxDomLinksScanned =
+      typeof maxDomLinksScanned === "number" ? maxDomLinksScanned : MAX_DOM_LINKS_SCANNED;
+    this._now = typeof now === "function" ? now : Date.now;
     this._lastAgentActionAt = -Infinity;
+    // Structured latency samples ({kind, ms, outcome, at, ...}) for
+    // getMetricsSummary() -- see shared/metrics.js. Never exposed via
+    // getSnapshot(); read only through the dedicated method/IPC channel.
+    this._metrics = [];
+    this._taskStartedAt = null;
     this._view = null;
     this._hasPage = false;
     this._page = {
@@ -112,6 +143,38 @@ class ControlApi {
   _pushTimeline(kind, message, status = "info") {
     this._timeline.push({ id: randomUUID(), at: new Date().toISOString(), kind, message, status });
     if (this._timeline.length > MAX_TIMELINE) this._timeline.shift();
+  }
+
+  // kind: "decision_wait" | "execute" | "navigation" | "dom_read" |
+  // "queue_wait" | "task_total". `extra` carries per-record context such as
+  // `action`/`outcome` -- outcome absent means "ok"; a specific value
+  // ("timeout", "error", "review", "deny", "cancelled", ...) is what lets
+  // getMetricsSummary() report per-stage failure reasons, not just timing.
+  _recordMetric(kind, ms, extra = {}) {
+    this._metrics.push({ kind, ms, at: this._now(), ...extra });
+    if (this._metrics.length > MAX_METRICS) this._metrics.shift();
+  }
+
+  // Grouped {count, p50, p95, outcomes} per metric kind -- see
+  // shared/metrics.js for the math. This is main-process-side timing only
+  // (decision round-trip, execute()/navigation, DOM read, approval queue
+  // wait, whole-task wall time). Renderer paint/snapshot-render latency is
+  // out of scope here -- it can only be measured from inside whatever
+  // renderer eventually lands, not from this process.
+  getMetricsSummary() {
+    return summarizeMetrics(this._metrics);
+  }
+
+  _recordTaskTotal(outcome) {
+    if (this._taskStartedAt != null) {
+      this._recordMetric("task_total", this._now() - this._taskStartedAt, { outcome });
+      this._taskStartedAt = null;
+    }
+  }
+
+  _markTaskCompleted() {
+    this._task = { ...this._task, state: "completed" };
+    this._recordTaskTotal("completed");
   }
 
   _ensureView() {
@@ -189,9 +252,46 @@ class ControlApi {
     this._ensureView();
     this._hasPage = true;
     this._view.setVisible(true);
-    await this._view.webContents.loadURL(target);
-    this._pushTimeline("navigation", `Navigated to ${target}`, "info");
+    const start = this._now();
+    const timedOut = await this._loadWithTimeout(target);
+    this._recordMetric("navigation", this._now() - start, { outcome: timedOut ? "timeout" : "ok" });
+    if (timedOut) {
+      this._pushTimeline(
+        "navigation",
+        `Navigation to ${target} did not finish within ${this._navigationTimeoutMs}ms; aborted.`,
+        "error",
+      );
+      this._syncPageState({ loadState: "error" });
+    } else {
+      this._pushTimeline("navigation", `Navigated to ${target}`, "info");
+    }
     return this.getSnapshot();
+  }
+
+  // loadURL() has no built-in bound (see Electron's webContents docs -- its
+  // promise only settles on the page's own completion/failure event). A
+  // slow or hanging page would otherwise keep performGatedAction()'s caller
+  // (startTask(), or a resume) waiting indefinitely. This races it against
+  // a timer; on timeout it calls webContents.stop() to actually abort the
+  // in-flight load rather than just walking away from it. A genuine fast
+  // failure (bad DNS, refused connection, etc.) is unaffected -- it settles
+  // via loadURL()'s own rejection (already surfaced by the did-fail-load
+  // listener wired up in _ensureView()) well before the timer fires.
+  async _loadWithTimeout(target) {
+    let timer;
+    const timedOut = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(true), this._navigationTimeoutMs);
+    });
+    const loaded = this._view.webContents
+      .loadURL(target)
+      .then(() => false)
+      .catch(() => false);
+    const result = await Promise.race([loaded, timedOut]);
+    clearTimeout(timer);
+    if (result) {
+      this._view.webContents.stop();
+    }
+    return result;
   }
 
   async goBack() {
@@ -260,6 +360,7 @@ class ControlApi {
     // effect" for something that really does write externally would defeat
     // the whole point of an independent approver.
     const stopEpoch = this._stopEpoch;
+    const decisionStart = this._now();
     const decision = await this._requestDecision(this._socketPath, {
       request_id: randomUUID(),
       action: descriptor.action,
@@ -269,6 +370,10 @@ class ControlApi {
       source: descriptor.source,
       target_scope: descriptor.targetScope ?? null,
       contains_secret: Boolean(descriptor.containsSecret),
+    });
+    this._recordMetric("decision_wait", this._now() - decisionStart, {
+      action: descriptor.action,
+      outcome: decision.decision,
     });
 
     // stopTask() bumps _stopEpoch and does not wait for outstanding
@@ -300,7 +405,9 @@ class ControlApi {
     if (decision.decision === "allow") {
       await this._paceAgentAction();
       this._pushTimeline(descriptor.action, descriptor.summary, "allow");
+      const executeStart = this._now();
       await execute();
+      this._recordMetric("execute", this._now() - executeStart, { action: descriptor.action });
       // stopTask() can run while execute() itself is in flight (e.g. a real
       // navigate() awaiting loadURL()) -- the decision was legitimately
       // "allow" and execute() already ran for real, but the *caller* must
@@ -332,6 +439,9 @@ class ControlApi {
         action: descriptor.action,
         reason: (decision.reasons || []).join("; "),
         createdAt: new Date().toISOString(),
+        // Precise, clock-injectable timestamp for the queue_wait metric --
+        // never exposed via getSnapshot() (see its explicit field allowlist).
+        _createdAtMs: this._now(),
         _execute: execute,
       });
       this._task = { ...this._task, state: "awaiting_approval" };
@@ -346,14 +456,22 @@ class ControlApi {
   // fixed extraction script WE control, run via executeJavaScript against
   // the embedded page -- not eval of anything the page supplies. Finding a
   // link is a read, not a decision; whether to follow it still goes through
-  // performGatedAction() like any other page_content-sourced action.
+  // performGatedAction() like any other page_content-sourced action. The
+  // anchor scan is capped at this._maxDomLinksScanned (MAX_DOM_LINKS_SCANNED
+  // by default) so a page with a pathologically large anchor count can't
+  // turn this into an unbounded DOM walk.
   async _findFirstOutboundLink() {
     if (!this._view) return null;
+    const start = this._now();
+    let outcome = "not_found";
     try {
-      return await this._view.webContents.executeJavaScript(
+      const result = await this._view.webContents.executeJavaScript(
         `(() => {
           const base = document.baseURI;
-          for (const a of document.querySelectorAll("a[href]")) {
+          const anchors = document.querySelectorAll("a[href]");
+          const limit = Math.min(anchors.length, ${this._maxDomLinksScanned});
+          for (let i = 0; i < limit; i++) {
+            const a = anchors[i];
             try {
               const url = new URL(a.getAttribute("href"), base);
               if ((url.protocol === "http:" || url.protocol === "https:") && url.href !== base) {
@@ -365,8 +483,13 @@ class ControlApi {
         })()`,
         true,
       );
+      outcome = result ? "found" : "not_found";
+      return result;
     } catch {
+      outcome = "error";
       return null;
+    } finally {
+      this._recordMetric("dom_read", this._now() - start, { outcome });
     }
   }
 
@@ -376,6 +499,7 @@ class ControlApi {
     }
     this._task = { id: randomUUID(), state: "running", pauseReason: null };
     this._taskCursor = null;
+    this._taskStartedAt = this._now();
     this._pushTimeline("task", `Task started: ${prompt.slice(0, 120)}`, "info");
     this._emit();
     // Captured once: every await below is a point where a concurrent
@@ -390,7 +514,7 @@ class ControlApi {
         "Prompt is not a directly actionable URL. A multi-step planning loop is not implemented yet — see design doc.",
         "info",
       );
-      this._task = { ...this._task, state: "completed" };
+      this._markTaskCompleted();
       this._emit();
       return this.getSnapshot();
     }
@@ -447,7 +571,7 @@ class ControlApi {
     }
     if (step === "step1") {
       if (outcome !== "allow") {
-        this._task = { ...this._task, state: "completed" };
+        this._markTaskCompleted();
         this._emit();
         return this.getSnapshot();
       }
@@ -455,7 +579,7 @@ class ControlApi {
     }
     // step === "step2": the last step in this fixed 2-step demo -- there is
     // nothing further to run regardless of outcome.
-    this._task = { ...this._task, state: "completed" };
+    this._markTaskCompleted();
     this._emit();
     return this.getSnapshot();
   }
@@ -495,7 +619,7 @@ class ControlApi {
       return this._afterStepOutcome("step2", followOutcome, trimmed, epoch);
     }
     this._pushTimeline("task", "No outbound link found on the page; task complete.", "info");
-    this._task = { ...this._task, state: "completed" };
+    this._markTaskCompleted();
     this._emit();
     return this.getSnapshot();
   }
@@ -547,7 +671,7 @@ class ControlApi {
       // Not part of startTask()'s own step sequence (e.g. a bare
       // performGatedAction() call) -- no further step to chain into.
       if (!this._stopHappenedSince(epoch) && outcome !== "review" && outcome !== "paused") {
-        this._task = { ...this._task, state: "completed" };
+        this._markTaskCompleted();
         this._emit();
       }
       return this.getSnapshot();
@@ -593,6 +717,7 @@ class ControlApi {
     this._taskCursor = null;
     this._approvalQueue = [];
     this._task = { ...this._task, state: "stopped", pauseReason: null };
+    this._recordTaskTotal("stopped");
     this._pushTimeline("task", "Task stopped", "info");
     this._emit();
     return this.getSnapshot();
@@ -602,6 +727,7 @@ class ControlApi {
     const index = this._approvalQueue.findIndex((item) => item.id === requestId);
     if (index === -1) return this.getSnapshot();
     const [item] = this._approvalQueue.splice(index, 1);
+    this._recordMetric("queue_wait", this._now() - item._createdAtMs, { action: item.action, outcome: "approved" });
     this._pushTimeline(item.action, `${item.summary} (approved by reviewer)`, "allow");
     await this._paceAgentAction();
     const epoch = this._stopEpoch;
@@ -612,7 +738,7 @@ class ControlApi {
     // _approvalQueue, so the length-zero check below would otherwise still
     // be true and overwrite "stopped"/"paused" with "completed".
     if (!this._stopHappenedSince(epoch) && this._task.state !== "paused" && this._approvalQueue.length === 0) {
-      this._task = { ...this._task, state: "completed" };
+      this._markTaskCompleted();
     }
     this._emit();
     return this.getSnapshot();
@@ -622,8 +748,9 @@ class ControlApi {
     const index = this._approvalQueue.findIndex((item) => item.id === requestId);
     if (index === -1) return this.getSnapshot();
     const [item] = this._approvalQueue.splice(index, 1);
+    this._recordMetric("queue_wait", this._now() - item._createdAtMs, { action: item.action, outcome: "denied" });
     this._pushTimeline(item.action, `${item.summary} (denied by reviewer)`, "deny");
-    if (this._approvalQueue.length === 0) this._task = { ...this._task, state: "completed" };
+    if (this._approvalQueue.length === 0) this._markTaskCompleted();
     this._emit();
     return this.getSnapshot();
   }

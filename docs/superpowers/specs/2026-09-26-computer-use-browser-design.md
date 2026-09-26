@@ -422,6 +422,80 @@ CAPTCHA로 멈춘 뒤 재개가 실제로 2단계까지 이어져 완료/REVIEW�
 `test/control-api.test.js` 최종 23개, `node --test` 41/41 통과, 전체
 Python 회귀 494/494 통과 유지 확인.
 
+**후속 업데이트 6 (2026-09-27) — 지연 계측 + navigation timeout/abort +
+DOM 스캔 상한(병목 분석 후속).** 사용자가 웹 근거(Anthropic computer-use
+문서의 tool_use↔tool_result 루프, WebArena의 long-horizon 실패 논의,
+Electron `loadURL()`가 완료 이벤트까지 promise가 끝나지 않는다는 공식
+문서)와 로컬 코드 병목 분석(고정 2단계 데모, 무기한 대기 가능한
+`navigate()`, `_findFirstOutboundLink()`의 전체 DOM 스캔, 액션마다 새
+Unix 소켓 왕복, 전체 목록을 매번 다시 렌더하는 렌더러)을 근거로 5가지
+우선순위를 제시했다: (1) 단계별 지연·실패 사유 계측(p50/p95, 테스트 가능한
+fixture)을 먼저, (2) navigation timeout/abort 연동, (3) LLM 미연결 상태를
+UI에 명확히 유지한 채 step/action/time/token 예산과 승인 게이트를 보존하는
+bounded loop **설계**, (4) selector 기반 관측량 상한, (5) 실측으로 렌더링이
+병목임이 확인될 때만 timeline 증분 렌더링. 이번에는 (1)·(2)·(4)를 구현했다
+— (1)은 나머지 판단의 증거가 되므로 먼저 필요했고, (2)는 `navigate()`가
+`loadURL()`을 무기한 대기하는 실제 안전/복구 공백이라 가장 구체적인
+병목이었으며, (4)는 (2)를 손보는 김에 저비용으로 막을 수 있었다. (3)은
+"설계부터", (5)는 "측정 후에만"이라는 사용자 지시대로 이번 범위에서
+제외했다.
+
+*지연 계측.* `shared/metrics.js`의 순수 함수 `summarizeMetrics(records)`가
+`{kind, ms, outcome}` 기록들을 종류별로 묶어 `count/p50/p95/outcomes`(실패
+사유별 개수)를 계산한다. `ControlApi`는 승인 왕복(`decision_wait`), 실제
+액션 실행(`execute`), 탐색 자체(`navigation`), 페이지 DOM 읽기(`dom_read`),
+승인 대기열 체류 시간(`queue_wait`), 작업 전체 시간(`task_total`) 여섯
+종류를 각 지점에서 기록하고 `getMetricsSummary()`(IPC로도 노출)로
+조회한다. 시계는 `now` 생성자 옵션으로 주입 가능해 테스트가 실제 sleep
+없이 정확한 지속시간을 단언한다. 렌더러 쪽 스냅샷 수신→페인트 지연은
+이 main 프로세스 코드에서 관측 불가능하므로(관측하려면 렌더러 자신이
+측정해야 함) 범위에서 제외했다 — 렌더러는 별도로 다시 만들어지는 중이라
+같은 규약(kind/ms/outcome)으로 자체 계측을 추가하면 된다.
+
+*navigation timeout/abort.* Electron 공식 문서대로 `loadURL()`은 완료
+이벤트까지 promise가 끝나지 않는다 — 느리거나 멈춘 페이지가 `startTask()`
+호출자(또는 대기 중인 resume)를 무기한 붙잡을 수 있었다. `navigate()`가
+이제 `loadURL()`을 타이머와 경쟁시켜(`_loadWithTimeout()`), 기본
+30초(`navigationTimeoutMs`로 설정 가능) 안에 끝나지 않으면
+`webContents.stop()`으로 실제로 중단시키고 `page.loadState = "error"`로
+보고한다(중단은 하되 예외를 던지지는 않는다 — `execute()` 클로저로도
+쓰이는 함수이므로 게이티드 파이프라인에 새 미처리 예외를 만들지 않기
+위함). 진짜 빠른 실패(DNS 실패 등)는 그대로 `did-fail-load` 리스너 경로로
+처리되며 이 타임아웃과 무관하다.
+
+*DOM 스캔 상한.* `_findFirstOutboundLink()`의 앵커 순회를
+`maxDomLinksScanned`(기본 500)로 제한해, 앵커가 병적으로 많은 페이지가
+"링크 하나 읽기"를 무제한 스캔으로 만들지 못하게 했다. `executeJavaScript`
+호출 자체에는 별도 타임아웃을 걸지 않았다(정직한 한계 참고).
+
+*벤치마크.* `bench/latency-bench.js`(신규, 반복 가능한 Node 스크립트,
+`node --test` 대상 아님)가 모의 지연을 주입해 계측이 실제로 의미 있는
+수치를 만드는지 보여준다 — **이 수치는 시뮬레이션이며 실제 운영 측정치가
+아니다**(실제 측정은 살아있는 Electron 앱·실제 승인자·실제 외부 사이트가
+필요해 이번 세션 범위 밖 — 이 프로젝트의 "가능하면 localhost/fixture로
+검증" 원칙과도 일치한다). 200회 반복 예시 출력:
+```
+execute        count=153   p50=525   ms p95=875   ms outcomes={"ok":153}
+dom_read       count=167   p50=24    ms p95=41    ms outcomes={"not_found":167}
+decision_wait  count=166   p50=17    ms p95=31    ms outcomes={"allow":152,"review":14}
+queue_wait     count=14    p50=11163 ms p95=14896 ms outcomes={"approved":14}
+```
+(카운트 합이 500인 것은 버그가 아니라 `MAX_METRICS=500`이 종류 구분 없이
+전체에 걸리는 공유 롤링 윈도우이기 때문이다 — 정직한 한계 참고.)
+
+**정직한 한계(이번 추가분)**: `MAX_METRICS=500`은 모든 종류를 합친
+공유 버퍼라서, 한 종류가 다른 종류보다 훨씬 자주 기록되면(예:
+`decision_wait`가 `queue_wait`보다 훨씬 잦음) 드문 종류의 표본이 상대적으로
+더 빨리 밀려날 수 있다 — 종류별 개별 버퍼가 아니다. `navigationTimeoutMs`
+기본값(30초)은 실측 p95 없이 고른 정적 추정치다(실제 측정 후 조정 대상).
+`executeJavaScript` 자체에는 타임아웃이 없다(앵커 개수만 상한). 렌더러
+페인트/스냅샷-수신 지연은 계측되지 않는다(주 프로세스 코드의 관측
+범위 밖). 벤치 수치는 시뮬레이션이며 실제 프로덕션 latency 분포를
+대표하지 않는다. 검증: `shared/metrics.js` 순수 함수 테스트 6개
+(`test/metrics.test.js`), `test/control-api.test.js`에 계측·타임아웃·
+DOM 상한 회귀 테스트 7개 추가 — `node --test` 54/54 통과, 전체 Python
+회귀 494/494 통과 유지 확인.
+
 ## 정직한 한계
 
 - 이 문서 작성 시점까지 Electron 앱을 실제로 빌드·실행해 검증하지 않았다 —
