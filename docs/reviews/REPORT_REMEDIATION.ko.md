@@ -200,6 +200,20 @@ provenance mismatch DENY)는 UI로 직접 트리거되지 않고 Python 유닛
 `type`을 halo의 `read` 어휘로 매핑한 것도 근사치이며 상태 변경 클릭과
 무해한 클릭을 구분하지 못한다.
 
+2026-09-26 후속 9: computer-use 브라우저의 REVIEW 경로를 UI에서 실제로
+도달 가능하게 확장(같은 [설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트" 절). `startTask`를 2단계로 확장했다 — 1단계는 사용자
+프롬프트의 URL로 이동(`source="user_prompt"`), 성공하면 2단계로 방금
+로드된 페이지에서 외부 링크 하나를 실제로 찾아(고정 추출 스크립트로 읽기,
+페이지 콘텐츠를 eval하지 않음) `source="page_content"`로 후속 이동을
+제안한다. 실제 Electron 앱 + CDP로 `https://example.com/` → "Learn more"
+링크가 실제로 `approvalQueue`에 큐잉됨 → `approve()` 호출 → 실제
+`iana.org`로 이동까지 종단 간 확인했다. 여전히 정해진 2단계 스크립트이지
+루프가 있는 진짜 플래너는 아니며, 거짓 self-report로 인한 DENY 경로는
+여전히 Python 유닛 테스트에서만 검증된다(정직하게 동작하는 데모 에이전트는
+스스로 거짓말하지 않으므로). Python/JS 코드는 `control-api.js`만 수정,
+회귀 494개(Python)·13개(JS) 그대로 통과.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

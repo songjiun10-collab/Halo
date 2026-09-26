@@ -223,6 +223,34 @@ class ControlApi {
     return decision.decision;
   }
 
+  // Reads the just-loaded page for exactly one outbound link. This is a
+  // fixed extraction script WE control, run via executeJavaScript against
+  // the embedded page -- not eval of anything the page supplies. Finding a
+  // link is a read, not a decision; whether to follow it still goes through
+  // performGatedAction() like any other page_content-sourced action.
+  async _findFirstOutboundLink() {
+    if (!this._view) return null;
+    try {
+      return await this._view.webContents.executeJavaScript(
+        `(() => {
+          const base = document.baseURI;
+          for (const a of document.querySelectorAll("a[href]")) {
+            try {
+              const url = new URL(a.getAttribute("href"), base);
+              if ((url.protocol === "http:" || url.protocol === "https:") && url.href !== base) {
+                return { href: url.href, text: (a.textContent || "").trim().slice(0, 80) };
+              }
+            } catch {}
+          }
+          return null;
+        })()`,
+        true,
+      );
+    } catch {
+      return null;
+    }
+  }
+
   async startTask(prompt) {
     if (typeof prompt !== "string" || prompt.trim().length === 0 || prompt.length > MAX_PROMPT_LENGTH) {
       throw new RangeError(`startTask requires a prompt of 1..${MAX_PROMPT_LENGTH} characters`);
@@ -232,31 +260,65 @@ class ControlApi {
     this._emit();
 
     const trimmed = prompt.trim();
-    if (URL_LIKE.test(trimmed)) {
-      const requestId = randomUUID();
-      const outcome = await this.performGatedAction(
-        {
-          requestId,
-          action: "navigate",
-          origin: this._page.url || "",
-          summary: `Agent proposes to navigate to ${trimmed}`,
-          selfProvenance: "trusted",
-          source: "user_prompt",
-          targetScope: "external",
-        },
-        () => this.navigate(trimmed),
+    if (!URL_LIKE.test(trimmed)) {
+      this._pushTimeline(
+        "task",
+        "Prompt is not a directly actionable URL. A multi-step planning loop is not implemented yet — see design doc.",
+        "info",
       );
-      if (outcome !== "review") this._task = { ...this._task, state: "completed" };
+      this._task = { ...this._task, state: "completed" };
       this._emit();
       return this.getSnapshot();
     }
 
-    this._pushTimeline(
-      "task",
-      "Prompt is not a directly actionable URL. A multi-step planning loop is not implemented yet — see design doc.",
-      "info",
+    // Step 1: navigate where the user's own prompt pointed. source is
+    // honestly "user_prompt" here, so this can only ever resolve to allow
+    // or deny -- never review (agreement between self-claim and the host
+    // rule is guaranteed for a genuine user-typed destination).
+    const initialOutcome = await this.performGatedAction(
+      {
+        requestId: randomUUID(),
+        action: "navigate",
+        origin: this._page.url || "",
+        summary: `Agent proposes to navigate to ${trimmed}`,
+        selfProvenance: "trusted",
+        source: "user_prompt",
+        targetScope: "external",
+      },
+      () => this.navigate(trimmed),
     );
-    this._task = { ...this._task, state: "completed" };
+    if (initialOutcome !== "allow") {
+      this._task = { ...this._task, state: "completed" };
+      this._emit();
+      return this.getSnapshot();
+    }
+
+    // Step 2: this is the part of the demo that actually exercises review —
+    // the agent looks at the page it just loaded (untrusted content it did
+    // not author) and proposes ONE follow-up hop, honestly labeled
+    // source="page_content". A well-behaved placeholder agent reports this
+    // truthfully, which is exactly what reaches review rather than being
+    // silently auto-executed. Still not a real planner: exactly one hop,
+    // no loop, no step budget, no LLM call — see design doc.
+    const link = await this._findFirstOutboundLink();
+    if (link && typeof link.href === "string") {
+      const followOutcome = await this.performGatedAction(
+        {
+          requestId: randomUUID(),
+          action: "navigate",
+          origin: this._page.url || trimmed,
+          summary: `Agent noticed a link on the page ("${link.text || link.href}") and proposes following it to ${link.href}`,
+          selfProvenance: "untrusted",
+          source: "page_content",
+          targetScope: "external",
+        },
+        () => this.navigate(link.href),
+      );
+      if (followOutcome !== "review") this._task = { ...this._task, state: "completed" };
+    } else {
+      this._pushTimeline("task", "No outbound link found on the page; task complete.", "info");
+      this._task = { ...this._task, state: "completed" };
+    }
     this._emit();
     return this.getSnapshot();
   }

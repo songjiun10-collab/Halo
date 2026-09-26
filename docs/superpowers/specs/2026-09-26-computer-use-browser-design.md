@@ -247,14 +247,27 @@ main 쪽 `approver-client.js`는 `connect()` 실패 시 짧은 backoff로 재시
   `os.tmpdir()` 경로를 그대로 쓰면 `UnixSocketChannel`이 심링크 컴포넌트를
   거부해 승인자가 소켓 바인딩에 영원히(조용히) 실패함.
 
-**검증되지 않은 부분**: 현재 `startTask`의 데모 경로는 프롬프트가 URL
-형태일 때 항상 `source="user_prompt"`만 만든다. 즉 이 프로젝트의 핵심
-시나리오 — REVIEW, 그리고 provenance mismatch로 인한 DENY(Comet식 사고
-재현) — 는 **UI에서 직접 트리거되는 경로가 아직 없다.** 이 두 경로는
-`tests/test_computer_browser_approver.py`의 Python 유닛 테스트에서만
-검증됐다. 실제 페이지 콘텐츠를 읽고 그로부터 `source="page_content"`인
-행동을 제안하는 진짜 에이전트 루프가 없다는, 위에 이미 적은 한계의 직접적
-결과다.
+**후속 업데이트 (같은 날) — REVIEW가 이제 UI에서도 실제로 도달 가능하다.**
+`startTask`를 2단계로 확장했다: 1단계는 그대로 사용자 프롬프트의 URL로
+이동(`source="user_prompt"`, ALLOW만 가능). 성공하면 2단계로, 방금 로드된
+페이지에서 외부 링크 하나를 실제로 찾아(`executeJavaScript`로 페이지 자신이
+아니라 우리가 작성한 고정 추출 스크립트를 실행 — 페이지 콘텐츠를 eval하는
+게 아니라 읽기다) `source="page_content"`, `self_provenance="untrusted"`
+(정직한 자기 신고)로 후속 이동을 제안한다. 실제 Electron 앱 + CDP로 끝까지
+검증했다: `https://example.com/`으로 이동 → 페이지의 "Learn more" 링크를
+찾아 `approvalQueue`에 실제로 큐잉됨(`reason: "Content originated from an
+untrusted data channel."`) → `approve(requestId)` 호출 → 실제로
+`https://iana.org/domains/example`(리다이렉트 후 `iana.org/help/example-domains`)
+로 이동, `canGoBack: true`, 타임라인에 "(approved by reviewer)" 기록까지
+정확히 확인됨.
+
+**여전히 남은 것**: 이건 여전히 정해진 2단계 스크립트이지 진짜 멀티스텝
+루프가 아니다 — 한 번의 후속 링크 제안 이후 멈춘다. 루프 횟수 상한·중복
+방문 방지 같은 것도 없다(루프 자체가 없으므로 아직 필요 없다). Provenance
+mismatch로 인한 DENY(에이전트가 거짓으로 `self_provenance="trusted"`를
+주장하는 경우)는 여전히 Python 유닛 테스트에서만 검증된다 — 정직하게
+동작하는 이 데모 에이전트는 스스로 거짓말을 하지 않으므로, 실제로 거짓
+신고하는 에이전트(또는 공격자가 조작한 실행자)가 있어야 라이브로 재현된다.
 
 ## 정직한 한계
 
