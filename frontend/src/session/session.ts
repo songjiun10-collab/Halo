@@ -5,7 +5,7 @@ export const AGENT = 'Claude'
 
 export const controlLabel: Record<Control, string> = {
   claude: `${AGENT} has control`,
-  approval: 'Approval needed',
+  approval: `${AGENT} has control`, // it waits for you in the confirmation, not in the chrome
   you: 'You have control',
 }
 

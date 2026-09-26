@@ -18,20 +18,26 @@ npm run lint
 | `src/styles/tokens.css` | Design tokens (colours, type, spacing, radii, shadows). Mirrors the design system's `tokens.json`. |
 | `src/styles/app.css` | Component styles, ported from the design system's `bundle.css`. |
 | `src/session/` | Session model and reducer: who has control, tabs with per-tab history and Claude's per-tab state, the shared timeline, the pending approval; stand-in page titles. |
-| `src/components/` | `TabStrip`, `ControlBar`, `Toolbar`, `Viewport` (with Claude's cursor), `SessionPanel`, `Timeline`, `ApprovalCard`, `Logo`, `Icons`. |
+| `src/components/` | `TabStrip`, `ControlBar`, `Toolbar`, `Viewport` (with Claude's target outline), `SessionPanel`, `Timeline`, `Confirmation`, `Logo`, `Icons`. |
 
 ## Interface rules
 
 These rules come from the repository's `better-*` and `emil-design-eng` skills.
 
-- **Control is stated at the top.** The top row says *Claude has control*, *Approval needed* or *You have control*, with the one action that changes it beside it:
-  - **Take control** hands the browser to you. It is not "pause": you carry on the task yourself.
-  - **Resume Claude** hands it back.
-- **One shared timeline.** The *Session* panel records what each party did, in plain words:
-  - Claude: "Filled shipping address"
-  - Halo: "Blocked a tracking request"
-  - You: "Approved $84.20"
-  - The main status is *Done*, *Blocked*, *Needs approval*, *Approved* or *Denied*. The policy verdict (`ALLOW`, `QUARANTINE`, `REVIEW`) is small secondary text.
+What's on screen is the web page, a quiet activity list, and a confirmation when one is needed. Everything else was removed; no function went with it.
+
+- **Control, at the top:** *Claude has control* or *You have control*, with **Take control** or **Resume Claude**. While Claude waits for you it still has control, so the top row doesn't announce the wait. The confirmation in the panel does.
+- **Activity:** one list of what Claude, You and Halo did.
+  - Each row names the actor in bold text and says what happened in plain words: "Claude Filled shipping address", "Halo Blocked a tracking request", "You Approved $84.20". There are no avatars and no panel title.
+  - "Done" is implicit. Only a pending ask gets a word ("Waiting").
+  - Halo's rows are quieter system text. A blocked row has a 2px red bar and red text.
+  - The policy verdict (`allow`, `review`, `quarantine`) is not printed; it's in the row's tooltip and in screen-reader text.
+- **Confirmation:** a compact strip at the bottom of the panel, shown only while a decision is open.
+  - "Place order for **$84.20**?", then the card and destination, then **Approve** and **Deny**.
+  - The activity above it dims while it's open.
+  - Focus goes to the question, not to Approve.
+- **Claude's target on the page:** a thin muted-blue outline, with no label and no glow.
+- **Per-tab status:** each tab Claude has worked in shows working / waiting / paused / done beside its favicon. Claude opens research tabs in the background.
 - **Colour: near-black neutrals.** Layers are flat and separated by 1px lines. The web page keeps its own look.
 
   | Role | Value |
@@ -53,23 +59,15 @@ These rules come from the repository's `better-*` and `emil-design-eng` skills.
   - SF / Inter sans everywhere.
   - Monospace is used only for URLs and log detail: selectors, hosts and requests.
   - Uppercase appears only on the small policy labels.
-- **The approval sheet is the focus.** It appears only while a decision is open, anchored to the bottom edge of the panel. It is not a card inside the panel.
-  - It lists the amount first, then the card, then the destination.
-  - While it's open, the timeline above it is dimmed. The text stays at readable contrast.
-  - Amber appears only as the sheet's dot and the top-row dot.
-- **Claude's cursor.** On the page, the element Claude is about to use gets a soft Halo-blue ring and a cursor labelled "Claude", like a collaborator's pointer.
-- **Per-tab status.** Each tab Claude has worked in shows its state next to the favicon: working (dot), waiting (Ⅱ amber), paused (Ⅱ grey) or done (green ✓).
-  - Claude opens research tabs in the background, so your view stays where it is.
-  - You can't navigate or close a tab while Claude holds it.
 - **Keyboard and screen reader**
   - Every control is a native `<button>`.
   - Tabs follow the ARIA tabs pattern: ← → Home End move between tabs, and Delete closes one.
   - A skip link jumps to the page.
   - A polite live region announces control changes.
-  - When an approval appears, focus goes to the amount, never to the approve button.
-- **Motion:** only when the user hasn't asked for reduced motion; animates only transform and opacity; buttons press to `scale(0.96)`; new events fade in over 220ms.
+  - When a confirmation appears, focus goes to its question, never to the approve button.
+- **Motion:** only when the user hasn't asked for reduced motion; animates only transform and opacity; buttons press to `scale(0.96)`; new rows and the confirmation fade in over 220ms.
 - **Layout**
-  - The Session panel is 340–400px wide on desktop.
+  - The activity panel is 340–400px wide on desktop.
   - Below 45rem it stacks under the page.
   - Below 40rem the control row takes the top line on its own.
   - At 320px there is no horizontal scroll.

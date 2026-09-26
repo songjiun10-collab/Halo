@@ -2,16 +2,6 @@ import { pageTitle } from '../session/pages'
 import { AGENT, currentUrl } from '../session/session'
 import type { Tab } from '../session/types'
 
-/** Where Claude is about to act: a soft halo on the element and a named cursor. */
-function ClaudeCursor() {
-  return (
-    <span className="hx-cursor" aria-hidden="true">
-      <svg viewBox="0 0 16 16" className="hx-cursor__arrow"><path d="M2 1.5l11 6.2-4.9 1.3-2 4.6z" /></svg>
-      <span className="hx-cursor__name">{AGENT}</span>
-    </span>
-  )
-}
-
 /**
  * Stand-in for the page engine's surface. The page keeps the site's own look;
  * HALO draws only where Claude is about to act.
@@ -38,7 +28,6 @@ export function Viewport({ tab, target }: { tab: Tab; target?: string }) {
         </dl>
         <span className="hx-site__btn" data-claude-target={targeted || undefined}>
           Place order
-          {targeted && <ClaudeCursor />}
         </span>
         {targeted && <p className="hx-sr">{AGENT} is about to click Place order.</p>}
       </>

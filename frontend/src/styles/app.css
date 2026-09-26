@@ -65,7 +65,7 @@ code { font-family: var(--font-mono); }
 @media (hover: hover) and (pointer: fine) {
   .hx-icbtn:hover:not(:disabled) { background: var(--hover); color: var(--foreground); }
   .hx-btn--secondary:hover { background: var(--hover); }
-  .hx-approval .hx-btn--secondary:hover { background: var(--well); }
+  .hx-confirm .hx-btn--secondary:hover { background: var(--well); }
   .hx-btn--primary:hover { background: color-mix(in oklab, var(--primary-fill), black 12%); }
 }
 
@@ -159,16 +159,8 @@ code { font-family: var(--font-mono); }
   padding: 10px 20px; border-radius: var(--radius-md);
   background: var(--site-button); color: var(--site-on-button); font-weight: 600;
 }
-/* Where Claude is about to act: a soft halo and a named cursor, like a collaborator's pointer. */
-.hx-site__btn[data-claude-target] {
-  box-shadow: 0 0 0 2px var(--site-bg), 0 0 0 4px var(--brand-on-site), 0 0 0 10px color-mix(in oklab, var(--brand-on-site), transparent 80%);
-}
-.hx-cursor { position: absolute; left: calc(100% - 10px); top: calc(100% - 6px); display: flex; align-items: flex-start; pointer-events: none; }
-.hx-cursor__arrow { width: 18px; height: 18px; fill: var(--brand-on-site); stroke: var(--site-bg); stroke-width: 1.2; stroke-linejoin: round; }
-.hx-cursor__name {
-  margin: 12px 0 0 -2px; padding: 1px 7px; border-radius: 999px;
-  background: var(--brand-on-site); color: var(--on-brand); font: 600 12px/18px var(--font-body); white-space: nowrap;
-}
+/* Where Claude is about to act: a thin muted-blue outline. No label, no glow. */
+.hx-site__btn[data-claude-target] { outline: 1.5px solid var(--brand-on-site); outline-offset: 3px; }
 .hx-site__empty { max-width: 28rem; margin: 10vh auto 0; text-align: center; color: var(--site-muted); }
 .hx-site__empty-title { margin: 0 0 var(--space-xs); color: var(--site-fg); font-weight: 600; }
 
@@ -179,7 +171,7 @@ code { font-family: var(--font-mono); }
 .hx-control__dot { width: 10px; height: 10px; border-radius: 50%; background: var(--foreground); }
 .hx-control[data-control="claude"] .hx-control__dot { background: var(--foreground); }
 .hx-control[data-control="you"] .hx-control__dot { background: transparent; box-shadow: inset 0 0 0 2px var(--foreground); }
-.hx-control[data-control="approval"] .hx-control__dot { background: var(--warning); }
+.hx-control[data-control="approval"] .hx-control__dot { background: var(--foreground); }
 .hx-control__note { color: var(--muted-foreground); font-size: 13px; }
 @media (max-width: 40rem) {
   .hx-control { flex: 1 0 100%; min-width: 0; gap: var(--space-sm); flex-wrap: wrap; }
@@ -201,10 +193,8 @@ code { font-family: var(--font-mono); }
   padding: var(--space-md); background: var(--sidebar);
   border-inline-start: 1px solid var(--border);
 }
-.hx-panel__head { display: flex; align-items: baseline; justify-content: space-between; }
-.hx-panel__title { margin: 0; font: 600 16px/1.2 var(--font-body); }
-.hx-demo { padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); font: 500 12px/1.4 var(--font-body); color: var(--muted-foreground); }
-.hx-panel__task { display: flex; gap: var(--space-sm); align-items: baseline; margin: 0; font-size: 15px; }
+.hx-demo { flex: none; padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); font: 500 12px/1.4 var(--font-body); color: var(--muted-foreground); }
+.hx-panel__task { display: flex; gap: var(--space-sm); align-items: baseline; justify-content: space-between; margin: 0; font-size: 14px; font-weight: 500; }
 .hx-panel__state { margin: 0; color: var(--muted-foreground); }
 .hx-typing { display: inline-flex; gap: 3px; margin-inline-start: 6px; vertical-align: middle; }
 .hx-typing i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
@@ -219,61 +209,29 @@ code { font-family: var(--font-mono); }
     radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.5), transparent) top / 100% 10px no-repeat scroll,
     radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.5), transparent) bottom / 100% 10px no-repeat scroll;
 }
-.hx-event {
-  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: start;
-  padding: 8px 10px; border-radius: var(--radius-md);
-}
-.hx-avatar {
-  display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%;
-  font: 700 12px/1 var(--font-body);
-}
-.hx-avatar[data-actor="claude"] { background: var(--well); color: var(--foreground); }
-.hx-avatar[data-actor="you"] { background: var(--foreground); color: var(--chrome); }
-.hx-avatar[data-actor="halo"] { background: var(--well); color: var(--brand); }
-.hx-avatar__mark { width: 16px; height: 16px; }
-.hx-event__body { display: grid; gap: 2px; min-width: 0; padding-top: 2px; }
-.hx-event__text { line-height: 1.4; }
-.hx-event__text b { font-weight: 600; }
+.hx-event { display: grid; gap: 1px; padding: 6px 10px; }
+.hx-event__text { line-height: 1.45; }
+.hx-event__actor { font-weight: 600; }
 .hx-event__detail { font-size: 12px; line-height: 1.4; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.hx-event__outcome { color: var(--muted-foreground); }
+/* Halo's interventions read as system events: quieter text. Blocked keeps a 2px red bar and red word. */
+.hx-event[data-actor="halo"] .hx-event__text { color: var(--muted-foreground); }
+.hx-event[data-actor="halo"] .hx-event__actor { color: var(--foreground); }
+.hx-event[data-outcome="blocked"], .hx-event[data-outcome="denied"] { box-shadow: inset 2px 0 0 var(--danger); }
+.hx-event[data-outcome="blocked"] .hx-event__what, .hx-event[data-outcome="denied"] .hx-event__what { color: var(--danger); }
+.hx-timeline[data-dim] .hx-event__text, .hx-timeline[data-dim] .hx-event__actor { color: var(--muted-foreground); }
 
-/* Plain-language outcome first; the policy verdict as small secondary text. */
-.hx-outcome { display: grid; justify-items: end; gap: 1px; padding-top: 2px; white-space: nowrap; }
-.hx-outcome__main { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; color: var(--muted-foreground); }
-.hx-outcome__main .hx-ic { width: 14px; height: 14px; stroke-width: 2; }
-.hx-outcome[data-outcome="done"] .hx-ic, .hx-outcome[data-outcome="approved"] .hx-ic { color: var(--success); }
-.hx-event:has(.hx-outcome[data-outcome="blocked"]), .hx-event:has(.hx-outcome[data-outcome="denied"]) { box-shadow: inset 2px 0 0 var(--danger); border-radius: 0 var(--radius-md) var(--radius-md) 0; }
-.hx-outcome[data-outcome="blocked"] .hx-outcome__main, .hx-outcome[data-outcome="denied"] .hx-outcome__main { color: var(--danger); }
-.hx-outcome[data-outcome="approval"] .hx-ic { color: var(--warning); }
-.hx-outcome__policy { font: 500 11px/1.3 var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
-
-/* While a decision is open, the history steps back: muted text and glyphs, contrast kept. */
-.hx-timeline[data-dim] .hx-event__text, .hx-timeline[data-dim] .hx-outcome__main { color: var(--muted-foreground); }
-.hx-timeline[data-dim] .hx-outcome .hx-ic { color: var(--muted-foreground); }
-.hx-timeline[data-dim] .hx-avatar { filter: grayscale(1); }
-
-/* The approval sheet: appears only when a decision is open, anchored to the panel's bottom edge.
-   Hierarchy does the work: amount, then card, then destination. Amber is only the kicker's dot. */
-.hx-approval {
+/* The confirmation: a compact strip at the panel's bottom edge, only while a decision is open. */
+.hx-confirm {
   flex: none; margin: 0 calc(-1 * var(--space-md)) calc(-1 * var(--space-md));
-  padding: var(--space-md); border-radius: 12px 12px 0 0;
-  background: var(--surface); border-top: 1px solid var(--border-strong); box-shadow: var(--shadow-raised);
+  padding: 12px var(--space-md) var(--space-md); border-top: 1px solid var(--border-strong); background: var(--surface);
 }
-.hx-approval__kicker { display: flex; align-items: center; justify-content: space-between; margin: 0 0 6px; color: var(--foreground); font-weight: 600; font-size: 13px; }
-.hx-approval__kicker > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
-.hx-approval__kicker > span:first-child::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
-.hx-approval__policy { font: 500 11px/1.3 var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
-.hx-approval__title { margin: 0; font: 500 15px/1.4 var(--font-body); color: var(--muted-foreground); }
-.hx-approval__amount { margin: 2px 0 12px; font: 600 34px/1.1 var(--font-body); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.hx-approval__amount:focus { outline: none; }
-.hx-approval__facts { display: grid; gap: 6px; margin: 0 0 12px; }
-.hx-approval__facts div { display: flex; justify-content: space-between; gap: var(--space-md); }
-.hx-approval__facts dt { color: var(--muted-foreground); }
-.hx-approval__facts dd { margin: 0; font-weight: 600; text-align: end; }
-.hx-approval__dest { font-family: var(--font-mono); font-weight: 500; }
-.hx-approval__request {
-  display: block; margin-bottom: var(--space-md); background: none; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere;
-}
-.hx-approval__actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+.hx-confirm__question { margin: 0; font-size: 15px; font-weight: 500; }
+.hx-confirm__question:focus { outline: none; }
+.hx-confirm__question b { font-weight: 700; }
+.hx-confirm__facts { margin: 2px 0 12px; color: var(--muted-foreground); font-size: 13px; }
+.hx-confirm__dest { font-family: var(--font-mono); color: var(--foreground); }
+.hx-confirm__actions { display: flex; gap: var(--space-sm); }
 
 /* Stacked: the whole body scrolls, so the timeline flows instead of nesting a second scroller. */
 @media (max-width: 45rem) {
@@ -284,7 +242,7 @@ code { font-family: var(--font-mono); }
 /* ---------- Motion: opt-in, transform and opacity only ---------- */
 
 @media (prefers-reduced-motion: no-preference) {
-  .hx-event, .hx-approval {
+  .hx-event, .hx-confirm {
     transition: opacity var(--enter) var(--ease-out), transform var(--enter) var(--ease-out);
     @starting-style { opacity: 0; transform: translateY(6px); }
   }
