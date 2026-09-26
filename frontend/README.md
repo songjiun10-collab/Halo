@@ -43,7 +43,7 @@ What's on screen is the web page, a quiet activity list, and a confirmation when
   | Role | Value |
   | --- | --- |
   | App background, tab bar | `#0C0E0D` |
-  | Toolbar, Session panel, approval sheet | `#151816` |
+  | Toolbar, activity panel, confirmation | `#151816` |
   | Separators, tiles | `#292D2A` |
   | Control edges (3.1:1 or better) | `#666D67` |
   | Primary text | `#E7E8E4` |
