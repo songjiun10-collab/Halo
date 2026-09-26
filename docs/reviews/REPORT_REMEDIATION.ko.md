@@ -151,6 +151,20 @@ compose.prod.yaml up` + Caddy + DuckDNS + launchd 전체 배포 경로는
 "인터넷 공개 운영 준비 완료로 판정하지 않는다"는 이 배포 이후에도
 바뀌지 않는다.
 
+2026-09-26 후속 7: 정적 프론트엔드 콘솔을 배포에 연결(`deploy/Caddyfile`).
+사용자가 "프론트하고 연결"을 요청해, 실제 `/public/hash` 공개 API까지
+연결할지 정적 페이지만 배포에 연결할지 먼저 확인했다 — 후자(권장, 안전한
+쪽)로 확정됐다. `web/halo-console.html`(별도 세션에서 만들어진 인라인
+CSS/JS 단일 정적 파일, 기본값이 `api.mode='simulation'`이라 fetch를 전혀
+호출하지 않고 SHA-256도 브라우저 Web Crypto로 계산)을 `deploy/Caddyfile`의
+`handle /` 블록이 `file_server`로 정확히 `/` 경로에서만 서빙하도록
+수정했다. `/approve`·`/execute`·`/revoke`·`/healthz`로 가는
+`reverse_proxy`는 여전히 없으므로 그 외 모든 경로는 이전과 동일하게
+404다 — 이번 변경으로 게이트웨이 API가 인터넷에 새로 열리지 않았다.
+`halo/public_api.py`(2단계, `/public/hash`)는 이전과 마찬가지로 별도
+승인 없이는 구현하지 않는다. Python 코드 변경 없음(설정 파일과
+`docs/DEPLOY.ko.md`만 갱신), 회귀 473개 그대로 통과.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

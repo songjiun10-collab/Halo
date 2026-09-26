@@ -4,9 +4,11 @@
 
 이 문서는 `halo.gateway`를 실제로 인터넷에 노출하기 위한 1단계 구성을
 다룬다: 개발용 `wsgiref` 서버를 gunicorn으로 교체하고, TLS reverse proxy를
-앞단에 두고, 무료 동적 DNS로 안정적인 호스트네임을 확보한다. **공개 API
-래퍼(인증 없는 엔드포인트)는 이번 배치에 포함되지 않는다** — 이유는 아래
-"정직한 한계"와 "2단계(범위 밖)"를 참고한다.
+앞단에 두고, 무료 동적 DNS로 안정적인 호스트네임을 확보한다. 정적 프론트
+엔드 콘솔(`web/halo-console.html`)을 같은 도메인의 `/` 경로에서 서빙하는
+것도 이번 배치에 포함된다. **공개 API 래퍼(인증 없는 엔드포인트)는 이번
+배치에 포함되지 않는다** — 이유는 아래 "정직한 한계"와 "2단계(범위 밖)"를
+참고한다.
 
 `halo/GATEWAY.ko.md`·`README.md`·`docs/DOCKER.ko.md`의 기존 경고("wsgiref를
 인터넷 서비스로 쓰지 말라")는 이 문서가 무시하는 대상이 아니라, 이 문서가
@@ -21,8 +23,19 @@
 ```
 Internet
   -> 집 라우터 (수동 포트포워딩 80,443 -> 이 Mac)
-  -> Caddy (Homebrew, 이 Mac에 네이티브 설치, TLS 종료 + 리버스 프록시, 0.0.0.0:80/443)
-  -> 127.0.0.1:8080 (기존 compose.yaml의 포트 매핑 그대로, 변경 없음)
+  -> Caddy (Homebrew, 이 Mac에 네이티브 설치, TLS 종료, 0.0.0.0:80/443)
+       |-- GET / -> web/halo-console.html (정적 파일, file_server)
+       `-- 그 외 모든 경로 -> 404 (프록시 라우트 없음)
+```
+
+콘솔 페이지는 인라인 CSS/JS만으로 이루어진 단일 정적 파일이며 기본값이
+`api.mode='simulation'`이라 fetch를 전혀 호출하지 않는다 — SHA-256 계산은
+브라우저 Web Crypto로 그 안에서 끝난다. 즉 이 Caddyfile은 실제 게이트웨이
+경로(`/approve`·`/execute`·`/revoke`·`/healthz`)를 인터넷에 열지 않는다.
+그 경로는 여전히 아래처럼 이 Mac의 loopback에서만 접근된다:
+
+```
+127.0.0.1:8080 (기존 compose.yaml의 포트 매핑 그대로, 변경 없음)
   -> Docker 컨테이너 (기존 하드닝 전부 유지: read_only, cap_drop, 리소스 제한, 내부 네트워크)
   -> gunicorn (신규)
   -> halo.wsgi:application
@@ -59,11 +72,15 @@ DNS 갱신이 실패해도 이미 연결된 세션에는 영향이 없다.
   쓸 수 있는 tmpfs가 필요하다.
 - [`deploy/Caddyfile`](../deploy/Caddyfile) — 1단계 구성. DuckDNS
   호스트네임(플레이스홀더), 자동 HTTPS, `request_body { max_size 64KB }`.
-  **지금은 공개 라우트가 하나도 없으므로 모든 경로를 404로 응답한다** —
-  `/approve`·`/execute`·`/revoke`·`/healthz`는 이 Mac의 loopback으로만
-  계속 접근한다(`compose.yaml`의 `127.0.0.1:8080:8080` 매핑은 이 작업으로
-  바뀌지 않았다). 접근 로그는 남긴다(공개 라우트가 없으므로 로그 경로에
-  민감정보가 실리지 않는다 — 유일한 남용 감시 수단).
+  정확히 `/` 경로만 `web/halo-console.html`을 정적으로 서빙하고(`handle /`
+  블록, `file_server`), **그 외 모든 경로는 여전히 404로 응답한다** —
+  `/approve`·`/execute`·`/revoke`·`/healthz`로 가는 `reverse_proxy`는
+  없으므로 이 API들은 이 Mac의 loopback으로만 계속 접근한다
+  (`compose.yaml`의 `127.0.0.1:8080:8080` 매핑은 이 작업으로 바뀌지
+  않았다). `root * REPLACE-WITH-ABSOLUTE-PATH-TO/Halo/web`를 실제 저장소
+  절대 경로로 채워야 한다. 접근 로그는 남긴다(공개 라우트가 정적 페이지
+  하나뿐이므로 로그 경로에 민감정보가 실리지 않는다 — 유일한 남용 감시
+  수단).
 - [`tools/duckdns_update.py`](../tools/duckdns_update.py) — stdlib만 사용.
   `~/.duckdns/token`·`~/.duckdns/domain`(둘 다 0600, 소유자·정규 파일 확인
   후에만 신뢰 — symlink는 `lstat()`로 거부)에서 읽어 DuckDNS 갱신 URL을
@@ -84,7 +101,9 @@ docker compose exec -T gateway python tools/docker_smoke.py
 
 # 2) Caddy 설치 (LaunchDaemon으로, 부팅 시 자동 시작 + 80/443 바인딩)
 brew install caddy
-sudo cp deploy/Caddyfile /opt/homebrew/etc/Caddyfile   # REPLACE-ME 채운 뒤 복사
+# deploy/Caddyfile의 REPLACE-ME(호스트네임)·YOUR-EMAIL·
+# REPLACE-WITH-ABSOLUTE-PATH-TO(저장소 절대 경로)를 채운 뒤 복사
+sudo cp deploy/Caddyfile /opt/homebrew/etc/Caddyfile
 sudo brew services start caddy
 
 # 3) DuckDNS 토큰/도메인을 개인 파일로 저장 (본인이 생성한 값)
@@ -146,7 +165,10 @@ audit 테이블에는 회전·정리 메커니즘이 없다 — 인증 없이 �
   `--workers=2`를 `--workers=1`로 낮춘다(기존 wsgiref와 동일한 단일 요청
   처리이지만 gunicorn의 크래시·타임아웃 감시는 그대로 얻는다).
 - 이번 배치는 기존 인증된 라우트만 TLS 뒤로 옮긴다 — 새 공개 엔드포인트는
-  없다(2단계는 위 참고, 별도 승인 후 진행).
+  없다(2단계는 위 참고, 별도 승인 후 진행). 콘솔 페이지가 공개되지만
+  그 페이지 자체는 서버에 아무 요청도 보내지 않는(`api.mode='simulation'`)
+  순수 정적 파일이다 — 이 문서가 "공개 API 없음"이라고 말하는 것과
+  모순되지 않는다.
 - `halo/GATEWAY.ko.md`의 기존 "배포 판정" 갭(외부 불변 감사, 백업/복구,
   OS 수준 도구 격리 등)은 이 작업과 무관하게 그대로 남는다.
 - **실제 배포는 이 세션에서 검증되지 않았다(미검증).** 이 세션에는 Docker
@@ -165,5 +187,6 @@ audit 테이블에는 회전·정리 메커니즘이 없다 — 인증 없이 �
 # 사용자가 자신의 Mac에서 직접 확인해야 함 (미검증)
 docker compose -f compose.yaml -f compose.prod.yaml up --build -d
 docker compose exec -T gateway python tools/docker_smoke.py
-curl https://<duckdns-hostname>/healthz   # 배포 후: 404가 기대값(1단계는 공개 라우트 없음)
+curl https://<duckdns-hostname>/            # 배포 후: 200 + 콘솔 HTML이 기대값
+curl https://<duckdns-hostname>/healthz     # 배포 후: 404가 기대값(API 라우트는 미공개)
 ```
