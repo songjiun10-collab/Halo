@@ -1,34 +1,37 @@
 /* HALO design tokens. Neutral graphite first: 85–90% of the screen is achromatic.
-   Hue carries meaning only: blue = Halo (brand, selection, focus), green = success,
-   amber = needs approval, red = blocked or danger. */
+   Hue carries meaning only: ice = Halo (brand, selection, focus), sage = success,
+   soft amber = needs approval, coral = blocked or danger. */
 :root {
   color-scheme: dark;
 
-  /* Neutrals (graphite, no blue cast) */
-  --backdrop: #111112;       /* outside the window */
-  --chrome: #1c1c1e;         /* window, tab strip, toolbar */
-  --sidebar: #232325;        /* Session panel, a step lighter than chrome */
-  --surface: #2c2c2e;        /* selected tab, cards, address field */
-  --well: #38383a;           /* hover, code wells, favicons */
-  --foreground: #f5f5f7;     /* ≥10.7:1 on every neutral */
-  --muted-foreground: #a1a1a6; /* ≥4.5:1 on every neutral */
-  --border: #3a3a3c;         /* decorative dividers only */
-  --border-strong: #7c7c81;  /* control edges, ≥3.3:1 on chrome, sidebar, surface */
+  /* Neutrals: graphite, warm-white text. */
+  --backdrop: #111214;         /* app background, almost black */
+  --chrome: #191a1d;           /* tab bar */
+  --toolbar: #202124;          /* toolbar; the selected tab joins it */
+  --sidebar: #242528;          /* Session panel */
+  --surface: #2d2f33;          /* cards and "You" rows in the panel; also hover */
+  --hover: #2d2f33;
+  --well: #383a3f;             /* favicon and avatar tiles */
+  --foreground: #f2f1ed;       /* primary text, warm white: >=11.8:1 everywhere */
+  --muted-foreground: #a6a7ab; /* secondary text: >=5.5:1 everywhere */
+  --text-muted: #73757a;       /* 2.9-4.1:1: disabled and decorative only, never readable text */
+  --border: #383a3f;           /* decorative dividers only (1.4:1) */
+  --border-strong: #7d7f84;    /* added: control edges, >=3.3:1 on every surface */
 
-  /* Actions: the primary action is neutral, not a hue */
-  --primary-fill: #f5f5f7;
-  --on-primary: #1c1c1e;
+  /* The primary action is neutral, not a hue. */
+  --primary-fill: #f2f1ed;
+  --on-primary: #111214;
 
-  /* Halo blue: brand, selection, focus. Never decoration. */
-  --brand: #5e9eff;          /* ≥5.1:1 on chrome, sidebar, surface */
-  --brand-on-site: #2f6fe0;  /* on the light web page (4.5:1) */
+  /* Halo accent (ice): brand, selection, focus. */
+  --brand: #a8c7fa;            /* >=7.8:1 on every dark surface */
+  --brand-on-site: #3b6fc4;    /* added: ice deepened for the light web page (4.7:1) */
   --on-brand: #ffffff;
   --ring: var(--brand);
 
   /* Status */
-  --success: #32d74b;
-  --warning: #ffb340;
-  --danger: #ff6961;         /* ≥4.9:1 on chrome, sidebar, surface */
+  --warning: #e5b85c;          /* approval, soft amber */
+  --danger: #e06c67;           /* blocked, coral: text >=4.7:1 on tab bar/toolbar/panel; icon only on surface */
+  --success: #78a980;          /* sage */
 
   /* The web page inside the viewport keeps the site's own light look. */
   --site-bg: #f8fafc;
