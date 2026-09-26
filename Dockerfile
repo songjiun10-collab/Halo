@@ -27,7 +27,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends nodejs npm git \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code \
-    && pip install --no-cache-dir mcp==2.0.0 pyotp==2.10.0
+    && pip install --no-cache-dir mcp==2.0.0 pyotp==2.10.0 gunicorn==26.2.0
 USER halo:halo
 RUN yes | claude plugin marketplace add songjiun10-collab/hook \
     && yes | claude plugin install hook@hook \

@@ -1,0 +1,27 @@
+# Production overlay -- adds gunicorn on top of the base compose.yaml.
+# Does not replace it: run both files together so the existing hardening
+# (read_only, cap_drop, secrets, healthcheck, network) stays in effect.
+#
+#   docker compose -f compose.yaml -f compose.prod.yaml up --build -d
+#
+# --worker-tmp-dir /dev/shm is required, not optional: compose.yaml sets
+# read_only: true, so gunicorn's sync worker needs a writable tmpfs for its
+# heartbeat file or it will fail to boot.
+services:
+  gateway:
+    command:
+      - gunicorn
+      - halo.wsgi:application
+      - --bind=0.0.0.0:8080
+      - --workers=2
+      - --threads=1
+      - --worker-class=sync
+      - --worker-tmp-dir=/dev/shm
+      - --timeout=30
+      - --graceful-timeout=10
+      - --keep-alive=5
+      - --max-requests=2000
+      - --max-requests-jitter=200
+      - --error-logfile=-
+      - --log-level=info
+    restart: unless-stopped

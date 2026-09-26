@@ -22,7 +22,8 @@
 WSGI 서버의 factory 설정으로 `halo.gateway_app:create_app()`을 지정한다.
 로컬 개발용 Docker Compose 실행은 [Docker 안내](../docs/DOCKER.ko.md)를 따른다.
 TLS·인증 프록시는 이 저장소에 구성되지 않았다. 개발용 wsgiref 서버를
-인터넷 서비스로 사용하지 않는다.
+인터넷 서비스로 사용하지 않는다. gunicorn+Caddy+DuckDNS로 이 전제조건을
+채우는 참조 배포는 [배포 안내](../docs/DEPLOY.ko.md)를 따른다.
 
 ## API
 
@@ -83,5 +84,7 @@ pending 권한은 최대 1024개다. 과거 grant/audit 행 보존으로 디스�
 프로세스 격리, 외부 도구 어댑터, 외부 감사, 백업/복구 및 실제 호스트 부하
 검증이 완료되지 않았으므로 인터넷 공개 운영 준비 완료로 판정하지 않는다.
 메타데이터 노출이 남은 Seatbelt 실험 결과도 이 서비스의 격리 보증이 아니다.
+[배포 안내](../docs/DEPLOY.ko.md)의 1단계 구성 이후에도 이 판정은
+바뀌지 않는다 — 남은 갭은 그 문서의 "정직한 한계"를 참고한다.
 
 검증 명령: `.venv/bin/python -m pytest tests/test_gateway.py tests/test_gateway_adversarial.py tests/test_authority.py -q`

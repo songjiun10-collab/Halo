@@ -3,7 +3,9 @@
 기존 SHA-256 데모 게이트웨이를 Docker Compose로 실행한다. Docker Engine 또는
 Docker Desktop과 Compose v2, 호스트 Python 3가 필요하다.
 Python 표준 라이브러리의 단일 요청 처리 `wsgiref` 개발 서버를 사용하므로
-인터넷 공개 서비스나 부하가 큰 운영 서버로 사용하지 않는다.
+인터넷 공개 서비스나 부하가 큰 운영 서버로 사용하지 않는다. 이 `compose.yaml`
+단독 실행(로컬 개발)은 아래 내용 그대로 유지되며, `compose.prod.yaml` 오버레이를
+추가로 얹는 별도 배포 경로는 [docs/DEPLOY.ko.md](DEPLOY.ko.md)에서 다룬다.
 
 ## 실행
 

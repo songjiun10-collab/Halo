@@ -125,6 +125,32 @@ Claude가 핵심 로직(`experiment.py`, `channel.py`의 `Channel`/
 `Authority`/`Gateway`가 요구하는 "호스트가 인증한 사용자 의도" 요건을
 대체하지 않는다 — README의 "정직한 한계" 참고.
 
+2026-09-26 후속 6: [Mac을 서버로 게이트웨이 인터넷 공개 1단계 — 프로덕션
+서버 + TLS + DDNS](DEPLOY.ko.md). 사용자가 실제 게이트웨이를 인터넷에
+공개하기를 요청했고, 프로덕션 서버·TLS를 먼저 갖추는 방안(권장)과 이
+Mac을 로컬 호스트로 쓰는 방안, 무료 동적 DNS(DuckDNS)를 확인받았다.
+`halo/authority.py`·`halo/gateway.py`·`halo/gateway_app.py`·
+`halo/dev_server.py`는 전혀 수정하지 않고, 새 `halo/wsgi.py`(umask 설정 후
+`dev_server.application()`을 감싸는 최소 엔트리포인트)를 추가해 개발용
+`wsgiref`를 gunicorn으로 교체했다. `compose.prod.yaml` 오버레이가 기존
+`compose.yaml`의 하드닝(read_only, cap_drop, 시크릿, 헬스체크, 네트워크)을
+재선언 없이 그대로 유지한 채 `command`만 gunicorn 호출로 바꾼다. TLS는
+호스트 네이티브 Caddy가 담당하며, 1단계 `deploy/Caddyfile`은 공개 라우트가
+아직 없으므로 모든 경로를 404로 응답한다 — `/approve`·`/execute`·
+`/revoke`·`/healthz`는 여전히 loopback 전용이다. `tools/duckdns_update.py`
+(stdlib만 사용, 0600 파일에서만 토큰을 읽고 symlink는 거부)와 launchd
+plist 템플릿으로 DNS 갱신을 자동화했다. 인증 없는 공개 API 래퍼
+(`halo/public_api.py`, 요청마다 fsync 디스크 쓰기 3회에 회전 없는 audit
+테이블이라는 실제 남용 벡터)는 설계만 해두고 이번 배치에 구현하지
+않았다 — 별도 승인 필요. Python 9개 신규(`test_wsgi.py`, `test_duckdns_update.py`)
+포함 473개 통과. **미검증**: 이 세션에는 Docker 데몬도 대상 라우터·macOS
+시스템 설정 접근도 없어, 실제 `docker compose -f compose.yaml -f
+compose.prod.yaml up` + Caddy + DuckDNS + launchd 전체 배포 경로는
+사용자가 자신의 Mac·네트워크에서 직접 확인해야 한다 — `docs/DEPLOY.ko.md`의
+"정직한 한계"·"사용자가 직접 해야 하는 것" 참고. `halo/GATEWAY.ko.md`의
+"인터넷 공개 운영 준비 완료로 판정하지 않는다"는 이 배포 이후에도
+바뀌지 않는다.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

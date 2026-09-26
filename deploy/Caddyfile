@@ -1,0 +1,33 @@
+# Phase 1: TLS reverse proxy in front of the Halo gateway, with NO public
+# routes yet. /approve, /execute, /revoke, /healthz stay loopback-only (the
+# gateway container is only published on 127.0.0.1:8080 -- see compose.yaml).
+# There is nothing behind this Caddyfile for the public internet to reach;
+# every path 404s. See docs/DEPLOY.ko.md for why, and for the Phase 2 plan
+# (a narrow /public/hash wrapper) that this file deliberately does not wire
+# up without separate approval.
+{
+	email YOUR-EMAIL@example.com   # Let's Encrypt expiry/problem notices -- replace
+}
+
+# REPLACE-ME: your DuckDNS hostname, e.g. myhalo.duckdns.org
+REPLACE-ME.duckdns.org {
+	handle {
+		respond 404
+	}
+
+	request_body {
+		max_size 64KB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	log {
+		output file /opt/homebrew/var/log/caddy/halo-access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
