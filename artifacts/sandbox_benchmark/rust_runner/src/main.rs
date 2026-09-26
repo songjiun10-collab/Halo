@@ -242,6 +242,11 @@ fn profile(work: &Path, exe: &Path, outside: &Path) -> String {
 (allow file-read-metadata (literal {exe}) (subpath {work})
     (subpath "/usr/lib") (literal "/dev/null"))
 (deny file-read-metadata (subpath {outside}))
+; These mount/configuration queries are not constrained by vnode metadata rules.
+; Cover both path and descriptor variants, including legacy syscall numbers.
+(deny syscall-unix
+    (syscall-number SYS_statfs SYS_statfs64 SYS_fstatfs SYS_fstatfs64
+                    SYS_pathconf SYS_fpathconf))
 (allow file-write* (subpath {work}) (literal "/dev/null"))
 (deny process-info*)
 "#
@@ -967,6 +972,60 @@ mod tests {
         report["summary"][MODES[2]]["errors"] = json!(0);
         report["summary"][MODES[2]]["attacks_blocked"] = json!(8);
         assert!(!report_passes(&report));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn syscall_filter_blocks_fd_metadata_variants() {
+        // Re-exec only this test so the real profile confines the syscall caller.
+        if let Ok(mode) = std::env::var("HALO_METADATA_FD_CONTROL") {
+            let file = File::open("input.txt").unwrap();
+            let fd = file.as_raw_fd();
+            let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+            let mut statvfs = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+            for query in 0..3 {
+                // SAFETY: the FD is live; the output pointers have the correct
+                // size/alignment and are never read after failure.
+                let rc = unsafe {
+                    match query {
+                        0 => libc::fstatfs(fd, stat.as_mut_ptr()) as i64,
+                        1 => libc::fstatvfs(fd, statvfs.as_mut_ptr()) as i64,
+                        _ => libc::fpathconf(fd, libc::_PC_NAME_MAX) as i64,
+                    }
+                };
+                if mode == "sandbox" {
+                    assert_eq!(rc, -1, "FD query {query} escaped");
+                    assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+                } else {
+                    assert!(rc >= 0, "control FD query {query} failed");
+                }
+            }
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().canonicalize().unwrap();
+        fs::write(work.join("input.txt"), "public input").unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let policy = profile(&work, &exe, &work.join("outside"));
+        for mode in ["control", "sandbox"] {
+            let mut cmd = if mode == "sandbox" {
+                let mut cmd = Command::new("/usr/bin/sandbox-exec");
+                cmd.args(["-p", &policy]).arg(&exe);
+                cmd
+            } else {
+                Command::new(&exe)
+            };
+            cmd.args([
+                "--exact",
+                "tests::syscall_filter_blocks_fd_metadata_variants",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env("HALO_METADATA_FD_CONTROL", mode)
+            .current_dir(&work);
+            let output = cmd.output().unwrap();
+            assert!(output.status.success(), "{mode}: {output:?}");
+        }
     }
 
     #[test]

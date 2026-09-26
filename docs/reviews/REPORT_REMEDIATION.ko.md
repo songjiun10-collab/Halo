@@ -62,6 +62,23 @@ informational로 재분류됐다. 실제 `--repeats 1` 실행으로 clean-launch
 (`tests/runner.rs`)가 이를 명시적으로 단언한다. B1(별도 격리 환경 필요) 자체를
 해결했다고 주장하지 않는다. Rust 16개 + Python 418개 통과.
 
+2026-09-26 후속 2: [macOS 샌드박스 clean-launch 잔여 3건(statvfs/statfs/
+pathconf) 추가 수정 — 9→3→0](../../artifacts/sandbox_benchmark/RUST_RUNNER.ko.md).
+위 9→3 축소 이후 남은 세 호출은 경로 기반 `file-read-metadata` deny로는
+막히지 않았다 — Seatbelt의 vnode metadata 필터가 애초에 이 syscall들의
+mount/파일시스템 수준 조회를 다루지 않기 때문이다. 프로파일에 `(deny
+syscall-unix (syscall-number SYS_statfs SYS_statfs64 SYS_fstatfs
+SYS_fstatfs64 SYS_pathconf SYS_fpathconf))`를 추가해 경로·파일서술자
+인자와 무관하게 syscall 번호 단위로 차단했다(`statvfs`류는 libc 내부에서
+`statfs`류로 구현되어 함께 막힌다). 새 회귀 테스트로 파일서술자 기반
+변형까지 `sandbox-exec` 자식 프로세스 안에서 재실행해 `EPERM`을 직접
+확인했다. 이 기기의 실제 `sandbox-exec`로 재검증한 결과 clean-launch는
+차단 97·정보성 3·허용 3(escaped 0)이 됐고 `security_gate.passed=true`,
+`residual_cases=[]`다 — B1이 이 러너의 고정 100개 probe 범위 안에서는
+더 이상 열려 있지 않다. 이 러너가 검사하는 시행에 한정된 결과이며 완전한
+호스트 메타데이터 기밀성을 주장하지 않는다. Rust 17개 + Python 418개
+통과.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
