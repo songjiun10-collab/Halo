@@ -32,33 +32,31 @@ These rules come from the repository's `better-*` and `emil-design-eng` skills.
   - Halo: "Blocked a tracking request"
   - You: "Approved $84.20"
   - The main status is *Done*, *Blocked*, *Needs approval*, *Approved* or *Denied*. The policy verdict (`ALLOW`, `QUARANTINE`, `REVIEW`) is small secondary text.
-- **Colour: 85–90% neutral.** The web page keeps its own look.
+- **Colour: near-black neutrals.** Layers are flat and separated by 1px lines. The web page keeps its own look.
 
   | Role | Value |
   | --- | --- |
-  | App background | `#111214` |
-  | Tab bar | `#191A1D` |
-  | Toolbar (the selected tab joins it) | `#202124` |
-  | Session panel | `#242528` |
-  | Hover, cards | `#2D2F33` |
-  | Border (dividers only) | `#383A3F` |
-  | Primary text, warm white | `#F2F1ED` |
-  | Secondary text | `#A6A7AB` |
-  | Muted (disabled and decorative only; 2.9–4.1:1, never readable text) | `#73757A` |
-  | Halo accent, ice: brand, focus, Claude's cursor | `#A8C7FA` |
-  | Approval, soft amber | `#E5B85C` |
-  | Blocked, coral | `#E06C67` |
-  | Success, sage | `#78A980` |
+  | App background, tab bar | `#0C0E0D` |
+  | Toolbar, Session panel, approval sheet | `#151816` |
+  | Separators, tiles | `#292D2A` |
+  | Control edges (3.1:1 or better) | `#666D67` |
+  | Primary text | `#E7E8E4` |
+  | Secondary text | `#858C86` |
+  | Halo accent, ice: brand, focus, Claude's cursor | `#A8C7FA` (`#3B6FC4` on the light page) |
+  | Approval (dot only) | `#B99752` |
+  | Blocked (2px left bar plus text, never a filled surface) | `#C86A64` |
+  | Success (glyph) | `#72A982` |
 
-  Two values were added so everything stays legible:
-  - `#7D7F84` for control edges. The border colour is only 1.4:1, and controls need 3:1.
-  - `#3B6FC4` for Claude's cursor on the light web page. Ice is only 1.6:1 there.
-
-  The primary button is a neutral warm-white fill, not a hue.
-- **The approval card is the focus.**
+  - Status is carried by a small dot, a glyph or a few words of text.
+  - The primary button is a neutral light fill, not a hue.
+- **Type:**
+  - SF / Inter sans everywhere.
+  - Monospace is used only for URLs and log detail: selectors, hosts and requests.
+  - Uppercase appears only on the small policy labels.
+- **The approval sheet is the focus.** It appears only while a decision is open, anchored to the bottom edge of the panel. It is not a card inside the panel.
   - It lists the amount first, then the card, then the destination.
   - While it's open, the timeline above it is dimmed. The text stays at readable contrast.
-  - Amber appears at full strength only on this card and the top-row state.
+  - Amber appears only as the sheet's dot and the top-row dot.
 - **Claude's cursor.** On the page, the element Claude is about to use gets a soft Halo-blue ring and a cursor labelled "Claude", like a collaborator's pointer.
 - **Per-tab status.** Each tab Claude has worked in shows its state next to the favicon: working (dot), waiting (Ⅱ amber), paused (Ⅱ grey) or done (green ✓).
   - Claude opens research tabs in the background, so your view stays where it is.
