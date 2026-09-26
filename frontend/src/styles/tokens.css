@@ -1,29 +1,34 @@
-/* HALO design tokens — the used subset of the HALO design system's tokens.json
-   (ui-ux-pro-max: Developer Tool / Dark Mode OLED). Edit there first. */
+/* HALO design tokens. Neutral graphite first: 85–90% of the screen is achromatic.
+   Hue carries meaning only: blue = Halo (brand, selection, focus), green = success,
+   amber = needs approval, red = blocked or danger. */
 :root {
   color-scheme: dark;
 
-  /* Surfaces and text */
-  --background: #0f172a;
-  --card: #1b2336;
-  --muted: #272f42;
-  --foreground: #f8fafc;
-  --muted-foreground: #94a3b8;
-  --secondary: #334155;
-  --on-secondary: #ffffff;
+  /* Neutrals (graphite, no blue cast) */
+  --backdrop: #111112;       /* outside the window */
+  --chrome: #1c1c1e;         /* window, tab strip, toolbar */
+  --sidebar: #232325;        /* Session panel, a step lighter than chrome */
+  --surface: #2c2c2e;        /* selected tab, cards, address field */
+  --well: #38383a;           /* hover, code wells, favicons */
+  --foreground: #f5f5f7;     /* ≥10.7:1 on every neutral */
+  --muted-foreground: #a1a1a6; /* ≥4.5:1 on every neutral */
+  --border: #3a3a3c;         /* decorative dividers only */
+  --border-strong: #7c7c81;  /* control edges, ≥3.3:1 on chrome, sidebar, surface */
 
-  /* Lines: `border` is decorative (2.4:1); controls use `border-strong` (3.8:1). */
-  --border: #475569;
-  --border-strong: #64748b;
-  --ring: #ffffff;
+  /* Actions: the primary action is neutral, not a hue */
+  --primary-fill: #f5f5f7;
+  --on-primary: #1c1c1e;
 
-  /* Meaning: green = go (agent working, allow, the one primary action), amber = needs you,
-     red = denied, violet = held back. */
-  --accent: #22c55e;
-  --on-accent: #0f172a;
-  --warning: #fbbf24;
-  --destructive-text: #f87171;
-  --hold: #c4b5fd;
+  /* Halo blue: brand, selection, focus. Never decoration. */
+  --brand: #5e9eff;          /* ≥5.1:1 on chrome, sidebar, surface */
+  --brand-on-site: #2f6fe0;  /* on the light web page (4.5:1) */
+  --on-brand: #ffffff;
+  --ring: var(--brand);
+
+  /* Status */
+  --success: #32d74b;
+  --warning: #ffb340;
+  --danger: #ff6961;         /* ≥4.9:1 on chrome, sidebar, surface */
 
   /* The web page inside the viewport keeps the site's own light look. */
   --site-bg: #f8fafc;
@@ -46,8 +51,8 @@
   --radius-md: 8px;
   --radius-lg: 12px;
 
-  --shadow-window: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 20px 25px rgba(0, 0, 0, 0.15);
-  --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 10px 15px rgba(0, 0, 0, 0.1);
+  --shadow-window: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 20px 25px rgba(0, 0, 0, 0.3);
+  --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 10px 15px rgba(0, 0, 0, 0.2);
 
   /* Motion (emil-design-eng): strong ease-out, UI under 300ms. */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);

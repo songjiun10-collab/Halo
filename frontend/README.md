@@ -32,12 +32,18 @@ These rules come from the repository's `better-*` and `emil-design-eng` skills.
   - Halo: "Blocked a tracking request"
   - You: "Approved $84.20"
   - The main status is *Done*, *Blocked*, *Needs approval*, *Approved* or *Denied*. The policy verdict (`ALLOW`, `QUARANTINE`, `REVIEW`) is small secondary text.
+- **Colour: 85–90% neutral.** Graphite chrome, a slightly lighter sidebar, low-chroma grey borders; the web page keeps its own look. Hue only carries meaning:
+  - Halo blue: brand (the logo), selection (the selected-tab underline, Claude's cursor on the page) and focus rings. Never decoration.
+  - Green: success (Done, Approved).
+  - Amber: needs approval.
+  - Red: blocked or danger.
+  - The primary button is neutral (light fill, dark text), not a hue.
 - **The approval card is the focus.**
   - It lists the amount first, then the card, then the destination.
   - While it's open, the timeline above it is dimmed. The text stays at readable contrast.
-  - Amber is used at full strength only on this card and the top-row state.
-- **Claude's cursor.** On the page, the element Claude is about to use gets a soft halo and a cursor labelled "Claude", like a collaborator's pointer.
-- **Per-tab status.** Each tab Claude has worked in shows its state next to the favicon: working (dot), waiting (Ⅱ amber), paused (Ⅱ grey) or done (✓).
+  - Amber appears at full strength only on this card and the top-row state.
+- **Claude's cursor.** On the page, the element Claude is about to use gets a soft Halo-blue ring and a cursor labelled "Claude", like a collaborator's pointer.
+- **Per-tab status.** Each tab Claude has worked in shows its state next to the favicon: working (dot), waiting (Ⅱ amber), paused (Ⅱ grey) or done (green ✓).
   - Claude opens research tabs in the background, so your view stays where it is.
   - You can't navigate or close a tab while Claude holds it.
 - **Keyboard and screen reader**
