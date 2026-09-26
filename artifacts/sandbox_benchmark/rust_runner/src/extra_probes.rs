@@ -582,7 +582,7 @@ pub fn run(case: &str, outside: &Path, work: &Path, fd: i32) -> io::Result<Value
             } else {
                 cmd.arg(outside).arg(work).arg("0").arg(fd.to_string());
             }
-            let (status, stdout, _, timeout) = super::capture(&mut cmd, Duration::from_secs(2))?;
+            let (status, stdout, _, timeout, _) = super::capture(&mut cmd, Duration::from_secs(2))?;
             if timeout || !status.success() {
                 return Err(io::Error::other("child did not complete successfully"));
             }

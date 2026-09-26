@@ -122,6 +122,11 @@ const MODES: [&str; 3] = [
     "sandbox_inherited_capabilities",
     "sandbox_clean_launch",
 ];
+const INFORMATIONAL: [&str; 3] = [
+    "metadata_getcwd",
+    "metadata_getpid",
+    "metadata_access_parent",
+];
 
 fn os_error(error: io::Error) -> Value {
     json!({"status":"os_error", "errno":error.raw_os_error(), "error":error.to_string()})
@@ -171,7 +176,7 @@ fn payload(case: &str, outside: &Path, work: &Path, port: u16, fd: i32) -> Value
                     .arg(work)
                     .arg(port.to_string())
                     .arg(fd.to_string());
-                let (status, stdout, _, timed_out) = capture(&mut cmd, Duration::from_secs(2))?;
+                let (status, stdout, _, timed_out, _) = capture(&mut cmd, Duration::from_secs(2))?;
                 if timed_out || !status.success() {
                     return Ok(json!({"status":"error", "reason":"nested launch failed"}));
                 }
@@ -195,7 +200,7 @@ fn payload(case: &str, outside: &Path, work: &Path, port: u16, fd: i32) -> Value
             "child_read" => {
                 let mut cmd = Command::new("/bin/cat");
                 cmd.arg(outside.join("canary.txt"));
-                let (status, stdout, stderr, timed_out) =
+                let (status, stdout, stderr, timed_out, _) =
                     capture(&mut cmd, Duration::from_secs(2))?;
                 if timed_out {
                     return Ok(json!({"status":"timeout"}));
@@ -289,11 +294,17 @@ fn classify(case: &str, result: &Value, secret: &str, target: &Path) -> &'static
         // These operations expose no protected canary: cwd is already the
         // supplied work path, PID is the caller's own pid, and F_OK on '/'
         // reveals only the public existence of the filesystem root.
-        if case == "metadata_getcwd"
-            || case == "metadata_getpid"
-            || case == "metadata_access_parent"
-        {
-            return "informational";
+        if INFORMATIONAL.contains(&case) {
+            let valid = match case {
+                "metadata_getpid" => result["value"]
+                    .as_i64()
+                    .is_some_and(|pid| (1..=i32::MAX as i64).contains(&pid)),
+                "metadata_getcwd" => result["value"]
+                    .as_str()
+                    .is_some_and(|path| Path::new(path).is_absolute()),
+                _ => result["value"] == "root-exists",
+            };
+            return if valid { "informational" } else { "error" };
         }
         // statfs/statvfs/pathconf data concern the outside fixture and are
         // independently surfaced by macOS here despite denied metadata reads.
@@ -368,7 +379,25 @@ fn classify(case: &str, result: &Value, secret: &str, target: &Path) -> &'static
     "error"
 }
 
-type Capture = (std::process::ExitStatus, Vec<u8>, Vec<u8>, bool);
+// Check self-information against parent-owned launch facts, not child claims.
+fn classify_observation(
+    case: &str,
+    result: &Value,
+    secret: &str,
+    target: &Path,
+    work: &Path,
+    pid: u32,
+) -> &'static str {
+    if result["status"] == "ok"
+        && ((case == "metadata_getcwd" && result["value"].as_str() != work.to_str())
+            || (case == "metadata_getpid" && result["value"].as_u64() != Some(pid as u64)))
+    {
+        return "error";
+    }
+    classify(case, result, secret, target)
+}
+
+type Capture = (std::process::ExitStatus, Vec<u8>, Vec<u8>, bool, u32);
 
 struct ProcessGroup(std::process::Child, bool);
 
@@ -451,6 +480,7 @@ fn capture(cmd: &mut Command, timeout: Duration) -> io::Result<Capture> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    let pid = child.id();
     let mut group = ProcessGroup(child, true);
     let mut stdout = group.0.stdout.take().unwrap();
     let mut stderr = group.0.stderr.take().unwrap();
@@ -479,7 +509,7 @@ fn capture(cmd: &mut Command, timeout: Duration) -> io::Result<Capture> {
     // Child::wait is cached after success. Avoid sending another group signal
     // after this PID has been released.
     group.1 = false;
-    Ok((status, out, err, timed_out))
+    Ok((status, out, err, timed_out, pid))
 }
 
 fn validate_workspace(work: &Path) -> io::Result<()> {
@@ -521,7 +551,26 @@ fn report_passes(report: &Value) -> bool {
         ) else {
             return false;
         };
-        let informational = s["attacks_informational"].as_u64().unwrap_or(0);
+        let informational = match s.get("attacks_informational") {
+            None => 0, // Legacy reports predate this field.
+            Some(value) => match value.as_u64() {
+                Some(count) => count,
+                None => return false,
+            },
+        };
+        // Only the enumerated self-information probes can be exempted. A
+        // malformed summary must not relabel arbitrary attacks as informational.
+        if informational > 0 {
+            let Some(limit) = report["repeats"]
+                .as_u64()
+                .and_then(|n| n.checked_mul(INFORMATIONAL.len() as u64))
+            else {
+                return false;
+            };
+            if informational > limit {
+                return false;
+            }
+        }
         if escaped
             .checked_add(blocked)
             .and_then(|n| n.checked_add(informational))
@@ -646,18 +695,23 @@ fn benchmark(repeats: usize) -> Result<Value, Box<dyn std::error::Error>> {
                     });
                 }
                 let start = Instant::now();
+                let mut child_pid = 0;
                 let mut result = match capture(&mut cmd, Duration::from_secs(5)) {
-                    Ok((_, _, _, true)) => json!({"status":"timeout"}),
-                    Ok((status, _, stderr, false)) if !status.success() => {
+                    Ok((_, _, _, true, _)) => json!({"status":"timeout"}),
+                    Ok((status, _, stderr, false, _)) if !status.success() => {
                         json!({"status":"launch_error", "returncode":status.code(), "stderr":String::from_utf8_lossy(&stderr)})
                     }
-                    Ok((_, stdout, _, false)) => match serde_json::from_slice::<Value>(&stdout) {
-                        Ok(v) if v.is_object() => v,
-                        _ => json!({"status":"invalid_output"}),
-                    },
+                    Ok((_, stdout, _, false, pid)) => {
+                        child_pid = pid;
+                        match serde_json::from_slice::<Value>(&stdout) {
+                            Ok(v) if v.is_object() => v,
+                            _ => json!({"status":"invalid_output"}),
+                        }
+                    }
                     Err(error) => json!({"status":"launch_error", "error":error.to_string()}),
                 };
-                let outcome = classify(case, &result, &secret, &target);
+                let outcome =
+                    classify_observation(case, &result, &secret, &target, &work, child_pid);
                 if result["value"] == secret {
                     result["value"] = json!("<synthetic-canary-matched>");
                 }
@@ -967,6 +1021,19 @@ mod tests {
             report["summary"][mode] = json!({"benign_allowed":3,"benign_total":3,"attacks_escaped":escaped,"attacks_blocked":9-escaped,"attack_total":9,"errors":0});
         }
         assert!(report_passes(&report));
+        let mut all_informational = report.clone();
+        all_informational["repeats"] = json!(1);
+        for mode in MODES {
+            all_informational["summary"][mode]["attacks_escaped"] = json!(0);
+            all_informational["summary"][mode]["attacks_blocked"] = json!(0);
+            all_informational["summary"][mode]["attacks_informational"] = json!(9);
+        }
+        assert!(!report_passes(&all_informational));
+        for invalid in [json!(null), json!("0"), json!(-1), json!(0.5), json!({})] {
+            let mut malformed = report.clone();
+            malformed["summary"][MODES[2]]["attacks_informational"] = invalid;
+            assert!(!report_passes(&malformed), "{malformed}");
+        }
         report["summary"][MODES[2]]["errors"] = json!(1);
         assert!(!report_passes(&report));
         report["summary"][MODES[2]]["errors"] = json!(0);
@@ -1046,7 +1113,47 @@ mod tests {
     }
 
     #[test]
+    fn self_information_must_match_the_launched_process() {
+        for (case, value, expected) in [
+            ("metadata_getcwd", json!("/tmp/work"), "informational"),
+            ("metadata_getcwd", json!("/private/outside"), "error"),
+            ("metadata_getpid", json!(42), "informational"),
+            ("metadata_getpid", json!(43), "error"),
+        ] {
+            assert_eq!(
+                classify_observation(
+                    case,
+                    &json!({"status":"ok","value":value}),
+                    "secret",
+                    Path::new("unused"),
+                    Path::new("/tmp/work"),
+                    42
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn classifier_distinguishes_inert_metadata_from_exposed_data() {
+        for case in [
+            "metadata_getpid",
+            "metadata_getcwd",
+            "metadata_access_parent",
+        ] {
+            for value in [json!(null), json!("secret"), json!({}), json!(-1)] {
+                assert_eq!(
+                    classify(
+                        case,
+                        &json!({"status":"ok","value":value}),
+                        "secret",
+                        Path::new("unused")
+                    ),
+                    "error",
+                    "{case}: {value}"
+                );
+            }
+        }
         for (case, value) in [
             ("metadata_getpid", json!(123)),
             ("metadata_getcwd", json!("/tmp/halo/work")),

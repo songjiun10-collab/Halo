@@ -91,6 +91,20 @@ Dockerfile 빌드 단계에 Node.js·Claude Code CLI·`songjiun10-collab/hook`
 비대화형 인자 계약이 특히 불확실하다. 게이트웨이 런타임 자체는 건드리지
 않아 Python 418개는 이 변경과 무관하다.
 
+2026-09-26 후속 4: [macOS 샌드박스 판정기의 정보성(informational) 분류 허위
+PASS 보완](../../artifacts/sandbox_benchmark/RUST_RUNNER.ko.md). 자기 신고
+`status="ok"`만으로 `metadata_getpid`/`metadata_getcwd`/`metadata_access_parent`를
+무조건 informational로 분류했던 지점을 강화 — PID는 부모가 실제로 생성한
+child PID와, cwd는 부모가 지정한 work 경로와 일치해야 informational로
+인정하고, 불일치·누락·잘못된 타입은 `error`로 분류한다. `report_passes()`도
+`attacks_informational` 필드가 음이 아닌 정수인지, 반복당 지정된 3개 사례
+수를 초과하지 않는지 검증해, 조작되거나 잘못된 요약이 임의의 escaped/blocked
+공격을 informational로 둔갑시켜 게이트를 통과시키는 경로를 막았다. 이는
+판정기 자체의 허위 PASS를 막는 보완이며 새로운 OS 권한 탈출을 발견했다는
+의미는 아니다 — `security_gate.passed`가 검사하는 실제 샌드박스 경계는
+바뀌지 않았다. Rust 18개(단위 16 + 통합 2) 통과, `cargo clippy --all-targets
+-- -D warnings` 통과. 이 변경은 Python 코드를 건드리지 않는다.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
