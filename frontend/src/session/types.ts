@@ -17,6 +17,8 @@ export interface Tab {
   /** Visited URLs, oldest first; `index` points at the current one. */
   history: string[]
   index: number
+  /** Titles the gateway supplied for URLs in this tab's history. */
+  titles?: Record<string, string>
   /** Set once Claude has worked in this tab. */
   claude?: TabActivity
 }

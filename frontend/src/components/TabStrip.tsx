@@ -1,5 +1,5 @@
-import { useRef, type KeyboardEvent } from 'react'
-import { pageTitle } from '../session/pages'
+import { useEffect, useRef, type KeyboardEvent } from 'react'
+import { tabTitle } from '../session/pages'
 import { getDomain } from 'tldts'
 import { AGENT, currentUrl, host } from '../session/session'
 import type { Tab, TabActivity } from '../session/types'
@@ -16,7 +16,7 @@ interface Props {
 
 /** Favicon stand-in: the first letter of the site name; works for localhost, IPs and plain words. */
 function initial(url: string) {
-  const domain = getDomain(url) ?? host(url)
+  const domain = getDomain(url, { allowPrivateDomains: true }) ?? host(url)
   const name = domain.split('.')[0].replace(/[^\p{L}\p{N}]/gu, '')
   return name ? name[0].toUpperCase() : '·'
 }
@@ -39,6 +39,13 @@ function Activity({ state }: { state: TabActivity }) {
 
 export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew }: Props) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({})
+  // After Delete removes the focused tab, focus follows to whichever tab is selected next.
+  const refocus = useRef(false)
+  useEffect(() => {
+    if (!refocus.current) return
+    refocus.current = false
+    refs.current[activeTabId]?.focus()
+  }, [tabs, activeTabId])
 
   // APG tabs: arrows move and select, Home/End jump, Delete closes.
   function onKeyDown(e: KeyboardEvent, i: number) {
@@ -50,6 +57,7 @@ export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew
       refs.current[tabs[to].id]?.focus()
     } else if (e.key === 'Delete' && canClose(tabs[i])) {
       e.preventDefault()
+      refocus.current = true
       onClose(tabs[i].id)
     }
   }
@@ -59,7 +67,7 @@ export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew
       <div className="hx-tabs" role="tablist" aria-label="Tabs">
         {tabs.map((tab, i) => {
           const selected = tab.id === activeTabId
-          const title = pageTitle(currentUrl(tab))
+          const title = tabTitle(tab)
           return (
             <div key={tab.id} className="hx-tab" data-selected={selected}>
               <button

@@ -10,7 +10,7 @@ import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
 import { usePresence } from './hooks/usePresence'
 import { AGENT, approvalFor, canCloseTab, claudeHolds, currentUrl, demoSession, reducer } from './session/session'
-import { pageTitle } from './session/pages'
+import { tabTitle } from './session/pages'
 import type { SessionState, TimelineEvent } from './session/types'
 
 const STEP_MS = 1600
@@ -130,7 +130,7 @@ export default function App() {
             onShare={async () => {
               const url = currentUrl(tab)
               try {
-                if (navigator.share) await navigator.share({ title: pageTitle(url), url })
+                if (navigator.share) await navigator.share({ title: tabTitle(tab), url })
                 else { await navigator.clipboard.writeText(url); setToast('Link copied') }
               } catch (err) {
                 if ((err as DOMException)?.name !== 'AbortError') setToast('Unable to share this page')

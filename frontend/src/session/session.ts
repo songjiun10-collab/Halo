@@ -27,7 +27,8 @@ export type Action =
 export const NEW_TAB_URL = 'halo://newtab'
 
 let tabSeq = 0
-const makeTab = (url: string, claude?: TabActivity): Tab => ({ id: `tab-${++tabSeq}`, history: [url], index: 0, claude })
+const makeTab = (url: string, claude?: TabActivity, title?: string): Tab =>
+  ({ id: `tab-${++tabSeq}`, history: [url], index: 0, claude, titles: title ? { [url]: title } : undefined })
 
 export const currentUrl = (tab: Tab) => tab.history[tab.index]
 
@@ -57,12 +58,14 @@ export function splitUrl(url: string): { before: string; domain: string; after: 
   const u = parse(url)
   if (!u || !/^https?:$/.test(u.protocol)) return { before: '', domain: url, after: '' }
   const hostname = u.host
-  const domain = getDomain(u.hostname) ?? hostname
+  // Private suffixes count too: on alice.github.io the site is alice.github.io, not github.io.
+  const domain = getDomain(u.hostname, { allowPrivateDomains: true }) ?? hostname
   const at = hostname.lastIndexOf(domain)
   const start = u.protocol + '//'
   const sub = at > 0 ? hostname.slice(0, at) : ''
   const rest = at >= 0 ? hostname.slice(at + domain.length) : ''
-  return { before: start + sub, domain: at >= 0 ? domain + rest : hostname, after: url.slice(url.indexOf(hostname) + hostname.length) }
+  // Built from the parsed URL: the host may have been lowercased or punycoded, so it can't be found in the input.
+  return { before: start + sub, domain: at >= 0 ? domain + rest : hostname, after: u.pathname + u.search + u.hash }
 }
 
 /**
@@ -117,7 +120,7 @@ function runStep(s: SessionState, step: PlannedStep): SessionState {
   if (step.verdict === 'allow') {
     if (step.opensTab && !next.tabKeys[step.tab]) {
       // Claude opens its own tab in the background; your view stays where it is.
-      const tab = makeTab(step.navigatesTo ?? NEW_TAB_URL)
+      const tab = makeTab(step.navigatesTo ?? NEW_TAB_URL, undefined, step.opensTab)
       next = { ...next, tabs: [...next.tabs, tab], tabKeys: { ...next.tabKeys, [step.tab]: tab.id } }
     } else if (step.navigatesTo) {
       const id = next.tabKeys[step.tab]

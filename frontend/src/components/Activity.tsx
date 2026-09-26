@@ -17,10 +17,22 @@ interface Props {
 export function Activity({ session, leaving, onClose }: Props) {
   const ref = useRef<HTMLElement>(null)
   const [showAll, setShowAll] = useState(false)
+  // Remember what opened Activity so focus can go back there when it closes.
+  const opener = useRef<HTMLElement | null>(null)
   // Runs on open and again if it's reopened while still animating out.
   useEffect(() => {
-    if (leaving) return
     const el = ref.current
+    if (leaving) {
+      // Only move focus if it was inside (or has already fallen to the page body).
+      const active = document.activeElement
+      if (active === document.body || el?.contains(active)) {
+        const back = opener.current?.isConnected ? opener.current : document.querySelector<HTMLElement>('.hx-halo')
+        back?.focus()
+      }
+      return
+    }
+    const active = document.activeElement as HTMLElement | null
+    if (active && active !== document.body && !el?.contains(active)) opener.current = active
     el?.focus()
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)

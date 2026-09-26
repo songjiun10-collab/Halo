@@ -37,7 +37,6 @@ code { font-family: var(--font-mono); }
   cursor: pointer;
   transition: transform var(--press) var(--ease-out), background-color 150ms ease, color 150ms ease, opacity 150ms ease;
 }
-.hx-btn:active:not(:disabled), .hx-icbtn:active:not(:disabled), .hx-chip:active, .hx-halo:active { transform: scale(0.96); }
 
 .hx-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--space-sm);
@@ -302,6 +301,8 @@ code { font-family: var(--font-mono); }
 .hx-overview__grid > li { transition: opacity var(--enter) var(--ease-out), transform var(--enter) var(--ease-out); @starting-style { opacity: 0; } }
 
 @media (prefers-reduced-motion: no-preference) {
+  /* Press feedback. */
+  .hx-btn:active:not(:disabled), .hx-icbtn:active:not(:disabled), .hx-chip:active, .hx-halo:active { transform: scale(0.96); }
   /* Anchored to the top-right (the address bar's end and the Halo button). */
   .hx-sheet, .hx-activity { transform-origin: top right; @starting-style { transform: translateY(-6px) scale(0.97); } }
   :is(.hx-sheet, .hx-activity)[data-leaving] { transform: translateY(-4px) scale(0.98); }

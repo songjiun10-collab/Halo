@@ -1,5 +1,5 @@
 import { useEffect, useRef, type CSSProperties } from 'react'
-import { pageTitle } from '../session/pages'
+import { tabTitle } from '../session/pages'
 import { AGENT, currentUrl, host } from '../session/session'
 import type { Tab, TabActivity } from '../session/types'
 
@@ -41,17 +41,18 @@ export function TabOverview({ tabs, leaving, activeTabId, onPick, onClose }: Pro
       <ul className="hx-overview__grid">
         {tabs.map((tab, i) => {
           const url = currentUrl(tab)
+          const title = tabTitle(tab)
           return (
             <li key={tab.id} style={{ '--i': Math.min(i, 8) } as CSSProperties}>
               <button
                 ref={tab.id === activeTabId || (i === 0 && !tabs.some((t) => t.id === activeTabId)) ? firstRef : undefined}
                 className="hx-card"
-                title={pageTitle(url)}
+                title={title}
                 data-selected={tab.id === activeTabId || undefined}
                 onClick={() => onPick(tab.id)}
               >
-                <span className="hx-card__thumb" aria-hidden="true"><span>{pageTitle(url).split(' — ')[0]}</span></span>
-                <span className="hx-card__title">{pageTitle(url)}</span>
+                <span className="hx-card__thumb" aria-hidden="true"><span>{title.split(' — ')[0]}</span></span>
+                <span className="hx-card__title">{title}</span>
                 <span className="hx-card__meta">
                   <code>{url.startsWith('halo://') ? 'New tab' : host(url)}</code>
                   {tab.claude && <span className="hx-card__agent">{activityText[tab.claude]}</span>}

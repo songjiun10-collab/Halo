@@ -1,4 +1,4 @@
-import { pageTitle } from '../session/pages'
+import { tabTitle } from '../session/pages'
 import { AGENT, currentUrl } from '../session/session'
 import type { Tab } from '../session/types'
 
@@ -42,7 +42,7 @@ export function Viewport({ tab, target, driven }: { tab: Tab; target?: string; d
   } else {
     body = (
       <>
-        <h2>{pageTitle(url).split(' — ')[0]}</h2>
+        <h2>{tabTitle(tab).split(' — ')[0]}</h2>
         <p>Sample page content.</p>
       </>
     )
