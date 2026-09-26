@@ -17,26 +17,29 @@
 
 ### Color Palette
 
+*Hand-edited after generation. The generated navy and green palette was replaced by the neutral graphite palette the frontend uses (`frontend/src/styles/tokens.css`). 85–90% of the screen is neutral, and hue appears only where it carries meaning.*
+
 | Role | Hex | CSS Variable |
 |------|-----|--------------|
-| Primary | `#1E293B` | `--color-primary` |
-| On Primary | `#FFFFFF` | `--color-on-primary` |
-| Secondary | `#334155` | `--color-secondary` |
-| On Secondary | `#FFFFFF` | `--color-on-secondary` |
-| Accent/CTA | `#22C55E` | `--color-accent` |
-| On Accent/CTA | `#0F172A` | `--color-on-accent` |
-| Background | `#0F172A` | `--color-background` |
-| Foreground | `#F8FAFC` | `--color-foreground` |
-| Card | `#1B2336` | `--color-card` |
-| Card Foreground | `#F8FAFC` | `--color-card-foreground` |
-| Muted | `#272F42` | `--color-muted` |
-| Muted Foreground | `#94A3B8` | `--color-muted-foreground` |
-| Border | `#475569` | `--color-border` |
-| Destructive | `#EF4444` | `--color-destructive` |
-| On Destructive | `#000000` | `--color-on-destructive` |
-| Ring | `#FFFFFF` | `--color-ring` |
+| App background | `#111214` | `--backdrop` |
+| Tab bar | `#191A1D` | `--chrome` |
+| Toolbar (selected tab joins it) | `#202124` | `--toolbar` |
+| Session panel | `#242528` | `--sidebar` |
+| Hover / cards | `#2D2F33` | `--hover`, `--surface` |
+| Favicon & avatar tiles | `#383A3F` | `--well` |
+| Border (dividers only, 1.4:1) | `#383A3F` | `--border` |
+| Control edge (≥3.3:1, added) | `#7D7F84` | `--border-strong` |
+| Primary text (warm white) | `#F2F1ED` | `--foreground` |
+| Secondary text | `#A6A7AB` | `--muted-foreground` |
+| Muted (disabled/decorative only) | `#73757A` | `--text-muted` |
+| Primary button fill / text | `#F2F1ED` / `#111214` | `--primary-fill` / `--on-primary` |
+| Halo accent, ice (brand, focus) | `#A8C7FA` | `--brand`, `--ring` |
+| Ice on the light web page (added) | `#3B6FC4` | `--brand-on-site` |
+| Approval, soft amber | `#E5B85C` | `--warning` |
+| Blocked, coral | `#E06C67` | `--danger` |
+| Success, sage | `#78A980` | `--success` |
 
-**Color Notes:** Code dark + run green
+**Color Notes:** Graphite first. Ice is for the brand, focus and Claude's cursor; amber means approval is needed; coral means blocked; sage means success. The primary action is neutral, never a hue.
 
 ### Typography
 
@@ -77,90 +80,32 @@
 
 ## Component Specs
 
+*Hand-edited after generation. The generated specs failed the skill's own checklist: white text on the green button was 2.3:1, the secondary outline was invisible on the dark background, and inputs had `outline: none`. These are the specs `frontend/` uses.*
+
 ### Buttons
 
 ```css
-/* Primary Button */
-.btn-primary {
-  background: #22C55E;
-  color: white;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-weight: 600;
-  transition: all 200ms ease;
-  cursor: pointer;
-}
-
-.btn-primary:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
-
-/* Secondary Button */
-.btn-secondary {
-  background: transparent;
-  color: #1E293B;
-  border: 2px solid #1E293B;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-weight: 600;
-  transition: all 200ms ease;
-  cursor: pointer;
-}
+.hx-btn { min-height: 40px; padding: 0 16px; border-radius: 8px; font-weight: 600;
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1), background-color 150ms ease; }
+.hx-btn:active { transform: scale(0.96); }
+.hx-btn--primary   { background: var(--primary-fill); color: var(--on-primary); }  /* one per view */
+.hx-btn--secondary { background: transparent; color: var(--foreground); border: 1px solid var(--border-strong); }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 ```
 
-### Cards
+### Cards (approval card)
 
 ```css
-.card {
-  background: #0F172A;
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: var(--shadow-md);
-  transition: all 200ms ease;
-  cursor: pointer;
-}
-
-.card:hover {
-  box-shadow: var(--shadow-lg);
-  transform: translateY(-2px);
-}
+.hx-approval { padding: 16px; border-radius: 24px; /* 8px buttons + 16px padding */
+  background: var(--surface); box-shadow: var(--shadow-raised), inset 0 0 0 1px var(--warning); }
 ```
 
-### Inputs
+### Address field
 
 ```css
-.input {
-  padding: 12px 16px;
-  border: 1px solid #E2E8F0;
-  border-radius: 8px;
-  font-size: 16px;
-  transition: border-color 200ms ease;
-}
-
-.input:focus {
-  border-color: #1E293B;
-  outline: none;
-  box-shadow: 0 0 0 3px #1E293B20;
-}
-```
-
-### Modals
-
-```css
-.modal-overlay {
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-}
-
-.modal {
-  background: white;
-  border-radius: 16px;
-  padding: 32px;
-  box-shadow: var(--shadow-xl);
-  max-width: 500px;
-  width: 90%;
-}
+.hx-omni { height: 40px; border-radius: 20px; background: var(--chrome); border: 1px solid var(--border);
+  font-family: var(--font-heading); color: var(--muted-foreground); }
+.hx-omni b { color: var(--foreground); } /* the registrable domain */
 ```
 
 ---
