@@ -269,6 +269,35 @@ mismatch로 인한 DENY(에이전트가 거짓으로 `self_provenance="trusted"`
 동작하는 이 데모 에이전트는 스스로 거짓말을 하지 않으므로, 실제로 거짓
 신고하는 에이전트(또는 공격자가 조작한 실행자)가 있어야 라이브로 재현된다.
 
+**후속 업데이트 2 (2026-09-27) — stopTask()/pauseTask() 경쟁 상태 수정.**
+Codex가 런타임 경계를 검수하던 중 실제 경쟁 상태 2건을 발견해 알려왔다:
+`stopTask()`가 이미 승인자에게 보낸 `requestDecision()` 호출을 취소하지
+않아, 정지 후 늦게 ALLOW가 도착하면 그대로 실행되고, 늦게 REVIEW가
+도착하면 `stopTask()`가 방금 비운 `approvalQueue`를 되살리며
+`_task.state`도 `"stopped"`에서 `"awaiting_approval"`로 조용히 되돌아갈 수
+있었다. `pauseTask()`도 동일한 문제였다 — 대기 중이던 결정이 도착하면
+일시정지 상태를 무시하고 그대로 실행됐다.
+
+수정: `stopTask()`가 세대 카운터(`_stopEpoch`)를 증가시키고,
+`performGatedAction()`은 `requestDecision()`이 풀린 직후 그 카운터가
+바뀌었는지 확인해 바뀌었으면(=그사이 정지됨) 실행도, 큐잉도 하지 않고
+버린다(`"cancelled"` 반환). `pauseTask()`는 대칭적으로, 결정이 도착한
+시점에 `_task.state === "paused"`이면 즉시 적용하지 않고 단일 슬롯
+(`_deferredDecision`)에 보류했다가 `resumeTask()`가 명시적으로 적용한다.
+`startTask()` 내부에서 결과를 `"completed"`로 덮어쓰던 두 지점도 함께
+고쳐, 정지·일시정지 상태가 덮어써지지 않게 했다.
+
+정직하게 남는 한계: `resumeTask()`가 보류된 결정을 적용해도 이미 반환된
+`startTask()`의 실행 흐름(1단계→2단계) 자체를 재개하지는 않는다 — 정지된
+2단계 고정 스크립트일 뿐 진짜 루프가 아니므로, 예를 들어 1단계에서
+일시정지된 뒤 재개하면 그 결정(ALLOW/REVIEW)은 적용되지만 2단계(링크
+추적 제안)로는 이어지지 않고 작업이 그대로 끝난다. 이는 기존에 문서화된
+"진짜 멀티스텝 루프 없음" 한계의 연장선이다. 검증: `apps/computer-browser
+/test/control-api.test.js`에 8개 회귀 테스트 추가(정지 후 늦은
+ALLOW/REVIEW 폐기, 일시정지 중 보류·재개 시 적용, 일시정지 후 정지 시
+보류분까지 폐기 등) — `node --test` 20/20 통과, 전체 Python 회귀
+`.venv/bin/python -m pytest -q` 494/494 통과 유지 확인.
+
 ## 정직한 한계
 
 - 이 문서 작성 시점까지 Electron 앱을 실제로 빌드·실행해 검증하지 않았다 —

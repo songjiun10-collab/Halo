@@ -214,6 +214,22 @@ provenance mismatch DENY)는 UI로 직접 트리거되지 않고 Python 유닛
 스스로 거짓말하지 않으므로). Python/JS 코드는 `control-api.js`만 수정,
 회귀 494개(Python)·13개(JS) 그대로 통과.
 
+2026-09-27 후속 10: computer-use 브라우저의 `stopTask()`/`pauseTask()`
+경쟁 상태 수정(같은 [설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트 2" 절). Codex가 런타임 경계를 검수하다 발견해 알려온
+버그다 — `stopTask()`가 이미 승인자에게 보낸 요청을 취소하지 않아 정지
+후 늦게 도착한 ALLOW가 그대로 실행되거나, 늦게 도착한 REVIEW가 방금 비운
+`approvalQueue`를 되살리며 `_task.state`를 `"stopped"`에서
+`"awaiting_approval"`로 조용히 되돌릴 수 있었다. `pauseTask()`도 동일한
+문제였다. `apps/computer-browser/main/control-api.js`에 세대 카운터
+(`_stopEpoch`)와 단일 슬롯 보류(`_deferredDecision`)를 추가해, 정지 후
+도착한 결정은 폐기하고 일시정지 중 도착한 결정은 `resumeTask()`가 명시적
+으로 적용하도록 고쳤다. **정직한 한계**: `resumeTask()`가 보류된 결정을
+적용해도 이미 반환된 `startTask()`의 1→2단계 흐름 자체를 재개하지는
+않는다 — 진짜 루프가 아니라 정해진 2단계 스크립트이기 때문이다. 검증:
+`test/control-api.test.js`에 회귀 테스트 8개 추가, `node --test` 20/20
+통과, 전체 Python 회귀 494/494 통과 유지 확인.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.

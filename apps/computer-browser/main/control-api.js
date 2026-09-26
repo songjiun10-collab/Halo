@@ -26,9 +26,12 @@ const MAX_QUEUE = 50;
  * control surface, not an autonomous browsing brain.
  */
 class ControlApi {
-  constructor({ window, socketPath }) {
+  constructor({ window, socketPath, requestDecision: requestDecisionOverride } = {}) {
     this._window = window;
     this._socketPath = socketPath;
+    // Injectable seam for tests only (default is the real Unix-socket
+    // client). Production callers never pass this.
+    this._requestDecision = requestDecisionOverride || requestDecision;
     this._view = null;
     this._hasPage = false;
     this._page = { url: "", title: "", loadState: "idle", canGoBack: false, canGoForward: false, hasPage: false };
@@ -38,6 +41,14 @@ class ControlApi {
     this._listeners = new Set();
     this._pendingBounds = null;
     this._lastBoundsKey = null;
+    // Bumped by stopTask() so an approver round-trip that was already in
+    // flight when stop happened can recognize it is stale once it resolves.
+    this._stopEpoch = 0;
+    // At most one gated action is ever in flight at a time in this
+    // reference implementation (startTask() awaits each performGatedAction()
+    // before issuing the next), so a single slot is enough to hold a
+    // decision that arrived while paused.
+    this._deferredDecision = null;
   }
 
   onChange(listener) {
@@ -185,7 +196,8 @@ class ControlApi {
     // executor's own say-so -- an executor that could self-declare "no
     // effect" for something that really does write externally would defeat
     // the whole point of an independent approver.
-    const decision = await requestDecision(this._socketPath, {
+    const stopEpoch = this._stopEpoch;
+    const decision = await this._requestDecision(this._socketPath, {
       request_id: randomUUID(),
       action: descriptor.action,
       origin: descriptor.origin || "",
@@ -196,6 +208,30 @@ class ControlApi {
       contains_secret: Boolean(descriptor.containsSecret),
     });
 
+    // stopTask() bumps _stopEpoch and does not wait for outstanding
+    // requestDecision() calls to unwind. Without this check, a decision that
+    // arrives after the user already stopped the task -- including "allow"
+    // -- would still execute, and a "review" would re-populate the queue
+    // stopTask() just cleared, silently undoing the stop. Discard instead.
+    if (stopEpoch !== this._stopEpoch) {
+      this._pushTimeline(descriptor.action, `${descriptor.summary} (decision arrived after stop; discarded)`, "info");
+      return "cancelled";
+    }
+
+    // Symmetric guard for pause: an approver round-trip already in flight
+    // when pauseTask() ran must not execute (or silently queue) once it
+    // resolves, or "pause" would not actually pause anything. Hold it and
+    // let resumeTask() apply it explicitly.
+    if (this._task.state === "paused") {
+      this._deferredDecision = { descriptor, execute, decision };
+      this._pushTimeline(descriptor.action, `${descriptor.summary} (decision held: task is paused)`, "info");
+      return "paused";
+    }
+
+    return this._applyDecision(descriptor, execute, decision);
+  }
+
+  async _applyDecision(descriptor, execute, decision) {
     if (decision.decision === "allow") {
       this._pushTimeline(descriptor.action, descriptor.summary, "allow");
       await execute();
@@ -287,6 +323,12 @@ class ControlApi {
       },
       () => this.navigate(trimmed),
     );
+    // "cancelled"/"paused" mean stopTask()/pauseTask() already own _task.state
+    // (stopped / paused-with-a-held-decision) -- overwriting it with
+    // "completed" here would silently undo the stop or pause.
+    if (initialOutcome === "cancelled" || initialOutcome === "paused") {
+      return this.getSnapshot();
+    }
     if (initialOutcome !== "allow") {
       this._task = { ...this._task, state: "completed" };
       this._emit();
@@ -314,7 +356,9 @@ class ControlApi {
         },
         () => this.navigate(link.href),
       );
-      if (followOutcome !== "review") this._task = { ...this._task, state: "completed" };
+      if (followOutcome !== "review" && followOutcome !== "cancelled" && followOutcome !== "paused") {
+        this._task = { ...this._task, state: "completed" };
+      }
     } else {
       this._pushTimeline("task", "No outbound link found on the page; task complete.", "info");
       this._task = { ...this._task, state: "completed" };
@@ -333,15 +377,31 @@ class ControlApi {
   }
 
   async resumeTask() {
-    if (this._task.state === "paused") {
-      this._task = { ...this._task, state: "running" };
-      this._pushTimeline("task", "Task resumed", "info");
-      this._emit();
+    if (this._task.state !== "paused") return this.getSnapshot();
+    this._task = { ...this._task, state: "running" };
+    this._pushTimeline("task", "Task resumed", "info");
+    this._emit();
+
+    if (this._deferredDecision) {
+      const { descriptor, execute, decision } = this._deferredDecision;
+      this._deferredDecision = null;
+      // Applying the held decision does not re-enter startTask()'s own
+      // control flow (that async call already returned when it saw
+      // "paused") -- a deferred step 1 "allow" navigates but the task ends
+      // there rather than continuing to step 2. No real multi-step loop
+      // exists to resume into yet; see design doc, "정직한 한계".
+      const outcome = await this._applyDecision(descriptor, execute, decision);
+      if (outcome !== "review") {
+        this._task = { ...this._task, state: "completed" };
+        this._emit();
+      }
     }
     return this.getSnapshot();
   }
 
   async stopTask() {
+    this._stopEpoch += 1;
+    this._deferredDecision = null;
     this._approvalQueue = [];
     this._task = { ...this._task, state: "stopped" };
     this._pushTimeline("task", "Task stopped", "info");
