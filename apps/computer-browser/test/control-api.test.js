@@ -89,6 +89,35 @@ test("performGatedAction queues review (baseline, no stop/pause)", async () => {
   assert.equal(snapshot.task.state, "awaiting_approval");
 });
 
+// --- Task 4 hardening: an approver failure (a rejected requestDecision --
+// transport error, timeout, or now also a malformed/invalid response per
+// approver-client.js's new schema validation) must never propagate as an
+// uncaught rejection out of performGatedAction()/startTask(). Previously
+// there was no try/catch around the requestDecision() call at all, so any
+// such rejection would reject the whole IPC handler with no timeline entry
+// and no state transition, leaving the task stuck "running" with the
+// executor never running.
+
+test("performGatedAction treats an approver failure as a deny instead of throwing", async () => {
+  const api = makeApi(async () => {
+    throw new Error("approver response has an invalid decision: undefined");
+  });
+  let executed = false;
+
+  const outcome = await api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go" },
+    async () => {
+      executed = true;
+    },
+  );
+
+  assert.equal(outcome, "deny");
+  assert.equal(executed, false);
+  const last = api.getSnapshot().timeline[api.getSnapshot().timeline.length - 1];
+  assert.equal(last.status, "deny");
+  assert.match(last.message, /invalid decision/);
+});
+
 test("stopTask discards a late allow instead of executing it", async () => {
   const { promise, resolve } = deferredDecision();
   const api = makeApi(async () => promise);
@@ -736,6 +765,87 @@ test("navigationWaitUntil \"dom-ready\" still respects the timeout/abort if dom-
   assert.ok(elapsed < 300, `expected the timeout to fire near 20ms, took ${elapsed}ms`);
   assert.equal(stopped, true);
   assert.equal(snapshot.page.loadState, "error");
+});
+
+// --- Task 4 fix: navigation error swallowing. A rejected loadURL() (bad
+// DNS, refused connection, etc. -- NOT a timeout) used to be caught and
+// treated identically to a genuine success (_loadWithTimeout's "load" branch
+// resolved `false` either way), so navigate() always took the success
+// branch: pushed a false "Navigated to X" timeline entry and recorded a
+// misleading "ok" navigation metric even though the page never loaded.
+
+test("navigate() reports an error outcome instead of a false-positive success when loadURL rejects", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._view = makeFakeView({
+    loadURL: async () => {
+      throw new Error("net::ERR_NAME_NOT_RESOLVED");
+    },
+  });
+
+  const snapshot = await api.navigate("https://does-not-exist.invalid");
+
+  assert.equal(snapshot.page.loadState, "error");
+  const metrics = api.getMetricsSummary();
+  assert.deepEqual(metrics.navigation.outcomes, { error: 1 }, "a rejected loadURL must not be recorded as ok");
+  const last = snapshot.timeline[snapshot.timeline.length - 1];
+  assert.equal(last.status, "error");
+  assert.doesNotMatch(last.message, /^Navigated to/, "must not claim success for a failed load");
+});
+
+test("navigate() still reports ok on a genuine successful load (no regression from the error-outcome fix)", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._view = makeFakeView({ loadURL: async () => {} });
+
+  const snapshot = await api.navigate("https://example.com");
+
+  assert.equal(api.getMetricsSummary().navigation.outcomes.ok, 1);
+  const last = snapshot.timeline[snapshot.timeline.length - 1];
+  assert.match(last.message, /^Navigated to/);
+  assert.equal(last.status, "info");
+});
+
+// --- Task 4 fix: pacing-during-stop race. stopTask() bumps _stopEpoch and
+// discards a late *decision*, but a decision that already resolved "allow"
+// and was already past that check, sitting in the 2s pacing wait
+// (_paceAgentAction), used to ignore a stop that landed during that very
+// wait and dispatch execute() anyway once the wait elapsed -- "stop" did not
+// actually guarantee zero further dispatches.
+
+test("stopTask during the pacing wait prevents the action from ever being dispatched", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 200 });
+  api._lastAgentActionAt = Date.now(); // force the next action to actually wait out the pacing floor
+  let executed = false;
+
+  const pending = api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go" },
+    async () => {
+      executed = true;
+    },
+  );
+
+  // Let performGatedAction pass the pre-pacing checks and enter the pacing wait.
+  await new Promise((r) => setImmediate(r));
+  await api.stopTask();
+
+  const outcome = await pending;
+  assert.equal(outcome, "cancelled");
+  assert.equal(executed, false, "stop during the pacing wait must result in zero dispatches");
+  assert.equal(api.getSnapshot().task.state, "stopped");
+});
+
+test("stopTask during the pacing wait wakes the wait immediately instead of idling out the full interval", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 5000 });
+  api._lastAgentActionAt = Date.now();
+
+  const pending = api.performGatedAction({ requestId: "r1", action: "navigate", summary: "go" }, async () => {});
+  await new Promise((r) => setImmediate(r));
+
+  const start = Date.now();
+  await api.stopTask();
+  await pending;
+  const elapsed = Date.now() - start;
+
+  assert.ok(elapsed < 500, `expected the pacing wait to be woken immediately on stop, took ${elapsed}ms`);
 });
 
 // --- Bounded DOM scan for the outbound-link read (prevents a pathological

@@ -103,6 +103,12 @@ class ControlApi {
     // before issuing the next), so a single slot is enough to hold a
     // decision that arrived while paused.
     this._deferredDecision = null;
+    // Wake functions for any performGatedAction() call currently sleeping out
+    // the pacing floor (_paceAgentAction) -- stopTask() calls each of these
+    // so a stop lands immediately instead of only being noticed after the
+    // full pacing interval elapses and execute() has already been allowed to
+    // run (see the epoch re-check right after the pacing await, below).
+    this._pendingPaceWaiters = new Set();
     // { step: "step1"|"step2", trimmed, epoch } | null -- set by startTask()/
     // _runStepTwo() right before a gated call that has a further step after
     // it, so a pause/CAPTCHA interruption (before OR after that call's
@@ -241,7 +247,17 @@ class ControlApi {
   async _paceAgentAction() {
     const wait = this._minAgentActionIntervalMs - (Date.now() - this._lastAgentActionAt);
     if (wait > 0) {
-      await new Promise((resolve) => setTimeout(resolve, wait));
+      await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          this._pendingPaceWaiters.delete(wakeEarly);
+          resolve();
+        }, wait);
+        const wakeEarly = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        this._pendingPaceWaiters.add(wakeEarly);
+      });
     }
     this._lastAgentActionAt = Date.now();
   }
@@ -257,17 +273,22 @@ class ControlApi {
     this._hasPage = true;
     this._view.setVisible(true);
     const start = this._now();
-    const timedOut = await this._loadWithTimeout(target);
-    this._recordMetric("navigation", this._now() - start, {
-      outcome: timedOut ? "timeout" : "ok",
-      waitUntil: this._navigationWaitUntil,
-    });
-    if (timedOut) {
+    const { outcome } = await this._loadWithTimeout(target);
+    this._recordMetric("navigation", this._now() - start, { outcome, waitUntil: this._navigationWaitUntil });
+    if (outcome === "timeout") {
       this._pushTimeline(
         "navigation",
         `Navigation to ${target} did not finish within ${this._navigationTimeoutMs}ms; aborted.`,
         "error",
       );
+      this._syncPageState({ loadState: "error" });
+    } else if (outcome === "error") {
+      // loadURL() itself rejected (bad DNS, refused connection, etc.) --
+      // must never be reported as if the navigation succeeded. did-fail-load
+      // (see _ensureView) also fires for this and pushes its own timeline
+      // entry with the real error description; this one guarantees the
+      // caller-visible outcome is honest even if that listener race loses.
+      this._pushTimeline("navigation", `Navigation to ${target} failed to load.`, "error");
       this._syncPageState({ loadState: "error" });
     } else {
       this._pushTimeline("navigation", `Navigated to ${target}`, "info");
@@ -302,19 +323,23 @@ class ControlApi {
   async _loadWithTimeout(target) {
     let timer;
     const timedOut = new Promise((resolve) => {
-      timer = setTimeout(() => resolve(true), this._navigationTimeoutMs);
+      timer = setTimeout(() => resolve({ outcome: "timeout" }), this._navigationTimeoutMs);
     });
     const wc = this._view.webContents;
     let ready;
     if (this._navigationWaitUntil === "dom-ready") {
-      ready = new Promise((resolve) => wc.once("dom-ready", () => resolve(false)));
+      ready = new Promise((resolve) => wc.once("dom-ready", () => resolve({ outcome: "ok" })));
       wc.loadURL(target).catch(() => {}); // failure still reported via did-fail-load
     } else {
-      ready = wc.loadURL(target).then(() => false).catch(() => false);
+      // loadURL()'s rejection must reach the caller as a real "error" outcome
+      // -- previously this .catch(() => false) made a genuine load failure
+      // (bad DNS, refused connection) indistinguishable from success, and
+      // navigate() would push a false "Navigated to X" success message.
+      ready = wc.loadURL(target).then(() => ({ outcome: "ok" })).catch(() => ({ outcome: "error" }));
     }
     const result = await Promise.race([ready, timedOut]);
     clearTimeout(timer);
-    if (result) {
+    if (result.outcome === "timeout") {
       wc.stop();
     }
     return result;
@@ -387,16 +412,29 @@ class ControlApi {
     // the whole point of an independent approver.
     const stopEpoch = this._stopEpoch;
     const decisionStart = this._now();
-    const decision = await this._requestDecision(this._socketPath, {
-      request_id: randomUUID(),
-      action: descriptor.action,
-      origin: descriptor.origin || "",
-      summary: descriptor.summary,
-      self_provenance: descriptor.selfProvenance,
-      source: descriptor.source,
-      target_scope: descriptor.targetScope ?? null,
-      contains_secret: Boolean(descriptor.containsSecret),
-    });
+    let decision;
+    try {
+      decision = await this._requestDecision(this._socketPath, {
+        request_id: randomUUID(),
+        action: descriptor.action,
+        origin: descriptor.origin || "",
+        summary: descriptor.summary,
+        self_provenance: descriptor.selfProvenance,
+        source: descriptor.source,
+        target_scope: descriptor.targetScope ?? null,
+        contains_secret: Boolean(descriptor.containsSecret),
+      });
+    } catch (error) {
+      // A transport failure, timeout, or (per approver-client.js's schema
+      // validation) a malformed response must never propagate as an
+      // uncaught rejection out of startTask()/approve() -- that would leave
+      // the task stuck "running" with no timeline entry and no state
+      // transition. Fail closed: treat it exactly like an explicit deny.
+      this._recordMetric("decision_wait", this._now() - decisionStart, { action: descriptor.action, outcome: "error" });
+      if (this._stopHappenedSince(stopEpoch)) return "cancelled";
+      this._pushTimeline(descriptor.action, `${descriptor.summary} — approver failure: ${error && error.message}`, "deny");
+      return "deny";
+    }
     this._recordMetric("decision_wait", this._now() - decisionStart, {
       action: descriptor.action,
       outcome: decision.decision,
@@ -430,6 +468,14 @@ class ControlApi {
   async _applyDecision(descriptor, execute, decision, epoch) {
     if (decision.decision === "allow") {
       await this._paceAgentAction();
+      // stopTask() can land while this call was asleep in the pacing wait
+      // above -- that's a real await point like any other in this pipeline,
+      // and without this check the action would still dispatch once the
+      // wait elapsed even though stop already ran (see _pendingPaceWaiters).
+      if (this._stopHappenedSince(epoch)) {
+        this._pushTimeline(descriptor.action, `${descriptor.summary} (task stopped while waiting to pace; not dispatched)`, "info");
+        return "cancelled";
+      }
       this._pushTimeline(descriptor.action, descriptor.summary, "allow");
       const executeStart = this._now();
       await execute();
@@ -739,6 +785,8 @@ class ControlApi {
 
   async stopTask() {
     this._stopEpoch += 1;
+    for (const wakeEarly of this._pendingPaceWaiters) wakeEarly();
+    this._pendingPaceWaiters.clear();
     this._deferredDecision = null;
     this._taskCursor = null;
     this._approvalQueue = [];

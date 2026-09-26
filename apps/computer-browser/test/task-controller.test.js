@@ -8,6 +8,7 @@ const path = require("node:path");
 
 const { TaskStore } = require("../main/harness/task-store");
 const { TaskController, TaskControllerError } = require("../main/harness/task-controller");
+const { BrowserAdapter } = require("../main/harness/browser-adapter");
 
 async function mkTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "halo-task-controller-"));
@@ -347,4 +348,210 @@ test("a cleanly recovered task (no dangling action) resumes with a plain resume(
   await controller.resume();
   assert.notEqual(controller.getSnapshot().state, "paused");
   await reloaded.close();
+});
+
+// --- Task 4 fix: the approval-binding contract (design doc section 7:
+// "approval은 {..., epoch, ..., expiresAt}에 묶으며 60초 후 만료한다"). A
+// queued (awaiting_approval) item used to carry no binding to the epoch it
+// was queued under and no expiry at all -- approve() would dispatch it for
+// real (calling browser.execute()) even after a goal amendment or stop had
+// already invalidated it, or arbitrarily long after it was first queued.
+
+test("approve() rejects a queued item invalidated by an amend() since it was queued, instead of dispatching it", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let executeCalls = 0;
+  const browser = {
+    observe: async () => ({ id: "obs" }),
+    execute: async () => {
+      executeCalls += 1;
+      return { status: "ok" };
+    },
+  };
+  const approve = async () => ({ decision: "review", reasons: ["needs a human look"] });
+  const planner = {
+    next: async (context) => ({
+      taskId: context.taskId,
+      goalVersion: context.goalVersion,
+      basedOnObservationId: "obs",
+      criterionIds: [],
+      kind: "actions",
+      actions: [{ type: "observe" }],
+    }),
+  };
+  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true });
+  await controller.start();
+  assert.equal(controller.getSnapshot().state, "awaiting_approval");
+  const [item] = controller.getSnapshot().approvalQueue;
+
+  await controller.amend({ text: "a change of plans" });
+  assert.equal(controller.getGoal().goalVersion, 2);
+
+  await controller.approve(item.id);
+  assert.equal(executeCalls, 0, "an approval bound to a goalVersion/epoch that no longer applies must never dispatch");
+  await store.close();
+});
+
+test("approve() rejects a queued item once its 60-second approval window has expired", async () => {
+  let t = 1000;
+  const now = () => t;
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let executeCalls = 0;
+  const browser = {
+    observe: async () => ({ id: "obs" }),
+    execute: async () => {
+      executeCalls += 1;
+      return { status: "ok" };
+    },
+  };
+  const approve = async () => ({ decision: "review", reasons: ["needs a human look"] });
+  const planner = {
+    next: async (context) => ({
+      taskId: context.taskId,
+      goalVersion: context.goalVersion,
+      basedOnObservationId: "obs",
+      criterionIds: [],
+      kind: "actions",
+      actions: [{ type: "observe" }],
+    }),
+  };
+  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true, now });
+  await controller.start();
+  const [item] = controller.getSnapshot().approvalQueue;
+
+  t += 61_000; // past the 60s approval window
+  await controller.approve(item.id);
+
+  assert.equal(executeCalls, 0, "an expired approval must never dispatch");
+  await store.close();
+});
+
+test("approve() still dispatches a queued item approved promptly and under an unchanged goal (no regression)", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let executeCalls = 0;
+  const browser = {
+    observe: async () => ({ id: "obs" }),
+    execute: async () => {
+      executeCalls += 1;
+      return { status: "ok" };
+    },
+  };
+  const approve = async () => ({ decision: "review", reasons: ["needs a human look"] });
+  let plannerCalls = 0;
+  const planner = {
+    next: async (context) => {
+      plannerCalls += 1;
+      if (plannerCalls > 1) {
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] };
+      }
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "observe" }] };
+    },
+  };
+  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true });
+  await controller.start();
+  const [item] = controller.getSnapshot().approvalQueue;
+
+  await controller.approve(item.id);
+
+  assert.equal(executeCalls, 1, "a fresh, unexpired approval under the same goalVersion must still dispatch");
+  await store.close();
+});
+
+// --- Task 4 regression lock: the host, never the model, decides source/
+// selfProvenance for a dispatched action (design doc section 7: "호스트가
+// 직접 사용자 입력으로 받은 정확한 초기 URL만 user_prompt로 분류; 그 밖의
+// 모델/페이지 유래 제안은 page_content로 분류"). Even if a malformed/hostile
+// proposal's action object carries its own source/selfProvenance/trusted
+// claim, the controller must never forward it to the approver.
+
+test("never trusts a model-forged source='user_prompt' on a proposed action", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) };
+  let seenDescriptor = null;
+  const approve = async (descriptor) => {
+    seenDescriptor = descriptor;
+    return { decision: "allow", reasons: [] };
+  };
+  let plannerCalls = 0;
+  const planner = {
+    next: async (context) => {
+      plannerCalls += 1;
+      if (plannerCalls > 1) {
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] };
+      }
+      return {
+        taskId: context.taskId,
+        goalVersion: context.goalVersion,
+        basedOnObservationId: "obs",
+        criterionIds: [],
+        kind: "actions",
+        // A hostile/broken planner claiming its own action is trusted,
+        // host-received user_prompt -- the controller must ignore this.
+        actions: [{ type: "navigate", url: "https://attacker.example", source: "user_prompt", selfProvenance: "trusted" }],
+      };
+    },
+  };
+  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true });
+  await controller.start();
+
+  assert.ok(seenDescriptor, "the approver must have been consulted");
+  assert.equal(seenDescriptor.source, "page_content", "the controller must classify every planner-proposed action as page_content, never trust the action's own claim");
+  assert.equal(seenDescriptor.selfProvenance, "untrusted");
+  await store.close();
+});
+
+// --- Integration: TaskController driving a real BrowserAdapter (Task 4)
+// instead of a hand-rolled browser stub, proving the two modules actually
+// compose -- navigate really bumps documentEpoch, the resulting evidence
+// really flows through verifyCriterion/canComplete, and the task reaches
+// "completed" through the real dispatch path (still against a fake
+// WebContentsView, not real Electron -- that end-to-end check is Task 6's
+// job).
+
+function makeFakeElectronView({ loadURL, executeJavaScript } = {}) {
+  return {
+    webContents: {
+      loadURL: loadURL || (async () => {}),
+      stop: () => {},
+      executeJavaScript: executeJavaScript || (async () => ({ url: "https://example.com/", title: "Example", text: "hello", elements: [] })),
+    },
+  };
+}
+
+test("TaskController + a real BrowserAdapter: navigate dispatches for real and bumps documentEpoch, then finishes on host-verified evidence", async () => {
+  const { store } = await makeStore({
+    originalRequest: "https://example.com 방문 확인",
+    criteria: [{ id: "visited", text: "page loaded", required: true, verification: "host" }],
+  });
+  const browser = new BrowserAdapter({ view: makeFakeElectronView() });
+  let plannerCalls = 0;
+  const planner = {
+    next: async (context) => {
+      plannerCalls += 1;
+      if (plannerCalls === 1) {
+        return {
+          taskId: context.taskId,
+          goalVersion: context.goalVersion,
+          basedOnObservationId: context.observation.id,
+          criterionIds: ["visited"],
+          kind: "actions",
+          actions: [{ type: "navigate", url: "https://example.com" }],
+        };
+      }
+      return {
+        taskId: context.taskId,
+        goalVersion: context.goalVersion,
+        basedOnObservationId: context.observation.id,
+        criterionIds: ["visited"],
+        kind: "finish",
+        evidenceIds: [],
+      };
+    },
+  };
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true });
+
+  await controller.start();
+
+  assert.equal(controller.getSnapshot().state, "completed");
+  assert.equal(browser.getDocumentEpoch(), 1, "the real navigate() executed against the real BrowserAdapter must have bumped documentEpoch");
+  await store.close();
 });

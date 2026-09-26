@@ -30,6 +30,7 @@ const MAX_RECENT_EVENTS_IN_CONTEXT = 10; // section 5: "최근 action/result 10�
 const MAX_ACTIONS_PER_PROPOSAL = 3; // section 8: "최대 3개 observe/scroll만 순차 묶음"
 const MAX_PLANNER_FRAME_BYTES = 64 * 1024; // section 6: JSONL stdio wire frame cap (envelope + payload)
 const PLANNER_RESPONSE_TIMEOUT_MS = 60 * 1000; // section 6: "응답 timeout 60초"
+const APPROVAL_EXPIRY_MS = 60 * 1000; // section 7: "60초 후 만료"
 const SEGMENT_ROTATION_CALLS = 25; // section 5: "25회 planner 호출마다 새 segment"
 const NO_PROGRESS_REPLAN_THRESHOLD = 3; // section 5: "3회 연속 같은 (action,target,observationHash)"
 
@@ -460,6 +461,7 @@ module.exports = {
   MAX_ACTIONS_PER_PROPOSAL,
   MAX_PLANNER_FRAME_BYTES,
   PLANNER_RESPONSE_TIMEOUT_MS,
+  APPROVAL_EXPIRY_MS,
   SEGMENT_ROTATION_CALLS,
   NO_PROGRESS_REPLAN_THRESHOLD,
   DEFAULT_LIMITS,

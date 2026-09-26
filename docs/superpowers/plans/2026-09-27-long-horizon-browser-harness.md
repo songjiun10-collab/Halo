@@ -82,17 +82,39 @@ Interfaces: spec의 Planner.next/TaskController.start,pause,resume,stop,amend �
 Files: create `main/harness/browser-adapter.js`, `test/browser-adapter.test.js`; modify `main/control-api.js`, `main/approver-client.js`, `approver/approver_service.py`; add `tests/test_computer_browser_harness_approver.py`.
 Interfaces: observe/execute typed ActionResult, task-bound approval context in spec. legacy evaluate contract may remain behind an explicit legacy path; new harness wire is versioned and unknown versions denied.
 
-- [ ] 실패 시험: rejected loadURL가 ok/completed 아님; timeout listener 정리; navigation ID 교차 이벤트 무시; stop during pace는 dispatch 0회.
-- [ ] 실패 시험: 바뀐 anchor href/documentEpoch, 60초 만료/goal amendment 후 승인, 모델 source='user_prompt' 위조 거부; remote frame 요청 거부(Task 5와 연결).
-- [ ] bounded DOM traversal, observation IDs, runtime-owned target resolution, navigation/read/scroll adapter 구현. observe 실패를 빈 페이지 성공으로 표시하지 않기.
-- [ ] old fixed startTask flow를 controller facade로 전환하되 기존 URL demo는 명시적인 legacy 모드로 회귀 보존. 새 모드의 natural-language planner 미연결은 paused:planner_unavailable.
-- [ ] approver response schema/request binding/abort를 검증. free-form planner eval/selector 명령을 IPC로 노출하지 않기.
-- [ ] 관련 node tests와 `.venv/bin/python -m pytest -q tests/test_computer_browser_approver.py tests/test_computer_browser_harness_approver.py` 통과 후 해당 파일만 커밋.
-- [ ] **(2026-09-27 후속 추가)** approver/local worker 프로세스를 spawn하는 시점에
+- [x] 실패 시험: rejected loadURL가 ok/completed 아님; timeout listener 정리; navigation ID 교차 이벤트 무시; stop during pace는 dispatch 0회.
+  (control-api.js: navigation error swallowing + pacing-during-stop race 수정,
+  browser-adapter.js: navSeq 기반 cross-event isolation + timeout에서 wc.stop())
+- [x] 실패 시험: 바뀐 anchor href/documentEpoch, 60초 만료/goal amendment 후 승인, 모델 source='user_prompt' 위조 거부. remote frame 요청 거부는 Task 5(IPC sender 검증)로 이연.
+  (browser-adapter.js: follow_link는 model이 준 href를 무시하고 실제 anchor를 재확인,
+  documentEpoch 불일치는 stale_document로 거부; task-controller.js: approve() 큐 항목에
+  epoch/expiresAt 바인딩 추가, amend/pause/stop 이후 또는 60초 경과 후 승인은 실행되지 않음;
+  "모델 source 위조 거부"는 이미 _dispatchActionsBatch가 하드코딩으로 방어하고 있었음을
+  회귀 테스트로 고정)
+- [x] bounded DOM traversal, observation IDs, runtime-owned target resolution, navigation/read/scroll adapter 구현. observe 실패를 빈 페이지 성공으로 표시하지 않기.
+  (browser-adapter.js: TreeWalker 500 visited/100 element/12KiB text 상한, elementId는
+  host가 매긴 인덱스일 뿐 model의 selector/href를 신뢰하지 않음, observe 실패는 throw)
+- [ ] **(이연, Task 5로)** old fixed startTask flow를 controller facade로 전환. Task 5가
+  main/index.js·main/ipc.js에 createTask/resumeSavedTask 등 IPC 계약을 추가하는 시점에
+  같이 처리한다 — 그 계약이 없는 채로 지금 전환하면 Task 5의 IPC 설계를 앞지르게 된다.
+  legacy URL demo(startTask)는 그대로 남아 있고 변경하지 않았다.
+- [x] approver response schema/request binding/abort를 검증. free-form planner eval/selector 명령을 IPC로 노출하지 않기.
+  (approver-client.js: decision enum/reasons 배열 검증 후 아니면 reject, AbortSignal 지원;
+  control-api.js: 이 reject를 잡아 deny로 fail-closed 처리하는 코드가 없었던 기존 gap도 함께 수정.
+  browser-adapter.js는애초에 selector/eval을 받는 action type 자체가 없음 — click/type/
+  submit_form/download는 전부 unsupported_action)
+- [x] 관련 node tests 통과 후 해당 파일만 커밋 (node --test: 155/155).
+  approver_service.py의 wire 포맷 자체는 이번 라운드에서 변경하지 않았으므로(클라이언트
+  측 검증 강화만 진행) tests/test_computer_browser_harness_approver.py는 아직 만들지
+  않았다 — 실제 Python 쪽 변경이 생기는 시점(Task 5/6에서 실제 프로세스 spawn·와이어
+  버전 협상이 필요해지면)에 함께 추가한다. `.venv/bin/python -m pytest -q`: 494/494
+  (변경 없음, 회귀만 확인).
+- [ ] **(이연, Task 5로)** approver/local worker 프로세스를 spawn하는 시점에
   pid+creationTime을 memory-monitor(Task 5)에 등록해, Electron이 직접 보지 못하는
-  프로세스도 합계에 들어가게 한다. observation은 이미 spec대로 500 노드/100
-  element/12KiB 상한이므로 여기서 추가로 깎지 않되, 상한이 실제로 지켜지는지 회귀에
-  포함한다.
+  프로세스도 합계에 들어가게 한다. memory-monitor.js가 아직 존재하지 않아 지금은
+  등록할 대상이 없다 — Task 5에서 memory-monitor.js와 함께 만든다. observation은
+  이미 spec대로 500 노드/100 element/12KiB 상한이며, browser-adapter.test.js에서
+  이 상한이 실제 traversal script에 반영됐는지 회귀로 확인했다.
 
 ### Task 5: Host/UI lifecycle bridge and recovery
 

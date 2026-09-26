@@ -13,6 +13,37 @@ const REQUEST_TIMEOUT_MS = 5000;
 // This is a known, documented property of reusing a one-shot channel as a
 // standing service (see the design doc) -- not a bug to paper over silently.
 const RETRY_DELAYS_MS = [10, 25, 50, 100, 200, 400];
+const VALID_DECISIONS = new Set(["allow", "review", "deny", "quarantine"]);
+
+class ApproverProtocolError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ApproverProtocolError";
+  }
+}
+
+// The approver's response must never be trusted as-is just because it
+// parsed as JSON -- a malformed/buggy response (missing decision, an
+// unrecognized decision string, a non-array reasons field, or a non-object
+// entirely) used to be resolved unchanged. control-api.js's _applyDecision
+// only branches on decision === "allow"/"review" and otherwise falls into
+// its deny path -- with a malformed response that final branch would return
+// `undefined` instead of a real outcome string, which callers like
+// startTask()'s step chain treat as "not allow" and silently mark the task
+// completed. Failing closed here (reject instead of resolve) turns that
+// into a real, catchable error instead of a silent wrong-outcome bug.
+function validateDecisionResponse(payload) {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new ApproverProtocolError("approver response must be a JSON object");
+  }
+  if (typeof payload.decision !== "string" || !VALID_DECISIONS.has(payload.decision)) {
+    throw new ApproverProtocolError(`approver response has an invalid decision: ${JSON.stringify(payload.decision)}`);
+  }
+  if (payload.reasons !== undefined && !Array.isArray(payload.reasons)) {
+    throw new ApproverProtocolError("approver response's reasons field must be an array");
+  }
+  return payload;
+}
 
 function encodeFrame(message) {
   const body = Buffer.from(JSON.stringify(message), "utf8");
@@ -24,26 +55,41 @@ function encodeFrame(message) {
   return Buffer.concat([header, body]);
 }
 
-function requestDecision(socketPath, request) {
+function requestDecision(socketPath, request, { signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) {
+      reject(new Error("approver request aborted"));
+      return;
+    }
     let attempt = 0;
+    let settled = false;
+    let pendingRetryTimer = null;
+    let currentSocket = null;
+    let currentTimeout = null;
+
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (currentTimeout) clearTimeout(currentTimeout);
+      if (pendingRetryTimer) clearTimeout(pendingRetryTimer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (currentSocket) {
+        currentSocket.removeAllListeners();
+        currentSocket.destroy();
+      }
+      fn(value);
+    };
+
+    const onAbort = () => finish(reject, new Error("approver request aborted"));
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
     const tryConnect = () => {
       const socket = net.createConnection({ path: socketPath });
-      let settled = false;
+      currentSocket = socket;
       let buffer = Buffer.alloc(0);
       let expected = null;
 
-      const finish = (fn, value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        socket.removeAllListeners();
-        socket.destroy();
-        fn(value);
-      };
-
-      const timeout = setTimeout(() => finish(reject, new Error("approver request timed out")), REQUEST_TIMEOUT_MS);
+      currentTimeout = setTimeout(() => finish(reject, new Error("approver request timed out")), REQUEST_TIMEOUT_MS);
 
       socket.once("connect", () => {
         try {
@@ -65,7 +111,7 @@ function requestDecision(socketPath, request) {
         if (expected !== null && buffer.length >= 4 + expected) {
           try {
             const payload = JSON.parse(buffer.subarray(4, 4 + expected).toString("utf8"));
-            finish(resolve, payload);
+            finish(resolve, validateDecisionResponse(payload));
           } catch (error) {
             finish(reject, error);
           }
@@ -75,11 +121,11 @@ function requestDecision(socketPath, request) {
       socket.on("error", (error) => {
         if (settled) return;
         if (error.code === "ENOENT" && attempt < RETRY_DELAYS_MS.length) {
-          clearTimeout(timeout);
+          clearTimeout(currentTimeout);
           const delay = RETRY_DELAYS_MS[attempt++];
           socket.removeAllListeners();
           socket.destroy();
-          setTimeout(tryConnect, delay);
+          pendingRetryTimer = setTimeout(tryConnect, delay);
           return;
         }
         finish(reject, error);
@@ -90,4 +136,4 @@ function requestDecision(socketPath, request) {
   });
 }
 
-module.exports = { requestDecision, encodeFrame, MAX_FRAME };
+module.exports = { requestDecision, encodeFrame, MAX_FRAME, ApproverProtocolError };

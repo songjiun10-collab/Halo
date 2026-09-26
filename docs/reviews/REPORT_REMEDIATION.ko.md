@@ -502,11 +502,104 @@ bounded) no_progress 감지만큼 빠르지 않다는 점은 남은 한계로 �
 검증: `node --test` 113/113 통과(신규 planner-stdio 11개 + task-controller
 9개), 전체 Python 회귀 494/494 통과 유지 확인(Python 미변경).
 
+2026-09-27 후속 20: 장기 브라우저 하네스 Task 4(browser + approver 실행 통합)
+구현과 함께, 계획서가 지정한 기존 `main/control-api.js`의 known bug 3개 중
+2개를 이번에 실제로 재현·수정했다.
+
+**버그 수정 (`main/control-api.js`)**:
+1. **navigation error swallowing** — `_loadWithTimeout()`의 "load" 모드가
+   `wc.loadURL(target).then(() => false).catch(() => false)`로 구현돼 있어,
+   `loadURL()`이 실제로 reject해도(DNS 실패, connection refused 등) timeout과
+   구별되지 않고 성공과 똑같이 처리됐다 — `navigate()`는 실패한 페이지에도
+   "Navigated to X" 타임라인을 남기고 metric을 `ok`로 기록했다. 실패 재현 후
+   `_loadWithTimeout()`이 `{outcome:"ok"|"timeout"|"error"}`를 반환하도록
+   고쳐 `navigate()`가 세 결과를 각각 정확히 구분해 기록하게 했다.
+2. **pacing-during-stop race** — `_applyDecision()`의 allow 분기가
+   `_paceAgentAction()`(최대 2초 대기) 완료 후 stop 여부를 재확인하지 않아,
+   대기 도중 `stopTask()`가 호출돼도 대기가 끝나면 그대로 `execute()`를
+   실행했다. `stopTask`가 pacing 대기를 즉시 깨우는 waiter 집합을 추가하고,
+   대기 직후 stop epoch를 재확인해 dispatch 0회를 보장하도록 고쳤다.
+3. **source self-report boundary** — 재현 결과 `task-controller.js`의
+   `_dispatchActionsBatch()`는 이미 모든 planner-제안 action에
+   `source:"page_content"`/`selfProvenance:"untrusted"`를 하드코딩하고
+   있어 모델이 자신의 action에 `source:"user_prompt"`를 실어 보내도 무시된다
+   — 새로운 버그는 아니었으므로, 악의적 proposal이 이를 위조해도 통과되지
+   않는다는 회귀 테스트를 `task-controller.test.js`에 추가해 고정했다.
+
+**신규: `main/harness/browser-adapter.js`** — TaskController가 구동하는 실제
+observe()/execute() 어댑터(design doc 6-7절). TreeWalker로 최대 500 노드
+방문·100 element·12KiB 텍스트로 제한된 DOM 관측을 만들고, `elementId`는
+host가 매긴 순번일 뿐 모델이 임의 selector/href를 주입할 방법이 없다.
+`follow_link`는 action이 주장하는 href를 무시하고 그 elementId의 **실제
+현재** href를 다시 읽어 navigate한다. `documentEpoch`가 현재와 다른 action은
+`stale_document`로 실행 전에 거부한다(navigate 자체는 새 문서를 여는 것이므로
+epoch 검사 대상이 아님). navigate는 `navSeq`로 호출을 구분해, 더 나중에 시작한
+navigate가 이미 끝난 뒤 더 이전 호출의 loadURL이 뒤늦게 settle돼도 epoch를
+다시 올리거나 성공으로 보고하지 않는다(cross-event isolation). click/type/
+submit_form/download는 `unsupported_action`으로 정직하게 보고한다. evidence는
+`shared/harness-contracts.js`의 `EVIDENCE_KINDS`(host_check/user_confirmation/
+artifact)에 맞춰 내보낸다 — 처음에는 `kind:"navigation"`/`"observation"`으로
+구현했다가, TaskController + 실제 BrowserAdapter 통합 테스트를 작성하는 과정
+에서 `validateEvidence()`가 이를 unknown enum으로 거부해 task store가
+`storage_corrupt`로 latch된다는 것을 직접 발견해 `host_check`/`artifact`로
+고쳤다 — 이 버그는 어떤 실제 navigate 1회 dispatch만으로도 발생했을 것이다.
+
+**`main/approver-client.js` 강화**: approver 응답이 JSON으로 파싱되기만
+하면 `decision`/`reasons`의 실제 값은 전혀 검증하지 않고 그대로 통과시키고
+있었다 — `decision`이 알 수 없는 문자열이거나 아예 없으면
+`control-api.js`의 `_applyDecision()` 마지막 분기가 `decision.decision`
+(즉 `undefined`)을 그대로 반환해, 호출부(`_afterStepOutcome`)가 이를
+"allow 아님"으로 취급해 task를 조용히 `completed`로 마킹해버리는 경로가
+있었다. `decision`을 닫힌 enum(allow/review/deny/quarantine)으로,
+`reasons`를 배열로 검증해 아니면 reject하도록 고쳤다. 이 강화로
+`requestDecision()`이 reject할 가능성이 실질적으로 높아졌는데,
+`performGatedAction()`에는 애초에 이 호출을 감싸는 try/catch가 전혀 없어
+(스키마 검증 이전에도 transport 오류/timeout에 이미 존재하던 gap)
+그대로 뒀다면 uncaught rejection으로 새 버그를 만들 뻔했다 — 같이
+`performGatedAction()`에 try/catch를 추가해 approver 실패를 명시적
+`deny`로 fail-closed 처리하도록 했다. 요청 취소를 위한 `AbortSignal` 지원도
+추가했다(실제 소켓 서버를 띄운 `test/approver-client.test.js`로 검증).
+
+**`main/harness/task-controller.js`의 approval-binding 수정**: design doc
+7절이 요구하는 `{..., epoch, ..., expiresAt}` 바인딩과 60초 만료가
+구현에는 없었다 — `approve(requestId)`는 큐에 든 항목을 goalVersion/epoch를
+전혀 재검증하지 않고 그대로 dispatch했다. 재현 결과: review 큐에 항목이
+있는 상태에서 `amend()`(goal 버전 상승, epoch 증가)나 시간 경과(60초 초과)가
+있어도 `approve()`를 부르면 실제로 `browser.execute()`가 호출됐다. 큐에
+넣을 때 `epoch`/`goalVersion`/`expiresAt`(60초, `APPROVAL_EXPIRY_MS`를
+`shared/harness-contracts.js`에 신설)을 함께 저장하고, `approve()`가 이를
+재검증해 stale/expired 항목은 `deny()`와 동일하게 폐기(dispatch 없이)하도록
+고쳤다.
+
+**통합 테스트**: `task-controller.test.js`에 실제 `BrowserAdapter`(fake
+WebContentsView 주입)를 사용하는 컨트롤러 테스트를 추가해 두 모듈이 실제로
+맞물려 동작함을 확인했다 — 위에서 언급한 evidence kind 버그를 바로 이
+테스트가 잡아냈다.
+
+**정직한 한계**: (1) `approver_service.py`의 wire 포맷 자체는 이번 라운드에서
+바꾸지 않았다(클라이언트 측 검증만 강화) — 계획서의
+`tests/test_computer_browser_harness_approver.py`는 실제 Python 변경이
+필요해지는 시점(Task 5/6에서 실제 프로세스 spawn 연동이 붙을 때)에 추가한다.
+(2) "old fixed startTask flow를 controller facade로 전환"은 Task 5로
+이연했다 — Task 5가 `main/index.js`/`main/ipc.js`에 `createTask`/
+`resumeSavedTask` 등 IPC 계약을 추가하는 작업과 함께 해야 그 설계를 앞지르지
+않는다. 기존 URL demo(`startTask`)는 이번에 변경하지 않았다. (3) remote
+frame 요청 거부는 계획서에도 명시된 대로 Task 5(IPC sender 검증)의 몫이다.
+(4) approver/local worker 프로세스의 pid+creationTime을 memory-monitor에
+등록하는 항목은 memory-monitor.js 자체가 아직 없어(Task 5 산출물) 이연했다.
+(5) `main/control-api.js`의 pause-during-pacing(stop이 아니라 pause가
+pacing 대기 중 발생하는 경우)은 이번 3개 버그 목록에 없었고 이번에도 다루지
+않았다 — 별도의 잠재적 개선 여지로만 기록한다.
+
+검증: `node --test` 155/155 통과(신규 browser-adapter 20개 + approver-client
+11개 + control-api/task-controller 신규 회귀 다수 포함), 전체 Python 회귀
+494/494 통과 유지 확인(Python 미변경).
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
-장기 브라우저 하네스는 Task 1(+메모리 스트리밍 수정)·Task 2·Task 3 완료, Task
-4~6 미착수 상태다. 실제 프로세스 메모리 실측(<1GB 확인)도 아직 없다.
+장기 브라우저 하네스는 Task 1(+메모리 스트리밍 수정)·Task 2·Task 3·Task 4 완료,
+Task 5~6 미착수 상태다. 실제 프로세스 메모리 실측(<1GB 확인)도 아직 없다.
 
 ## 판정 기준
 

@@ -204,8 +204,19 @@ class TaskController {
     const index = this._approvalQueue.findIndex((item) => item.id === requestId);
     if (index === -1) return this.getSnapshot();
     const [item] = this._approvalQueue.splice(index, 1);
-    if (this._approvalQueue.length === 0 && this._task.state === "awaiting_approval") {
+    const wasAwaitingApproval = this._approvalQueue.length === 0 && this._task.state === "awaiting_approval";
+    if (wasAwaitingApproval) {
       this._task = { state: "running", pauseReason: null };
+    }
+    // Approval-binding staleness check (design doc section 7): pause/stop/
+    // amend all bump the epoch, and every binding expires after 60s
+    // regardless. A stale item was never re-validated against the current
+    // goal/epoch, so it must be dropped -- exactly like a deny() -- rather
+    // than dispatched against a goal or execution context it no longer
+    // corresponds to.
+    if (this._stopHappenedSince(item.epoch) || this._now() >= item.expiresAt) {
+      if (wasAwaitingApproval) return this._runLoop();
+      return this.getSnapshot();
     }
     this._enterActive();
     const epoch = this._epoch;
@@ -387,6 +398,14 @@ class TaskController {
           summary: descriptor.summary,
           actionType: action.type,
           createdAt: new Date().toISOString(),
+          // Approval-binding contract (design doc section 7): a queued item
+          // is only ever dispatchable while the epoch it was queued under is
+          // still current (pause/stop/amend all bump the epoch, so any of
+          // them invalidates it) and before its 60s window expires. See
+          // approve()'s staleness check below.
+          epoch,
+          goalVersion: this._goal.goalVersion,
+          expiresAt: this._now() + contracts.APPROVAL_EXPIRY_MS,
           descriptor,
           action,
           proposal,
