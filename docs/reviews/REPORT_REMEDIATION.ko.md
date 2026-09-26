@@ -105,6 +105,26 @@ child PID와, cwd는 부모가 지정한 work 경로와 일치해야 information
 바뀌지 않았다. Rust 18개(단위 16 + 통합 2) 통과, `cargo clippy --all-targets
 -- -D warnings` 통과. 이 변경은 Python 코드를 건드리지 않는다.
 
+2026-09-26 후속 5: [E007 — AI 전용 승인자/실행자 분리 게이트웨이 접근 모델](../../experiments/e007_dual_agent_provenance_gate/README.ko.md).
+사용자가 "헤일로는 이제 AI만을 위한 공간"이라는 방향을 밝히고 게이트웨이
+접근 모델의 재설계를 요청했다. `halo/authority.py`·`halo/gateway.py`·
+`halo/gateway_app.py`·`halo/dev_server.py`는 전혀 수정하지 않고, 승인자·
+실행자 역할을 각자 자신의 게이트웨이 키만 쥔 별도 OS 프로세스로 실행하는
+새 참조 구현(`experiments/e007_dual_agent_provenance_gate/`)을 추가했다.
+승인 판단은 전적으로 기존 `halo.policy.decide()` + `halo.safety_cases
+.evaluate_trace()`가 내리며(자유 형식 LLM 판단 없음), 실행자가 자기 신고
+provenance를 `"trusted"`로 주장해도 승인자가 독립적으로 분류한
+`host_provenance`가 이를 잡아내 거부하는, 이 저장소의 기존 P9-B2
+provenance-laundering 패턴을 승인/실행 경계에서 재현·검증했다(대조군으로
+"자기 신고를 그대로 믿었다면 ALLOW였을 것"도 같은 스위트에서 직접 증명).
+Claude가 핵심 로직(`experiment.py`, `channel.py`의 `Channel`/
+`LoopbackChannel`)과 그 단위·HTTP 종단 간 테스트를, Codex가 실제 2-프로세스
+배관(`UnixSocketChannel`, `approver_process.py`/`executor_process.py`/
+`run_two_process_demo.py`와 그 테스트)을 나눠 작업했다. Python 464개(신규
+46개) 통과. `intent_id`는 여전히 추적용 식별자일 뿐이며, 이 실험은 프로덕션
+`Authority`/`Gateway`가 요구하는 "호스트가 인증한 사용자 의도" 요건을
+대체하지 않는다 — README의 "정직한 한계" 참고.
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
