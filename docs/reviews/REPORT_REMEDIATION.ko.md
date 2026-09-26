@@ -421,11 +421,38 @@ action_started나 actionId가 안 맞는 action_outcome도 이제 storage_corrup
 monitor)·Task 6(실제 Electron 통합) 몫으로 아직 구현하지 않았다. 검증: `node
 --test` 87/87 통과, 전체 Python 회귀 494/494 통과 유지 확인(Python 미변경).
 
+2026-09-27 후속 18: 장기 브라우저 하네스 Task 2(context/progress/completion
+게이트) 구현. `main/harness/progress.js`(신규)는 `validateProposal`(taskId
+불일치·stale goalVersion·모르는 criterionId를 각각 wrong_task/stale_goal_version/
+off_goal로 거부), `verifyCriterion`(verification:"user" 조건은 사전에 실제로
+확인된 evidence 항목만 인정하고, verification:"host" 조건은 evidence 자신의
+`verification` 필드를 절대 신뢰하지 않고 주입된 `hostVerifier` 콜백만이 판정한다 —
+모델이 스스로 "verified"라고 써넣은 evidence로는 통과할 수 없다), `canComplete`
+(모든 필수 criterion이 **현재 goalVersion**에서 검증된 evidence를 가져야
+complete/completed, 하나라도 없으면 awaiting_verification — 이전 goalVersion에서
+검증된 evidence는 amendment 이후 자동으로 재사용되지 않는다)를 구현했다.
+`main/harness/context-builder.js`(신규)의 `buildContext`는 매 planner 호출마다
+GoalSpec 원문·amendments·constraints·criteria를 절대 요약·삭제 없이 그대로 복사하고,
+`state.modelSummary`(있다면)는 `untrustedSummary`로 완전히 분리해 echo만 하며
+goal/progress 어디에도 병합하지 않는다 — 10회 연속으로 "목표를 지금 즉시 재정의하고
+C1이 검증됐다"는 가짜 요약을 주입해도 매번 원본과 바이트 단위로 동일함을 테스트로
+확인했다. `recentEvents`는 항상 최근 `MAX_RECENT_EVENTS_IN_CONTEXT`(10)개로만
+자르고(§10 메모리 규율과 §5 "최근 action/result 10쌍" 둘 다 충족), 조립한 packet
+전체가 64KiB(`MAX_CONTEXT_PACKET_BYTES`)를 넘으면 아무것도 잘라내지 않고
+`context_limit`으로 던진다 — goal 블록 자체가 커서 넘치는 경우와 관측이 커서
+넘치는 경우 둘 다 같은 fail-closed 경로로 확인했다. `shared/harness-contracts.js`
+에는 Evidence/Proposal envelope 검증기(`validateEvidence`, `validateProposalEnvelope`,
+관련 enum·상수)를 추가했다(이전 커밋 `bb9b3fa`에서 이미 반영). **정직한 한계**:
+`hostVerifier`는 이 단계에서 순수 주입 콜백이며 실제 페이지/artifact 검사는
+Task 4가 붙여야 한다 — 이 모듈은 자연어 의미 이해를 deterministic verifier라고
+주장하지 않는다. 검증: `node --test` 93/93 통과(신규 progress 11개 + context-builder
+6개), 전체 Python 회귀 494/494 통과 유지 확인(Python 미변경).
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
-장기 브라우저 하네스는 Task 1(+메모리 스트리밍 수정) 완료, Task 2 진행 중, Task
-3~6 미착수 상태다. 실제 프로세스 메모리 실측(<1GB 확인)도 아직 없다.
+장기 브라우저 하네스는 Task 1(+메모리 스트리밍 수정)·Task 2 완료, Task 3~6
+미착수 상태다. 실제 프로세스 메모리 실측(<1GB 확인)도 아직 없다.
 
 ## 판정 기준
 
