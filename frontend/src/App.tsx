@@ -1,33 +1,33 @@
 import { useEffect, useReducer } from 'react'
-import { AgentPanel } from './components/AgentPanel'
+import { ControlBar } from './components/ControlBar'
+import { SessionPanel } from './components/SessionPanel'
 import { TabStrip } from './components/TabStrip'
 import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
-import { agentHolds, demoSession, reducer } from './session/session'
+import { AGENT, claudeHolds, controlLabel, demoSession, reducer } from './session/session'
 import type { SessionState } from './session/types'
 
 const STEP_MS = 1600
 
-/** One sentence per state change for the polite live region. */
+/** One sentence per control change for the polite live region. */
 function announcement(s: SessionState) {
-  if (s.agent === 'waiting' && s.pending) return `Step ${s.pending.n} needs your review: ${s.pending.prompt?.title ?? s.pending.title}`
-  if (s.agent === 'stopped') return 'Agent paused'
-  if (s.agent === 'idle') return `Agent finished after ${s.log.length} steps`
-  return ''
+  if (s.control === 'approval' && s.pending?.approval) return `Approval needed: ${AGENT} wants to ${s.pending.approval.action.toLowerCase()} for ${s.pending.approval.amount}`
+  if (s.control === 'you' && s.finished) return `${AGENT} finished. You have control.`
+  return controlLabel[s.control]
 }
 
 export default function App() {
-  const [s, dispatch] = useReducer(reducer, undefined, () => demoSession(Date.now()))
+  const [s, dispatch] = useReducer(reducer, undefined, demoSession)
 
-  // Advance the scripted agent while it is working.
+  // Advance the scripted session while Claude has control.
   useEffect(() => {
-    if (s.agent !== 'acting') return
-    const id = window.setTimeout(() => dispatch({ type: 'tick', now: Date.now() }), STEP_MS)
+    if (s.control !== 'claude') return
+    const id = window.setTimeout(() => dispatch({ type: 'tick' }), STEP_MS)
     return () => window.clearTimeout(id)
-  }, [s.agent, s.log.length])
+  }, [s.control, s.timeline.length])
 
   const tab = s.tabs.find((t) => t.id === s.activeTabId) ?? s.tabs[0]
-  const locked = agentHolds(s, tab)
+  const pendingHere = s.control === 'approval' && s.pending && s.tabKeys[s.pending.tab] === tab.id
 
   return (
     <div className="hx-app">
@@ -36,32 +36,27 @@ export default function App() {
       <p className="hx-sr" role="status" aria-live="polite">{announcement(s)}</p>
       <div className="hx-window">
         <header className="hx-chrome">
-        <TabStrip
-          tabs={s.tabs}
-          activeTabId={tab.id}
-          agent={s.agent}
-          canClose={(t) => !agentHolds(s, t)}
-          onSelect={(id) => dispatch({ type: 'selectTab', id })}
-          onClose={(id) => dispatch({ type: 'closeTab', id })}
-          onNew={() => dispatch({ type: 'newTab' })}
-        />
-        <Toolbar
-          tab={tab}
-          locked={locked}
-          agent={s.agent}
-          onBack={() => dispatch({ type: 'back' })}
-          onForward={() => dispatch({ type: 'forward' })}
-          onPause={() => dispatch({ type: 'pause', now: Date.now() })}
-          onResume={() => dispatch({ type: 'resume', now: Date.now() })}
-        />
+          <TabStrip
+            tabs={s.tabs}
+            activeTabId={tab.id}
+            canClose={(t) => !claudeHolds(s, t)}
+            onSelect={(id) => dispatch({ type: 'selectTab', id })}
+            onClose={(id) => dispatch({ type: 'closeTab', id })}
+            onNew={() => dispatch({ type: 'newTab' })}
+            trailing={
+              <ControlBar
+                control={s.control}
+                finished={s.finished}
+                onTakeControl={() => dispatch({ type: 'takeControl' })}
+                onResume={() => dispatch({ type: 'resume' })}
+              />
+            }
+          />
+          <Toolbar tab={tab} locked={claudeHolds(s, tab)} onBack={() => dispatch({ type: 'back' })} onForward={() => dispatch({ type: 'forward' })} />
         </header>
         <div className="hx-body">
-          <Viewport tab={tab} target={tab.agent ? s.pending?.target : undefined} />
-          <AgentPanel
-            session={s}
-            onApprove={() => dispatch({ type: 'approve', now: Date.now() })}
-            onDeny={() => dispatch({ type: 'deny', now: Date.now() })}
-          />
+          <Viewport tab={tab} target={pendingHere ? s.pending?.target : undefined} />
+          <SessionPanel session={s} onApprove={() => dispatch({ type: 'approve' })} onDeny={() => dispatch({ type: 'deny' })} />
         </div>
       </div>
     </div>

@@ -1,19 +1,18 @@
-import { useRef, type KeyboardEvent } from 'react'
+import { useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { pageTitle } from '../session/pages'
-import { currentUrl } from '../session/session'
-import type { AgentState, Tab } from '../session/types'
-import { AgentDot } from './AgentStatus'
-import { Close, Plus } from './Icons'
+import { AGENT, currentUrl } from '../session/session'
+import type { Tab, TabActivity } from '../session/types'
+import { Check, Close, Pause, Plus } from './Icons'
 import { Logo } from './Logo'
 
 interface Props {
   tabs: Tab[]
   activeTabId: string
-  agent: AgentState
   canClose: (tab: Tab) => boolean
   onSelect: (id: string) => void
   onClose: (id: string) => void
   onNew: () => void
+  trailing: ReactNode
 }
 
 function initial(url: string) {
@@ -21,7 +20,23 @@ function initial(url: string) {
   return host ? host.split('.').slice(-2, -1)[0][0].toUpperCase() : '·'
 }
 
-export function TabStrip({ tabs, activeTabId, agent, canClose, onSelect, onClose, onNew }: Props) {
+const activityText: Record<TabActivity, string> = {
+  working: `${AGENT} working`,
+  waiting: `${AGENT} waiting for approval`,
+  paused: `${AGENT} paused`,
+  done: `${AGENT} done`,
+}
+
+function Activity({ state }: { state: TabActivity }) {
+  return (
+    <span className="hx-act" data-state={state} title={activityText[state]}>
+      {state === 'working' ? <i /> : state === 'done' ? <Check /> : <Pause />}
+      <span className="hx-sr">, {activityText[state]}</span>
+    </span>
+  )
+}
+
+export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew, trailing }: Props) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   // APG tabs: arrows move and select, Home/End jump, Delete closes.
@@ -46,7 +61,7 @@ export function TabStrip({ tabs, activeTabId, agent, canClose, onSelect, onClose
           const selected = tab.id === activeTabId
           const title = pageTitle(currentUrl(tab))
           return (
-            <div key={tab.id} className="hx-tab" data-selected={selected} data-agent={tab.agent}>
+            <div key={tab.id} className="hx-tab" data-selected={selected}>
               <button
                 ref={(el) => { refs.current[tab.id] = el }}
                 className="hx-tab__main"
@@ -54,15 +69,15 @@ export function TabStrip({ tabs, activeTabId, agent, canClose, onSelect, onClose
                 id={`tab-${tab.id}`}
                 aria-selected={selected}
                 aria-controls="hx-page"
+                aria-keyshortcuts={canClose(tab) ? 'Delete' : undefined}
                 tabIndex={selected ? 0 : -1}
                 title={title}
                 onClick={() => onSelect(tab.id)}
                 onKeyDown={(e) => onKeyDown(e, i)}
-                aria-keyshortcuts={canClose(tab) ? "Delete" : undefined}
               >
-                {tab.agent ? <AgentDot state={agent} /> : <span className="hx-tab__fav" aria-hidden="true">{initial(currentUrl(tab))}</span>}
+                <span className="hx-tab__fav" aria-hidden="true">{initial(currentUrl(tab))}</span>
+                {tab.claude && <Activity state={tab.claude} />}
                 <span className="hx-tab__title">{title}</span>
-                {tab.agent && <span className="hx-sr">, agent tab</span>}
               </button>
               {canClose(tab) && (
                 <button className="hx-icbtn hx-icbtn--sm" aria-label={`Close ${title}`} tabIndex={-1} onClick={() => onClose(tab.id)}>
@@ -72,10 +87,9 @@ export function TabStrip({ tabs, activeTabId, agent, canClose, onSelect, onClose
             </div>
           )
         })}
+        <button className="hx-icbtn" aria-label="New tab" onClick={onNew}><Plus /></button>
       </div>
-      <button className="hx-icbtn" aria-label="New tab" onClick={onNew}>
-        <Plus />
-      </button>
+      {trailing}
     </div>
   )
 }

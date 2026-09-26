@@ -4,7 +4,7 @@ import { NEW_TAB_URL } from './session'
 const titles: Record<string, string> = {
   'https://www.example.com/cart': 'Cart — Example Store',
   'https://www.example.com/orders': 'Order history — Example Store',
-  'https://docs.example.org/api': 'API reference — Example Docs',
+  'https://reviews.example.org/headphones': 'Headphone reviews — Example Reviews',
   'https://checkout.example.com/pay': 'Checkout — Example Store',
   'https://checkout.example.com/done': 'Order placed — Example Store',
   [NEW_TAB_URL]: 'New tab',

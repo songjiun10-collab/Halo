@@ -18,8 +18,6 @@ code { font-family: var(--font-heading); }
 .num { font-variant-numeric: tabular-nums; }
 
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-/* The prompt title takes focus only so screen readers start there; it is not operable. */
-.hx-prompt__title:focus { outline: none; }
 
 .hx-sr {
   position: absolute; width: 1px; height: 1px; overflow: hidden;
@@ -70,28 +68,6 @@ code { font-family: var(--font-heading); }
   .hx-btn--primary:hover { background: color-mix(in oklab, var(--accent), white 12%); }
 }
 
-.hx-verdict {
-  display: inline-flex; align-items: center; gap: var(--space-xs); flex: none;
-  padding: 2px 6px 2px 4px; border-radius: var(--radius-sm);
-  border: 1px solid currentColor; background: var(--muted);
-  font: 600 12px/16px var(--font-heading); white-space: nowrap;
-}
-.hx-verdict .hx-ic { width: 14px; height: 14px; stroke-width: 2; }
-.hx-verdict[data-verdict="allow"] { color: var(--accent); }
-.hx-verdict[data-verdict="review"] { color: var(--warning); }
-.hx-verdict[data-verdict="deny"] { color: var(--destructive-text); }
-.hx-verdict[data-verdict="quarantine"] { color: var(--hold); }
-
-.hx-dot {
-  width: 10px; height: 10px; flex: none; border-radius: 50%;
-  border: 2px solid var(--border-strong);
-}
-.hx-dot[data-state="acting"] { background: var(--accent); border-color: var(--accent); }
-.hx-dot[data-state="waiting"] { border-color: var(--warning); }
-.hx-dot[data-state="stopped"] { background: var(--muted-foreground); border-color: var(--muted-foreground); }
-
-.hx-status { display: inline-flex; align-items: center; gap: var(--space-sm); font-weight: 600; white-space: nowrap; }
-
 /* ---------- Window ---------- */
 
 .hx-app { height: 100%; padding: var(--space-md); }
@@ -109,8 +85,9 @@ code { font-family: var(--font-heading); }
 .hx-logo { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-inline-end: var(--space-sm); color: var(--foreground); }
 .hx-logo__mark { width: 18px; height: 18px; color: var(--accent); }
 .hx-logo__word { font: 700 13px/1 var(--font-heading); letter-spacing: 0.08em; }
-.hx-tabs { display: flex; align-items: flex-end; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.hx-tabs { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .hx-tab {
+  position: relative;
   display: flex; align-items: center; flex: 0 1 220px; min-width: 120px; height: 34px;
   padding-inline-end: 5px; border-radius: var(--radius-md);
   color: var(--muted-foreground);
@@ -146,11 +123,12 @@ code { font-family: var(--font-heading); }
 .hx-omni__lock .hx-ic { width: 16px; height: 16px; }
 .hx-omni__url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hx-omni__url b { color: var(--foreground); font-weight: 400; }
-.hx-agentctl { display: flex; align-items: center; gap: 12px; margin-inline-start: auto; }
 
-/* Below ~560px the address field takes its own row under the controls. */
-@media (max-width: 35rem) {
-  .hx-omni { order: 3; flex-basis: 100%; }
+/* Narrow: who has control moves to its own row at the very top. */
+@media (max-width: 40rem) {
+  .hx-strip { flex-wrap: wrap; padding-inline-start: var(--space-sm); }
+  .hx-control { order: -1; flex-basis: 100%; justify-content: space-between; }
+  .hx-logo__word { display: none; }
 }
 
 .hx-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 400px); }
@@ -178,18 +156,42 @@ code { font-family: var(--font-heading); }
   padding: 10px 20px; border-radius: var(--radius-md);
   background: var(--site-button); color: var(--site-on-button); font-weight: 600;
 }
-/* The one thing HALO draws on the page: what the agent is about to touch. */
-.hx-site__btn[data-agent-target] { outline: 2px solid var(--accent); outline-offset: 4px; }
-.hx-site__btn[data-agent-target]::after {
-  content: "Agent target"; position: absolute; inset-inline-start: -6px; bottom: calc(100% + 10px);
-  padding: 2px 8px; border-radius: var(--radius-sm);
-  background: var(--accent); color: var(--on-accent);
-  font: 600 12px/16px var(--font-heading); white-space: nowrap;
+/* Where Claude is about to act: a soft halo and a named cursor, like a collaborator's pointer. */
+.hx-site__btn[data-claude-target] {
+  box-shadow: 0 0 0 2px var(--site-bg), 0 0 0 4px var(--accent), 0 0 0 10px color-mix(in oklab, var(--accent), transparent 78%);
+}
+.hx-cursor { position: absolute; left: calc(100% - 10px); top: calc(100% - 6px); display: flex; align-items: flex-start; pointer-events: none; }
+.hx-cursor__arrow { width: 18px; height: 18px; fill: var(--accent); stroke: var(--site-bg); stroke-width: 1.2; stroke-linejoin: round; }
+.hx-cursor__name {
+  margin: 12px 0 0 -2px; padding: 1px 7px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent); font: 600 12px/18px var(--font-body); white-space: nowrap;
 }
 .hx-site__empty { max-width: 28rem; margin: 10vh auto 0; text-align: center; color: var(--site-muted); }
 .hx-site__empty-title { margin: 0 0 var(--space-xs); color: var(--site-fg); font-weight: 600; }
 
-/* ---------- Agent panel ---------- */
+/* ---------- Control: who drives the browser ---------- */
+
+.hx-control { display: flex; align-items: center; gap: 12px; flex: none; }
+.hx-control__state { display: inline-flex; align-items: center; gap: var(--space-sm); font-weight: 600; white-space: nowrap; }
+.hx-control__dot { width: 10px; height: 10px; border-radius: 50%; background: var(--foreground); }
+.hx-control[data-control="claude"] .hx-control__dot { background: var(--accent); }
+.hx-control[data-control="approval"] .hx-control__dot { background: var(--warning); }
+.hx-control[data-control="approval"] .hx-control__state { color: var(--warning); }
+.hx-control__note { color: var(--muted-foreground); font-size: 13px; }
+@media (max-width: 40rem) {
+  .hx-control { flex: 1 0 100%; min-width: 0; gap: var(--space-sm); flex-wrap: wrap; }
+  .hx-control__state { white-space: normal; }
+}
+
+/* Claude's state per tab, beside the favicon. */
+.hx-act { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; }
+.hx-act .hx-ic { width: 14px; height: 14px; stroke-width: 2; }
+.hx-act i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.hx-act[data-state="waiting"] { color: var(--warning); }
+.hx-act[data-state="paused"] { color: var(--muted-foreground); }
+.hx-act[data-state="done"] { color: var(--accent); }
+
+/* ---------- Session panel ---------- */
 
 .hx-panel {
   display: flex; flex-direction: column; gap: 12px; min-height: 0;
@@ -200,71 +202,92 @@ code { font-family: var(--font-heading); }
 .hx-panel__title { margin: 0; font: 600 16px/1.2 var(--font-heading); }
 .hx-demo { padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); font: 500 12px/1.4 var(--font-heading); color: var(--muted-foreground); }
 .hx-panel__task { display: flex; gap: var(--space-sm); align-items: baseline; margin: 0; font-size: 15px; }
+.hx-panel__state { margin: 0; color: var(--muted-foreground); }
+.hx-typing { display: inline-flex; gap: 3px; margin-inline-start: 6px; vertical-align: middle; }
+.hx-typing i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
 
-/* Scroll shadows: a cue that more steps sit past either edge. */
-.hx-log {
+/* Scroll shadows: a cue that more events sit past either edge. */
+.hx-timeline {
   flex: 1; min-height: 120px; overflow-y: auto; margin: 0; padding: 0; list-style: none;
-  display: flex; flex-direction: column; gap: 6px;
+  display: flex; flex-direction: column; gap: 2px;
   background:
     linear-gradient(var(--background) 30%, transparent) top / 100% 24px no-repeat local,
     linear-gradient(transparent, var(--background) 70%) bottom / 100% 24px no-repeat local,
     radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.5), transparent) top / 100% 10px no-repeat scroll,
     radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.5), transparent) bottom / 100% 10px no-repeat scroll;
 }
-.hx-step {
-  display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 10px; align-items: start;
-  padding: 10px 12px; border-radius: var(--radius-md); background: var(--card);
+.hx-event {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: start;
+  padding: 8px 10px; border-radius: var(--radius-md);
 }
-.hx-step[data-current] { box-shadow: inset 0 0 0 1px var(--border-strong); }
-/* Past steps stay quiet: the word in muted text, only the glyph keeps its hue.
-   Review keeps no amber here; the approval card is the one amber surface. */
-.hx-log .hx-verdict { border-color: transparent; background: none; padding-inline: 0; color: var(--muted-foreground); font-weight: 500; }
-.hx-log .hx-verdict[data-verdict="allow"] .hx-ic { color: var(--accent); }
-.hx-log .hx-verdict[data-verdict="deny"] .hx-ic { color: var(--destructive-text); }
-.hx-log .hx-verdict[data-verdict="quarantine"] .hx-ic { color: var(--hold); }
-.hx-step__n { font: 500 12px/20px var(--font-heading); color: var(--muted-foreground); }
-.hx-step__body { display: grid; gap: 2px; min-width: 0; }
-.hx-step__title { font-weight: 500; line-height: 1.4; }
-.hx-step__target { font-size: 12px; line-height: 1.4; color: var(--muted-foreground); overflow-wrap: anywhere; }
-.hx-step__note { font-size: 12px; color: var(--muted-foreground); }
-.hx-step .hx-verdict { margin-top: 1px; }
+.hx-event[data-actor="you"] { background: var(--card); }
+.hx-avatar {
+  display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%;
+  font: 700 12px/1 var(--font-heading);
+}
+.hx-avatar[data-actor="claude"] { background: var(--accent); color: var(--on-accent); }
+.hx-avatar[data-actor="you"] { background: var(--foreground); color: var(--background); }
+.hx-avatar[data-actor="halo"] { background: var(--muted); color: var(--foreground); }
+.hx-avatar__mark { width: 16px; height: 16px; }
+.hx-event__body { display: grid; gap: 2px; min-width: 0; padding-top: 2px; }
+.hx-event__text { line-height: 1.4; }
+.hx-event__text b { font-weight: 600; }
+.hx-event__detail { font-size: 12px; line-height: 1.4; color: var(--muted-foreground); overflow-wrap: anywhere; }
 
-.hx-panel__state { margin: 0; color: var(--muted-foreground); }
-.hx-typing { display: inline-flex; gap: 3px; margin-inline-start: 6px; vertical-align: middle; }
-.hx-typing i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+/* Plain-language outcome first; the policy verdict as small secondary text. */
+.hx-outcome { display: grid; justify-items: end; gap: 1px; padding-top: 2px; white-space: nowrap; }
+.hx-outcome__main { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; color: var(--muted-foreground); }
+.hx-outcome__main .hx-ic { width: 14px; height: 14px; stroke-width: 2; }
+.hx-outcome[data-outcome="done"] .hx-ic, .hx-outcome[data-outcome="approved"] .hx-ic { color: var(--accent); }
+.hx-outcome[data-outcome="blocked"] .hx-ic { color: var(--hold); }
+.hx-outcome[data-outcome="denied"] .hx-ic { color: var(--destructive-text); }
+.hx-outcome[data-outcome="approval"] .hx-ic { color: var(--warning); }
+.hx-outcome__policy { font: 500 11px/1.3 var(--font-heading); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
 
-/* Concentric radius: 8px buttons + 16px padding = 24px. */
-.hx-prompt {
+/* While a decision is open, the history steps back: muted text and glyphs, contrast kept. */
+.hx-timeline[data-dim] .hx-event__text, .hx-timeline[data-dim] .hx-outcome__main { color: var(--muted-foreground); }
+.hx-timeline[data-dim] .hx-outcome .hx-ic { color: var(--muted-foreground); }
+.hx-timeline[data-dim] .hx-avatar { filter: grayscale(1); }
+
+/* The approval card: amount, then card, then destination. Concentric: 8px buttons + 16px padding = 24px. */
+.hx-approval {
   flex: none; padding: var(--space-md); border-radius: 24px;
   background: var(--card); box-shadow: var(--shadow-raised), inset 0 0 0 1px var(--warning);
 }
-.hx-prompt__kicker { display: flex; align-items: center; gap: var(--space-sm); margin-bottom: 10px; }
-.hx-prompt__title { margin: 0 0 var(--space-xs); font: 600 18px/1.3 var(--font-heading); }
-.hx-prompt__text { margin: 0 0 12px; font-size: 15px; }
-.hx-prompt__request {
-  display: block; margin-bottom: var(--space-md); padding: 10px 12px; border-radius: var(--radius-md);
-  background: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere;
+.hx-approval__kicker { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 6px; color: var(--warning); font-weight: 600; font-size: 13px; }
+.hx-approval__policy { font: 500 11px/1.3 var(--font-heading); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
+.hx-approval__title { margin: 0; font: 500 15px/1.4 var(--font-body); color: var(--muted-foreground); }
+.hx-approval__amount { margin: 2px 0 12px; font: 700 36px/1.1 var(--font-heading); letter-spacing: -0.02em; }
+.hx-approval__amount:focus { outline: none; }
+.hx-approval__facts { display: grid; gap: 6px; margin: 0 0 12px; }
+.hx-approval__facts div { display: flex; justify-content: space-between; gap: var(--space-md); }
+.hx-approval__facts dt { color: var(--muted-foreground); }
+.hx-approval__facts dd { margin: 0; font-weight: 600; text-align: end; }
+.hx-approval__dest { font-family: var(--font-heading); font-weight: 500; }
+.hx-approval__request {
+  display: block; margin-bottom: var(--space-md); padding: 8px 10px; border-radius: var(--radius-md);
+  background: var(--muted); color: var(--muted-foreground); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere;
 }
-.hx-prompt__actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
-.hx-prompt__note { margin: 0; color: var(--muted-foreground); }
+.hx-approval__actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
 
-/* Stacked: the whole body scrolls, so the log flows instead of nesting a second scroller. */
+/* Stacked: the whole body scrolls, so the timeline flows instead of nesting a second scroller. */
 @media (max-width: 45rem) {
   .hx-panel { border-inline-start: 0; border-top: 1px solid var(--border); }
-  .hx-log { flex: none; overflow: visible; background: none; }
+  .hx-timeline { flex: none; overflow: visible; background: none; }
 }
 
 /* ---------- Motion: opt-in, transform and opacity only ---------- */
 
 @media (prefers-reduced-motion: no-preference) {
-  .hx-step, .hx-prompt {
+  .hx-event, .hx-approval {
     transition: opacity var(--enter) var(--ease-out), transform var(--enter) var(--ease-out);
     @starting-style { opacity: 0; transform: translateY(6px); }
   }
-  .hx-dot[data-state="acting"] { animation: hx-breathe 1.6s ease-in-out infinite; }
+  .hx-control[data-control="claude"] .hx-control__dot, .hx-act[data-state="working"] i { animation: hx-breathe 1.6s ease-in-out infinite; }
   .hx-typing i { animation: hx-breathe 1.2s ease-in-out infinite; }
   .hx-typing i:nth-child(2) { animation-delay: 0.15s; }
   .hx-typing i:nth-child(3) { animation-delay: 0.3s; }
   .hx-skip { transition: transform 150ms var(--ease-out); }
 }
 @keyframes hx-breathe { 50% { opacity: 0.35; } }
+
