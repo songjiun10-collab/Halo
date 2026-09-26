@@ -288,6 +288,75 @@ test("harness-contracts rejects unknown fields and unknown enums", () => {
   );
 });
 
+test("eventsSinceCheckpoint is capped at the most recent 10 events, never the whole journal since checkpoint", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+  for (let i = 0; i < 15; i++) {
+    await store.append({ type: "note", payload: { i } });
+  }
+  const taskId = store.taskId;
+  await store.close();
+
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  // 1 goal_created + 15 notes = 16 events total, no checkpoint was ever
+  // written, but the store must never hand back more than the last 10.
+  assert.equal(reopened.eventsSinceCheckpoint.length, 10);
+  assert.equal(reopened.eventsSinceCheckpoint[0].payload.i, 5); // the oldest of the kept 10
+  assert.equal(reopened.eventsSinceCheckpoint[9].payload.i, 14); // the most recent
+  await reopened.close();
+});
+
+test("a large journal replays via bounded streaming, not a full in-memory array (functional smoke test)", async () => {
+  // This proves the replay path scales structurally (no O(n) array of
+  // parsed events survives replay) and stays correct at scale; it is not a
+  // real RSS measurement -- see docs/superpowers/specs/2026-09-27-long-
+  // horizon-browser-harness-design.md section 10 for that separate evidence.
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+  const actionCount = 300; // far larger than the bounded ring (10); kept modest so the real per-append fsync stays fast
+  for (let i = 0; i < actionCount; i++) {
+    await store.append({ type: "action_started", payload: { actionId: `a${i}` } });
+    await store.append({ type: "action_outcome", payload: { actionId: `a${i}`, status: "ok" } });
+  }
+  const taskId = store.taskId;
+  await store.close();
+
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  assert.equal(reopened.recoveryReason, "recovered");
+  assert.ok(reopened.eventsSinceCheckpoint.length <= 10);
+  const appended = await reopened.append({ type: "note", payload: { msg: "still going" } });
+  assert.equal(appended.seq, 1 + actionCount * 2 + 1);
+  await reopened.close();
+});
+
+test("refuses to load a journal where a second action_started overlaps one still open (violates one-in-flight)", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+  await store.append({ type: "action_started", payload: { actionId: "a1" } });
+  await store.append({ type: "action_started", payload: { actionId: "a2" } }); // no outcome for a1 first
+  const taskId = store.taskId;
+  await store.close();
+
+  await assert.rejects(
+    () => TaskStore.load(taskId, { storageRoot }),
+    (err) => err.code === "storage_corrupt",
+  );
+});
+
+test("refuses to load a journal where an action_outcome does not match the open action", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+  await store.append({ type: "action_started", payload: { actionId: "a1" } });
+  await store.append({ type: "action_outcome", payload: { actionId: "a2", status: "ok" } }); // wrong id
+  const taskId = store.taskId;
+  await store.close();
+
+  await assert.rejects(
+    () => TaskStore.load(taskId, { storageRoot }),
+    (err) => err.code === "storage_corrupt",
+  );
+});
+
 test("harness-contracts rejects an oversized journal event", () => {
   const bigPayload = { blob: "x".repeat(MAX_EVENT_BYTES) };
   assert.throws(

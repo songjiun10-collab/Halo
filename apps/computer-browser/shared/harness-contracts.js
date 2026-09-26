@@ -25,6 +25,9 @@ const MAX_CONSTRAINT_TEXT_CHARS = 512; // no separate bound is given for constra
 const MAX_EVENT_BYTES = 64 * 1024;
 const MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024;
 const MAX_TASK_STORE_BYTES = 100 * 1024 * 1024;
+const MAX_CONTEXT_PACKET_BYTES = 64 * 1024; // section 5: "구조화된 packet 상한 64 KiB"
+const MAX_RECENT_EVENTS_IN_CONTEXT = 10; // section 5: "최근 action/result 10쌍"
+const MAX_ACTIONS_PER_PROPOSAL = 3; // section 8: "최대 3개 observe/scroll만 순차 묶음"
 
 const DEFAULT_LIMITS = Object.freeze({
   maxActions: 1000,
@@ -48,6 +51,17 @@ const EVENT_TYPES = Object.freeze(["goal_created", "goal_amended", "action_start
 
 const VERIFICATION_KINDS = Object.freeze(["host", "user"]);
 const AMENDMENT_AUTHORITY = Object.freeze(["user"]); // pages/models can never author an amendment
+
+// Evidence.kind: what produced the candidate; EVIDENCE_VERIFICATION_STATES:
+// only a host verifier (verifyCriterion) or a trusted user-confirmation IPC
+// path may ever move an entry out of "pending" -- a model proposing Evidence
+// can only ever produce "pending" (enforced below: verifierId is required
+// for verified/rejected, forbidden while pending, and nothing in this module
+// lets a caller self-assign verifierId from untrusted input).
+const EVIDENCE_KINDS = Object.freeze(["host_check", "user_confirmation", "artifact"]);
+const EVIDENCE_VERIFICATION_STATES = Object.freeze(["pending", "verified", "rejected"]);
+
+const PROPOSAL_KINDS = Object.freeze(["actions", "replan", "finish", "need_user"]);
 
 class ContractError extends Error {
   constructor(code, message) {
@@ -320,6 +334,101 @@ function validateCheckpointEnvelope(envelope, label = "checkpoint") {
   return envelope;
 }
 
+const EVIDENCE_FIELDS = [
+  "id",
+  "taskId",
+  "goalVersion",
+  "criterionId",
+  "kind",
+  "observationId",
+  "sourceUrl",
+  "artifactHash",
+  "at",
+  "verification",
+  "verifierId",
+  "details",
+];
+
+function validateEvidence(evidence, label = "evidence") {
+  assertPlainObject(evidence, label);
+  assertNoUnknownKeys(evidence, EVIDENCE_FIELDS, label);
+  assertId(evidence.id, `${label}.id`);
+  assertUuid(evidence.taskId, `${label}.taskId`);
+  assertPositiveInteger(evidence.goalVersion, `${label}.goalVersion`);
+  assertId(evidence.criterionId, `${label}.criterionId`);
+  if (!EVIDENCE_KINDS.includes(evidence.kind)) {
+    throw new ContractError("unknown_enum", `${label}.kind must be one of ${EVIDENCE_KINDS.join("|")}`);
+  }
+  if (evidence.observationId !== undefined && evidence.observationId !== null) {
+    assertString(evidence.observationId, `${label}.observationId`, { maxChars: 128 });
+  }
+  if (evidence.sourceUrl !== undefined && evidence.sourceUrl !== null) {
+    assertString(evidence.sourceUrl, `${label}.sourceUrl`, { maxChars: 2048 });
+  }
+  if (evidence.artifactHash !== undefined && evidence.artifactHash !== null) {
+    assertString(evidence.artifactHash, `${label}.artifactHash`, { maxChars: 256 });
+  }
+  assertIsoTimestamp(evidence.at, `${label}.at`);
+  if (!EVIDENCE_VERIFICATION_STATES.includes(evidence.verification)) {
+    throw new ContractError("unknown_enum", `${label}.verification must be one of ${EVIDENCE_VERIFICATION_STATES.join("|")}`);
+  }
+  if (evidence.verification === "pending") {
+    if (evidence.verifierId !== undefined && evidence.verifierId !== null) {
+      throw new ContractError("invalid_field", `${label}.verifierId must be absent while verification is pending`);
+    }
+  } else {
+    assertString(evidence.verifierId, `${label}.verifierId`);
+  }
+  if (evidence.details !== undefined && evidence.details !== null) {
+    assertPlainObject(evidence.details, `${label}.details`);
+  }
+  return evidence;
+}
+
+// Proposal is the Planner->host wire message (section 6). Only the envelope
+// shape is validated here; per-action-type payloads (navigate/follow_link/
+// scroll/observe) are the browser adapter's concern (Task 4).
+function validateProposalEnvelope(proposal, label = "proposal") {
+  assertPlainObject(proposal, label);
+  assertNoUnknownKeys(
+    proposal,
+    ["taskId", "goalVersion", "basedOnObservationId", "criterionIds", "kind", "actions", "reason", "evidenceIds"],
+    label,
+  );
+  assertUuid(proposal.taskId, `${label}.taskId`);
+  assertPositiveInteger(proposal.goalVersion, `${label}.goalVersion`);
+  assertString(proposal.basedOnObservationId, `${label}.basedOnObservationId`, { maxChars: 128 });
+  assertStringArray(proposal.criterionIds, `${label}.criterionIds`, { maxLength: MAX_CRITERIA_COUNT });
+  if (!PROPOSAL_KINDS.includes(proposal.kind)) {
+    throw new ContractError("unknown_enum", `${label}.kind must be one of ${PROPOSAL_KINDS.join("|")}`);
+  }
+
+  const disallow = (fields) => {
+    for (const f of fields) {
+      if (proposal[f] !== undefined) throw new ContractError("invalid_shape", `${label} kind=${proposal.kind} must not include "${f}"`);
+    }
+  };
+
+  if (proposal.kind === "finish") {
+    assertStringArray(proposal.evidenceIds, `${label}.evidenceIds`);
+    disallow(["actions", "reason"]);
+  } else if (proposal.kind === "replan" || proposal.kind === "need_user") {
+    assertString(proposal.reason, `${label}.reason`, { maxChars: 2000 });
+    disallow(["actions", "evidenceIds"]);
+  } else {
+    // kind === "actions"
+    if (!Array.isArray(proposal.actions) || proposal.actions.length === 0) {
+      throw new ContractError("invalid_field", `${label}.actions must be a non-empty array`);
+    }
+    if (proposal.actions.length > MAX_ACTIONS_PER_PROPOSAL) {
+      throw new ContractError("field_too_large", `${label}.actions exceeds the ${MAX_ACTIONS_PER_PROPOSAL}-item batch limit`);
+    }
+    proposal.actions.forEach((a, i) => assertPlainObject(a, `${label}.actions[${i}]`));
+    disallow(["reason", "evidenceIds"]);
+  }
+  return proposal;
+}
+
 module.exports = {
   SCHEMA_VERSION,
   UUID_RE,
@@ -332,10 +441,16 @@ module.exports = {
   MAX_EVENT_BYTES,
   MAX_CHECKPOINT_BYTES,
   MAX_TASK_STORE_BYTES,
+  MAX_CONTEXT_PACKET_BYTES,
+  MAX_RECENT_EVENTS_IN_CONTEXT,
+  MAX_ACTIONS_PER_PROPOSAL,
   DEFAULT_LIMITS,
   DEFAULT_CRITERION_C1,
   EVENT_TYPES,
   VERIFICATION_KINDS,
+  EVIDENCE_KINDS,
+  EVIDENCE_VERIFICATION_STATES,
+  PROPOSAL_KINDS,
   ContractError,
   isPlainObject,
   assertUuid,
@@ -345,4 +460,6 @@ module.exports = {
   applyAmendment,
   validateJournalEvent,
   validateCheckpointEnvelope,
+  validateEvidence,
+  validateProposalEnvelope,
 };

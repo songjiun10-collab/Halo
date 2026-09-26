@@ -167,31 +167,38 @@ async function appendLineDurable(filePath, line) {
   }
 }
 
-// Reads events.jsonl and returns { events, tornTailDropped, bytesKept }.
-// Only the FINAL line may be an incomplete write (a crash mid-append); any
-// earlier line that fails to parse, or any seq that is out of order or
-// duplicated, is storage_corrupt.
-async function readJournal(journalPath) {
-  let raw;
+// Replays events.jsonl WITHOUT ever materializing the full file as one
+// string or one array (docs/superpowers/specs/2026-09-27-long-horizon-
+// browser-harness-design.md section 10: a long-running task's journal must
+// not be loaded into RAM in full). The file is read in bounded chunks and
+// reduced line-by-line: only a handful of scalars (last seq, the single
+// in-flight action id -- Task 3's controller dispatches at most one action
+// per task at a time, so recovery never needs more than one) plus a small
+// ring buffer of the most recent events are kept, capped at
+// MAX_RECENT_EVENTS_IN_CONTEXT regardless of how many events the journal
+// actually holds. Only the FINAL line may be an incomplete write (a crash
+// mid-append, detected as leftover bytes with no terminating "\n"); any
+// earlier line that fails to parse or validate, has an out-of-order seq, or
+// violates the one-action-in-flight invariant is storage_corrupt.
+async function streamJournalReplay(journalPath, checkpointSeq) {
+  let fh;
   try {
-    raw = await readFileNoFollow(journalPath);
+    fh = await fsp.open(journalPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   } catch (err) {
-    if (err.code === "ENOENT") return { events: [], tornTailDropped: false, bytesKept: 0 };
+    if (err.code === "ENOENT") {
+      return { nextSeq: 1, bytesKept: 0, tornTailDropped: false, recentEvents: [], openActionId: null };
+    }
     throw err;
   }
-  if (raw.length === 0) return { events: [], tornTailDropped: false, bytesKept: 0 };
 
-  const endsClean = raw.endsWith("\n");
-  const rawLines = raw.split("\n");
-  if (rawLines[rawLines.length - 1] === "") rawLines.pop();
-
-  const tornTailDropped = !endsClean && rawLines.length > 0;
-  const completeLines = tornTailDropped ? rawLines.slice(0, -1) : rawLines;
-
-  const events = [];
-  let expectedSeq = 1;
+  let lastSeq = 0;
   let bytesKept = 0;
-  for (const line of completeLines) {
+  let openActionId = null;
+  const recentEvents = [];
+  let residual = "";
+  let tornTailDropped = false;
+
+  function commitLine(line) {
     let parsed;
     try {
       parsed = JSON.parse(line);
@@ -199,26 +206,56 @@ async function readJournal(journalPath) {
     } catch (err) {
       throw new TaskStoreError("storage_corrupt", `journal line is invalid: ${err.message}`);
     }
-    if (parsed.seq !== expectedSeq) {
-      throw new TaskStoreError("storage_corrupt", `journal seq out of order: expected ${expectedSeq}, got ${parsed.seq}`);
+    if (parsed.seq !== lastSeq + 1) {
+      throw new TaskStoreError("storage_corrupt", `journal seq out of order: expected ${lastSeq + 1}, got ${parsed.seq}`);
     }
-    events.push(parsed);
-    expectedSeq += 1;
+    if (parsed.type === "action_started") {
+      if (openActionId !== null) {
+        throw new TaskStoreError(
+          "storage_corrupt",
+          `action_started for "${parsed.payload.actionId}" arrived while "${openActionId}" was still open`,
+        );
+      }
+      openActionId = parsed.payload.actionId;
+    } else if (parsed.type === "action_outcome") {
+      if (openActionId !== parsed.payload.actionId) {
+        throw new TaskStoreError(
+          "storage_corrupt",
+          `action_outcome for "${parsed.payload.actionId}" does not match the open action "${openActionId}"`,
+        );
+      }
+      openActionId = null;
+    }
+    lastSeq = parsed.seq;
     bytesKept += Buffer.byteLength(line, "utf8") + 1;
-  }
-  return { events, tornTailDropped, bytesKept };
-}
-
-function computeRecoveryReason(events) {
-  const started = new Map();
-  for (const event of events) {
-    if (event.type === "action_started") {
-      started.set(event.payload.actionId, true);
-    } else if (event.type === "action_outcome") {
-      started.delete(event.payload.actionId);
+    if (parsed.seq > checkpointSeq) {
+      recentEvents.push(parsed);
+      if (recentEvents.length > contracts.MAX_RECENT_EVENTS_IN_CONTEXT) recentEvents.shift();
     }
   }
-  return started.size > 0 ? "execution_uncertain" : "recovered";
+
+  try {
+    const stream = fh.createReadStream({ encoding: "utf8", highWaterMark: 64 * 1024 });
+    for await (const chunk of stream) {
+      residual += chunk;
+      let idx;
+      while ((idx = residual.indexOf("\n")) !== -1) {
+        const line = residual.slice(0, idx);
+        residual = residual.slice(idx + 1);
+        commitLine(line);
+      }
+    }
+    if (residual.length > 0) {
+      // Leftover bytes with no terminating newline: the last append was cut
+      // short by a crash. Drop it silently without ever validating its
+      // content -- section 4: "마지막 미완성 JSONL 줄만 잘라낼 수 있다".
+      tornTailDropped = true;
+    }
+  } finally {
+    await fh.close();
+  }
+
+  return { nextSeq: lastSeq + 1, bytesKept, tornTailDropped, recentEvents, openActionId };
 }
 
 class TaskStore {
@@ -447,8 +484,21 @@ class TaskStore {
         throw wrapContractError(err);
       }
 
+      let checkpoint = null;
+      const checkpointPath = path.join(taskDir, "checkpoint.json");
+      try {
+        const raw = await readFileNoFollow(checkpointPath);
+        checkpoint = contracts.validateCheckpointEnvelope(JSON.parse(raw));
+      } catch (err) {
+        if (err.code !== "ENOENT") throw wrapContractError(err);
+      }
+      const checkpointSeq = checkpoint ? checkpoint.seq : 0;
+
       const journalPath = path.join(taskDir, "events.jsonl");
-      const { events, tornTailDropped, bytesKept } = await readJournal(journalPath);
+      const { nextSeq, bytesKept, tornTailDropped, recentEvents, openActionId } = await streamJournalReplay(
+        journalPath,
+        checkpointSeq,
+      );
 
       if (tornTailDropped) {
         // Truncate the journal file to drop the incomplete trailing write so
@@ -462,19 +512,6 @@ class TaskStore {
         }
       }
 
-      let checkpoint = null;
-      const checkpointPath = path.join(taskDir, "checkpoint.json");
-      try {
-        const raw = await readFileNoFollow(checkpointPath);
-        checkpoint = contracts.validateCheckpointEnvelope(JSON.parse(raw));
-      } catch (err) {
-        if (err.code !== "ENOENT") throw wrapContractError(err);
-      }
-
-      const checkpointSeq = checkpoint ? checkpoint.seq : 0;
-      const eventsSinceCheckpoint = events.filter((e) => e.seq > checkpointSeq);
-      const nextSeq = events.length > 0 ? events[events.length - 1].seq + 1 : 1;
-
       const store = new TaskStore({
         taskId,
         storageRoot: root,
@@ -486,8 +523,8 @@ class TaskStore {
         totalBytes: bytesKept,
       });
       store.lastCheckpoint = checkpoint;
-      store.eventsSinceCheckpoint = eventsSinceCheckpoint;
-      store.recoveryReason = computeRecoveryReason(events);
+      store.eventsSinceCheckpoint = recentEvents;
+      store.recoveryReason = openActionId !== null ? "execution_uncertain" : "recovered";
       return store;
     } catch (err) {
       await releaseLock(lockPath);
