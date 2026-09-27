@@ -26,8 +26,22 @@ const METHODS = [
   "goBack", "goForward", "reload", "newTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
 ];
 
+// Long-horizon harness channels (main/harness/task-host.js via main/ipc.js).
+// Additive: the legacy METHODS above are unchanged, and the renderer is free
+// to never call any of these. main/ipc.js independently re-validates the
+// sender for every one of these (a compromised/relaxed preload alone is not
+// the trust boundary), so this list is just "what's reachable", not "what's
+// authorized".
+const HARNESS_METHODS = [
+  "createTask", "listTasks", "resumeSavedTask", "amendTask", "confirmCriterion", "getTaskDetail",
+  "taskApprove", "taskDeny", "taskPause", "taskStop",
+];
+
 const api = {};
 for (const method of METHODS) {
+  api[method] = (...args) => ipcRenderer.invoke(`halo:${method}`, ...args);
+}
+for (const method of HARNESS_METHODS) {
   api[method] = (...args) => ipcRenderer.invoke(`halo:${method}`, ...args);
 }
 

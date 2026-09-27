@@ -127,6 +127,16 @@ class TaskHost {
 
   async resumeSavedTask(taskId, opts = {}) {
     let entry = this._active.get(taskId);
+    // A memory_emergency-paused controller already disposed its own
+    // browser/planner (task-controller.js's teardown) and now refuses
+    // resume() outright -- the only way forward is a fresh re-attachment
+    // (new browser/planner instances), exactly like recovering from a
+    // process restart. Evict the stale entry and fall through to the
+    // "never attached" path below.
+    if (entry && entry.controller.getSnapshot().pauseReason === "memory_emergency") {
+      this._active.delete(taskId);
+      entry = null;
+    }
     if (!entry) {
       const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
       entry = this._attach(store);

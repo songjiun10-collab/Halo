@@ -334,3 +334,102 @@ test("observe() bounds the traversal script to maxNodesVisited/maxElements/maxTe
   assert.match(receivedScript, /999/);
   assert.match(receivedScript, /createTreeWalker/, "must walk bounded, not querySelectorAll + slice");
 });
+
+// --- dispose(): the emergency memory-pressure teardown path (task-controller.js)
+// needs a way to actually release this adapter's WebContentsView, not just
+// stop calling it.
+
+test("dispose() destroys the underlying webContents/view so the emergency teardown path can actually release it", async () => {
+  let destroyed = false;
+  const view = {
+    webContents: {
+      loadURL: async () => {},
+      stop: () => {},
+      executeJavaScript: async () => ({ url: "https://example.com/", title: "", text: "", elements: [] }),
+      close: () => {
+        destroyed = true;
+      },
+    },
+  };
+  const adapter = new BrowserAdapter({ view });
+
+  await adapter.dispose();
+
+  assert.equal(destroyed, true);
+});
+
+test("dispose() is a safe no-op if the view has no close()/destroy() method", async () => {
+  const adapter = new BrowserAdapter({ view: makeFakeView() });
+  await assert.doesNotReject(() => adapter.dispose());
+});
+
+// --- Real-Electron-discovered bug (Task 6): a genuine Electron webContents'
+// executeJavaScript() hangs forever if called before ANY navigation has ever
+// happened on it (no committed document/render frame to inject into) --
+// confirmed by direct reproduction against real Electron, not simulated.
+// observe() is the very first call task-controller.js's _runLoop makes, so
+// this hung the whole harness on its first iteration against a real
+// WebContentsView, even though every fake-view unit test above passed
+// (fakes don't reproduce Electron's real timing constraint here). The fix:
+// lazily load "about:blank" once, before the first executeJavaScript call,
+// whenever the real webContents reports no URL yet (wc.getURL() === "").
+// Fakes that don't implement getURL() at all (every fake above) are
+// untouched -- this only activates for a real Electron-shaped webContents.
+
+test("observe() loads about:blank first if the real webContents has never navigated (getURL() === '')", async () => {
+  let blankLoaded = false;
+  const view = {
+    webContents: {
+      getURL: () => (blankLoaded ? "about:blank" : ""),
+      loadURL: async (url) => {
+        if (url === "about:blank") blankLoaded = true;
+      },
+      executeJavaScript: async () => {
+        if (!blankLoaded) throw new Error("executeJavaScript called before any navigation -- this is the real hang this fix prevents");
+        return { url: "about:blank", title: "", text: "", elements: [] };
+      },
+    },
+  };
+  const adapter = new BrowserAdapter({ view });
+
+  const observation = await adapter.observe();
+
+  assert.equal(blankLoaded, true);
+  assert.equal(observation.url, "about:blank");
+});
+
+test("observe() does NOT load about:blank if the real webContents already has a URL (already navigated)", async () => {
+  let loadURLCalls = 0;
+  const view = {
+    webContents: {
+      getURL: () => "https://example.com/",
+      loadURL: async () => {
+        loadURLCalls += 1;
+      },
+      executeJavaScript: async () => ({ url: "https://example.com/", title: "", text: "", elements: [] }),
+    },
+  };
+  const adapter = new BrowserAdapter({ view });
+
+  await adapter.observe();
+
+  assert.equal(loadURLCalls, 0, "must not redundantly load about:blank once the page has already navigated somewhere real");
+});
+
+test("a fake view with no getURL() at all is unaffected (existing fake-based tests keep working unchanged)", async () => {
+  const view = makeFakeView();
+  const adapter = new BrowserAdapter({ view });
+  const observation = await adapter.observe();
+  assert.ok(observation);
+});
+
+test("execute() after dispose() fails cleanly instead of touching a destroyed view", async () => {
+  const view = makeFakeView();
+  const adapter = new BrowserAdapter({ view });
+  await adapter.dispose();
+
+  const result = await adapter.execute({ type: "navigate", url: "https://example.com" });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.errorCode, "disposed");
+});

@@ -132,6 +132,44 @@ test("grants one free replan after 3 identical no-progress actions, then pauses 
   await store.close();
 });
 
+test("no-progress detection still catches an identical action/page even when the observation carries a fresh random id each call (matches the real BrowserAdapter, which always does)", async () => {
+  const { store } = await makeStore({ originalRequest: "goal", limits: { maxPlannerCalls: 50 } });
+  let counter = 0;
+  const browser = {
+    // Same url/text/elements every call -- only the id (as the real
+    // BrowserAdapter's _randomId() always produces) differs. A stale
+    // observationKey() that includes this volatile id would never see two
+    // calls compare equal, silently disabling the no-progress safety net.
+    observe: async () => ({ id: `real-observation-${counter++}`, url: "http://example.test/", text: "same page", elements: [] }),
+    execute: async () => ({ status: "ok" }), // never produces evidence -> never counts as progress
+  };
+  const planner = {
+    next: async (context) => ({
+      taskId: context.taskId,
+      goalVersion: context.goalVersion,
+      basedOnObservationId: context.observation.id,
+      criterionIds: [],
+      kind: "actions",
+      actions: [{ type: "observe" }], // always identical
+    }),
+  };
+  const controller = new TaskController({
+    store,
+    planner,
+    browser,
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    noProgressThreshold: 3,
+  });
+  await controller.start();
+
+  const snapshot = controller.getSnapshot();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(snapshot.budgets.actionsUsed, 6); // 3 (first streak, grace replan) + 3 (second streak, pause) -- NOT 50 (budget exhaustion)
+  await store.close();
+});
+
 test("does not count time spent in awaiting_approval toward the active-time budget", async () => {
   let t = 1000;
   const now = () => t;
@@ -671,5 +709,96 @@ test("confirmCriterion rejects an unknown criterionId", async () => {
     () => controller.confirmCriterion({ criterionId: "does-not-exist", goalVersion: controller.getGoal().goalVersion, evidenceId: "x", outcome: "verified" }),
     TaskControllerError,
   );
+  await store.close();
+});
+
+// --- Task 5/6: 900MB emergency memory pressure must tear down this
+// controller's OWNED browser/planner resources (not just pause), and must
+// never let resume() silently reuse those now-disposed resources -- the
+// user's explicit mandate: "900MB emergency에서는 owned page-renderer/worker
+// 정리; 자동 resume/reload 폭주 금지." A "pause"-level (800MB) pressure must
+// still behave exactly as before (checkpoint + paused:memory_pressure, no
+// teardown) -- only "emergency" (900MB) disposes resources.
+
+test("emergency memory pressure disposes the browser/planner and pauses as memory_emergency, not the generic memory_pressure", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let browserDisposed = false;
+  let plannerClosed = false;
+  const browser = {
+    observe: async () => ({ id: "obs" }),
+    execute: async () => ({ status: "ok" }),
+    dispose: async () => {
+      browserDisposed = true;
+    },
+  };
+  const planner = {
+    next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "observe" }] }),
+    close: async () => {
+      plannerClosed = true;
+    },
+  };
+  const memoryMonitor = { getPressureLevel: () => "emergency" };
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true, memoryMonitor });
+
+  await controller.start();
+
+  const snapshot = controller.getSnapshot();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "memory_emergency");
+  assert.equal(browserDisposed, true, "the owned BrowserAdapter must be disposed on emergency pressure");
+  assert.equal(plannerClosed, true, "the owned planner transport must be closed on emergency pressure");
+  await store.close();
+});
+
+test("pause-level (800MB) memory pressure still just pauses with memory_pressure -- no teardown", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let disposed = false;
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }), dispose: async () => { disposed = true; } };
+  const planner = { next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "observe" }] }) };
+  const memoryMonitor = { getPressureLevel: () => "pause" };
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true, memoryMonitor });
+
+  await controller.start();
+
+  const snapshot = controller.getSnapshot();
+  assert.equal(snapshot.pauseReason, "memory_pressure");
+  assert.equal(disposed, false, "a mere pause-level pressure must not tear anything down");
+  await store.close();
+});
+
+test("resume() refuses a memory_emergency-paused task instead of reusing disposed resources", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }), dispose: async () => {} };
+  const planner = { next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "observe" }] }) };
+  const memoryMonitor = { getPressureLevel: () => "emergency" };
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true, memoryMonitor });
+  await controller.start();
+  assert.equal(controller.getSnapshot().pauseReason, "memory_emergency");
+
+  await assert.rejects(() => controller.resume(), TaskControllerError);
+  await store.close();
+});
+
+test("emergency teardown never throws even if dispose()/close() themselves fail", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const browser = {
+    observe: async () => ({ id: "obs" }),
+    execute: async () => ({ status: "ok" }),
+    dispose: async () => {
+      throw new Error("view already destroyed");
+    },
+  };
+  const planner = {
+    next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "observe" }] }),
+    close: () => {
+      throw new Error("child already exited");
+    },
+  };
+  const memoryMonitor = { getPressureLevel: () => "emergency" };
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true, memoryMonitor });
+
+  await controller.start(); // must not throw despite dispose()/close() both failing
+
+  assert.equal(controller.getSnapshot().pauseReason, "memory_emergency");
   await store.close();
 });

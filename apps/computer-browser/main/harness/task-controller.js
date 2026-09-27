@@ -35,9 +35,15 @@ const NOOP_MEMORY_MONITOR = { getPressureLevel: () => "normal" };
 
 function observationKey(observation) {
   // A comparison key for no-progress detection, not a cryptographic hash --
-  // it only needs to be deterministic and cheap to compare.
+  // it only needs to be deterministic and cheap to compare. The real
+  // BrowserAdapter stamps every observation with a fresh random `id`
+  // (_randomId()), so that field must be excluded here -- otherwise no two
+  // observations of the identical page would ever compare equal and the
+  // no-progress safety net would never fire against a real browser.
+  if (!observation || typeof observation !== "object") return String(observation);
+  const { id, ...rest } = observation;
   try {
-    return JSON.stringify(observation);
+    return JSON.stringify(rest);
   } catch {
     return String(observation);
   }
@@ -145,6 +151,51 @@ class TaskController {
     await this._checkpoint();
   }
 
+  // 900MB emergency pressure (user mandate, design doc section 10): tear
+  // down this controller's OWNED resources -- its BrowserAdapter's
+  // WebContentsView and its planner's worker child process -- rather than
+  // merely pausing. dispose()/close() failing (e.g. the view was already
+  // destroyed by something else) must never prevent the pause itself from
+  // landing, so each is best-effort. Distinct pauseReason
+  // ("memory_emergency") from the plain "memory_pressure" (800MB) pause so
+  // resume() can refuse to reuse now-disposed resources instead of the
+  // resume/reload storm the user explicitly prohibited -- recovering a
+  // memory_emergency task requires a fresh TaskHost re-attachment (new
+  // browser/planner instances), exactly like a process restart.
+  async _pauseForMemoryEmergency() {
+    this._leaveActive();
+    this._task = { state: "paused", pauseReason: "memory_emergency" };
+    await this._checkpoint();
+    try {
+      await this._browser.dispose?.();
+    } catch {
+      // best-effort -- see comment above
+    }
+    try {
+      await this._planner.close?.();
+    } catch {
+      // best-effort -- see comment above
+    }
+    try {
+      // Release the writer.lock so a fresh re-attachment (TaskHost's
+      // resumeSavedTask(), or a real process restart) can actually
+      // TaskStore.load() this task again -- without this, the abandoned
+      // instance's still-held lock would make recovery impossible without
+      // the whole host process exiting first.
+      await this._store.close();
+    } catch {
+      // best-effort -- see comment above
+    }
+  }
+
+  async _pauseForMemoryPressure(pressure) {
+    if (pressure === "emergency") {
+      await this._pauseForMemoryEmergency();
+    } else {
+      await this._pauseWith("memory_pressure");
+    }
+  }
+
   async start() {
     if (this._task.state !== "idle") {
       throw new TaskControllerError("invalid_state", `start() requires state idle, got ${this._task.state}`);
@@ -161,6 +212,18 @@ class TaskController {
       throw new TaskControllerError(
         "confirmation_required",
         "resume() from execution_uncertain requires resume({confirmed: true}) -- the dangling action is never auto-replayed",
+      );
+    }
+    if (this._task.pauseReason === "memory_emergency") {
+      // This controller's own browser/planner were already disposed when
+      // emergency pressure hit -- there is nothing left here to resume into,
+      // and no confirmed:true can rescue that (unlike execution_uncertain,
+      // resuming THIS controller is not an option at all, not just gated).
+      // Recovery requires a fresh TaskHost re-attachment (new browser/
+      // planner instances), exactly like a process restart.
+      throw new TaskControllerError(
+        "resources_disposed",
+        "this controller's browser/planner were disposed after a memory emergency -- re-attach the task fresh instead of resuming this instance",
       );
     }
     this._task = { state: "running", pauseReason: null };
@@ -312,7 +375,7 @@ class TaskController {
 
         const pressure = this._memoryMonitor.getPressureLevel();
         if (pressure === "pause" || pressure === "emergency") {
-          await this._pauseWith("memory_pressure");
+          await this._pauseForMemoryPressure(pressure);
           break;
         }
 
@@ -432,7 +495,7 @@ class TaskController {
 
       const pressure = this._memoryMonitor.getPressureLevel();
       if (pressure === "pause" || pressure === "emergency") {
-        await this._pauseWith("memory_pressure");
+        await this._pauseForMemoryPressure(pressure);
         return "stop_loop";
       }
 

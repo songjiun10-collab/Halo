@@ -151,3 +151,41 @@ test("each task gets its own browser/planner instance (makeBrowser/makePlanner c
 
   assert.deepEqual(seenBrowserTaskIds, [first.taskId, second.taskId]);
 });
+
+// --- resumeSavedTask() after a 900MB emergency teardown must re-attach a
+// FRESH browser/planner instead of calling .resume() on a controller whose
+// resources were already disposed (task-controller.js's resume() now
+// rejects that outright) -- otherwise a task that hit emergency pressure
+// would be permanently stuck, unrecoverable without an actual app restart.
+
+test("resumeSavedTask() re-attaches fresh browser/planner instances after a memory_emergency pause instead of erroring", async () => {
+  const storageRoot = await mkTempRoot();
+  let browserBuilds = 0;
+  const memoryMonitor = { getPressureLevel: () => "emergency" };
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => {
+      browserBuilds += 1;
+      return {
+        observe: async () => ({ id: "obs" }),
+        execute: async () => ({ status: "ok" }),
+        dispose: async () => {},
+      };
+    },
+    makePlanner: () => ({
+      next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "observe" }] }),
+      close: async () => {},
+    }),
+    memoryMonitor,
+  });
+
+  const { taskId } = await host.createTask({ originalRequest: "goal" });
+  assert.equal(browserBuilds, 1);
+  assert.equal((await host.getTaskDetail(taskId)).snapshot.pauseReason, "memory_emergency");
+
+  // Pressure has since cleared -- a fresh attach + resume should now work.
+  memoryMonitor.getPressureLevel = () => "normal";
+  const snapshot = await host.resumeSavedTask(taskId);
+
+  assert.equal(browserBuilds, 2, "resumeSavedTask() must build a brand-new browser instance, not reuse the disposed one");
+  assert.notEqual(snapshot.pauseReason, "memory_emergency");
+});

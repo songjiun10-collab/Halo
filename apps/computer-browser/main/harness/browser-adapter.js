@@ -129,15 +129,44 @@ class BrowserAdapter {
     // never resolve/settle a newer, still-in-flight navigate() call.
     this._navSeq = 0;
     this._observeSeq = 0;
+    this._disposed = false;
+    this._readyEnsured = false;
   }
 
   getDocumentEpoch() {
     return this._documentEpoch;
   }
 
+  // A real Electron webContents' executeJavaScript() hangs forever if
+  // called before ANY navigation has ever committed a document -- confirmed
+  // by direct reproduction against real Electron (Task 6). observe() is the
+  // very first call task-controller.js's loop makes, so without this a
+  // brand-new task would hang on its first iteration. wc.getURL() reports
+  // "" only for a webContents that has never navigated; loading "about:blank"
+  // once gives it a real committed document to inject into. Fakes that
+  // don't implement getURL() at all (most of this file's own unit tests)
+  // are unaffected -- this only ever activates for a real Electron-shaped
+  // webContents.
+  async _ensureReadyForScriptExecution(wc) {
+    if (this._readyEnsured) return;
+    this._readyEnsured = true;
+    if (typeof wc.getURL !== "function") return;
+    if (wc.getURL()) return;
+    try {
+      await wc.loadURL("about:blank");
+    } catch {
+      // best-effort -- if this fails, the subsequent executeJavaScript call
+      // will surface its own real error rather than hanging silently.
+    }
+  }
+
   async observe({ signal } = {}) {
     void signal; // no cancellable long-running observe op yet -- accepted for interface symmetry
+    if (this._disposed) {
+      throw new BrowserAdapterError("disposed", "observe() called after dispose()");
+    }
     const wc = this._view.webContents;
+    await this._ensureReadyForScriptExecution(wc);
     this._observeSeq += 1;
     let raw;
     try {
@@ -160,8 +189,30 @@ class BrowserAdapter {
     };
   }
 
+  // Emergency memory-pressure teardown (task-controller.js): actually
+  // releases the WebContentsView rather than just no longer calling it.
+  // Electron's WebContentsView doesn't expose a single documented
+  // "destroy" -- webContents.close() is what actually tears down the
+  // renderer process; tolerate a fake/older shape exposing .destroy()
+  // instead, and tolerate having neither (a no-op, never throws) so a
+  // dispose() call from within a best-effort teardown path never itself
+  // becomes the reason teardown fails.
+  async dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
+    const wc = this._view && this._view.webContents;
+    if (wc && typeof wc.close === "function") {
+      wc.close();
+    } else if (wc && typeof wc.destroy === "function") {
+      wc.destroy();
+    }
+  }
+
   async execute(action, { signal, documentEpoch } = {}) {
     void signal;
+    if (this._disposed) {
+      return { status: "failed", errorCode: "disposed" };
+    }
     if (!action || typeof action.type !== "string") {
       return { status: "failed", errorCode: "invalid_action" };
     }
@@ -268,6 +319,7 @@ class BrowserAdapter {
       return { status: "failed", errorCode: "invalid_element_id" };
     }
     const wc = this._view.webContents;
+    await this._ensureReadyForScriptExecution(wc);
     let raw;
     try {
       raw = await wc.executeJavaScript(buildObserveScript(this._maxNodesVisited, this._maxElements, this._maxTextBytes), true);
@@ -285,6 +337,7 @@ class BrowserAdapter {
     const dir = direction === "up" ? "up" : "down";
     const delta = typeof amount === "number" && amount > 0 ? amount : 600;
     const wc = this._view.webContents;
+    await this._ensureReadyForScriptExecution(wc);
     try {
       await wc.executeJavaScript(`window.scrollBy(0, ${dir === "up" ? -delta : delta});`, true);
     } catch (error) {

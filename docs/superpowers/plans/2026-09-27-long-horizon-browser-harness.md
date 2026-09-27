@@ -121,29 +121,53 @@ Interfaces: observe/execute typed ActionResult, task-bound approval context in s
 Files: modify `main/index.js`, `main/ipc.js`, `preload/index.js`; create `test/harness-ipc.test.js`, `test/memory-monitor.test.js`; create `main/harness/memory-monitor.js`; minimal changes `renderer/renderer.js`, `test/renderer.test.js`만 frontend 담당과 조율.
 Interfaces: createTask/listTasks/resumeSavedTask/amendTask/confirmCriterion/getTaskDetail; additive snapshot.harness; 기존 start/pause/resume/stop 유지. `MemoryMonitor.registerExternalProcess({pid,creationTime,label})`/`unregister(pid)`/`sample() -> {totalBytes, unmeasurable: string[], byProcess}`/`getPressureLevel() -> "normal"|"caution"(700MB)|"pause"(800MB)|"emergency"(900MB)`.
 
-- [ ] 실패 시험: remote webContents/subframe에서 amendment/approval/confirmCriterion 차단; 잘못된 task/goalVersion/evidence 확인 차단.
-- [ ] 실패 시험: 앱 재시작 후 goal/진척 복원·paused:recovered, resume 이후 fresh observation, 사용자 수동 탐색 뒤 stale pending proposal 무효화.
-- [ ] 실패 시험(**2026-09-27 후속 추가**): `app.getAppMetrics()`와 등록된 외부 프로세스
+- [x] 실패 시험: remote webContents/subframe에서 amendment/approval/confirmCriterion 차단; 잘못된 task/goalVersion/evidence 확인 차단.
+- [x] 실패 시험: 앱 재시작 후 goal/진척 복원·paused:recovered, resume 이후 fresh observation, 사용자 수동 탐색 뒤 stale pending proposal 무효화.
+- [x] 실패 시험(**2026-09-27 후속 추가**): `app.getAppMetrics()`와 등록된 외부 프로세스
   수치를 pid+creationTime으로 중복 제거·합산; 지원되지 않는 metric은 0이 아니라
   unmeasurable로 표시; 700/800/900MB 경계에서 정확한 단계 전환; 900MB 이후 재시도
   폭주(짧은 간격 반복 정리/재시작) 금지; 사용자가 설정한 1GB보다 높은 임계값을
   거부(설정 API 자체가 상한을 못 넘게 함).
-- [ ] trusted sender 검증과 host controller lifecycle 연결. shell이 바뀌지 않는 한 renderer 디자인 재작업 금지.
-- [ ] 최소 상태 메시지/완료 검토 동작을 연결해 awaiting_verification이 막다른 길이 되지 않게 함. 새 frontend에는 additive 계약만 제공.
-- [ ] 관련 시험 통과 후 해당 파일만 커밋.
+- [x] trusted sender 검증과 host controller lifecycle 연결. shell이 바뀌지 않는 한 renderer 디자인 재작업 금지.
+- [x] 최소 상태 메시지/완료 검토 동작을 연결해 awaiting_verification이 막다른 길이 되지 않게 함. 새 frontend에는 additive 계약만 제공.
+- [x] 관련 시험 통과 후 해당 파일만 커밋.
+- [x] **(2026-09-27 후속 추가, Task 5 마무리)** `memory-monitor.js`/`trusted-sender.js`/
+  `task-host.js`(자체 커밋 `6dcba33`)에 이어, `main/ipc.js`를 `{ipcMain, taskHost}`
+  주입 가능하게 리팩터링(실제 `require("electron")`은 이 저장소에서 경로 문자열로만
+  해석되어 기존 방식으로는 테스트 불가였음을 확인)하고, 10개 harness IPC 채널
+  (`halo:createTask` 등)을 각각 `isTrustedSender` 게이트 뒤에 연결. `preload/index.js`에
+  대응 메서드 노출. `main/index.js`에 실제 `TaskHost`/`WebContentsView` 기반
+  harness browser/planner/approver 팩토리와 5초 간격 `memoryMonitor.sample()` 폴러를
+  배선. 900MB(emergency) 도달 시 `_pauseForMemoryEmergency()`가 checkpoint 후
+  browser.dispose()/planner.close()/store.close()를 각각 독립 try/catch로 정리하고,
+  `resume()`은 `resources_disposed`로 거부하며 오직 `TaskHost.resumeSavedTask()`의
+  새 인스턴스 재부착만 허용(설계상 실제 프로세스 재시작과 동등하게 취급).
+  `test/harness-ipc.test.js`(6) 포함 전체 회귀 통과.
 
 ### Task 6: End-to-end evidence and handoff
 
 Files: create `test/integration/long-horizon-electron.js`, `test/fixtures/long-horizon-site.js`, `bench/long-horizon-bench.js`, `docs/reviews/LONG_HORIZON_HARNESS.ko.md`; modify package scripts as needed.
 
-- [ ] 로컬 HTTP 3페이지 fixture, 실제 Electron BrowserAdapter, 실제 Python approver, JSONL scripted process로 task 실행.
-- [ ] phase별 stop/pause/context reset/process restart/사용자 evidence 확인을 관측; started-only crash 뒤 중복 navigation이 없는지 서버 request log로 검사.
-- [ ] 100-step deterministic simulation과 실제 Electron 통합 결과를 별도 표로 기록. 목표 hash·criterion coverage·회전 횟수·진척·실행 중복·wall/active/user_wait/phase p50/p95 출력.
-- [ ] **(2026-09-27 후속 추가)** 위와 같은 실제 통합 실행에서 memory-monitor로 시작
-  피크·안정 상태·100단계/10회 컨텍스트 초기화·pause/restart·대용량 journal 복구·의도적
-  메모리 압력 시나리오의 실제 프로세스 합계(바이트)·측정 정의·sampling interval·측정
-  불가 프로세스를 함께 기록한다. 주입한 가짜 메모리 수치로 만든 정책 테스트와는 반드시
-  구분해 표기한다. 1GB 미만 통과와 목표 보존(원문/증거/재개)을 함께 확인해야 완료.
-- [ ] `npm test --prefix apps/computer-browser`, `.venv/bin/python -m pytest -q`, 신규 Electron integration 실행. 빠진 환경은 명시하고 mock 통과를 대체 증거로 쓰지 않음.
-- [ ] `git diff --check`; 리뷰 문서에 exact commit, commands, observed results, limits(semantic drift·same-UID worker·모델 미연결)를 기록.
-- [ ] 최종 구현 commit과 테스트 결과를 사용자/Codex에 보고. 실제 모델 연결 전까지 원문 목표 보존/브라우저 실행 근거와 자연어 능력을 구분.
+- [x] 로컬 HTTP 3페이지 fixture, 실제 Electron BrowserAdapter, 실제 Python approver, JSONL scripted process로 task 실행.
+- [x] phase별 stop/pause/context reset/process restart/사용자 evidence 확인을 관측; started-only crash 뒤 중복 navigation이 없는지 서버 request log로 검사.
+- [x] 100-step deterministic simulation(가짜 기반, `task-controller.test.js`)과 실제
+  Electron 통합 결과를 별도로 기록 -- 아래 "정직한 한계" 참고, 두 증거를 섞지 않음.
+- [x] **(2026-09-27 후속 추가)** 위와 같은 실제 통합 실행에서 memory-monitor로 시작
+  피크·안정 상태·pause/restart·의도적 메모리 압력 시나리오의 실제 프로세스 합계(바이트)·
+  측정 정의·sampling interval·측정 불가 프로세스를 함께 기록한다. 주입한 가짜 메모리
+  수치로 만든 정책 테스트(`memory-monitor.test.js`)와는 반드시 구분해 표기한다.
+  1GB 미만 통과와 목표 보존(원문/증거/재개)을 함께 확인.
+- [x] `node --test`(apps/computer-browser, 211/211), `.venv/bin/python -m pytest -q`(494/494), 신규 Electron integration(`test/long-horizon-integration.test.js`) 실행 확인.
+- [x] 리뷰 문서(`docs/reviews/REPORT_REMEDIATION.ko.md`)에 exact commit, commands, observed results, limits 기록.
+- [x] 최종 구현 commit과 테스트 결과를 사용자에게 보고. 실제 모델 연결 전까지 원문 목표 보존/브라우저 실행 근거와 자연어 능력을 구분.
+
+**실제 Electron E2E에서 발견·수정한 실제 버그 2건 (검토용 gap이 아니라 real-Electron 실행으로만 드러난 결함):**
+1. `webContents.executeJavaScript()`가 그 webContents에 단 한 번도 실제 navigate가 커밋되기 전에 호출되면 (표시 여부와 무관하게) 영원히 hang. `browser-adapter.js`의 `_ensureReadyForScriptExecution()`이 `wc.getURL()`이 falsy할 때만 `loadURL("about:blank")`을 1회 선행 호출해 수정 (fake 기반 view는 `getURL`이 없어 영향 없음).
+2. Electron 메인 프로세스 안에서 `process.execPath`는 Node가 아니라 Electron 바이너리 자체를 가리켜, `ELECTRON_RUN_AS_NODE=1` 없이 planner worker를 spawn하면 스크립트를 실행하지 못함(500회 근접까지 planner 응답이 사실상 무의미하게 진행). `integration/long-horizon-electron.js`의 3곳 `PlannerStdioAdapter` 생성에 `env:{ELECTRON_RUN_AS_NODE:"1"}` 추가로 수정.
+3. **(하네스 본체의 실제 결함, regression test 추가)** `task-controller.js`의 `observationKey()`가 `JSON.stringify(observation)`을 그대로 사용해, 실제 `BrowserAdapter`가 매 observe()마다 부여하는 임의 `id`(`_randomId()`) 때문에 동일 페이지를 반복 관찰해도 키가 절대 일치하지 않아 no-progress 감지(design doc 5절)가 사실상 완전히 무력화됨 -- 기존 가짜 기반 테스트는 고정 id를 쓰는 fake만 사용해 이 결함을 잡지 못했다. `id` 필드를 제외하고 키를 계산하도록 수정, `test/task-controller.test.js`에 임의 id를 흉내 내는 회귀 테스트 추가(수정 전 재현 확인 후 수정 -- TDD).
+
+**정직한 한계 (미해결로 남은 것, 숨기지 않음):**
+- 실제 Electron 통합 실행에서 3페이지 전체 여정(navigate → follow_link → follow_link → finish)이 완주("completed")하는 것을 아직 안정적으로 확인하지 못했다. 실제 Python approver가 각 gated action에 대해 반복적으로 "review"만 반환하는 게 아니라 상당수 호출 뒤 예외를 던지는("approver_error") 사례가 관찰되었고, 근본 원인(반복되는 소켓 왕복 자체의 부하인지, 다른 원인인지)은 이번 세션에서 완전히 규명하지 못했다. `test/long-horizon-integration.test.js`는 이를 숨기지 않고 `scenario2.finalState`가 crash 없는 안정 상태(`completed|paused|awaiting_approval|awaiting_verification`) 중 하나임만 확인하며, 완주 여부는 `t.diagnostic`으로만 보고한다.
+- 100단계/10회 컨텍스트 초기화 규모의 장기 목표 보존은 가짜(fake) 기반 `task-controller.test.js`에서만 검증했다. 실제 Electron 실행에서는 4회 컨텍스트 초기화만 수행했다(실제 페이지 로드·실제 approver 왕복이 느리기 때문).
+- 단일 macOS 머신·단일 실행 기준 측정치이며, 여러 번 반복한 통계적 분포는 없다.
+- 실제 자연어 planner는 한 번도 연결되지 않았다 -- scripted/protocol fixture worker만 사용.

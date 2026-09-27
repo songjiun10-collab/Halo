@@ -595,11 +595,111 @@ pacing 대기 중 발생하는 경우)은 이번 3개 버그 목록에 없었고
 11개 + control-api/task-controller 신규 회귀 다수 포함), 전체 Python 회귀
 494/494 통과 유지 확인(Python 미변경).
 
+2026-09-27 후속 21: 장기 브라우저 하네스 Task 5(host/UI lifecycle bridge)
+마무리 + Task 6(실제 Electron end-to-end 증거) 완료. Task 5의 핵심 모듈
+(`memory-monitor.js`/`trusted-sender.js`/`task-host.js`/`confirmCriterion`/
+`TaskStore.listTaskIds`)은 이미 별도 커밋(`6dcba33`)에 있었으나 이 문서에는
+아직 기록되지 않았던 것을 여기서 함께 정리한다.
+
+**Task 5 마무리 배선**: `main/ipc.js`를 `{ipcMain, taskHost}` 주입 가능하게
+리팩터링했다 — 이 저장소에서 `require("electron")`이 실제 Electron 프로세스
+밖에서는 경로 문자열로만 해석되어(직접 확인함) 기존 방식으로는 테스트가
+아예 불가능했기 때문이다. 신규 harness IPC 채널 10개(`halo:createTask`
+~`halo:taskStop`)를 각각 `isTrustedSender(event, win)` 게이트 뒤에 연결하고
+(신뢰되지 않은 sender는 taskHost를 아예 호출하지 않고 reject),
+`preload/index.js`에 대응 메서드를 노출했다. `main/index.js`에 실제
+`TaskHost`(storageRoot: `app.getPath("userData")/harness-tasks`)와
+`WebContentsView` 기반 harness browser/실제 Python approver/`HALO_PLANNER_*`
+env 기반 planner 팩토리, 5초 간격 `memoryMonitor.sample()` 백그라운드 폴러를
+배선했다. **메모리 비상 정리(사용자 지시로 재확인된 요구사항)**: 800MB
+(`memory_pressure`)는 기존처럼 checkpoint 후 pause만 하지만, 900MB
+(`memory_emergency`)는 `_pauseForMemoryEmergency()`가 checkpoint 후
+`browser.dispose()`/`planner.close()`/`store.close()`를 각각 독립된
+try/catch로 정리해(하나가 실패해도 나머지를 막지 않음) 실제로 자원을
+반환한다. `resume()`은 이 상태를 `resources_disposed`로 거부(execution_uncertain과
+달리 `confirmed:true`로도 구제 불가)하고, 오직 `TaskHost.resumeSavedTask()`가
+이 경우를 감지해 기존 항목을 버리고 완전히 새 browser/planner 인스턴스로
+재부착하는 경로만 허용 — 실제 프로세스 재시작과 동등하게 취급한다.
+`test/harness-ipc.test.js`(6개, 모든 harness 채널이 신뢰되지 않은 sender를
+거부하는지 개별 확인) 신설.
+
+**Task 6: 실제 Electron E2E** — `fixtures/long-horizon-site.js`(로컬 3페이지
+HTTP fixture, port 0), `fixtures/scripted-planner-long-horizon.js`(결정론적
+JSONL stdio planner, 자연어 능력의 증거 아님을 헤더에 명시),
+`integration/long-horizon-electron.js`(실제 Electron 앱으로 실행, 실제
+Python approver 프로세스, 실제 `BrowserAdapter`+`WebContentsView`, 실제
+`app.getAppMetrics()`+`ps` 기반 approver RSS 합산), `test/long-horizon-integration.test.js`
+(`electron` 바이너리를 실제 자식 프로세스로 spawn해 `RESULT_JSON:` 라인을
+검증 — 다른 모든 `*.test.js`와 달리 fake가 아니라 진짜 실행 경로).
+
+**실제 Electron 실행으로만 드러난 실제 버그 3건** (fake 기반 단위 테스트는
+전부 통과한 채로 숨어 있었다):
+1. `webContents.executeJavaScript()`가 그 webContents에 단 한 번도 실제
+   navigate가 커밋되기 전에 호출되면 창의 표시 여부와 무관하게 영원히
+   hang한다. 4개의 격리된 디버그 스크립트로 원인을 이진 탐색해 확정한 뒤,
+   `browser-adapter.js`에 `_ensureReadyForScriptExecution(wc)`를 추가해
+   `wc.getURL()`이 falsy(실제로 한 번도 navigate 안 한 실제 webContents)일
+   때만 `loadURL("about:blank")`을 1회 선행 호출하도록 수정했다(`getURL`이
+   없는 fake view는 전혀 영향받지 않아 기존 테스트 전부 그대로 통과).
+2. Electron 메인 프로세스 안에서 `process.execPath`는 plain Node가 아니라
+   Electron 바이너리 자체를 가리킨다 — `ELECTRON_RUN_AS_NODE=1` 없이 이
+   값으로 planner worker를 spawn하면 대상 스크립트를 Node로 실행하지 못해
+   응답이 사실상 기능하지 않는다. `integration/long-horizon-electron.js`의
+   3곳 `PlannerStdioAdapter` 생성에 `env:{ELECTRON_RUN_AS_NODE:"1"}`을
+   추가해 수정(오케스트레이션 스크립트의 버그이지 하네스 본체 결함은 아님).
+3. **하네스 본체의 실제 결함, regression test로 고정**: `task-controller.js`의
+   `observationKey()`가 `JSON.stringify(observation)`을 그대로 키로
+   사용하는데, 실제 `BrowserAdapter`는 매 `observe()` 호출마다 새 임의 `id`
+   (`_randomId()`)를 관측에 부여한다. 그 결과 동일한 페이지를 반복
+   관찰해도 키가 절대 일치하지 않아, design doc 5절이 규정한 no-progress
+   감지(3회 동일 반복 → 1회 무료 replan → 재발 시 pause)가 실질적으로
+   완전히 무력화되어 있었다 — 실제 실행에서 500회에 가까운 planner 호출
+   예산을 아무 진척 없이 소진하는 것으로 재현했다. 기존 가짜 기반 테스트는
+   전부 고정 문자열 id("same-observation")를 쓰는 fake만 사용해 이 결함을
+   전혀 잡지 못했다. `id` 필드를 제외하고 나머지 필드로만 키를 계산하도록
+   고치고, 실제 BrowserAdapter의 임의 id 부여를 흉내 낸 새 회귀 테스트를
+   `task-controller.test.js`에 추가했다(수정 전 재현 실패 확인 → 수정 →
+   통과 확인, TDD 그대로 준수).
+
+**정직한 한계**: 실제 Electron 통합 실행에서 3페이지 전체 여정(navigate →
+follow_link → follow_link → finish)이 "completed"까지 안정적으로 완주하는
+것은 이번 세션에서 확인하지 못했다. 실제 Python approver가 반복되는 gated
+action 승인 요청 중 상당수 호출 이후 예외를 던지는("approver_error") 현상이
+관찰되었고, 근본 원인(반복 소켓 왕복 자체의 부하인지 다른 원인인지)은 완전히
+규명하지 못한 채로 남아 있다 — 추측성 수정을 하지 않고 정직하게 미해결로
+기록한다. `test/long-horizon-integration.test.js`는 이를 숨기지 않고
+`scenario2`의 최종 상태가 crash 없는 안정 상태(completed/paused/
+awaiting_approval/awaiting_verification) 중 하나인지만 단언하며, 실제
+완주 여부는 `t.diagnostic`으로 있는 그대로 보고한다. 100단계/10회 컨텍스트
+초기화 규모의 장기 목표 보존은 여전히 가짜 기반 `task-controller.test.js`
+(2026-09-27 후속 19 기록)에서만 검증했고, 실제 Electron 실행에서는 실제
+페이지 로드·실제 approver 왕복이 느려 4회 컨텍스트 초기화만 수행했다.
+단일 macOS 머신·단일 실행 기준 측정치이며 여러 번 반복한 통계 분포는 없다.
+실제 자연어 planner는 한 번도 연결하지 않았다.
+
+**측정 방법(실제, 가짜 정책 테스트와 구분)**: `integration/long-horizon-electron.js`가
+300ms 간격으로 `memoryMonitor.sample()`을 호출해 실제 `app.getAppMetrics()`
+(Electron main/renderer/GPU/utility helper 포함)와 실제 `ps -o rss= -p <pid>`로
+읽은 Python approver 프로세스 RSS를 pid+creationTime 기준 중복 제거 후
+합산한다(프로덕션 `main/index.js`의 백그라운드 폴러는 5000ms 간격, 동일
+`memory-monitor.js` 코드). 가장 최근 실행 관측치: 실측 피크 약 665MB
+(한도 1GB, `pass:true`), wall time 약 2.1~2.8초, 4회 실제 컨텍스트 초기화,
+`unmeasurable: []`(측정 불가 프로세스 없음). 이 수치는 `memory-monitor.test.js`의
+주입된 가짜 메모리로 만든 정책 테스트 결과와는 명확히 별개 파일(`integration/`,
+`RESULT_JSON.memory`)에 존재하며 섞이지 않는다.
+
+검증: `node --test`(apps/computer-browser 전체) 211/211 통과(신규
+`harness-ipc.test.js` 6개, `long-horizon-integration.test.js` 1개, 신규
+no-progress 회귀 1개 포함), 전체 Python 회귀 `.venv/bin/python -m pytest -q`
+494/494 통과 유지 확인(Python 미변경).
+
 전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
 B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
 연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
-장기 브라우저 하네스는 Task 1(+메모리 스트리밍 수정)·Task 2·Task 3·Task 4 완료,
-Task 5~6 미착수 상태다. 실제 프로세스 메모리 실측(<1GB 확인)도 아직 없다.
+장기 브라우저 하네스는 Task 1(+메모리 스트리밍 수정)~Task 6까지 구현·실제
+Electron E2E 검증을 마쳤으나, 실제 3페이지 전체 여정의 안정적 완주는 위
+"정직한 한계"에 기록한 대로 미해결이다. 실제 프로세스 메모리 실측은
+<1GB로 확인되었다(약 665MB, 위 측정 방법 참고).
 
 ## 판정 기준
 
