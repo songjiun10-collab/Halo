@@ -57,6 +57,15 @@ The page is the product. Halo stays quiet while the agent works, and appears onl
   | Success | `#72A982` |
 
   Status is shown with a dot, a glyph or a few words. The primary button is a neutral light fill.
+- **HALO Glass.** The web page always stays solid — only Halo's own chrome, notifications, events and approval float over it. Three materials, near-opaque so identity holds regardless of what's behind them:
+
+  | Material | Where | Alpha |
+  | --- | --- | --- |
+  | Chrome Glass | Top bar, address field | 0.95 |
+  | Floating Glass | Notice, Halo Events, tab overview, toast | 0.94 |
+  | Critical Glass | Approval | 0.96, less blur — legibility over effect |
+
+  A newer Halo surface cuts an older one instantly rather than cross-fading over it, so the glass never stacks two deep, and an approval always hides Events, the notice and the tab overview: one decision, shown alone.
 - **Type:** SF / Inter sans. Monospace is used only for URLs and log detail.
 - **Per-tab status:** each tab the agent has used shows a mark beside its favicon: working (ice dot), waiting (Ⅱ amber), paused (Ⅱ) or done (✓). The agent opens research tabs in the background, so your view stays put. Tabs the unfinished task still uses can't be closed, even after you take over.
 - **Keyboard and screen reader**
@@ -64,6 +73,24 @@ The page is the product. Halo stays quiet while the agent works, and appears onl
   - Tabs follow the ARIA tabs pattern: ← → Home End move between tabs, and Delete closes one.
   - A skip link jumps to the page.
   - A polite live region announces who is browsing and when Halo pauses for an approval.
+- **Keyboard shortcuts** (`Mod` is ⌘ on Mac, Ctrl elsewhere). Disabled while an approval is pending — the sheet is the only thing that should hear the keyboard then, same as the chrome and page being made `inert`. The full list is also in the app itself: **Shift + /**.
+
+  | Shortcut | Action |
+  | --- | --- |
+  | Mod + T | New tab |
+  | Mod + W | Close tab |
+  | Mod + 1–8 | Go to tab 1–8 |
+  | Mod + 9 | Go to the last tab |
+  | Mod + Shift + ] / [ | Next / previous tab |
+  | Alt + ← / → | Back / Forward |
+  | Mod + L | Focus the address field |
+  | Mod + . | Keep Halo unfolded |
+  | Mod + Shift + . | Halo Events |
+  | Mod + Shift + A | Show all tabs |
+  | Mod + N | New window |
+  | Mod + Shift + S | Share |
+  | Esc | Close the open Halo surface |
+  | Shift + / | This list |
 - **Motion:** transform and opacity only, with a strong ease-out: 220ms in, 150ms out (exits are quicker).
   - The approval sheet and Activity grow from their anchor at the top right of the address bar (`scale(0.97)`, 6px). The block notice and toast drop in 4px.
   - All overlays animate out instead of vanishing: `usePresence` keeps them mounted for 150ms, inert.

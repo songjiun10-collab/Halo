@@ -4,11 +4,13 @@ import { ControllerChip } from './components/ControllerChip'
 import { HaloButton } from './components/HaloButton'
 import { HaloSheet } from './components/HaloSheet'
 import { Notice } from './components/Notice'
+import { ShortcutsHelp } from './components/ShortcutsHelp'
 import { TabOverview } from './components/TabOverview'
 import { TabStrip } from './components/TabStrip'
 import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
 import { usePresence } from './hooks/usePresence'
+import { useShortcuts } from './hooks/useShortcuts'
 import { AGENT, approvalFor, canCloseTab, claudeHolds, currentUrl, demoSession, reducer } from './session/session'
 import { tabTitle } from './session/pages'
 import type { SessionState, TimelineEvent } from './session/types'
@@ -33,6 +35,8 @@ export default function App() {
   /** ⌘/Ctrl + . keeps Halo's controls unfolded even when nothing needs you. */
   const [pinned, setPinned] = useState(false)
   const [overviewOpen, setOverviewOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const omniRef = useRef<HTMLDivElement>(null)
   const [toast, setToast] = useState<string | null>(null)
   useEffect(() => {
     if (!toast) return
@@ -58,18 +62,60 @@ export default function App() {
     return () => window.clearTimeout(id)
   }, [notice])
 
+  const tab = s.tabs.find((t) => t.id === s.activeTabId) ?? s.tabs[0]
+  // Every review step gets a usable sheet, with or without payment details.
+  const approval = useMemo(() => (s.control === 'approval' && s.pending ? approvalFor(s.pending) : undefined), [s.control, s.pending])
+
   const notableCount = s.timeline.filter((e) => e.notable).length
-  const openActivity = useCallback(() => { setActivityOpen(true); setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id) }, [notableCount, lastBlock])
+  const openActivity = useCallback(() => {
+    setActivityOpen(true); setOverviewOpen(false); setHelpOpen(false)
+    setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id)
+  }, [notableCount, lastBlock])
   const closeOverview = useCallback(() => setOverviewOpen(false), [])
   const closeActivity = useCallback(() => { setActivityOpen(false); setSeen(notableCount) }, [notableCount])
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === '.') { e.preventDefault(); setPinned((p) => !p) }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+  const toggleActivity = useCallback(() => { if (activityOpen) closeActivity(); else openActivity() }, [activityOpen, closeActivity, openActivity])
+  const toggleOverview = useCallback(() => {
+    setOverviewOpen((o) => {
+      if (!o) { setActivityOpen(false); setHelpOpen(false) }
+      return !o
+    })
   }, [])
+  const toggleHelp = useCallback(() => {
+    setHelpOpen((h) => {
+      if (!h) { setActivityOpen(false); setOverviewOpen(false) }
+      return !h
+    })
+  }, [])
+
+  const onShare = useCallback(async () => {
+    const tab = s.tabs.find((t) => t.id === s.activeTabId) ?? s.tabs[0]
+    const url = currentUrl(tab)
+    try {
+      if (navigator.share) await navigator.share({ title: tabTitle(tab), url })
+      else { await navigator.clipboard.writeText(url); setToast('Link copied') }
+    } catch (err) {
+      if ((err as DOMException)?.name !== 'AbortError') setToast('Unable to share this page')
+    }
+  }, [s.tabs, s.activeTabId])
+  const onNewWindow = useCallback(() => {
+    window.open(window.location.href, '_blank', 'noopener,width=1280,height=800')
+  }, [])
+
+  const shortcutHandlers = useMemo(() => ({
+    onNewTab: () => dispatch({ type: 'newTab' }),
+    onCloseTab: (id: string) => dispatch({ type: 'closeTab', id }),
+    onSelectTab: (id: string) => dispatch({ type: 'selectTab', id }),
+    onBack: () => dispatch({ type: 'back' }),
+    onForward: () => dispatch({ type: 'forward' }),
+    onFocusOmni: () => omniRef.current?.focus(),
+    onTogglePin: () => setPinned((p) => !p),
+    onToggleActivity: toggleActivity,
+    onToggleOverview: toggleOverview,
+    onNewWindow,
+    onShare,
+    onToggleHelp: toggleHelp,
+  }), [dispatch, toggleActivity, toggleOverview, onNewWindow, onShare, toggleHelp])
+  useShortcuts(s, approval, shortcutHandlers)
 
   const unseen = Math.max(0, notableCount - seen)
   // Folded: nothing needs a person, so Halo shows nothing at all — just the browser.
@@ -78,11 +124,8 @@ export default function App() {
   const folded = !pinned && !activityOpen && !notice && unseen === 0 && !needsYou
 
 
-  const tab = s.tabs.find((t) => t.id === s.activeTabId) ?? s.tabs[0]
   const pendingHere = s.control === 'approval' && s.pending && s.tabKeys[s.pending.tab] === tab.id
   const driven = s.control !== 'you' && (tab.claude === 'working' || tab.claude === 'waiting')
-  // Every review step gets a usable sheet, with or without payment details.
-  const approval = useMemo(() => (s.control === 'approval' && s.pending ? approvalFor(s.pending) : undefined), [s.control, s.pending])
 
   // The approval sheet is modal: while it's open the rest of the window is inert, and focus
   // returns to where it was once the decision is made.
@@ -103,13 +146,17 @@ export default function App() {
   // An approval takes precedence over the tab overview: the sheet lives in .hx-body, which the overview makes inert.
   // Adjusted during render (like usePresence) so the overview never commits on top of a new sheet.
   if (approval && overviewOpen) setOverviewOpen(false)
+  if (approval && helpOpen) setHelpOpen(false)
+  // At the moment of a decision, show only the decision: Activity closes rather than stack behind the sheet.
+  if (approval && activityOpen) { setActivityOpen(false); setSeen(notableCount) }
 
   // Overlays stay mounted briefly after they're dismissed so they can animate out.
   const sheet = usePresence(approval ?? null)
-  const noticeShown = usePresence(notice && !activityOpen ? notice : null)
+  const noticeShown = usePresence(notice && !activityOpen && !approval ? notice : null)
   const activityShown = usePresence(activityOpen ? true : null)
   const toastShown = usePresence(toast)
   const overviewShown = usePresence(overviewOpen ? true : null)
+  const helpShown = usePresence(helpOpen ? true : null)
 
   return (
     <div className="hx-app">
@@ -130,19 +177,13 @@ export default function App() {
             folded={folded}
             tab={tab}
             locked={claudeHolds(s, tab)}
+            omniRef={omniRef}
             onBack={() => dispatch({ type: 'back' })}
             onForward={() => dispatch({ type: 'forward' })}
-            onShare={async () => {
-              const url = currentUrl(tab)
-              try {
-                if (navigator.share) await navigator.share({ title: tabTitle(tab), url })
-                else { await navigator.clipboard.writeText(url); setToast('Link copied') }
-              } catch (err) {
-                if ((err as DOMException)?.name !== 'AbortError') setToast('Unable to share this page')
-              }
-            }}
-            onOverview={() => setOverviewOpen(true)}
-            onNewWindow={() => { window.open(window.location.href, '_blank', 'noopener,width=1280,height=800') }}
+            onShare={onShare}
+            onOverview={toggleOverview}
+            onNewWindow={onNewWindow}
+            onHelp={toggleHelp}
             controller={
               <ControllerChip
                 control={s.control}
@@ -151,7 +192,7 @@ export default function App() {
                 onResume={() => dispatch({ type: 'resume' })}
               />
             }
-            halo={<HaloButton unseen={unseen} open={activityOpen} onToggle={activityOpen ? closeActivity : openActivity} />}
+            halo={<HaloButton unseen={unseen} open={activityOpen} onToggle={toggleActivity} />}
           />
         </header>
         <div className="hx-body" inert={overviewOpen}>
@@ -159,15 +200,18 @@ export default function App() {
             <Viewport tab={tab} target={pendingHere ? s.pending?.target : undefined} driven={driven && !folded} />
             <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
           </div>
+          {/* One Halo surface at a time: a surface a newer one supersedes cuts instantly rather
+              than cross-fading underneath it, so the glass never stacks two deep. */}
           <div className="hx-overlays">
             {sheet.item && <HaloSheet approval={sheet.item} leaving={sheet.leaving} onApprove={() => dispatch({ type: 'approve' })} onDeny={() => dispatch({ type: 'deny' })} onTakeOver={() => dispatch({ type: 'takeControl' })} />}
-            {noticeShown.item && <Notice event={noticeShown.item} leaving={noticeShown.leaving} blocked={!!approval} onOpen={openActivity} />}
-            {activityShown.item && <Activity session={s} leaving={activityShown.leaving} onClose={closeActivity} />}
+            {noticeShown.item && !activityOpen && !approval && <Notice event={noticeShown.item} leaving={noticeShown.leaving} blocked={!!approval} onOpen={openActivity} />}
+            {activityShown.item && !approval && !overviewOpen && !helpOpen && <Activity session={s} leaving={activityShown.leaving} onClose={closeActivity} />}
+            {helpShown.item && !approval && !activityOpen && !overviewOpen && <ShortcutsHelp leaving={helpShown.leaving} onClose={() => setHelpOpen(false)} />}
             {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}
           </div>
 
         </div>
-        {overviewShown.item && (
+        {overviewShown.item && !approval && !activityOpen && !helpOpen && (
           <TabOverview
             leaving={overviewShown.leaving}
             tabs={s.tabs}

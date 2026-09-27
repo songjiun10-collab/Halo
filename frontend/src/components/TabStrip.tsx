@@ -95,7 +95,7 @@ export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew
             </div>
           )
         })}
-        <button className="hx-icbtn" aria-label="New tab" onClick={onNew}><Plus /></button>
+        <button className="hx-icbtn" aria-label="New tab" aria-keyshortcuts="Control+T Meta+T" onClick={onNew}><Plus /></button>
       </div>
     </div>
   )

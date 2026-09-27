@@ -57,6 +57,18 @@
   --shadow-window: 0 0 0 1px #292d2a;
   --shadow-raised: 0 -12px 24px rgba(0, 0, 0, 0.35);
 
+  /* HALO Glass: the web page stays solid; only chrome/notification/approval/events float.
+     Three materials only — never make the page or tab content glass. Material identity comes
+     from opacity, not blur: these read as near-black whether the page behind is white or dark.
+     Blur adds texture at the edge; it is never what carries legibility. */
+  --halo-glass-chrome: rgba(9, 10, 10, 0.95);      /* top bar, address field: almost opaque */
+  --halo-glass-floating: rgba(13, 15, 14, 0.94);   /* Halo Events, notice, toast, tab overview */
+  --halo-glass-critical: rgba(15, 16, 15, 0.96);   /* approval: glass, but legibility first */
+  --halo-blur-chrome: 10px;
+  --halo-blur-floating: 20px;
+  --halo-glass-border: rgba(255, 255, 255, 0.10);
+  --halo-glass-highlight: rgba(255, 255, 255, 0.05);
+
   /* Motion (emil-design-eng): strong ease-out, UI under 300ms. */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --press: 160ms;
