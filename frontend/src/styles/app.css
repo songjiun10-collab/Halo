@@ -198,8 +198,33 @@ code { font-family: var(--font-mono); }
 .hx-site__btn { position: relative; display: inline-block; margin-top: var(--space-xl); padding: 10px 20px; border-radius: var(--radius-md); background: var(--site-button); color: var(--site-on-button); font-weight: 600; }
 /* What the agent is about to touch: a thin muted-blue outline. */
 .hx-site__btn[data-claude-target] { outline: 1.5px solid var(--brand-on-site); outline-offset: 3px; }
-.hx-site__empty { max-width: 28rem; margin: 12vh auto 0; text-align: center; color: var(--site-muted); }
-.hx-site__empty-title { margin: 0 0 var(--space-xs); color: var(--site-fg); font-weight: 600; }
+
+/* A new tab: Halo's own dark surface, not the light web page. */
+.hx-site--home { display: flex; background: var(--backdrop); padding: 0; }
+.hx-home { margin: auto; width: min(30rem, calc(100% - 48px)); padding: 40px 0; text-align: center; }
+.hx-home__mark { width: 40px; height: 40px; color: var(--brand); }
+.hx-home__title { margin: var(--space-md) 0 var(--space-lg); font-size: 20px; font-weight: 600; color: var(--foreground); }
+.hx-home__form { display: flex; gap: var(--space-sm); }
+.hx-home__input {
+  flex: 1; min-width: 0; height: 44px; padding-inline: var(--space-md); border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong); background: var(--toolbar); color: var(--foreground); font: 400 15px/1 var(--font-body);
+}
+.hx-home__input::placeholder { color: var(--muted-foreground); }
+.hx-home__input:focus-visible { outline-offset: 0; }
+.hx-home__suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-sm); margin: var(--space-md) 0 0; padding: 0; list-style: none; }
+.hx-home__suggestions button {
+  padding: 6px 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--toolbar);
+  color: var(--muted-foreground); font-size: 13px; cursor: pointer; transition: border-color 150ms ease, color 150ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .hx-home__suggestions button:hover { border-color: var(--border-strong); color: var(--foreground); }
+}
+.hx-home__resume {
+  display: inline-flex; align-items: center; gap: var(--space-sm); margin-top: var(--space-xl); padding: 8px 4px;
+  border: 0; background: none; color: var(--muted-foreground); font: 500 13px/1 var(--font-body); cursor: pointer;
+}
+.hx-home__resume .hx-ic { width: 14px; height: 14px; }
+@media (hover: hover) and (pointer: fine) { .hx-home__resume:hover { color: var(--foreground); } }
 
 /* ---------- Halo's interruptions: dropped from the address bar, over the page ---------- */
 
@@ -333,7 +358,7 @@ kbd {
   .hx-nav .hx-icbtn[aria-label="Share"], .hx-nav .hx-icbtn[aria-label="New window"], .hx-nav .hx-icbtn[aria-label="Keyboard shortcuts"] { display: none; }
   .hx-chip__state { display: none; }
   .hx-chip__action { padding-inline-start: 0; border-inline-start: 0; }
-  .hx-site { padding: 24px 20px; }
+  .hx-site:not(.hx-site--home) { padding: 24px 20px; }
   .hx-overlays { top: 8px; right: 8px; width: calc(100% - 16px); }
 }
 

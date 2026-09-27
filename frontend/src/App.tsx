@@ -134,6 +134,10 @@ export default function App() {
 
   const pendingHere = s.control === 'approval' && s.pending && s.tabKeys[s.pending.tab] === tab.id
   const driven = s.control !== 'you' && (tab.claude === 'working' || tab.claude === 'waiting')
+  // The home screen offers a way back into a task already running elsewhere, rather than
+  // pretending a fresh one can start here.
+  const runningTab = s.tabs.find((t) => t.id !== tab.id && t.claude && t.claude !== 'done')
+  const activeTask = runningTab ? { text: s.task, tabId: runningTab.id } : undefined
 
   // The approval sheet is modal: while it's open the rest of the window is inert, and focus
   // returns to where it was once the decision is made.
@@ -205,7 +209,14 @@ export default function App() {
         </header>
         <div className="hx-body" inert={overviewOpen}>
           <div className="hx-page" inert={!!approval}>
-            <Viewport tab={tab} target={pendingHere ? s.pending?.target : undefined} driven={driven && !folded} />
+            <Viewport
+              tab={tab}
+              target={pendingHere ? s.pending?.target : undefined}
+              driven={driven && !folded}
+              activeTask={activeTask}
+              onSelectTab={(id) => dispatch({ type: 'selectTab', id })}
+              onStartTask={(text) => setToast(`Demo — "${text}" isn't wired to a live agent yet`)}
+            />
             <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
           </div>
           {/* One Halo surface at a time: a surface a newer one supersedes cuts instantly rather

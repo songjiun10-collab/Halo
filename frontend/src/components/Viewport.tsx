@@ -1,13 +1,35 @@
 import { tabTitle } from '../session/pages'
-import { AGENT, currentUrl } from '../session/session'
+import { AGENT, currentUrl, NEW_TAB_URL } from '../session/session'
 import type { Tab } from '../session/types'
+import { HomeScreen } from './HomeScreen'
+
+interface Props {
+  tab: Tab
+  target?: string
+  driven: boolean
+  /** A task already running or paused in another tab: offered from the home screen. */
+  activeTask?: { text: string; tabId: string }
+  onSelectTab: (id: string) => void
+  onStartTask: (text: string) => void
+}
 
 /**
  * Stand-in for the page engine's surface. The page keeps the site's own look;
  * HALO draws only where Claude is about to act.
  */
-export function Viewport({ tab, target, driven }: { tab: Tab; target?: string; driven: boolean }) {
+export function Viewport({ tab, target, driven, activeTask, onSelectTab, onStartTask }: Props) {
   const url = currentUrl(tab)
+
+  // halo://newtab is Halo's own surface, not a web page: it gets the dark chrome look,
+  // never the site's white background.
+  if (url === NEW_TAB_URL) {
+    return (
+      <main id="hx-page" className="hx-site hx-site--home" role="tabpanel" aria-labelledby={`tab-${tab.id}`} tabIndex={-1}>
+        <HomeScreen activeTask={activeTask} onSelectTab={onSelectTab} onSubmit={onStartTask} />
+      </main>
+    )
+  }
+
   let body
   if (url.endsWith('/done')) {
     body = (
@@ -31,13 +53,6 @@ export function Viewport({ tab, target, driven }: { tab: Tab; target?: string; d
         </span>
         {targeted && <p className="hx-sr">{AGENT} is about to click Place order.</p>}
       </>
-    )
-  } else if (url.startsWith('halo://')) {
-    body = (
-      <div className="hx-site__empty">
-        <p className="hx-site__empty-title">New tab</p>
-        <p>{AGENT} can see this tab only when you hand it control.</p>
-      </div>
     )
   } else {
     body = (
