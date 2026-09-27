@@ -4,6 +4,10 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body, #root { height: 100%; }
+/* Safari's own edge-swipe back/forward is a browser-chrome gesture, not a page one: left
+   unblocked, it can consume a two-finger swipe before useTrackpad ever sees the wheel
+   event. This keeps the gesture on the page, where Halo's own history handles it. */
+html { overscroll-behavior-x: none; }
 body {
   margin: 0;
   background: var(--backdrop);
