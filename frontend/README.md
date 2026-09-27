@@ -91,6 +91,8 @@ The page is the product. Halo stays quiet while the agent works, and appears onl
   | Mod + Shift + S | Share |
   | Esc | Close the open Halo surface |
   | Shift + / | This list |
+
+- **Trackpad gestures**, mirroring Safari/Chrome: a two-finger horizontal swipe goes back or forward; a pinch (trackpads report this as Ctrl+wheel) opens or closes the tab overview. Disabled while an approval is pending, like the shortcuts above.
 - **Motion:** transform and opacity only, with a strong ease-out: 220ms in, 150ms out (exits are quicker).
   - The approval sheet and Activity grow from their anchor at the top right of the address bar (`scale(0.97)`, 6px). The block notice and toast drop in 4px.
   - All overlays animate out instead of vanishing: `usePresence` keeps them mounted for 150ms, inert.

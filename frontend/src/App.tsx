@@ -11,6 +11,7 @@ import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
 import { usePresence } from './hooks/usePresence'
 import { useShortcuts } from './hooks/useShortcuts'
+import { useTrackpad } from './hooks/useTrackpad'
 import { AGENT, approvalFor, canCloseTab, claudeHolds, currentUrl, demoSession, reducer } from './session/session'
 import { tabTitle } from './session/pages'
 import type { SessionState, TimelineEvent } from './session/types'
@@ -116,6 +117,13 @@ export default function App() {
     onToggleHelp: toggleHelp,
   }), [dispatch, toggleActivity, toggleOverview, onNewWindow, onShare, toggleHelp])
   useShortcuts(s, approval, shortcutHandlers)
+
+  const trackpadHandlers = useMemo(() => ({
+    onBack: () => dispatch({ type: 'back' }),
+    onForward: () => dispatch({ type: 'forward' }),
+    onToggleOverview: toggleOverview,
+  }), [dispatch, toggleOverview])
+  useTrackpad(!approval, overviewOpen, trackpadHandlers)
 
   const unseen = Math.max(0, notableCount - seen)
   // Folded: nothing needs a person, so Halo shows nothing at all — just the browser.
