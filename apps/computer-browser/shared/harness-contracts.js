@@ -58,6 +58,7 @@ const EVENT_TYPES = Object.freeze([
   "action_started",
   "action_outcome",
   "evidence_recorded",
+  "approval_cancelled",
   "note",
 ]);
 
@@ -323,6 +324,12 @@ function validateJournalEvent(event, label = "event") {
   }
   if (event.type === "evidence_recorded") {
     validateEvidence(event.payload.evidence, `${label}.payload.evidence`);
+  }
+  if (event.type === "approval_cancelled") {
+    assertUuid(event.payload.requestId, `${label}.payload.requestId`);
+    assertString(event.payload.actionType, `${label}.payload.actionType`);
+    assertPositiveInteger(event.payload.goalVersion, `${label}.payload.goalVersion`);
+    assertString(event.payload.reason, `${label}.payload.reason`);
   }
   assertIsoTimestamp(event.at, `${label}.at`);
   const size = Buffer.byteLength(JSON.stringify(event), "utf8");

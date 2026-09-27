@@ -17,6 +17,7 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 
 const contracts = require("../../shared/harness-contracts");
+const MAX_EVENTS_PER_PAGE = 200;
 
 class TaskStoreError extends Error {
   constructor(code, message) {
@@ -153,19 +154,6 @@ async function releaseLock(lockPath) {
   }
 }
 
-async function appendLineDurable(filePath, line) {
-  const fh = await fsp.open(
-    filePath,
-    fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW,
-    0o600,
-  );
-  try {
-    await fh.appendFile(line, "utf8");
-    await fh.sync();
-  } finally {
-    await fh.close();
-  }
-}
 
 // Replays events.jsonl WITHOUT ever materializing the full file as one
 // string or one array (docs/superpowers/specs/2026-09-27-long-horizon-
@@ -180,7 +168,7 @@ async function appendLineDurable(filePath, line) {
 // mid-append, detected as leftover bytes with no terminating "\n"); any
 // earlier line that fails to parse or validate, has an out-of-order seq, or
 // violates the one-action-in-flight invariant is storage_corrupt.
-async function streamJournalReplay(journalPath, checkpointSeq) {
+async function streamJournalReplay(journalPath, checkpointSeq, pageOptions) {
   let fh;
   try {
     fh = await fsp.open(journalPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
@@ -195,16 +183,23 @@ async function streamJournalReplay(journalPath, checkpointSeq) {
   let bytesKept = 0;
   let openActionId = null;
   const recentEvents = [];
+  const events = [];
   let residual = "";
   let tornTailDropped = false;
 
   function commitLine(line) {
+    if (pageOptions && Buffer.byteLength(line, "utf8") > contracts.MAX_EVENT_BYTES) {
+      throw new TaskStoreError("storage_corrupt", "journal line exceeds the event size limit");
+    }
     let parsed;
     try {
       parsed = JSON.parse(line);
       contracts.validateJournalEvent(parsed);
     } catch (err) {
       throw new TaskStoreError("storage_corrupt", `journal line is invalid: ${err.message}`);
+    }
+    if (pageOptions && parsed.taskId !== pageOptions.taskId) {
+      throw new TaskStoreError("storage_corrupt", "journal event belongs to a different task");
     }
     if (parsed.seq !== lastSeq + 1) {
       throw new TaskStoreError("storage_corrupt", `journal seq out of order: expected ${lastSeq + 1}, got ${parsed.seq}`);
@@ -232,10 +227,25 @@ async function streamJournalReplay(journalPath, checkpointSeq) {
       recentEvents.push(parsed);
       if (recentEvents.length > contracts.MAX_RECENT_EVENTS_IN_CONTEXT) recentEvents.shift();
     }
+    if (pageOptions && parsed.seq > pageOptions.since && events.length < MAX_EVENTS_PER_PAGE) {
+      events.push(parsed);
+    }
   }
 
   try {
-    const stream = fh.createReadStream({ encoding: "utf8", highWaterMark: 64 * 1024 });
+    // A timeline query reads a fixed prefix even if another writer keeps
+    // appending. It has the same validation as recovery, but never repairs
+    // the journal or acquires its writer lock.
+    const streamOptions = { encoding: "utf8", highWaterMark: 64 * 1024 };
+    if (pageOptions) {
+      const stat = await fh.stat();
+      if (!stat.isFile() || stat.size > contracts.MAX_TASK_STORE_BYTES) {
+        throw new TaskStoreError("storage_corrupt", "journal is not a bounded regular file");
+      }
+      if (stat.size === 0) return { events: [] };
+      streamOptions.end = stat.size - 1;
+    }
+    const stream = fh.createReadStream(streamOptions);
     for await (const chunk of stream) {
       residual += chunk;
       let idx;
@@ -243,6 +253,9 @@ async function streamJournalReplay(journalPath, checkpointSeq) {
         const line = residual.slice(0, idx);
         residual = residual.slice(idx + 1);
         commitLine(line);
+      }
+      if (pageOptions && Buffer.byteLength(residual, "utf8") > contracts.MAX_EVENT_BYTES) {
+        throw new TaskStoreError("storage_corrupt", "journal line exceeds the event size limit");
       }
     }
     if (residual.length > 0) {
@@ -255,7 +268,18 @@ async function streamJournalReplay(journalPath, checkpointSeq) {
     await fh.close();
   }
 
-  return { nextSeq: lastSeq + 1, bytesKept, tornTailDropped, recentEvents, openActionId };
+  return { nextSeq: lastSeq + 1, bytesKept, tornTailDropped, recentEvents, openActionId, events };
+}
+
+function eventCursor(options) {
+  if (!contracts.isPlainObject(options) || Object.keys(options).some((key) => key !== "since")) {
+    throw new TaskStoreError("invalid_field", "event options must contain only an optional since sequence");
+  }
+  const since = options.since === undefined ? 0 : options.since;
+  if (!Number.isSafeInteger(since) || since < 0) {
+    throw new TaskStoreError("invalid_field", "since must be a non-negative safe integer");
+  }
+  return since;
 }
 
 class TaskStore {
@@ -270,6 +294,30 @@ class TaskStore {
     this._totalBytes = totalBytes;
     this._writeBlocked = false;
     this._closed = false;
+    // Perf: append() used to open+write+fsync+close the journal file on
+    // EVERY event (4 syscalls plus a fresh fsync each time). The fsync
+    // itself must stay per-append -- that is the durability guarantee
+    // action_started-before-execute and fail-closed recovery both depend
+    // on -- but the open/close pair does not need to happen every time.
+    // This handle is opened lazily (see _openJournalFh()) on the first
+    // append() so it is always opened AFTER load()'s torn-tail truncation
+    // (which runs on its own short-lived fd before a TaskStore even
+    // exists), never held open across a truncate.
+    this._journalFh = null;
+
+    // append()'s critical section (seq assignment -> validate -> write ->
+    // fsync -> _nextSeq/_totalBytes update) spans several await points. Two
+    // append() calls issued without awaiting one before starting the next
+    // would otherwise both read the same this._nextSeq before either had a
+    // chance to advance it -- the very first await inside the critical
+    // section (opening/writing the journal fd) yields control back to the
+    // event loop, so a second, concurrently-issued call resumes synchronous
+    // execution from the top and computes the SAME candidateSeq. That
+    // produces a duplicate seq and, on replay, storage_corrupt. This chain
+    // makes the critical section a strict FIFO queue: each append() call's
+    // seq-assign-through-state-update runs to completion, in call order,
+    // before the next one starts, regardless of how many callers overlap.
+    this._appendChain = Promise.resolve();
 
     // Recovery metadata, set by load(); undefined on a freshly created store.
     this.lastCheckpoint = null;
@@ -279,6 +327,13 @@ class TaskStore {
 
   getGoal() {
     return this._goal;
+  }
+
+  async getEvents(options = {}) {
+    const since = eventCursor(options);
+    await this._appendChain;
+    const { events = [] } = await streamJournalReplay(this._journalPath, 0, { since, taskId: this.taskId });
+    return events;
   }
 
   isWriteBlocked() {
@@ -322,6 +377,38 @@ class TaskStore {
     if (offending) {
       throw new TaskStoreError("invalid_event", `append() input must not set "${offending}"; the store assigns it`);
     }
+    let inputSnapshot;
+    try {
+      // Work may queue behind an earlier fsync. Capture the caller-owned
+      // object before yielding so the persisted event reflects the input at
+      // invocation time, not any mutation that happens while it waits.
+      inputSnapshot = structuredClone(input);
+    } catch (err) {
+      throw new TaskStoreError("invalid_event", `append() input cannot be snapshotted: ${err.message}`);
+    }
+
+    // Chain this call's critical section onto the tail synchronously (no
+    // await between reading and reassigning this._appendChain), so the
+    // order callers become queued in exactly matches the order append() was
+    // actually invoked. The chain link always resolves (its own rejection
+    // handled) so one caller's failure never wedges callers queued behind
+    // it -- each caller instead observes success/failure via `result`,
+    // which is this specific call's own outcome.
+    const runOne = () => this._appendOne(inputSnapshot);
+    const result = this._appendChain.then(runOne, runOne);
+    this._appendChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async _appendOne(input) {
+    // A call queued behind one that just failed must not silently write
+    // past that failure.
+    if (this._writeBlocked) {
+      throw new TaskStoreError("journal_write_failed", "this task store's journal is blocked after a prior write failure");
+    }
 
     const candidateSeq = this._nextSeq;
     const event = {
@@ -348,7 +435,9 @@ class TaskStore {
     }
 
     try {
-      await appendLineDurable(this._journalPath, line);
+      const fh = await this._openJournalFh();
+      await fh.appendFile(line, "utf8");
+      await fh.sync();
     } catch (err) {
       this._writeBlocked = true;
       throw new TaskStoreError("journal_write_failed", `journal append failed: ${err.message}`);
@@ -395,7 +484,40 @@ class TaskStore {
   async close() {
     if (this._closed) return;
     this._closed = true;
+    // Drain any append() calls already queued in the FIFO chain (invoked
+    // before close() started) so they finish running against the
+    // still-open handle instead of racing close()'s own fh.close() below.
+    // _appendChain always resolves regardless of an individual append's
+    // outcome (see append()/_appendOne()), so this never itself throws; a
+    // NEW append() arriving after _closed is set above fails immediately at
+    // _assertOpen() without ever reaching this chain.
+    await this._appendChain;
+    if (this._journalFh) {
+      const fh = this._journalFh;
+      this._journalFh = null;
+      try {
+        await fh.close();
+      } catch {
+        // Best-effort, matching releaseLock()'s existing pattern: a close
+        // failure here must not prevent the lock release below.
+      }
+    }
     await releaseLock(this._lockPath);
+  }
+
+  // Opens the journal file handle on first use only. Always called after
+  // load()'s torn-tail truncation has already run (that truncation uses its
+  // own short-lived fd, before a TaskStore is even constructed), so this
+  // handle never straddles a truncate.
+  async _openJournalFh() {
+    if (!this._journalFh) {
+      this._journalFh = await fsp.open(
+        this._journalPath,
+        fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW,
+        0o600,
+      );
+    }
+    return this._journalFh;
   }
 
   _assertOpen() {
@@ -466,6 +588,21 @@ class TaskStore {
       throw err;
     }
     return entries.filter((e) => e.isDirectory() && contracts.UUID_RE.test(e.name)).map((e) => e.name);
+  }
+
+  static async readEvents(taskId, { storageRoot } = {}, options = {}) {
+    const since = eventCursor(options);
+    if (!storageRoot) throw new TaskStoreError("invalid_field", "storageRoot is required");
+    const { taskDir } = await resolveTaskDir(path.resolve(storageRoot), taskId);
+    try {
+      const stat = await fsp.stat(taskDir);
+      if (!stat.isDirectory()) throw new TaskStoreError("not_found", "task store is not a directory");
+    } catch (error) {
+      if (error.code === "ENOENT") throw new TaskStoreError("not_found", `no task store at ${taskDir}`);
+      throw error;
+    }
+    const { events = [] } = await streamJournalReplay(path.join(taskDir, "events.jsonl"), 0, { since, taskId });
+    return events;
   }
 
   static async load(taskId, { storageRoot } = {}) {

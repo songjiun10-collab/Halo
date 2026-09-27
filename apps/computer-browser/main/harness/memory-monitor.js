@@ -71,7 +71,12 @@ class MemoryMonitor {
     this._externalProcesses.set(pid, { pid, creationTime, label });
   }
 
-  unregister(pid) {
+  unregister(pid, creationTime) {
+    const current = this._externalProcesses.get(pid);
+    if (!current) return;
+    // Lifecycle callbacks can arrive late. When the OS recycles a pid for a
+    // newer worker, an old exit event must not unregister the new process.
+    if (creationTime !== undefined && current.creationTime !== creationTime) return;
     this._externalProcesses.delete(pid);
   }
 
@@ -103,7 +108,20 @@ class MemoryMonitor {
       } catch {
         bytes = null;
       }
+      // The child may have exited (and its pid may already have been
+      // unregistered/reused) while the asynchronous OS lookup was pending.
+      // Revalidate the generation for both successful and failed lookups;
+      // otherwise a late successful `ps` result can count an unrelated
+      // process against this old registration.
+      const current = this._externalProcesses.get(pid);
+      if (!current || processKey(current.pid, current.creationTime) !== key) continue;
       if (typeof bytes !== "number" || !Number.isFinite(bytes)) {
+        // The external child may have exited while this asynchronous `ps`
+        // lookup was in flight. Its lifecycle callback unregisters it at
+        // exit; if that exact (pid, creationTime) is no longer live by the
+        // time lookup settles, do not report a stale sample as an
+        // unmeasurable *current* process (and do not accidentally attribute
+        // a recycled pid to its previous owner).
         unmeasurable.push(`external:${label}:pid=${pid}`);
         byProcess.push({ key, label: `external:${label}`, bytes: null });
         continue;

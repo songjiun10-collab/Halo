@@ -56,6 +56,7 @@ function makeFakeControlApi() {
   return {
     getSnapshot: async () => ({ page: {}, task: {}, approvalQueue: [], timeline: [] }),
     navigate: async (url) => ({ navigated: url }),
+    takeOverTask: async () => ({ task: { state: "paused", pauseReason: "user_takeover" } }),
     onChange: () => () => {},
   };
 }
@@ -78,6 +79,7 @@ function makeFakeTaskHost() {
     denyTask: record("denyTask"),
     pauseTask: record("pauseTask"),
     stopTask: record("stopTask"),
+    takeOverTask: record("takeOverTask"),
   };
 }
 
@@ -90,8 +92,12 @@ test("legacy channels still register and dispatch to controlApi unchanged", asyn
 
   assert.ok(ipcMain._has("halo:getSnapshot"));
   assert.ok(ipcMain._has("halo:navigate"));
+  assert.ok(ipcMain._has("halo:takeOverTask"));
   const result = await ipcMain._invoke("halo:navigate", trustedEvent(win), "https://example.com");
   assert.deepEqual(result, { navigated: "https://example.com" });
+  assert.deepEqual(await ipcMain._invoke("halo:takeOverTask", trustedEvent(win)), {
+    task: { state: "paused", pauseReason: "user_takeover" },
+  });
 });
 
 test("legacy channels work even from an untrusted sender (unchanged behavior -- not newly gated)", async () => {
@@ -128,13 +134,14 @@ test("harness channels dispatch to taskHost for a trusted sender", async () => {
   await ipcMain._invoke("halo:taskDeny", trustedEvent(win), "task-1", "req-1");
   await ipcMain._invoke("halo:taskPause", trustedEvent(win), "task-1");
   await ipcMain._invoke("halo:taskStop", trustedEvent(win), "task-1");
+  await ipcMain._invoke("halo:taskTakeOver", trustedEvent(win), "task-1", "user_takeover");
   await ipcMain._invoke("halo:resumeSavedTask", trustedEvent(win), "task-1");
   await ipcMain._invoke("halo:getTaskDetail", trustedEvent(win), "task-1");
   await ipcMain._invoke("halo:listTasks", trustedEvent(win));
 
   assert.deepEqual(
     taskHost.calls.map((c) => c[0]),
-    ["createTask", "amendTask", "confirmCriterion", "approveTask", "denyTask", "pauseTask", "stopTask", "resumeSavedTask", "getTaskDetail", "listTasks"],
+    ["createTask", "amendTask", "confirmCriterion", "approveTask", "denyTask", "pauseTask", "stopTask", "takeOverTask", "resumeSavedTask", "getTaskDetail", "listTasks"],
   );
 });
 
@@ -155,6 +162,7 @@ test("every harness channel rejects a request from an untrusted (non-main-frame)
     ["halo:taskDeny", ["task-1", "req-1"]],
     ["halo:taskPause", ["task-1"]],
     ["halo:taskStop", ["task-1"]],
+    ["halo:taskTakeOver", ["task-1", "user_takeover"]],
   ];
 
   for (const [channel, args] of channels) {

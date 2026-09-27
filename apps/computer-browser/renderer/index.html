@@ -55,7 +55,7 @@
       <main class="workspace">
         <section class="page-column" aria-label="Browser page">
           <div class="page-strip">
-            <div class="page-tab"><span class="tab-indicator"></span><span id="page-title">New tab</span><span class="tab-close">×</span></div>
+            <div class="tab-list" id="tab-list" role="tablist" aria-label="Browser tabs"></div>
             <span class="page-meta" id="page-meta">RENDERER READY</span>
           </div>
           <div class="web-surface" id="web-surface" aria-label="Web content viewport">
@@ -83,6 +83,7 @@
             <label class="sr-only" for="task-prompt">Describe a browser task</label>
             <textarea id="task-prompt" rows="3" maxlength="2000" placeholder="Describe one task for the agent…" spellcheck="false"></textarea>
             <div class="task-controls"><span class="char-count" id="char-count">0 / 2000</span><button class="run-button" id="run-button" type="button" disabled><span>START TASK</span><span class="keycap">⌘ ↵</span></button></div>
+            <div class="task-handoff-row"><span class="control-state" id="control-state">AUTOMATION CONTROL</span><button class="handoff-button" id="take-over-button" type="button" disabled>TAKE OVER</button></div>
             <div class="task-note"><span class="signal amber"></span><span>REVIEW waits for a person. ALLOW runs; DENY is blocked.</span></div>
           </section>
 

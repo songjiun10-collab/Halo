@@ -7,7 +7,7 @@ const { looksLikeCaptcha } = require("../shared/captcha-heuristics");
 const { summarizeMetrics } = require("../shared/metrics");
 const { requestDecision } = require("./approver-client");
 
-const URL_LIKE = /^https?:\/\/\S+$/i;
+const URL_LIKE = /^https?:\/\//i;
 const MAX_PROMPT_LENGTH = 2000;
 const MAX_TIMELINE = 200;
 const MAX_QUEUE = 50;
@@ -55,8 +55,10 @@ class ControlApi {
     navigationWaitUntil,
     maxDomLinksScanned,
     now,
+    webContentsViewClass = WebContentsView,
   } = {}) {
     this._window = window;
+    this._WebContentsView = webContentsViewClass;
     this._socketPath = socketPath;
     // Injectable seams for tests only (defaults are the real Unix-socket
     // client / the real pacing floor / the real clock). Production callers
@@ -79,6 +81,8 @@ class ControlApi {
     this._metrics = [];
     this._taskStartedAt = null;
     this._view = null;
+    this._tabs = [];
+    this._activeTabId = null;
     this._hasPage = false;
     this._page = {
       url: "", title: "", loadState: "idle", canGoBack: false, canGoForward: false, hasPage: false,
@@ -109,6 +113,11 @@ class ControlApi {
     // full pacing interval elapses and execute() has already been allowed to
     // run (see the epoch re-check right after the pacing await, below).
     this._pendingPaceWaiters = new Set();
+    // Actions that already crossed the allow boundary. TAKE OVER waits for
+    // these executions to settle before returning the visible page to manual
+    // control; a decision still waiting on the approver is invalidated by
+    // _stopEpoch instead and is deliberately not part of this set.
+    this._inFlightAgentActions = new Set();
     // { step: "step1"|"step2", trimmed, epoch } | null -- set by startTask()/
     // _runStepTwo() right before a gated call that has a further step after
     // it, so a pause/CAPTCHA interruption (before OR after that call's
@@ -137,6 +146,8 @@ class ControlApi {
   getSnapshot() {
     return {
       page: { ...this._page },
+      tabs: this._tabs.map(({ id, title, url }) => ({ id, title, url })),
+      activeTabId: this._activeTabId,
       task: { ...this._task },
       // Only public fields cross the IPC boundary. Each queue item also
       // carries a private _execute closure (the deferred action to run on
@@ -189,28 +200,40 @@ class ControlApi {
 
   _ensureView() {
     if (this._view) return this._view;
-    this._view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
-    this._window.contentView.addChildView(this._view);
-    this._view.setVisible(false);
+    return this._createTab();
+  }
+
+  _createTab() {
+    if (this._view) this._view.setVisible(false);
+    const view = new this._WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
+    this._window.contentView.addChildView(view);
+    view.setVisible(false);
     // A bounds update can arrive (from the renderer's ResizeObserver) before
     // any tab exists, when there is no view yet to apply it to. Without this,
     // that update is lost and a freshly created view sits at Electron's
     // default {0,0,0,0} bounds until the next *different* bounds message —
     // which may never come if the layout hasn't changed.
     if (this._pendingBounds) {
-      this._view.setBounds(this._pendingBounds);
+      view.setBounds(this._pendingBounds);
       this._lastBoundsKey = JSON.stringify(this._pendingBounds);
     }
-    const wc = this._view.webContents;
-    wc.on("did-start-navigation", () => this._syncPageState({ loadState: "loading" }));
-    wc.on("did-navigate", (_e, url) => this._syncPageState({ url, loadState: "ready" }));
-    wc.on("did-navigate-in-page", (_e, url) => this._syncPageState({ url }));
-    wc.on("page-title-updated", (_e, title) => this._syncPageState({ title }));
+    const tab = { id: randomUUID(), title: "New tab", url: "", view };
+    this._tabs.push(tab);
+    this._activeTabId = tab.id;
+    this._view = view;
+    const wc = view.webContents;
+    wc.on("did-start-navigation", () => { if (this._view === view) this._syncPageState({ loadState: "loading" }); });
+    wc.on("did-navigate", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url, loadState: "ready" }); });
+    wc.on("did-navigate-in-page", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url }); });
+    wc.on("page-title-updated", (_e, title) => { tab.title = title; if (this._view === view) this._syncPageState({ title }); });
     wc.on("did-fail-load", (_e, code, description) => {
+      if (this._view !== view) return;
       if (code !== -3) this._pushTimeline("navigation", `Load failed: ${description}`, "error");
       this._syncPageState({ loadState: "error" });
     });
-    return this._view;
+    this._page = { url: tab.url, title: tab.title, loadState: "idle", canGoBack: false, canGoForward: false, hasPage: false };
+    this._emit();
+    return view;
   }
 
   _syncPageState(patch) {
@@ -268,7 +291,7 @@ class ControlApi {
     if (typeof url !== "string" || url.trim().length === 0 || url.length > 8192) {
       throw new RangeError("navigate requires a non-empty, bounded URL string");
     }
-    const target = URL_LIKE.test(url.trim()) ? url.trim() : `https://${url.trim()}`;
+    const target = this._normalizeAddress(url.trim());
     this._ensureView();
     this._hasPage = true;
     this._view.setVisible(true);
@@ -294,6 +317,22 @@ class ControlApi {
       this._pushTimeline("navigation", `Navigated to ${target}`, "info");
     }
     return this.getSnapshot();
+  }
+
+  _normalizeAddress(input) {
+    if (URL_LIKE.test(input)) {
+      const parsed = new URL(input);
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new TypeError("Only HTTP and HTTPS pages can be opened");
+      return parsed.href;
+    }
+    if (/^[a-z][a-z\d+.-]*:/i.test(input) && !/^(localhost|[\w.-]+\.\w+):\d+(?:\/|$)/i.test(input)) {
+      throw new TypeError("Only HTTP and HTTPS addresses can be opened");
+    }
+    if (/\s/.test(input) || !/^(localhost|[\w.-]+\.\w+)(?::\d+)?(?:\/|$)/i.test(input)) {
+      return `https://duckduckgo.com/?q=${encodeURIComponent(input)}`;
+    }
+    const parsed = new URL(`https://${input}`);
+    return parsed.href;
   }
 
   // loadURL() has no built-in bound (see Electron's webContents docs -- its
@@ -365,13 +404,51 @@ class ControlApi {
   }
 
   async newTab() {
-    // Single-surface v1: "new tab" resets the one embedded view to a blank
-    // page. Real multi-tab support is future work.
-    this._ensureView();
+    this._createTab();
     this._hasPage = false;
-    this._view.setVisible(false);
-    this._page = { url: "", title: "", loadState: "idle", canGoBack: false, canGoForward: false, hasPage: false };
     this._pushTimeline("navigation", "Opened a new tab", "info");
+    this._emit();
+    return this.getSnapshot();
+  }
+
+  async selectTab(tabId) {
+    const tab = this._tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) throw new RangeError("Unknown browser tab");
+    if (this._view !== tab.view) {
+      if (this._view) this._view.setVisible(false);
+      this._view = tab.view;
+      this._activeTabId = tab.id;
+      if (this._pendingBounds) tab.view.setBounds(this._pendingBounds);
+      tab.view.setVisible(Boolean(tab.url));
+      const wc = tab.view.webContents;
+      this._hasPage = Boolean(tab.url);
+      this._page = {
+        url: tab.url, title: tab.title, loadState: wc.isLoading?.() ? "loading" : "ready",
+        canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward(), hasPage: this._hasPage,
+        captchaSuspected: looksLikeCaptcha(tab.url, tab.title),
+      };
+      this._emit();
+    }
+    return this.getSnapshot();
+  }
+
+  async closeTab(tabId) {
+    if (this._tabs.length <= 1) throw new Error("Cannot close the last tab");
+    const index = this._tabs.findIndex((candidate) => candidate.id === tabId);
+    if (index < 0) throw new RangeError("Unknown browser tab");
+    const [tab] = this._tabs.splice(index, 1);
+    if (tab.view === this._view) {
+      const next = this._tabs[Math.min(index, this._tabs.length - 1)];
+      tab.view.setVisible(false);
+      this._window.contentView.removeChildView?.(tab.view);
+      tab.view.webContents.destroy?.();
+      this._view = null;
+      await this.selectTab(next.id);
+    } else {
+      this._window.contentView.removeChildView?.(tab.view);
+      tab.view.webContents.destroy?.();
+    }
+    this._pushTimeline("navigation", `Closed tab ${tab.title || tab.url || "New tab"}`, "info");
     this._emit();
     return this.getSnapshot();
   }
@@ -401,6 +478,26 @@ class ControlApi {
   // "completed" once the in-flight work finally resolves.
   _stopHappenedSince(epoch) {
     return epoch !== this._stopEpoch;
+  }
+
+  async _executeAgentAction(execute, epoch) {
+    if (this._stopHappenedSince(epoch)) return false;
+    // Invoke synchronously before yielding, then register its promise in the
+    // same turn. That avoids a gap where takeover could finish before a
+    // scheduled-but-not-yet-started action begins running.
+    let execution;
+    try {
+      execution = Promise.resolve(execute());
+    } catch (error) {
+      execution = Promise.reject(error);
+    }
+    this._inFlightAgentActions.add(execution);
+    try {
+      await execution;
+      return true;
+    } finally {
+      this._inFlightAgentActions.delete(execution);
+    }
   }
 
   async performGatedAction(descriptor, execute) {
@@ -476,9 +573,18 @@ class ControlApi {
         this._pushTimeline(descriptor.action, `${descriptor.summary} (task stopped while waiting to pace; not dispatched)`, "info");
         return "cancelled";
       }
+      // A REVIEW round-trip or the pacing wait above is a real await point a
+      // human can act during -- if they switched the active tab since this
+      // action was proposed, it must not silently execute() against whatever
+      // tab is active now (see the originTabId comment in startTask()).
+      if (descriptor.originTabId != null && descriptor.originTabId !== this._activeTabId) {
+        this._pushTimeline(descriptor.action, `${descriptor.summary} (cancelled: the target tab changed before this action ran)`, "info");
+        return "tab_changed";
+      }
       this._pushTimeline(descriptor.action, descriptor.summary, "allow");
       const executeStart = this._now();
-      await execute();
+      const didExecute = await this._executeAgentAction(execute, epoch);
+      if (!didExecute) return "cancelled";
       this._recordMetric("execute", this._now() - executeStart, { action: descriptor.action });
       // stopTask() can run while execute() itself is in flight (e.g. a real
       // navigate() awaiting loadURL()) -- the decision was legitimately
@@ -515,6 +621,10 @@ class ControlApi {
         // never exposed via getSnapshot() (see its explicit field allowlist).
         _createdAtMs: this._now(),
         _execute: execute,
+        // Same tab-drift guard as the immediate-allow path (see
+        // originTabId in startTask()) -- a REVIEW item can sit in the queue
+        // indefinitely, so this matters even more here than for a pacing wait.
+        _originTabId: descriptor.originTabId ?? null,
       });
       this._task = { ...this._task, state: "awaiting_approval" };
       this._emit();
@@ -610,6 +720,13 @@ class ControlApi {
         selfProvenance: "trusted",
         source: "user_prompt",
         targetScope: "external",
+        // Captured now, not re-read at execute() time: a decision round-trip
+        // or the pacing wait can take seconds, long enough for a human to
+        // switch tabs via selectTab() in the meantime. Without this, a
+        // proposal made about tab A could silently execute against whatever
+        // tab happens to be active once the approver/pacing wait resolves --
+        // see the originTabId check in _applyDecision()/approve().
+        originTabId: this._activeTabId,
       },
       () => this.navigate(trimmed),
     );
@@ -685,6 +802,7 @@ class ControlApi {
           selfProvenance: "untrusted",
           source: "page_content",
           targetScope: "external",
+          originTabId: this._activeTabId,
         },
         () => this.navigate(link.href),
       );
@@ -700,6 +818,36 @@ class ControlApi {
     if (["running", "awaiting_approval"].includes(this._task.state)) {
       this._task = { ...this._task, state: "paused", pauseReason: "user" };
       this._pushTimeline("task", "Task paused", "info");
+      this._emit();
+    }
+    return this.getSnapshot();
+  }
+
+  // Ownership handoff for the visible, legacy browser task. Unlike a plain
+  // pause this invalidates outstanding approver replies, drops queued and
+  // deferred agent intent, and drains actions that already crossed the
+  // allow boundary before the renderer is told the page is available to the
+  // person. Navigation remains bounded by _loadWithTimeout().
+  async takeOverTask() {
+    let takeoverEpoch = this._stopEpoch;
+    if (["running", "awaiting_approval"].includes(this._task.state)) {
+      this._stopEpoch += 1;
+      takeoverEpoch = this._stopEpoch;
+      for (const wakeEarly of this._pendingPaceWaiters) wakeEarly();
+      this._pendingPaceWaiters.clear();
+      this._deferredDecision = null;
+      this._taskCursor = null;
+      this._approvalQueue = [];
+      this._task = { ...this._task, state: "paused", pauseReason: "user_takeover_pending" };
+      this._pushTimeline("task", "Takeover requested; waiting for the active browser action to settle.", "info");
+      this._emit();
+    }
+    await Promise.allSettled([...this._inFlightAgentActions]);
+    // stopTask() may supersede takeover while an action drains. Never turn a
+    // stopped task back into a paused/user-owned task when that happens.
+    if (this._stopEpoch === takeoverEpoch && this._task.pauseReason === "user_takeover_pending") {
+      this._task = { ...this._task, state: "paused", pauseReason: "user_takeover" };
+      this._pushTimeline("task", "Automation paused; browser control returned to the person.", "info");
       this._emit();
     }
     return this.getSnapshot();
@@ -803,9 +951,14 @@ class ControlApi {
     const [item] = this._approvalQueue.splice(index, 1);
     this._recordMetric("queue_wait", this._now() - item._createdAtMs, { action: item.action, outcome: "approved" });
     this._pushTimeline(item.action, `${item.summary} (approved by reviewer)`, "allow");
-    await this._paceAgentAction();
     const epoch = this._stopEpoch;
-    await item._execute();
+    await this._paceAgentAction();
+    if (this._stopHappenedSince(epoch) || this._task.state === "paused") return this.getSnapshot();
+    if (item._originTabId != null && item._originTabId !== this._activeTabId) {
+      this._pushTimeline(item.action, `${item.summary} (cancelled: the target tab changed before this action ran)`, "info");
+    } else {
+      await this._executeAgentAction(item._execute, epoch);
+    }
     // Same class of race as startTask()/resumeTask(): stopTask() can run
     // while this execute() is in flight, and this execute() can itself
     // trigger a CAPTCHA-detection auto-pause. stopTask() already cleared

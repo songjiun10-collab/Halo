@@ -857,3 +857,449 @@ test("emergency teardown never throws even if dispose()/close() themselves fail"
   assert.equal(controller.getSnapshot().pauseReason, "memory_emergency");
   await store.close();
 });
+
+// --- 2026-09-27: transition/admission-gate concurrency tests (A-I) ---
+//
+// takeOver()/pause()/stop() must close admission SYNCHRONOUSLY (before any
+// await), track every admitted mutator's dispatch (whether reached via
+// approve() or the main loop's own _dispatchActionsBatch) until its real
+// outcome lands, cancel still-queued approvals durably before removing them,
+// serialize pause/stop/takeOver FIFO, and never reopen admission while a
+// later transition is still queued behind the one that just checkpointed.
+
+function singleObserveActionPlanner() {
+  return {
+    next: async (context) => ({
+      taskId: context.taskId,
+      goalVersion: context.goalVersion,
+      basedOnObservationId: "obs",
+      criterionIds: [],
+      kind: "actions",
+      actions: [{ type: "observe" }],
+    }),
+  };
+}
+
+function reviewApprove() {
+  return async () => ({ decision: "review", reasons: [] });
+}
+
+// Gates the FIRST store.append() call of `matchType`, letting every other
+// call (including a later append of the SAME type, e.g. action_outcome)
+// through immediately.
+function makeGatedAppend(store, matchType) {
+  const original = store.append.bind(store);
+  let release;
+  let hit = false;
+  const gate = new Promise((r) => {
+    release = r;
+  });
+  store.append = async (input) => {
+    if (input.type === matchType && !hit) {
+      hit = true;
+      await gate;
+    }
+    return original(input);
+  };
+  return { release: () => release() };
+}
+
+// Fails the first `failCount` store.append() calls of `matchType`, then lets
+// the rest through to the real implementation.
+function makeFlakyAppend(store, matchType, failCount = 1) {
+  const original = store.append.bind(store);
+  let calls = 0;
+  store.append = async (input) => {
+    if (input.type === matchType) {
+      calls += 1;
+      if (calls <= failCount) {
+        throw new Error(`injected failure #${calls} for ${matchType}`);
+      }
+    }
+    return original(input);
+  };
+  return { callsFor: () => calls };
+}
+
+test("A: admission closes synchronously the instant takeOver() is called -- before its own _doTransition (scheduled via Promise.then) ever runs -- so a fresh approve() right after is rejected immediately with zero execute()", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let executeCalls = 0;
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => { executeCalls += 1; return { status: "ok" }; } };
+  const controller = new TaskController({ store, planner: singleObserveActionPlanner(), browser, approve: reviewApprove(), hostVerifier: () => true });
+
+  await controller.start();
+  const requestId = controller.getSnapshot().approvalQueue[0].id;
+
+  // No await/setImmediate between takeOver() and approve() below -- if
+  // admission were only closed inside the deferred _doTransition, this
+  // approve() would still see it open and slip through.
+  const takeOverPromise = controller.takeOver();
+  await assert.rejects(
+    () => controller.approve(requestId),
+    (err) => err instanceof TaskControllerError && err.code === "admission_closed",
+  );
+
+  assert.equal(executeCalls, 0, "the rejected approve() must never have reached dispatch");
+  assert.equal(controller.getSnapshot().approvalQueue.length, 1, "the rejected approve() must never have spliced the queue");
+
+  await takeOverPromise;
+  assert.equal(controller.getSnapshot().state, "paused");
+  assert.equal(controller.getSnapshot().pauseReason, "user_takeover");
+  await store.close();
+});
+
+test("B: an already-admitted approve() dispatch (barrier at the action_started append) forces a concurrent takeOver() to wait for its real outcome, never retroactively cancelling it", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let executeCalls = 0;
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => { executeCalls += 1; return { status: "ok" }; } };
+  const controller = new TaskController({ store, planner: singleObserveActionPlanner(), browser, approve: reviewApprove(), hostVerifier: () => true });
+
+  await controller.start();
+  const requestId = controller.getSnapshot().approvalQueue[0].id;
+
+  const gate = makeGatedAppend(store, "action_started");
+  const approvePromise = controller.approve(requestId);
+  await new Promise((r) => setImmediate(r)); // let approve() reach the gated append
+
+  const takeOverPromise = controller.takeOver();
+  await assert.rejects(
+    () => controller.approve("nonexistent-id"),
+    (err) => err instanceof TaskControllerError && err.code === "admission_closed",
+  );
+
+  let takeOverSettled = false;
+  takeOverPromise.then(() => { takeOverSettled = true; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(takeOverSettled, false, "takeOver() must wait for the in-flight dispatch, not race it");
+  assert.equal(executeCalls, 0, "execute() must not run while action_started is still pending");
+
+  gate.release();
+  await approvePromise;
+  await takeOverPromise;
+
+  assert.equal(executeCalls, 1, "the already-admitted dispatch must still run to completion, never be silently skipped");
+  const snapshot = controller.getSnapshot();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "user_takeover");
+  assert.equal(controller._admissionOpen, true, "admission must reopen once the sole pending transition's checkpoint succeeds");
+  await store.close();
+});
+
+test("C: takeOver() also waits for the main loop's OWN internal dispatch (an 'allow' decision inside _dispatchActionsBatch, never queued through approve()) -- proving that call site is tracked too", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let executeCalls = 0;
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => { executeCalls += 1; return { status: "ok" }; } };
+  const controller = new TaskController({ store, planner: singleObserveActionPlanner(), browser, approve: allowApprove(), hostVerifier: () => true });
+
+  const gate = makeGatedAppend(store, "action_started");
+  const startPromise = controller.start();
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r)); // let observe -> plan -> approve('allow') reach the gated append
+
+  assert.equal(executeCalls, 0, "must still be stuck before the gate release");
+
+  const takeOverPromise = controller.takeOver();
+  let settled = false;
+  takeOverPromise.then(() => { settled = true; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(settled, false, "takeOver() must wait for the loop's own in-flight dispatch");
+
+  gate.release();
+  await startPromise;
+  await takeOverPromise;
+
+  assert.equal(executeCalls, 1, "the loop's own already-admitted dispatch must still run to completion");
+  assert.equal(controller.getSnapshot().state, "paused");
+  assert.equal(controller.getSnapshot().pauseReason, "user_takeover");
+  await store.close();
+});
+
+test("D: takeOver() appends approval_cancelled durably BEFORE removing the item; a failed append leaves it retryable and fails closed rather than silently dropping it", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) };
+  const controller = new TaskController({ store, planner: singleObserveActionPlanner(), browser, approve: reviewApprove(), hostVerifier: () => true });
+
+  await controller.start();
+  const requestId = controller.getSnapshot().approvalQueue[0].id;
+
+  const flaky = makeFlakyAppend(store, "approval_cancelled", 1);
+  await assert.rejects(() => controller.takeOver(), /injected failure/);
+
+  assert.equal(controller.getSnapshot().state, "awaiting_approval", "task state must be unchanged after a failed cancel-append");
+  assert.equal(controller.getSnapshot().approvalQueue.length, 1, "the item must not be lost");
+  assert.equal(controller.getSnapshot().approvalQueue[0].id, requestId);
+  assert.equal(controller._admissionOpen, false, "must fail closed");
+  await assert.rejects(() => controller.deny(requestId), TaskControllerError);
+
+  await controller.takeOver(); // retry succeeds once the injected failure is exhausted
+  assert.equal(controller.getSnapshot().state, "paused");
+  assert.equal(controller.getSnapshot().pauseReason, "user_takeover");
+  assert.equal(controller.getSnapshot().approvalQueue.length, 0);
+  assert.equal(controller._admissionOpen, true);
+  assert.equal(flaky.callsFor(), 2, "exactly one failed attempt then one successful retry");
+  await store.close();
+});
+
+test("E: two concurrent takeOver() calls against a queued item produce exactly one approval_cancelled append, not a duplicate, and both resolve to the same final state", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) };
+  const controller = new TaskController({ store, planner: singleObserveActionPlanner(), browser, approve: reviewApprove(), hostVerifier: () => true });
+
+  await controller.start();
+
+  let cancelAppends = 0;
+  const originalAppend = store.append.bind(store);
+  store.append = async (input) => {
+    if (input.type === "approval_cancelled") cancelAppends += 1;
+    return originalAppend(input);
+  };
+
+  const [snap1, snap2] = await Promise.all([controller.takeOver(), controller.takeOver()]);
+
+  assert.equal(cancelAppends, 1, "the second, FIFO-queued takeOver() must find nothing left to cancel");
+  assert.equal(snap1.state, "paused");
+  assert.equal(snap2.state, "paused");
+  assert.equal(snap1.pauseReason, "user_takeover");
+  assert.equal(snap2.pauseReason, "user_takeover");
+  assert.equal(controller.getSnapshot().approvalQueue.length, 0);
+  assert.equal(controller._admissionOpen, true, "admission reopens once the LAST of the two queued transitions finishes");
+  await store.close();
+});
+
+test("F: stop() called while a takeOver() is still draining is queued FIFO behind it -- it does not run concurrently, and the in-flight dispatch's real outcome is preserved", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let executeCalls = 0;
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => { executeCalls += 1; return { status: "ok" }; } };
+  const controller = new TaskController({ store, planner: singleObserveActionPlanner(), browser, approve: reviewApprove(), hostVerifier: () => true });
+
+  await controller.start();
+  const requestId = controller.getSnapshot().approvalQueue[0].id;
+
+  const gate = makeGatedAppend(store, "action_started");
+  const approvePromise = controller.approve(requestId);
+  await new Promise((r) => setImmediate(r));
+
+  const takeOverPromise = controller.takeOver();
+  const stopPromise = controller.stop();
+
+  await new Promise((r) => setImmediate(r));
+  assert.equal(executeCalls, 0, "must still be gated");
+
+  gate.release();
+  await approvePromise;
+  await takeOverPromise;
+  await stopPromise;
+
+  assert.equal(executeCalls, 1, "the admitted dispatch ran to completion exactly once, real outcome preserved");
+  assert.equal(controller.getSnapshot().state, "stopped", "stop() is last in the FIFO chain, so it wins the final state");
+  await store.close();
+});
+
+test("G: a checkpoint failure during a transition leaves task state unchanged and admission closed (fail-closed); a retry succeeds and reopens admission", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const plannerGate = new Promise(() => {}); // never resolves -- keeps the loop stuck mid-planner-call
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) };
+  const planner = { next: async () => plannerGate };
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true });
+
+  controller.start(); // intentionally not awaited -- sticks forever on the never-resolving planner.next()
+  await new Promise((r) => setImmediate(r));
+  assert.equal(controller.getSnapshot().state, "running");
+
+  let checkpointCalls = 0;
+  const originalCheckpoint = store.checkpoint.bind(store);
+  store.checkpoint = async (payload) => {
+    checkpointCalls += 1;
+    if (checkpointCalls === 1) throw new Error("injected checkpoint failure");
+    return originalCheckpoint(payload);
+  };
+
+  await assert.rejects(() => controller.pause("user"), /injected checkpoint failure/);
+  // _task.state was already optimistically flipped to "paused" before the
+  // failed checkpoint await (the same pre-existing pattern _pauseWith always
+  // used) -- what "fail closed" actually guarantees is that admission stays
+  // closed and every other external mutator is rejected, not that the
+  // in-memory state field is rolled back.
+  assert.equal(controller.getSnapshot().state, "paused");
+  assert.equal(controller._admissionOpen, false, "admission must stay closed (fail-closed) after the checkpoint failure");
+  await assert.rejects(() => controller.amend({ text: "x" }), TaskControllerError);
+  await assert.rejects(() => controller.resume(), TaskControllerError);
+
+  await controller.pause("user"); // retry succeeds now that the injected failure is exhausted -- _transitionRetryable() lets this back in despite state already reading "paused"
+  assert.equal(controller.getSnapshot().state, "paused");
+  assert.equal(controller._admissionOpen, true);
+  controller.resume(); // admission reopened -- resume() is no longer blocked (not awaited: the loop sticks forever on the never-resolving planner.next() again)
+  await new Promise((r) => setImmediate(r));
+  assert.equal(controller.getSnapshot().state, "running");
+  await store.close();
+});
+
+test("H: admission stays closed across a back-to-back burst of two queued transitions -- a fresh approve() attempted exactly between the first transition's checkpoint success and the second transition's start is still rejected", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) };
+  const controller = new TaskController({ store, planner: singleObserveActionPlanner(), browser, approve: reviewApprove(), hostVerifier: () => true });
+
+  await controller.start();
+  const requestId = controller.getSnapshot().approvalQueue[0].id;
+
+  let checkpointCalls = 0;
+  let releaseFirstCheckpoint;
+  const firstCheckpointGate = new Promise((r) => { releaseFirstCheckpoint = r; });
+  const originalCheckpoint = store.checkpoint.bind(store);
+  store.checkpoint = async (payload) => {
+    checkpointCalls += 1;
+    if (checkpointCalls === 1) await firstCheckpointGate;
+    return originalCheckpoint(payload);
+  };
+
+  const p1 = controller.pause("user"); // first queued transition (cancelQueue: false)
+  const p2 = controller.takeOver(); // second, enqueued synchronously right behind it
+
+  await assert.rejects(() => controller.approve(requestId), TaskControllerError);
+
+  releaseFirstCheckpoint();
+  await p1;
+
+  // The FIRST transition's checkpoint just succeeded, but a SECOND
+  // transition is still queued behind it -- admission must NOT reopen here.
+  assert.equal(controller._admissionOpen, false, "admission must stay closed while a later transition is still pending");
+  await assert.rejects(
+    () => controller.approve(requestId),
+    TaskControllerError,
+    "a fresh approve() at the exact boundary between the two transitions must still be rejected",
+  );
+
+  await p2;
+  assert.equal(controller._admissionOpen, true, "admission reopens only after the LAST queued transition's checkpoint succeeds");
+  assert.equal(controller.getSnapshot().state, "paused");
+  assert.equal(controller.getSnapshot().pauseReason, "user_takeover", "takeOver() ran second in the FIFO chain, so it wins the final pauseReason");
+  await store.close();
+});
+
+test("I: deny()/confirmCriterion() (not just approve()/amend()) are also rejected with admission_closed while a transition is in progress, and succeed again once it reopens", async () => {
+  const { store } = await makeStore({
+    originalRequest: "goal",
+    criteria: [{ id: "C1", text: "done", required: true, verification: "user" }],
+  });
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) };
+  const controller = new TaskController({ store, planner: singleObserveActionPlanner(), browser, approve: reviewApprove(), hostVerifier: () => true });
+
+  await controller.start();
+  const requestId = controller.getSnapshot().approvalQueue[0].id;
+
+  let releaseCheckpoint;
+  const gate = new Promise((r) => { releaseCheckpoint = r; });
+  const originalCheckpoint = store.checkpoint.bind(store);
+  store.checkpoint = async (payload) => {
+    await gate;
+    return originalCheckpoint(payload);
+  };
+
+  const pausePromise = controller.pause("user");
+  await new Promise((r) => setImmediate(r));
+
+  await assert.rejects(() => controller.deny(requestId), TaskControllerError);
+  await assert.rejects(
+    () => controller.confirmCriterion({ criterionId: "C1", goalVersion: 1, evidenceId: "x", outcome: "verified" }),
+    TaskControllerError,
+  );
+
+  releaseCheckpoint();
+  await pausePromise;
+  assert.equal(controller._admissionOpen, true);
+
+  // A plain pause() never cancels the queue -- deny() must still find and
+  // remove the item now that admission has reopened.
+  const snapshot = await controller.deny(requestId);
+  assert.equal(snapshot.approvalQueue.length, 0);
+  await store.close();
+});
+
+test("J: takeOver() waits for an admitted goal amendment to finish before checkpointing the paused state", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const plannerGate = new Promise(() => {});
+  const controller = new TaskController({
+    store,
+    planner: { next: async () => plannerGate },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+  controller.start();
+  await new Promise((r) => setImmediate(r));
+
+  let releaseAmend;
+  let amendEntered = false;
+  const amendGate = new Promise((r) => { releaseAmend = r; });
+  const originalAmend = store.amendGoal.bind(store);
+  store.amendGoal = async (...args) => {
+    amendEntered = true;
+    await amendGate;
+    return originalAmend(...args);
+  };
+
+  const amendment = controller.amend({ text: "revised goal" });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(amendEntered, true);
+  let takeoverSettled = false;
+  const takeover = controller.takeOver();
+  takeover.then(() => { takeoverSettled = true; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(takeoverSettled, false, "takeOver() must drain the admitted amendment's durable write");
+
+  releaseAmend();
+  await amendment;
+  await takeover;
+  assert.equal(controller.getGoal().goalVersion, 2);
+  assert.equal(controller.getSnapshot().pauseReason, "user_takeover");
+  assert.equal(store.lastCheckpoint.payload.task.pauseReason, "user_takeover");
+  assert.equal(store.lastCheckpoint.goalVersion, 2);
+  await store.close();
+});
+
+test("K: takeOver() waits for an admitted user evidence confirmation before checkpointing", async () => {
+  const { store } = await makeStore({
+    originalRequest: "goal",
+    criteria: [{ id: "C1", text: "done", required: true, verification: "user" }],
+  });
+  const controller = new TaskController({
+    store,
+    planner: singleObserveActionPlanner(),
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: reviewApprove(),
+    hostVerifier: () => true,
+  });
+  await controller.start();
+  controller._criteriaStatus.set("C1", { status: "pending", evidenceId: "evidence-pending", goalVersion: 1 });
+
+  let releaseEvidence;
+  let evidenceEntered = false;
+  const evidenceGate = new Promise((r) => { releaseEvidence = r; });
+  const originalAppend = store.append.bind(store);
+  store.append = async (input) => {
+    if (input.type === "evidence_recorded" && !evidenceEntered) {
+      evidenceEntered = true;
+      await evidenceGate;
+    }
+    return originalAppend(input);
+  };
+
+  const confirmation = controller.confirmCriterion({
+    criterionId: "C1", goalVersion: 1, evidenceId: "evidence-pending", outcome: "verified",
+  });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(evidenceEntered, true);
+  let takeoverSettled = false;
+  const takeover = controller.takeOver();
+  takeover.then(() => { takeoverSettled = true; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(takeoverSettled, false, "takeOver() must drain the admitted evidence append");
+
+  releaseEvidence();
+  await confirmation;
+  await takeover;
+  assert.equal(controller.getSnapshot().criteriaStatus[0].status, "verified");
+  assert.equal(controller.getSnapshot().pauseReason, "user_takeover");
+  assert.equal(store.lastCheckpoint.payload.criteriaStatus[0][1].status, "verified");
+  await store.close();
+});

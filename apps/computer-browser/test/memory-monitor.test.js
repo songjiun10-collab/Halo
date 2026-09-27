@@ -58,6 +58,20 @@ test("unregister() stops counting a previously-registered external process", asy
   assert.equal(result.totalBytes, 0);
 });
 
+test("unregister(pid, creationTime) does not remove a newer process that reused the pid", async () => {
+  const monitor = new MemoryMonitor({
+    getAppMetrics: () => [],
+    getExternalMemoryBytes: async () => mb(12),
+  });
+  monitor.registerExternalProcess({ pid: 555, creationTime: 2000, label: "new-planner" });
+
+  monitor.unregister(555, 1000); // late exit callback from the old process
+
+  const result = await monitor.sample();
+  assert.equal(result.totalBytes, mb(12));
+  assert.equal(result.byProcess[0].label, "external:new-planner");
+});
+
 // --- Dedup by (pid, creationTime): a recycled pid that Electron itself now
 // also reports must not be double-counted or misattributed.
 
@@ -129,6 +143,44 @@ test("reports a registered external process as unmeasurable when its lookup thro
 
   assert.equal(result.totalBytes, 0);
   assert.ok(result.unmeasurable.some((entry) => entry.includes("worker")));
+});
+
+test("does not report a planner as unmeasurable if it exited while an in-flight RSS lookup was pending", async () => {
+  let monitor;
+  monitor = new MemoryMonitor({
+    getAppMetrics: () => [],
+    getExternalMemoryBytes: async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      monitor.unregister(777);
+      return null;
+    },
+  });
+  monitor.registerExternalProcess({ pid: 777, creationTime: 1, label: "planner" });
+
+  const result = await monitor.sample();
+
+  assert.equal(result.totalBytes, 0);
+  assert.deepEqual(result.unmeasurable, [], "the worker is no longer alive at sample completion and must not poison current live-process completeness");
+  assert.deepEqual(result.byProcess, []);
+});
+
+test("does not attribute a successful stale RSS lookup after the registered process exits", async () => {
+  let monitor;
+  monitor = new MemoryMonitor({
+    getAppMetrics: () => [],
+    getExternalMemoryBytes: async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      monitor.unregister(778, 10);
+      return mb(450);
+    },
+  });
+  monitor.registerExternalProcess({ pid: 778, creationTime: 10, label: "planner" });
+
+  const result = await monitor.sample();
+
+  assert.equal(result.totalBytes, 0, "RSS from a no-longer-registered process must not affect the cap");
+  assert.deepEqual(result.unmeasurable, []);
+  assert.deepEqual(result.byProcess, []);
 });
 
 // --- Three-tier pressure level at 70/80/90% of the (<=1GB) cap.

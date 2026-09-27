@@ -18,6 +18,9 @@ const { TaskHost, TaskHostError } = require("../main/harness/task-host");
 const { TaskStore } = require("../main/harness/task-store");
 const { TaskController } = require("../main/harness/task-controller");
 
+const hostsToClose = new Set();
+const SHUTDOWN_DEADLOCK_TIMEOUT_MS = 5000;
+
 async function mkTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "halo-task-host-"));
 }
@@ -36,7 +39,7 @@ function finishingPlanner() {
 }
 
 function makeHost(storageRoot, overrides = {}) {
-  return new TaskHost({
+  const host = new TaskHost({
     storageRoot,
     makeBrowser: () => ({ observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) }),
     makePlanner: () => finishingPlanner(),
@@ -44,7 +47,15 @@ function makeHost(storageRoot, overrides = {}) {
     approve: async () => ({ decision: "allow", reasons: [] }),
     ...overrides,
   });
+  hostsToClose.add(host);
+  return host;
 }
+
+test.afterEach(async () => {
+  const hosts = [...hostsToClose];
+  hostsToClose.clear();
+  await Promise.all(hosts.map((host) => host.close()));
+});
 
 test("constructor requires storageRoot/makeBrowser/makePlanner/hostVerifier/approve", () => {
   assert.throws(() => new TaskHost({}), TaskHostError);
@@ -163,12 +174,243 @@ test("resumeSavedTask() on an execution_uncertain task requires confirmed:true (
   assert.notEqual(snapshot.state, "paused");
 });
 
-test("amendTask/confirmCriterion/approveTask/denyTask/pauseTask/stopTask require the task to be attached first", async () => {
+test("amendTask/confirmCriterion/approveTask/denyTask/pauseTask/stopTask/takeOverTask require the task to be attached first", async () => {
   const storageRoot = await mkTempRoot();
   const host = makeHost(storageRoot);
   await assert.rejects(() => host.amendTask("11111111-1111-1111-1111-111111111111", { text: "x" }), TaskHostError);
   await assert.rejects(() => host.confirmCriterion("11111111-1111-1111-1111-111111111111", {}), TaskHostError);
   await assert.rejects(() => host.approveTask("11111111-1111-1111-1111-111111111111", "r1"), TaskHostError);
+  await assert.rejects(() => host.takeOverTask("11111111-1111-1111-1111-111111111111"), TaskHostError);
+});
+
+test("takeOverTask() delegates to the attached controller's takeOver() with the given reason", async () => {
+  const storageRoot = await mkTempRoot();
+  let sawReason;
+  const host = makeHost(storageRoot, {
+    makePlanner: () => ({
+      next: async (context) => ({
+        taskId: context.taskId,
+        goalVersion: context.goalVersion,
+        basedOnObservationId: "obs",
+        criterionIds: [],
+        kind: "actions",
+        actions: [{ type: "observe" }],
+      }),
+    }),
+    approve: async () => ({ decision: "review", reasons: [] }), // queues instead of dispatching -- reaches awaiting_approval, no hang
+  });
+  const { taskId } = await host.createTask({ originalRequest: "long task" });
+  const controller = host._active.get(taskId).controller;
+  const realTakeOver = controller.takeOver.bind(controller);
+  controller.takeOver = (reason) => {
+    sawReason = reason;
+    return realTakeOver(reason);
+  };
+
+  const snapshot = await host.takeOverTask(taskId, "user_takeover");
+  assert.equal(sawReason, "user_takeover");
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "user_takeover");
+});
+
+test("close() durably pauses active work and closes each owned resource", async () => {
+  const storageRoot = await mkTempRoot();
+  const closed = [];
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => ({
+      observe: async () => ({ id: "obs" }),
+      execute: async () => ({ status: "ok" }),
+      dispose: async () => closed.push("browser"),
+    }),
+    makePlanner: () => ({
+      next: async (context) => ({
+        taskId: context.taskId,
+        goalVersion: context.goalVersion,
+        basedOnObservationId: "obs",
+        criterionIds: [],
+        kind: "actions",
+        actions: [{ type: "observe" }],
+      }),
+      close: async () => closed.push("planner"),
+    }),
+    approve: async () => ({ decision: "review", reasons: [] }),
+  });
+  const { taskId } = await host.createTask({ originalRequest: "close me safely" });
+  assert.equal((await host.getTaskDetail(taskId)).snapshot.state, "awaiting_approval");
+
+  await host.close();
+
+  assert.deepEqual(closed.sort(), ["browser", "planner"]);
+  assert.equal(host._active.size, 0);
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  assert.equal(reopened.lastCheckpoint.payload.task.state, "paused");
+  assert.equal(reopened.lastCheckpoint.payload.task.pauseReason, "host_shutdown");
+  await reopened.close();
+});
+
+test("close() drains a pending createTask before it can attach unowned resources", async () => {
+  const storageRoot = await mkTempRoot();
+  const originalCreate = TaskStore.create;
+  let releaseCreate;
+  let signalCreateStarted;
+  const createStarted = new Promise((resolve) => { signalCreateStarted = resolve; });
+  const createGate = new Promise((resolve) => { releaseCreate = resolve; });
+  let createdStore;
+  const resourcesCreated = [];
+  TaskStore.create = async (...args) => {
+    signalCreateStarted();
+    await createGate;
+    createdStore = await originalCreate(...args);
+    return createdStore;
+  };
+
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => {
+      resourcesCreated.push("browser");
+      return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }), dispose: async () => {} };
+    },
+    makePlanner: () => {
+      resourcesCreated.push("planner");
+      return finishingPlanner();
+    },
+  });
+
+  try {
+    const creating = host.createTask({ originalRequest: "creation racing shutdown" });
+    await createStarted;
+    const closing = host.close();
+    releaseCreate();
+
+    await assert.rejects(creating, (error) => error.code === "host_closed");
+    await closing;
+    assert.deepEqual(resourcesCreated, [], "shutdown must prevent post-close BrowserView/planner attachment");
+
+    const reopened = await TaskStore.load(createdStore.taskId, { storageRoot });
+    await reopened.close();
+  } finally {
+    TaskStore.create = originalCreate;
+    releaseCreate();
+  }
+});
+
+test("close() drains a pending resumeSavedTask before it can attach unowned resources", async () => {
+  const storageRoot = await mkTempRoot();
+  const saved = await TaskStore.create({ originalRequest: "saved task racing shutdown" }, { storageRoot });
+  const taskId = saved.taskId;
+  await saved.close();
+
+  const originalLoad = TaskStore.load;
+  let releaseLoad;
+  let signalLoadStarted;
+  const loadStarted = new Promise((resolve) => { signalLoadStarted = resolve; });
+  const loadGate = new Promise((resolve) => { releaseLoad = resolve; });
+  let loadedStore;
+  const resourcesCreated = [];
+  TaskStore.load = async (...args) => {
+    signalLoadStarted();
+    await loadGate;
+    loadedStore = await originalLoad(...args);
+    return loadedStore;
+  };
+
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => {
+      resourcesCreated.push("browser");
+      return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }), dispose: async () => {} };
+    },
+    makePlanner: () => {
+      resourcesCreated.push("planner");
+      return finishingPlanner();
+    },
+  });
+
+  try {
+    const resuming = host.resumeSavedTask(taskId);
+    await loadStarted;
+    const closing = host.close();
+    releaseLoad();
+
+    await assert.rejects(resuming, (error) => error.code === "host_closed");
+    await closing;
+    assert.deepEqual(resourcesCreated, [], "shutdown must prevent post-close BrowserView/planner attachment");
+    const reopened = await originalLoad(taskId, { storageRoot });
+    await reopened.close();
+  } finally {
+    TaskStore.load = originalLoad;
+    releaseLoad();
+  }
+});
+
+test("close() can take over a task while its initial planner response is pending", async () => {
+  const storageRoot = await mkTempRoot();
+  let signalPlannerStarted;
+  const plannerStarted = new Promise((resolve) => { signalPlannerStarted = resolve; });
+  let releasePlanner;
+  const plannerGate = new Promise((resolve) => { releasePlanner = resolve; });
+  const host = makeHost(storageRoot, {
+    makePlanner: () => ({
+      next: async () => {
+        signalPlannerStarted();
+        await plannerGate;
+        return { kind: "need_user", reason: "planner yielded" };
+      },
+      close: async () => releasePlanner(),
+    }),
+    approve: async () => ({ decision: "allow", reasons: [] }),
+  });
+
+  const creating = host.createTask({ originalRequest: "task that waits on the planner" });
+  try {
+    await plannerStarted;
+    const closing = host.close();
+    const closedPromptly = await Promise.race([
+      closing.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), SHUTDOWN_DEADLOCK_TIMEOUT_MS)),
+    ]);
+    assert.equal(closedPromptly, true, "shutdown must reach takeOver() instead of waiting for the planner first");
+    assert.equal((await creating).snapshot.pauseReason, "host_shutdown");
+  } finally {
+    releasePlanner();
+  }
+});
+
+test("close() can take over a freshly resumed task while its planner response is pending", async () => {
+  const storageRoot = await mkTempRoot();
+  const saved = await TaskStore.create({ originalRequest: "paused task racing shutdown" }, { storageRoot });
+  await saved.append({ type: "action_started", payload: { actionId: "completed-action" } });
+  await saved.append({ type: "action_outcome", payload: { actionId: "completed-action", status: "ok" } });
+  const taskId = saved.taskId;
+  await saved.close();
+
+  let signalPlannerStarted;
+  const plannerStarted = new Promise((resolve) => { signalPlannerStarted = resolve; });
+  let releasePlanner;
+  const plannerGate = new Promise((resolve) => { releasePlanner = resolve; });
+  const host = makeHost(storageRoot, {
+    makePlanner: () => ({
+      next: async () => {
+        signalPlannerStarted();
+        await plannerGate;
+        return { kind: "need_user", reason: "planner yielded" };
+      },
+      close: async () => releasePlanner(),
+    }),
+    approve: async () => ({ decision: "allow", reasons: [] }),
+  });
+
+  const resuming = host.resumeSavedTask(taskId);
+  try {
+    await plannerStarted;
+    const closing = host.close();
+    const closedPromptly = await Promise.race([
+      closing.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), SHUTDOWN_DEADLOCK_TIMEOUT_MS)),
+    ]);
+    assert.equal(closedPromptly, true, "shutdown must see and take over the freshly resumed controller");
+    assert.equal((await resuming).pauseReason, "host_shutdown");
+  } finally {
+    releasePlanner();
+  }
 });
 
 test("getTaskDetail() works for both an active task and a saved-only one", async () => {

@@ -11,11 +11,60 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const vm = require("node:vm");
+const { EventEmitter } = require("node:events");
 const { BrowserAdapter, BrowserAdapterError, buildObserveScript } = require("../main/harness/browser-adapter");
 
-function makeFakeView({ loadURL, executeJavaScript, stop } = {}) {
+test("browser snapshot and subscribers follow real page navigation, and unsubscribe on dispose", async () => {
+  const wc = new EventEmitter();
+  Object.assign(wc, { getURL: () => "https://example.com", getTitle: () => "Real page", close() {},
+    navigationHistory: { canGoBack: () => true, canGoForward: () => false } });
+  const browser = new BrowserAdapter({ view: { webContents: wc } });
+  const changes = [];
+  const unsubscribe = browser.onChange(s => changes.push(s));
+  browser.onChange(() => { throw new Error("observer failure"); });
+  wc.emit("did-navigate");
+  assert.equal(changes[0].tabs[0].title, "Real page");
+  assert.equal(changes[0].tabs[0].canGoBack, true);
+  assert.equal(changes[0].documentEpoch, 1);
+  unsubscribe(); wc.emit("page-title-updated");
+  assert.equal(changes.length, 1);
+  await browser.dispose();
+  assert.equal(wc.listenerCount("did-navigate"), 0);
+  assert.deepEqual(browser.getBrowserSnapshot().tabs, []);
+});
+
+test("human navigation rejects privileged protocols and reports real load errors", async () => {
+  const calls = [];
+  const browser = new BrowserAdapter({ view: makeFakeView({ loadURL: async url => { calls.push(url); throw new Error("offline"); } }) });
+  for (const url of ["file:///etc/passwd", "javascript:alert(1)", "https://user:secret@example.com"]) {
+    await assert.rejects(browser.userNavigate({ type:"navigate", url }), { code:"invalid_url" });
+  }
+  assert.equal(calls.length, 0);
+  await assert.rejects(browser.userNavigate({ type:"navigate", url:"https://example.com" }), {code:"navigation_error"});
+  assert.equal(calls.length, 1);
+});
+
+test("history traversal stays pending until load settles and cleans up listeners", async () => {
+  const wc = new EventEmitter();
+  let index;
+  Object.assign(wc, { getURL: () => "https://example.com", stop() {}, navigationHistory: {
+    canGoBack: () => true, getActiveIndex: () => 2, goToIndex: i => { index = i; },
+  } });
+  const browser = new BrowserAdapter({ view: {webContents:wc}, navigationTimeoutMs:100 });
+  let done = false;
+  const pending = browser.userNavigate({type:"back"}).then(() => {done=true;});
+  await Promise.resolve();
+  assert.equal(index, 1); assert.equal(done, false);
+  wc.emit("did-stop-loading"); await pending;
+  assert.equal(done,true); assert.equal(wc.listenerCount("did-fail-load"),0);
+  await assert.rejects(browser.userNavigate({type:"back"}), {code:"navigation_timeout"});
+  assert.equal(wc.listenerCount("destroyed"),0);
+});
+
+function makeFakeView({ loadURL, executeJavaScript, stop, getURL } = {}) {
   return {
     webContents: {
+      ...(getURL ? { getURL } : {}),
       loadURL: loadURL || (async () => {}),
       stop: stop || (() => {}),
       executeJavaScript: executeJavaScript || (async () => ({ url: "https://example.com/", title: "", text: "", elements: [] })),
@@ -397,6 +446,23 @@ test("observe() loads about:blank first if the real webContents has never naviga
 
   assert.equal(blankLoaded, true);
   assert.equal(observation.url, "about:blank");
+});
+
+test("initial blank observation is synthesized truthfully without loading a document just to inspect it", async () => {
+  let loads = 0;
+  let scripts = 0;
+  const view = makeFakeView({
+    getURL: () => "",
+    loadURL: async () => { loads += 1; },
+    executeJavaScript: async () => { scripts += 1; return { url: "about:blank", title: "", text: "", elements: [] }; },
+  });
+  const adapter = new BrowserAdapter({ view, now: () => 42, randomId: () => "initial-obs" });
+  const observation = await adapter.observe({ initial: true });
+  assert.deepEqual(observation, {
+    id: "initial-obs", documentEpoch: 0, url: "about:blank", title: "", text: "", elements: [], at: 42,
+  });
+  assert.equal(loads, 0, "blank DOM need not be committed when the host already knows this fresh view is blank");
+  assert.equal(scripts, 0, "do not inject JavaScript merely to observe a host-created empty page");
 });
 
 test("observe() does NOT load about:blank if the real webContents already has a URL (already navigated)", async () => {

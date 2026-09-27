@@ -35,6 +35,8 @@ const APP_ROOT = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const APPROVER_SCRIPT = path.join(APP_ROOT, "approver", "approver_service.py");
 const LONG_HORIZON_PLANNER = path.join(APP_ROOT, "fixtures", "scripted-planner-long-horizon.js");
+const PLANNER_COMMAND = process.env.HALO_NODE_COMMAND || process.execPath;
+const PLANNER_ENV = process.env.HALO_NODE_COMMAND ? {} : { ELECTRON_RUN_AS_NODE: "1" };
 const ITERATIONS = Number(process.env.HALO_REPEAT_COUNT || 20);
 const SAMPLING_INTERVAL_MS = 300;
 const APPROVE_GUARD_LIMIT = 10; // real journey needs exactly 3; generous headroom without masking a real hang as success
@@ -46,6 +48,7 @@ const { PlannerStdioAdapter } = require("../main/harness/planner-stdio");
 const { MemoryMonitor } = require("../main/harness/memory-monitor");
 const { requestDecision } = require("../main/approver-client");
 const { startFixtureServer } = require("../fixtures/long-horizon-site");
+const { performance } = require("node:perf_hooks");
 
 function getExternalMemoryBytesViaPs(pid) {
   return new Promise((resolve) => {
@@ -99,8 +102,26 @@ function waitForApproverReady(child, stderrTail, timeoutMs = 10000) {
   });
 }
 
+function measureMethod(target, method, timings, label) {
+  const original = target[method].bind(target);
+  target[method] = async (...args) => {
+    const started = performance.now();
+    try {
+      return await original(...args);
+    } finally {
+      const item = timings[label] || { count: 0, totalMs: 0, maxMs: 0 };
+      const elapsedMs = performance.now() - started;
+      item.count += 1;
+      item.totalMs += elapsedMs;
+      item.maxMs = Math.max(item.maxMs, elapsedMs);
+      timings[label] = item;
+    }
+  };
+}
+
 async function runOneJourney({ win, fixtureUrl, approve, storageRoot, memoryMonitor }) {
   const startedAt = Date.now();
+  const timings = {};
   const goal = {
     originalRequest: `방문 확인: ${fixtureUrl}`,
     criteria: [{ id: "visited", text: "reached the final page", required: true, verification: "host" }],
@@ -111,12 +132,26 @@ async function runOneJourney({ win, fixtureUrl, approve, storageRoot, memoryMoni
   view.setVisible(false);
   const browser = new BrowserAdapter({ view });
   const planner = new PlannerStdioAdapter({
-    command: process.execPath,
+    command: PLANNER_COMMAND,
     args: [LONG_HORIZON_PLANNER],
     cwd: APP_ROOT,
-    env: { ELECTRON_RUN_AS_NODE: "1" },
+    env: PLANNER_ENV,
   });
-  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: defaultHostVerifier, memoryMonitor });
+  for (const method of ["append", "checkpoint"]) if (typeof store[method] === "function") measureMethod(store, method, timings, "durable_store");
+  measureMethod(browser, "observe", timings, "browser_observe");
+  measureMethod(browser, "execute", timings, "browser_execute");
+  measureMethod(planner, "next", timings, "planner_roundtrip");
+  const measuredApprove = async (...args) => {
+    const start = performance.now();
+    try { return await approve(...args); }
+    finally {
+      const item = timings.approver_roundtrip || { count: 0, totalMs: 0, maxMs: 0 };
+      const elapsedMs = performance.now() - start;
+      item.count += 1; item.totalMs += elapsedMs; item.maxMs = Math.max(item.maxMs, elapsedMs);
+      timings.approver_roundtrip = item;
+    }
+  };
+  const controller = new TaskController({ store, planner, browser, approve: measuredApprove, hostVerifier: defaultHostVerifier, memoryMonitor });
 
   let approveCount = 0;
   try {
@@ -133,6 +168,7 @@ async function runOneJourney({ win, fixtureUrl, approve, storageRoot, memoryMoni
       pauseReason: snapshot.pauseReason,
       approveCount,
       elapsedMs: Date.now() - startedAt,
+      timings,
       error: null,
     };
   } catch (error) {
@@ -143,6 +179,7 @@ async function runOneJourney({ win, fixtureUrl, approve, storageRoot, memoryMoni
       pauseReason: controller.getSnapshot().pauseReason,
       approveCount,
       elapsedMs: Date.now() - startedAt,
+      timings,
       error: String((error && error.message) || error),
     };
   } finally {
@@ -230,6 +267,14 @@ async function main() {
       maxMs: Math.max(...elapsedList),
       meanMs: elapsedList.reduce((a, b) => a + b, 0) / elapsedList.length,
     },
+    stageTotals: results.reduce((totals, item) => {
+      for (const [stage, timing] of Object.entries(item.timings || {})) {
+        const total = totals[stage] || { count: 0, totalMs: 0, maxMs: 0 };
+        total.count += timing.count; total.totalMs += timing.totalMs; total.maxMs = Math.max(total.maxMs, timing.maxMs);
+        totals[stage] = total;
+      }
+      return totals;
+    }, {}),
     memory: {
       peakBytes,
       limitBytes,

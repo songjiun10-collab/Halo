@@ -5,8 +5,10 @@
   "description": "Computer-use browser research extension for Halo. main/preload/approver are owned by Claude (runtime + approve/execute boundary); renderer/ is owned by Codex (UI). See docs/superpowers/specs/2026-09-26-computer-use-browser-design.md.",
   "main": "main/index.js",
   "scripts": {
-    "start": "electron .",
-    "test": "node --test"
+    "build": "npm --prefix ../../frontend run build",
+    "start": "npm run build && electron .",
+    "test": "node --test",
+    "test:renderer:e2e": "npm run build && electron integration/phase2-renderer-electron.js"
   },
   "devDependencies": {
     "electron": "44.4.5"

@@ -209,26 +209,183 @@ test("refuses to load when a non-tail journal line is corrupt", async () => {
 test("a journal write failure blocks all further appends on this store instance", async () => {
   const storageRoot = await mkTempRoot();
   const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
-  const journalPath = path.join(storageRoot, "tasks", store.taskId, "events.jsonl");
 
-  const savedContent = await fs.readFile(journalPath, "utf8").catch(() => "");
-  await fs.rm(journalPath, { force: true });
-  await fs.mkdir(journalPath); // any open() on this path now fails, regardless of uid
+  // append() keeps one journal file handle open for the store's lifetime
+  // (opened lazily on the first append -- create() above already triggered
+  // that via its own internal goal_created append) instead of reopening the
+  // path on every call, so a path-level failure injection (deleting the file,
+  // swapping in a directory) no longer reaches it: an already-open fd keeps
+  // writing to its original inode regardless of what the path now points to.
+  // Closing that fd out from under the store simulates a real I/O failure
+  // (a revoked descriptor, disk error) that the next write will hit instead.
+  assert.ok(store._journalFh, "journal handle should already be open after create()'s internal append");
+  await store._journalFh.close();
 
   await assert.rejects(
     () => store.append({ type: "note", payload: { msg: "x" } }),
     (err) => err.code === "journal_write_failed",
   );
 
-  await fs.rmdir(journalPath);
-  await fs.writeFile(journalPath, savedContent, { mode: 0o600 });
-
-  // Still blocked even though the underlying problem is now fixed -- a
-  // failed writer must not silently start accepting actions again.
+  // Still blocked even though nothing else is wrong -- a failed writer must
+  // not silently start accepting actions again.
   await assert.rejects(
     () => store.append({ type: "note", payload: { msg: "y" } }),
     (err) => err.code === "journal_write_failed",
   );
+});
+
+test("close() releases the persistent journal handle and is idempotent", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+  await store.append({ type: "note", payload: { msg: "first" } });
+  assert.ok(store._journalFh, "journal handle should be open after at least one append");
+
+  await store.close();
+  assert.equal(store._journalFh, null);
+
+  // Idempotent: closing an already-closed store must not throw or attempt
+  // to close the (already-cleared) handle a second time.
+  await store.close();
+});
+
+test("a persistent journal handle still produces a correctly ordered, fully readable-back journal", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+  const openedFh = store._journalFh;
+  for (let i = 0; i < 5; i++) {
+    await store.append({ type: "note", payload: { i } });
+    // The same handle is reused across every append -- no reopen per call.
+    assert.equal(store._journalFh, openedFh);
+  }
+  const taskId = store.taskId;
+  await store.close();
+
+  const journalPath = path.join(storageRoot, "tasks", taskId, "events.jsonl");
+  const raw = await fs.readFile(journalPath, "utf8");
+  const lines = raw.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(lines.length, 6); // 1 goal_created + 5 notes
+  lines.forEach((line, idx) => assert.equal(line.seq, idx + 1));
+  assert.deepEqual(
+    lines.slice(1).map((line) => line.payload.i),
+    [0, 1, 2, 3, 4],
+  );
+});
+
+test("concurrent append() calls (no await between them) still get unique, gapless seq numbers and replay cleanly", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+
+  // Fire N appends without awaiting one before starting the next -- exactly
+  // the pattern that raced before the append chain existed: each call would
+  // read the same this._nextSeq before the first call's journal write had a
+  // chance to advance it, producing a duplicate seq and, on reload,
+  // storage_corrupt.
+  const CONCURRENT_COUNT = 20;
+  const results = await Promise.all(
+    Array.from({ length: CONCURRENT_COUNT }, (_, i) => store.append({ type: "note", payload: { i } })),
+  );
+
+  const seqs = results.map((r) => r.seq);
+  const uniqueSeqs = new Set(seqs);
+  assert.equal(uniqueSeqs.size, CONCURRENT_COUNT, "every concurrent append must get a distinct seq");
+  const sorted = [...seqs].sort((a, b) => a - b);
+  for (let i = 1; i < sorted.length; i++) {
+    assert.equal(sorted[i], sorted[i - 1] + 1, "seq numbers must be gapless");
+  }
+
+  const taskId = store.taskId;
+  await store.close();
+
+  // The real proof: the journal on disk must replay without storage_corrupt
+  // (streamJournalReplay throws on any out-of-order or duplicate seq), and
+  // every one of the CONCURRENT_COUNT payloads must actually be present.
+  const journalPath = path.join(storageRoot, "tasks", taskId, "events.jsonl");
+  const raw = await fs.readFile(journalPath, "utf8");
+  const lines = raw.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(lines.length, 1 + CONCURRENT_COUNT); // 1 goal_created + N notes
+  lines.forEach((line, idx) => assert.equal(line.seq, idx + 1));
+  const notePayloads = lines.slice(1).map((line) => line.payload.i).sort((a, b) => a - b);
+  assert.deepEqual(notePayloads, Array.from({ length: CONCURRENT_COUNT }, (_, i) => i));
+
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  assert.equal(reopened.recoveryReason, "recovered");
+  await reopened.close();
+});
+
+test("append() snapshots caller payload before its queued write runs", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+  const payload = { msg: "at invocation" };
+
+  const pending = store.append({ type: "note", payload });
+  payload.msg = "mutated before queued append ran";
+  await pending;
+
+  const taskId = store.taskId;
+  await store.close();
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  assert.equal(reopened.eventsSinceCheckpoint.at(-1).payload.msg, "at invocation");
+  await reopened.close();
+});
+
+test("a mid-batch write failure blocks concurrently-queued appends behind it, not just later calls", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+
+  // Break the shared journal handle first (fully awaited, so it is
+  // deterministically broken before any of the concurrent appends below
+  // start their own critical section), then fire several appends
+  // concurrently in one batch. The first to run the chain hits the break
+  // and sets _writeBlocked; every append already queued behind it in the
+  // same batch must also fail, not silently succeed past the failure or
+  // reopen a fresh handle.
+  await store._journalFh.close();
+
+  const calls = Array.from({ length: 5 }, (_, i) => store.append({ type: "note", payload: { i } }));
+  const outcomes = await Promise.allSettled(calls);
+  assert.ok(
+    outcomes.every((o) => o.status === "rejected" && o.reason.code === "journal_write_failed"),
+    "every queued append must fail once the shared journal handle is broken",
+  );
+  assert.equal(store.isWriteBlocked(), true);
+});
+
+test("close() drains any already-queued append() calls before closing the persistent journal handle", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+
+  // Fire several appends without awaiting any of them, then close()
+  // immediately -- also without awaiting the appends first. This is exactly
+  // the race close() must handle: appends already queued in the FIFO chain
+  // must finish running against the still-open handle before close() closes
+  // it out from under them, not fail or get silently dropped.
+  const pending = Array.from({ length: 5 }, (_, i) => store.append({ type: "note", payload: { i } }));
+  const closePromise = store.close();
+
+  const results = await Promise.all(pending);
+  await closePromise;
+
+  assert.equal(store._journalFh, null);
+  const seqs = results.map((r) => r.seq).sort((a, b) => a - b);
+  assert.deepEqual(seqs, [2, 3, 4, 5, 6]); // seq 1 is create()'s own goal_created
+
+  const taskId = store.taskId;
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  assert.equal(reopened.recoveryReason, "recovered");
+  assert.equal(reopened.eventsSinceCheckpoint.length, 6);
+  await reopened.close();
+});
+
+test("close() rejects a brand-new append() immediately instead of queuing it behind the drain", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });
+
+  const closePromise = store.close();
+  await assert.rejects(
+    () => store.append({ type: "note", payload: { msg: "too late" } }),
+    (err) => err.code === "closed",
+  );
+  await closePromise;
 });
 
 test("recovers as execution_uncertain when an action_started has no matching outcome", async () => {

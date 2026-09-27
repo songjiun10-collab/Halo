@@ -6,8 +6,9 @@
   const els = {
     connection: $("connection"), connectionLabel: $("connection-label"), emptyStatus: $("empty-status-text"),
     addressForm: $("address-form"), address: $("address"), originLabel: $("origin-label"),
-    title: $("page-title"), pageMeta: $("page-meta"), origin: $("security-origin"), loadState: $("page-load-state"),
+    title: $("page-title"), tabs: $("tab-list"), pageMeta: $("page-meta"), origin: $("security-origin"), loadState: $("page-load-state"),
     prompt: $("task-prompt"), charCount: $("char-count"), taskState: $("task-state"), run: $("run-button"),
+    takeOver: $("take-over-button"), controlState: $("control-state"),
     pause: $("pause-button"), stop: $("stop-button"), back: $("back-button"), forward: $("forward-button"),
     reload: $("reload-button"), newTab: $("new-tab-button"), queue: $("queue-list"), queueCount: $("queue-count"),
     timeline: $("timeline"), surface: $("web-surface"), empty: $("empty-state"), toast: $("toast"),
@@ -33,6 +34,7 @@
   let toastTimer;
   let unsubscribe = null;
   let lastBounds = "";
+  let takeOverPending = false;
 
   const safeText = (value, fallback = "") => typeof value === "string" ? value : fallback;
   const escapeOrigin = (value) => {
@@ -57,25 +59,37 @@
   }
 
   function disableBridgeControls() {
-    for (const control of [els.run, els.pause, els.stop, els.back, els.forward, els.reload, els.newTab]) {
+    for (const control of [els.run, els.pause, els.stop, els.takeOver, els.back, els.forward, els.reload, els.newTab]) {
       control.disabled = true;
     }
   }
 
   function renderTask(task = {}) {
     const state = safeText(task.state, "idle").toLowerCase();
-    const label = ({ idle: "IDLE", running: "RUNNING", awaiting_approval: "NEEDS REVIEW", paused: "PAUSED", stopped: "STOPPED", completed: "COMPLETE", error: "ERROR" })[state] || state.toUpperCase();
+    const handoffPending = takeOverPending || task.pauseReason === "user_takeover_pending";
+    const userOwnsPage = state === "paused" && task.pauseReason === "user_takeover";
+    const label = handoffPending ? "HANDOFF IN PROGRESS" : userOwnsPage ? "USER CONTROL" : ({ idle: "IDLE", running: "RUNNING", awaiting_approval: "NEEDS REVIEW", paused: "PAUSED", stopped: "STOPPED", completed: "COMPLETE", error: "ERROR" })[state] || state.toUpperCase();
     els.taskState.textContent = label;
     els.taskState.dataset.state = state;
-    els.run.disabled = !bridgeReady || (state !== "paused" && !els.prompt.value.trim()) || state === "running" || state === "awaiting_approval";
+    els.controlState.textContent = handoffPending ? "WAITING FOR ACTIVE ACTION TO SETTLE" : userOwnsPage ? "AUTOMATION PAUSED · PAGE IS YOURS" : "AUTOMATION CONTROL";
+    els.controlState.dataset.state = handoffPending ? "pending" : userOwnsPage ? "user" : "automation";
+    els.prompt.disabled = handoffPending;
+    els.address.disabled = handoffPending;
+    const page = snapshot?.page || {};
+    els.back.disabled = handoffPending || !bridgeReady || !page.canGoBack;
+    els.forward.disabled = handoffPending || !bridgeReady || !page.canGoForward;
+    els.reload.disabled = handoffPending || !bridgeReady || !page.url;
+    els.newTab.disabled = handoffPending || !bridgeReady;
+    els.run.disabled = handoffPending || !bridgeReady || (state !== "paused" && !els.prompt.value.trim()) || state === "running" || state === "awaiting_approval";
     els.run.querySelector("span").textContent = state === "paused" ? "RESUME TASK" : "START TASK";
-    els.pause.disabled = !bridgeReady || !["running", "paused"].includes(state);
+    els.pause.disabled = handoffPending || !bridgeReady || !["running", "paused"].includes(state);
     els.pause.setAttribute("aria-label", state === "paused" ? "Resume task" : "Pause task");
     els.pause.title = state === "paused" ? "Resume task" : "Pause task";
     els.pause.innerHTML = state === "paused"
       ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 3 7 5-7 5z" /></svg>'
       : '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3v10M11 3v10" /></svg>';
     els.stop.disabled = !bridgeReady || !["running", "paused", "awaiting_approval"].includes(state);
+    els.takeOver.disabled = !bridgeReady || takeOverPending || typeof bridge?.takeOverTask !== "function" || !["running", "awaiting_approval"].includes(state);
   }
 
   function renderQueue(items = []) {
@@ -128,15 +142,43 @@
     }
   }
 
+  function renderTabs(tabs = [], activeTabId = "") {
+    els.tabs.replaceChildren();
+    for (const tab of tabs.slice(0, 30)) {
+      if (!tab || typeof tab.id !== "string") continue;
+      const item = document.createElement("div");
+      item.className = "browser-tab";
+      item.setAttribute("role", "presentation");
+      const select = document.createElement("button");
+      select.type = "button";
+      select.className = "tab-select";
+      select.setAttribute("role", "tab");
+      select.setAttribute("aria-selected", String(tab.id === activeTabId));
+      select.textContent = safeText(tab.title, tab.url ? escapeOrigin(tab.url) : "New tab");
+      select.title = safeText(tab.url, "New tab");
+      select.addEventListener("click", () => invoke("selectTab", tab.id));
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "tab-close";
+      close.setAttribute("aria-label", `Close ${safeText(tab.title, "tab")}`);
+      close.textContent = "×";
+      close.addEventListener("click", () => invoke("closeTab", tab.id));
+      item.append(select, close);
+      els.tabs.append(item);
+    }
+  }
+
   function render(next) {
     if (!next || typeof next !== "object" || !next.page || typeof next.page !== "object" ||
         !next.task || typeof next.task !== "object" || !Array.isArray(next.approvalQueue) ||
         !Array.isArray(next.timeline)) return false;
     snapshot = next;
     bridgeReady = true;
+    const handoffPending = takeOverPending || next.task.pauseReason === "user_takeover_pending";
     setConnection("connected", "RUNTIME CONNECTED");
     const page = next.page && typeof next.page === "object" ? next.page : next;
     const url = safeText(page.url);
+    renderTabs(Array.isArray(next.tabs) ? next.tabs : [], safeText(next.activeTabId));
     els.address.value = url;
     els.title.textContent = safeText(page.title, url ? escapeOrigin(url) : "New tab");
     els.originLabel.textContent = url ? escapeOrigin(url).replace(/^https?:\/\//, "") : "NO PAGE";
@@ -145,10 +187,10 @@
     const load = safeText(page.loadState, url ? "READY" : "IDLE").toUpperCase();
     els.loadState.textContent = load;
     els.pageMeta.textContent = safeText(page.title, "RENDERER READY").toUpperCase().slice(0, 42);
-    els.back.disabled = !bridgeReady || !page.canGoBack;
-    els.forward.disabled = !bridgeReady || !page.canGoForward;
-    els.reload.disabled = !bridgeReady || !url;
-    els.newTab.disabled = !bridgeReady;
+    els.back.disabled = handoffPending || !bridgeReady || !page.canGoBack;
+    els.forward.disabled = handoffPending || !bridgeReady || !page.canGoForward;
+    els.reload.disabled = handoffPending || !bridgeReady || !url;
+    els.newTab.disabled = handoffPending || !bridgeReady;
     els.empty.hidden = Boolean(page.hasPage ?? Boolean(url));
     renderTask(next.task || {});
     renderQueue(next.approvalQueue);
@@ -192,6 +234,18 @@
     }
   }
 
+  async function takeOver() {
+    if (takeOverPending || els.takeOver.disabled) return;
+    takeOverPending = true;
+    renderTask(snapshot?.task || {});
+    try {
+      await invoke("takeOverTask");
+    } finally {
+      takeOverPending = false;
+      renderTask(snapshot?.task || {});
+    }
+  }
+
   function sendBounds() {
     if (!bridge || typeof bridge.setBrowserBounds !== "function") return;
     const rect = els.surface.getBoundingClientRect();
@@ -221,10 +275,34 @@
   });
   els.pause.addEventListener("click", () => invoke(snapshot?.task?.state === "paused" ? "resumeTask" : "pauseTask"));
   els.stop.addEventListener("click", () => invoke("stopTask"));
+  els.takeOver.addEventListener("click", takeOver);
   els.back.addEventListener("click", () => invoke("goBack"));
   els.forward.addEventListener("click", () => invoke("goForward"));
   els.reload.addEventListener("click", () => invoke("reload"));
   els.newTab.addEventListener("click", () => invoke("newTab"));
+  window.addEventListener("keydown", (event) => {
+    const command = event.metaKey || event.ctrlKey;
+    const key = safeText(event.key).toLowerCase();
+    if (command && key === "l") {
+      event.preventDefault();
+      els.address.focus();
+    } else if (command && key === "t") {
+      event.preventDefault();
+      invoke("newTab");
+    } else if (command && key === "w") {
+      event.preventDefault();
+      if (snapshot?.activeTabId) invoke("closeTab", snapshot.activeTabId);
+    } else if (command && key === "r") {
+      event.preventDefault();
+      invoke("reload");
+    } else if (event.altKey && key === "arrowleft") {
+      event.preventDefault();
+      invoke("goBack");
+    } else if (event.altKey && key === "arrowright") {
+      event.preventDefault();
+      invoke("goForward");
+    }
+  });
 
   if (!bridge) {
     setConnection("error", "BRIDGE UNAVAILABLE");

@@ -34,14 +34,15 @@ class ElementStub {
   querySelector(selector) { return selector === "span" ? this.label : null; }
   setAttribute(name, value) { this.attributes[name] = value; }
   getBoundingClientRect() { return { x: 0, y: 124, width: 937, height: 571 }; }
+  focus() { this.focused = true; }
 }
 
 const ids = [
   "shell", "connection", "connection-label", "empty-status-text", "address-form", "address",
-  "origin-label", "page-title", "page-meta", "security-origin", "page-load-state", "task-prompt",
+  "origin-label", "page-title", "tab-list", "page-meta", "security-origin", "page-load-state", "task-prompt",
   "char-count", "task-state", "run-button", "pause-button", "stop-button", "back-button",
   "forward-button", "reload-button", "new-tab-button", "queue-list", "queue-count", "timeline",
-  "web-surface", "empty-state", "toast",
+  "take-over-button", "control-state", "web-surface", "empty-state", "toast",
 ];
 
 function boot(bridge, width = 1280) {
@@ -76,6 +77,8 @@ function snapshot(overrides = {}) {
       url: "https://research.example/report", title: "Research report", loadState: "ready",
       canGoBack: true, canGoForward: false, hasPage: true,
     },
+    tabs: [{ id: "tab-1", title: "Research report", url: "https://research.example/report" }],
+    activeTabId: "tab-1",
     task: { id: "task-1", state: "awaiting_approval" },
     approvalQueue: [{
       id: "review-1", summary: "Open <img src=x onerror=alert(1)>", origin: "https://research.example",
@@ -109,6 +112,8 @@ test("renders the live session snapshot as text and exposes only REVIEW decision
   assert.equal(elements["page-title"].textContent, "Research report");
   assert.equal(elements["security-origin"].textContent, "ORIGIN: https://research.example");
   assert.equal(elements["task-state"].textContent, "NEEDS REVIEW");
+  assert.equal(elements["tab-list"].children.length, 1);
+  assert.equal(elements["tab-list"].children[0].children[0].textContent, "Research report");
   assert.equal(elements["queue-count"].textContent, "01");
   assert.equal(elements["queue-list"].children[0].children[1].textContent, "Open <img src=x onerror=alert(1)>");
   assert.equal(elements.timeline.children[0].children[1].textContent, "Page said <script>not authority</script>");
@@ -122,6 +127,103 @@ test("renders the live session snapshot as text and exposes only REVIEW decision
 
   windowListeners.get("beforeunload")();
   assert.equal(eventListener, null);
+});
+
+test("renders separate tab controls and routes selection and close through the privileged bridge", async () => {
+  const calls = [];
+  const state = snapshot({
+    tabs: [
+      { id: "tab-1", title: "First", url: "https://first.example" },
+      { id: "tab-2", title: "Second", url: "https://second.example" },
+    ], activeTabId: "tab-2",
+  });
+  const bridge = {
+    layout: { headerHeight: 124, footerHeight: 25, sidePanelWidth: 342, mobileBreakpoint: 680 },
+    async getSnapshot() { return state; }, async setBrowserBounds() {}, onEvent() { return () => {}; },
+    async selectTab(id) { calls.push(["selectTab", id]); return state; },
+    async closeTab(id) { calls.push(["closeTab", id]); return state; },
+  };
+  const { elements } = boot(bridge);
+  await tick();
+  const [first, second] = elements["tab-list"].children;
+  assert.equal(first.children[0].attributes["aria-selected"], "false");
+  assert.equal(second.children[0].attributes["aria-selected"], "true");
+  await first.children[0].dispatch("click");
+  await second.children[1].dispatch("click");
+  assert.deepEqual(calls, [["selectTab", "tab-1"], ["closeTab", "tab-2"]]);
+});
+
+test("browser keyboard shortcuts focus the omnibox and route tab/navigation commands", async () => {
+  const calls = [];
+  const state = snapshot({ tabs: [{ id: "tab-1", title: "First", url: "https://first.example" }], activeTabId: "tab-1" });
+  const bridge = {
+    layout: { headerHeight: 124, footerHeight: 25, sidePanelWidth: 342, mobileBreakpoint: 680 },
+    async getSnapshot() { return state; }, async setBrowserBounds() {}, onEvent() { return () => {}; },
+    async newTab() { calls.push("newTab"); return state; },
+    async closeTab(id) { calls.push(["closeTab", id]); return state; },
+    async reload() { calls.push("reload"); return state; },
+    async goBack() { calls.push("goBack"); return state; },
+  };
+  const { elements, windowListeners } = boot(bridge);
+  await tick();
+  const keydown = windowListeners.get("keydown");
+  const send = async (key, extra = {}) => {
+    let prevented = false;
+    await keydown({ key, preventDefault() { prevented = true; }, ...extra });
+    await tick();
+    return prevented;
+  };
+  assert.equal(await send("l", { metaKey: true }), true);
+  assert.equal(elements.address.focused, true);
+  assert.equal(await send("t", { metaKey: true }), true);
+  assert.equal(await send("w", { metaKey: true }), true);
+  assert.equal(await send("r", { metaKey: true }), true);
+  assert.equal(await send("ArrowLeft", { altKey: true }), true);
+  assert.deepEqual(calls, ["newTab", ["closeTab", "tab-1"], "reload", "goBack"]);
+});
+
+test("hands control back to the person and shows the durable user-control state", async () => {
+  const calls = [];
+  let state = snapshot();
+  let finishTakeOver;
+  const bridge = {
+    layout: { headerHeight: 124, footerHeight: 25, sidePanelWidth: 342, mobileBreakpoint: 680 },
+    async getSnapshot() { return state; },
+    async setBrowserBounds() {},
+    onEvent() { return () => {}; },
+    takeOverTask() {
+      calls.push("takeOverTask");
+      return new Promise((resolve) => {
+        finishTakeOver = () => {
+          state = snapshot({ task: { id: "task-1", state: "paused", pauseReason: "user_takeover" }, approvalQueue: [] });
+          resolve(state);
+        };
+      });
+    },
+  };
+
+  const { elements } = boot(bridge);
+  await tick();
+
+  assert.equal(elements["take-over-button"].disabled, false);
+  assert.equal(elements["control-state"].textContent, "AUTOMATION CONTROL");
+  const handoff = elements["take-over-button"].dispatch("click");
+  assert.equal(elements["take-over-button"].disabled, true, "prevent another handoff while the first one is pending");
+  assert.equal(elements["task-state"].textContent, "HANDOFF IN PROGRESS");
+  assert.equal(elements["control-state"].dataset.state, "pending");
+  assert.equal(elements.address.disabled, true, "do not start manual navigation before runtime hands the page back");
+  assert.equal(elements["back-button"].disabled, true);
+  assert.equal(elements["run-button"].disabled, true);
+  assert.equal(elements["stop-button"].disabled, false, "STOP remains available to supersede a pending handoff");
+  await elements["take-over-button"].dispatch("click");
+  assert.deepEqual(calls, ["takeOverTask"]);
+  finishTakeOver();
+  await handoff;
+
+  assert.deepEqual(calls, ["takeOverTask"]);
+  assert.equal(elements["task-state"].textContent, "USER CONTROL");
+  assert.equal(elements["control-state"].textContent, "AUTOMATION PAUSED · PAGE IS YOURS");
+  assert.equal(elements["take-over-button"].disabled, true);
 });
 
 test("keeps agent actions disabled when the privileged bridge is absent", async () => {

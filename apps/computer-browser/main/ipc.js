@@ -8,8 +8,8 @@ const { isTrustedSender } = require("./harness/trusted-sender");
 // before the long-horizon harness: no taskId, no trusted-sender gate (this
 // predates that requirement and governs only the single legacy demo task).
 const LEGACY_METHODS = [
-  "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask",
-  "goBack", "goForward", "reload", "newTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
+  "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask", "takeOverTask",
+  "goBack", "goForward", "reload", "newTab", "selectTab", "closeTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
 ];
 
 // New long-horizon harness channels (design doc section 8), each mapped to
@@ -31,6 +31,7 @@ const HARNESS_METHODS = {
   "halo:taskDeny": "denyTask",
   "halo:taskPause": "pauseTask",
   "halo:taskStop": "stopTask",
+  "halo:taskTakeOver": "takeOverTask",
 };
 
 // win, controlApi: unchanged from before. Options:

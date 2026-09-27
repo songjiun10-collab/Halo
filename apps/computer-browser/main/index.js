@@ -11,8 +11,10 @@ const layoutConstants = require("../shared/layout-constants");
 const { requestDecision } = require("./approver-client");
 const { TaskHost } = require("./harness/task-host");
 const { BrowserAdapter } = require("./harness/browser-adapter");
+const { BrowserSurfaces } = require("./harness/browser-surfaces");
 const { PlannerStdioAdapter } = require("./harness/planner-stdio");
 const { MemoryMonitor } = require("./harness/memory-monitor");
+const { resolvePlannerCommand } = require("./harness/planner-command");
 
 // Real OS-level RSS lookup for a process Electron itself doesn't track (the
 // Python approver, a local planner worker) -- app.getAppMetrics() only ever
@@ -51,6 +53,9 @@ const APPROVER_SCRIPT = path.join(REPO_ROOT, "apps", "computer-browser", "approv
 let approverProcess = null;
 let socketDir = null;
 let memoryPollTimer = null;
+const taskHosts = new Set();
+const closingTaskHosts = [];
+let shutdownStarted = false;
 
 // Single MemoryMonitor for the whole app (design doc section 10, user
 // mandate: sum every process HALO's computer-browser actually launches --
@@ -137,38 +142,71 @@ function makeHarnessApprove(socketPath) {
     });
 }
 
-// One dedicated, invisible WebContentsView per harness task -- never the
-// same view the legacy ControlApi demo drives, so a long-horizon task can
-// never be confused with (or fight over) the visible demo surface. Not
-// attached to any window's visible layout; BrowserAdapter never needs
-// visibility, only a real Chromium document to observe/execute against.
-function makeHarnessBrowser(win) {
-  return () => {
-    const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
-    win.contentView.addChildView(view);
-    view.setVisible(false);
+// Each harness task owns a page. The selected task's native view is laid out
+// beneath the React chrome; BrowserSurfaces hides it for renderer overlays.
+function makeHarnessBrowser(surfaces) {
+  return (taskId) => {
+    const view = new WebContentsView({ webPreferences: {
+      sandbox: true, contextIsolation: true, nodeIntegration: false,
+      partition: `halo-task-${taskId}`,
+    } });
+    view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    view.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    view.webContents.session.setPermissionCheckHandler(() => false);
+    view.webContents.on("will-navigate", (event, url) => {
+      if (!/^https?:\/\//i.test(url)) event.preventDefault();
+    });
+    view.webContents.session.on("will-download", (event) => event.preventDefault());
+    surfaces.register(taskId, view);
     return new BrowserAdapter({ view });
   };
 }
 
 // Planner worker command comes ONLY from trusted host config (env vars set
-// by whoever launches this Electron app) -- never from the UI, a page, or
-// the model itself (design doc section 6). With nothing configured, the
-// adapter stays honestly "unavailable" (PlannerStdioAdapter throws
+// by whoever launches this Electron app, or a real `node` binary this host
+// discovers on its own PATH -- see harness/planner-command.js) -- never from
+// the UI, a page, or the model itself (design doc section 6). With nothing
+// configured and no real node found, the adapter stays honestly
+// "unavailable" (PlannerStdioAdapter throws
 // PlannerTransportError("planner_unavailable", ...) from next()) rather
 // than fabricating a natural-language-sounding proposal; task-controller.js
 // surfaces that as paused:planner_unavailable.
+//
+// Resolved ONCE here, not inside the returned per-task factory below:
+// resolution may itself spawn a short-lived `node --version` verification
+// process (harness/planner-command.js), and redoing that on every task/
+// context-reset would add back exactly the kind of per-task process-spawn
+// overhead this exists to reduce.
 function makeHarnessPlanner() {
-  return () => {
-    let args = [];
-    if (process.env.HALO_PLANNER_ARGS) {
-      try {
-        args = JSON.parse(process.env.HALO_PLANNER_ARGS);
-      } catch {
-        args = [];
-      }
+  const { command: plannerCommand, env: plannerEnv } = resolvePlannerCommand();
+  let args = [];
+  let configured = Boolean(process.env.HALO_PLANNER_COMMAND);
+  if (process.env.HALO_PLANNER_ARGS) {
+    try {
+      args = JSON.parse(process.env.HALO_PLANNER_ARGS);
+      configured = Array.isArray(args) && args.length > 0 && args.every((arg) => typeof arg === "string");
+    } catch {
+      configured = false;
     }
-    return new PlannerStdioAdapter({ command: process.env.HALO_PLANNER_COMMAND || null, args, cwd: REPO_ROOT });
+    if (!configured) {
+      args = [];
+      console.error("[harness] HALO_PLANNER_ARGS must be a non-empty JSON array of worker arguments");
+    }
+  }
+  return () => {
+    return new PlannerStdioAdapter({
+      // A Node executable on PATH alone is not a configured agent worker.
+      command: configured ? plannerCommand : null,
+      args,
+      cwd: REPO_ROOT,
+      env: plannerEnv,
+      // Host-owned hooks so every planner worker this app ever spawns is
+      // counted in the same <1GB aggregate memory budget the Python
+      // approver already is (see the memoryMonitor comment above) --
+      // consumed by planner-stdio.js's own spawn/exit handling.
+      onWorkerStart: ({ pid, creationTime }) => memoryMonitor.registerExternalProcess({ pid, creationTime, label: "planner" }),
+      onWorkerExit: ({ pid, creationTime }) => memoryMonitor.unregister(pid, creationTime),
+    });
   };
 }
 
@@ -186,16 +224,27 @@ function createWindow(socketPath) {
   });
 
   const controlApi = new ControlApi({ window: win, socketPath });
+  const surfaces = new BrowserSurfaces(win, { isUserControlled: (taskId) => taskHost.canUseTaskBrowser(taskId) });
   const taskHost = new TaskHost({
     storageRoot: path.join(app.getPath("userData"), "harness-tasks"),
-    makeBrowser: makeHarnessBrowser(win),
+    makeBrowser: makeHarnessBrowser(surfaces),
+    setViewport: (taskId, bounds) => surfaces.setViewport(taskId, bounds),
     makePlanner: makeHarnessPlanner(),
     hostVerifier: defaultHostVerifier,
     approve: makeHarnessApprove(socketPath),
     memoryMonitor,
   });
+  taskHosts.add(taskHost);
+  win.once("closed", () => {
+    const closing = taskHost.close().catch((error) => {
+      console.error("[harness] failed to close task resources:", error);
+    }).finally(() => taskHosts.delete(taskHost));
+    closingTaskHosts.push(closing);
+  });
   registerIpc(win, controlApi, { taskHost });
-  win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event) => event.preventDefault());
+  win.loadFile(path.join(__dirname, "..", "renderer", "dist", "index.html"));
   return win;
 }
 
@@ -221,7 +270,9 @@ app.whenReady().then(() => {
   memoryMonitor.sample().catch(() => {});
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow(socketPath);
+    if (BrowserWindow.getAllWindows().length === 0) {
+      Promise.allSettled(closingTaskHosts.splice(0)).then(() => createWindow(socketPath));
+    }
   });
 });
 
@@ -229,14 +280,26 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (shutdownStarted) return;
+  event.preventDefault();
+  shutdownStarted = true;
   if (memoryPollTimer) clearInterval(memoryPollTimer);
-  if (approverProcess) approverProcess.kill();
-  if (socketDir) {
-    try {
-      fs.rmSync(socketDir, { recursive: true, force: true });
-    } catch {
-      // Best-effort cleanup; a leftover empty tmp dir is not a safety issue.
-    }
-  }
+  Promise.allSettled([...taskHosts].map((host) => host.close()))
+    .then((results) => {
+      for (const result of results) {
+        if (result.status === "rejected") console.error("[harness] failed to close task resources:", result.reason);
+      }
+    })
+    .finally(() => {
+      if (approverProcess) approverProcess.kill();
+      if (socketDir) {
+        try {
+          fs.rmSync(socketDir, { recursive: true, force: true });
+        } catch {
+          // Best-effort cleanup; a leftover empty tmp dir is not a safety issue.
+        }
+      }
+      app.quit();
+    });
 });

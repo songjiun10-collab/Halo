@@ -12,6 +12,38 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { ControlApi } = require("../main/control-api");
+const { EventEmitter } = require("node:events");
+
+class FakeWebContents extends EventEmitter {
+  constructor() {
+    super();
+    this.url = "";
+    this.navigationHistory = {
+      canGoBack: () => false,
+      canGoForward: () => false,
+      goBack: () => {},
+      goForward: () => {},
+    };
+  }
+  async loadURL(url) { this.url = url; this.emit("did-navigate", {}, url); }
+  getURL() { return this.url; }
+  getTitle() { return this.url ? new URL(this.url).hostname : ""; }
+  isLoading() { return false; }
+  stop() {}
+  reload() {}
+  executeJavaScript() { return Promise.resolve(null); }
+}
+
+const fakeViews = [];
+function makeFakeWebContentsView() {
+  const view = {
+    webContents: new FakeWebContents(), visible: false, bounds: null,
+    setVisible(value) { this.visible = value; },
+    setBounds(value) { this.bounds = value; },
+  };
+  fakeViews.push(view);
+  return view;
+}
 
 function deferredDecision() {
   let resolve;
@@ -26,6 +58,7 @@ function makeApi(requestDecisionStub, options = {}) {
     window: {},
     socketPath: "/tmp/fake.sock",
     requestDecision: requestDecisionStub,
+    webContentsViewClass: makeFakeWebContentsView,
     // 0 by default so unrelated tests never trip over the real pacing floor
     // (MIN_AGENT_ACTION_INTERVAL_MS) -- pacing itself is exercised by tests
     // further down that explicitly pass a small nonzero interval.
@@ -156,6 +189,189 @@ test("stopTask discards a late review without resurrecting the approval queue", 
   const snapshot = api.getSnapshot();
   assert.equal(snapshot.approvalQueue.length, 0, "stop must not be silently undone by a late review");
   assert.equal(snapshot.task.state, "stopped");
+});
+
+// --- originTabId guard: an approver round-trip, the pacing wait, or a
+// review item sitting in the queue are all real windows where a human can
+// call selectTab() before the proposed action actually runs. Without
+// re-checking the active tab right before execute(), an action proposed
+// about tab A would silently run against whatever tab is active by then.
+
+test("an allow is cancelled instead of executing if the active tab changed since the action was proposed", async () => {
+  const { promise, resolve } = deferredDecision();
+  const api = makeApi(async () => promise);
+  api._activeTabId = "tab-a";
+
+  let executed = false;
+  const pending = api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go", originTabId: "tab-a" },
+    async () => {
+      executed = true;
+    },
+  );
+
+  // The human switches tabs while the approver round-trip is still in flight.
+  api._activeTabId = "tab-b";
+  resolve({ decision: "allow", reasons: [] });
+
+  const outcome = await pending;
+  assert.equal(outcome, "tab_changed");
+  assert.equal(executed, false, "must never execute against a tab other than the one the action was proposed for");
+});
+
+test("approve() cancels instead of executing if the active tab changed while the item was queued", async () => {
+  const api = makeApi(async () => ({ decision: "review", reasons: ["why"] }));
+  api._activeTabId = "tab-a";
+
+  let executed = false;
+  const outcome = await api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go", originTabId: "tab-a" },
+    async () => {
+      executed = true;
+    },
+  );
+  assert.equal(outcome, "review");
+  const queued = api.getSnapshot().approvalQueue[0];
+
+  api._activeTabId = "tab-b"; // human switched tabs while this sat in the queue
+  await api.approve(queued.id);
+
+  assert.equal(executed, false, "approving a queued item must not execute it against a different tab than it was proposed for");
+  const last = api.getSnapshot().timeline.at(-1);
+  assert.match(last.message, /target tab changed/);
+});
+
+test("an allow with no originTabId (or an unchanged tab) still executes normally", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._activeTabId = "tab-a";
+  let executed = false;
+  const outcome = await api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go", originTabId: "tab-a" },
+    async () => {
+      executed = true;
+    },
+  );
+  assert.equal(outcome, "allow");
+  assert.equal(executed, true);
+});
+
+test("newTab creates and selects a separate page without replacing existing tabs", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  const attached = [];
+  api._window = { contentView: { addChildView(view) { attached.push(view); } } };
+  api.setBrowserBounds = (bounds) => { api._pendingBounds = bounds; };
+
+  const first = await api.navigate("https://first.example");
+  assert.equal(first.page.url, "https://first.example/");
+  assert.equal(api.getSnapshot().tabs.length, 1);
+
+  const second = await api.newTab();
+  assert.equal(second.tabs.length, 2);
+  assert.equal(second.activeTabId, second.tabs[1].id);
+  assert.equal(second.page.url, "");
+  assert.equal(fakeViews.at(-1).visible, false, "a blank tab leaves the renderer's new-tab surface visible until navigation starts");
+  assert.equal(fakeViews.at(-2).visible, false);
+  assert.equal(attached.length, 2);
+
+  const restored = await api.selectTab(first.tabs[0].id);
+  assert.equal(restored.page.url, "https://first.example/");
+  assert.equal(fakeViews.at(-2).visible, true);
+  assert.equal(fakeViews.at(-1).visible, false);
+});
+
+test("address bar opens bare domains and turns ordinary text into a web search", async () => {
+  const targets = [];
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._view = makeFakeView({ loadURL: async (url) => { targets.push(url); } });
+  await api.navigate("example.com/path");
+  await api.navigate("research notes 2026");
+  assert.equal(targets[0], "https://example.com/path");
+  assert.equal(targets[1], "https://duckduckgo.com/?q=research%20notes%202026");
+});
+
+test("address bar refuses explicit non-web schemes", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  await assert.rejects(api.navigate("javascript:alert(1)"), /Only HTTP and HTTPS/);
+  await assert.rejects(api.navigate("file:///etc/passwd"), /Only HTTP and HTTPS/);
+});
+
+test("closing a tab selects its neighbor and refuses to close the final tab", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  api._window = { contentView: { addChildView() {} } };
+  await api.navigate("https://first.example");
+  const firstId = api.getSnapshot().activeTabId;
+  const second = await api.newTab();
+  const secondId = second.activeTabId;
+  await api.closeTab(secondId);
+
+  assert.equal(api.getSnapshot().tabs.length, 1);
+  assert.equal(api.getSnapshot().activeTabId, firstId);
+  assert.equal(api.getSnapshot().page.url, "https://first.example/");
+  await assert.rejects(api.closeTab(firstId), /last tab/i);
+  assert.equal(api.getSnapshot().tabs.length, 1);
+});
+
+test("takeOverTask discards a late approver allow and gives the person the page", async () => {
+  const { promise, resolve } = deferredDecision();
+  const api = makeApi(async () => promise);
+  let executed = false;
+  const pending = api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go" },
+    async () => { executed = true; },
+  );
+
+  await api.takeOverTask();
+  resolve({ decision: "allow", reasons: [] });
+  const outcome = await pending;
+
+  assert.equal(outcome, "cancelled");
+  assert.equal(executed, false, "a decision from before takeover must not execute after control returns");
+  assert.equal(api.getSnapshot().task.state, "paused");
+  assert.equal(api.getSnapshot().task.pauseReason, "user_takeover");
+  assert.equal(api.getSnapshot().approvalQueue.length, 0);
+});
+
+test("takeOverTask waits for an already-running browser action before returning page control", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  let releaseExecute;
+  const executeGate = new Promise((resolve) => { releaseExecute = resolve; });
+  const pending = api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go" },
+    async () => executeGate,
+  );
+  await new Promise((r) => setImmediate(r));
+
+  let takeoverSettled = false;
+  const takeover = api.takeOverTask();
+  takeover.then(() => { takeoverSettled = true; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(takeoverSettled, false, "do not hand the page to manual input while agent execute() is still active");
+  assert.equal(api.getSnapshot().task.pauseReason, "user_takeover_pending", "do not claim ownership before the active action settles");
+
+  releaseExecute();
+  await pending;
+  await takeover;
+  assert.equal(api.getSnapshot().task.pauseReason, "user_takeover");
+  assert.equal(api.getSnapshot().task.state, "paused");
+});
+
+test("stopTask wins over a takeover that is still draining an active browser action", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }));
+  let releaseExecute;
+  const executeGate = new Promise((resolve) => { releaseExecute = resolve; });
+  const pending = api.performGatedAction(
+    { requestId: "r1", action: "navigate", summary: "go" },
+    async () => executeGate,
+  );
+  await new Promise((r) => setImmediate(r));
+
+  const takeover = api.takeOverTask();
+  await api.stopTask();
+  releaseExecute();
+  await pending;
+  await takeover;
+  assert.equal(api.getSnapshot().task.state, "stopped");
+  assert.equal(api.getSnapshot().task.pauseReason, null);
 });
 
 test("pauseTask holds a late allow instead of executing it; resumeTask applies it", async () => {

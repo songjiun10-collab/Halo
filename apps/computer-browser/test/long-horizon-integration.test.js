@@ -129,6 +129,10 @@ test(
     // --- No replay of already-completed navigation across resets/resume ---
     assert.equal(result.scenario1.noDuplicateNavigation, true, `a page was requested more than once: ${JSON.stringify(result.scenario1.requestPathCounts)}`);
     assert.deepEqual(result.scenario1.requestPathCounts, { "/": 1, "/page2": 1, "/page3": 1 }, "each of the 3 fixture pages must be requested exactly once");
+    assert.equal(result.scenario1.resetTimings.length, 3, "timing output must cover each completed journey step/reset");
+    assert.ok(result.scenario1.stageTotals.planner_roundtrip.count >= 3, "timings must include planner cold-start/round-trip cost");
+    assert.ok(result.scenario1.stageTotals.durable_store.count > 0, "timings must include durable journal/checkpoint cost");
+    t.diagnostic(`scenario1 reset timings=${JSON.stringify(result.scenario1.resetTimings)} stage totals=${JSON.stringify(result.scenario1.stageTotals)}`);
 
     // --- Pause mid-flight + fresh re-attachment (simulated restart) completes the journey ---
     assert.equal(result.scenario2.pauseResumeWorks, true);
@@ -145,6 +149,9 @@ test(
 
     // --- Real memory measurement: the actual <1GB requirement ---
     assert.ok(result.memory.sampleCount > 0, "must have taken at least one real memory sample");
+    assert.ok(result.memory.plannerWorkerSamples.length >= 1, "memory accounting must sample at least one planner worker process");
+    assert.ok(result.memory.plannerWorkerSamples.every((sample) => Number.isFinite(sample.bytes) && sample.bytes >= 10_000_000 && sample.sampleCount > 0), "planner worker RSS must include an initialized runtime sample, not only a just-spawned pid");
+    assert.deepEqual(result.memory.unmeasurable, [], "every live Electron/approver/planner process must be measured for the 1GB aggregate");
     assert.equal(
       result.memory.pass,
       true,
@@ -154,6 +161,6 @@ test(
     // Surface the real numbers in the test output (not just pass/fail) so a
     // human reading `node --test` output sees the actual measurement, not
     // just a boolean.
-    t.diagnostic(`real peak memory: ${result.memory.peakBytes} bytes (limit ${result.memory.limitBytes}); wall time ${result.wallMs}ms; ${result.scenario1.contextResets} real context resets; unmeasurable: ${JSON.stringify(result.memory.unmeasurable)}`);
+    t.diagnostic(`real peak memory: ${result.memory.peakBytes} bytes (limit ${result.memory.limitBytes}); wall time ${result.wallMs}ms; ${result.scenario1.contextResets} real context resets; planner worker samples: ${JSON.stringify(result.memory.plannerWorkerSamples)}; unmeasurable: ${JSON.stringify(result.memory.unmeasurable)}`);
   },
 );

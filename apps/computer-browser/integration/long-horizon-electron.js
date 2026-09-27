@@ -32,6 +32,8 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const APP_ROOT = path.resolve(__dirname, "..");
 const APPROVER_SCRIPT = path.join(APP_ROOT, "approver", "approver_service.py");
 const LONG_HORIZON_PLANNER = path.join(APP_ROOT, "fixtures", "scripted-planner-long-horizon.js");
+const PLANNER_COMMAND = process.env.HALO_NODE_COMMAND || process.execPath;
+const PLANNER_ENV = process.env.HALO_NODE_COMMAND ? {} : { ELECTRON_RUN_AS_NODE: "1" };
 
 const { TaskStore } = require("../main/harness/task-store");
 const { TaskController } = require("../main/harness/task-controller");
@@ -40,6 +42,24 @@ const { PlannerStdioAdapter } = require("../main/harness/planner-stdio");
 const { MemoryMonitor } = require("../main/harness/memory-monitor");
 const { requestDecision } = require("../main/approver-client");
 const { startFixtureServer } = require("../fixtures/long-horizon-site");
+const { performance } = require("node:perf_hooks");
+
+function measureMethod(target, method, totals, label) {
+  const original = target[method].bind(target);
+  target[method] = async (...args) => {
+    const started = performance.now();
+    try {
+      return await original(...args);
+    } finally {
+      const entry = totals[label] || { count: 0, totalMs: 0, maxMs: 0 };
+      const elapsedMs = performance.now() - started;
+      entry.count += 1;
+      entry.totalMs += elapsedMs;
+      entry.maxMs = Math.max(entry.maxMs, elapsedMs);
+      totals[label] = entry;
+    }
+  };
+}
 
 function getExternalMemoryBytesViaPs(pid) {
   return new Promise((resolve) => {
@@ -107,9 +127,11 @@ function wrapWithCallCounter(obj, methods) {
 
 async function main() {
   const storageRoot = process.env.HALO_TEST_STORAGE_ROOT || (await fs.mkdtemp(path.join(os.tmpdir(), "halo-lh-tasks-")));
-  const samplingIntervalMs = 300;
+  const samplingIntervalMs = 50;
   const memorySamples = [];
   const startedAt = Date.now();
+  let peakDuringRun = 0;
+  const backgroundSamples = new Set();
 
   await app.whenReady();
 
@@ -131,6 +153,8 @@ async function main() {
     memorySamples.push({ label, at: Date.now() - startedAt, ...result });
     return result;
   };
+  const plannerWorkerRecords = new Map();
+  const plannerWorkerSamplePromises = [];
 
   await sample("startup_before_window");
 
@@ -138,11 +162,51 @@ async function main() {
   // script runs with no user watching it.
   const win = new BrowserWindow({ show: false, width: 800, height: 600 });
 
-  function makeBrowser() {
+function makeBrowser() {
     const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
     win.contentView.addChildView(view);
     view.setVisible(false);
     return new BrowserAdapter({ view });
+  }
+
+  function makePlanner() {
+    return new PlannerStdioAdapter({
+      command: PLANNER_COMMAND,
+      args: [LONG_HORIZON_PLANNER],
+      cwd: APP_ROOT,
+      env: PLANNER_ENV,
+      onWorkerStart: ({ pid, creationTime }) => {
+        memoryMonitor.registerExternalProcess({ pid, creationTime, label: "planner" });
+        const record = { pid, creationTime, bytes: null, sampleCount: 0, active: true, pending: Promise.resolve(), timer: null };
+        plannerWorkerRecords.set(`${pid}:${creationTime}`, record);
+        const takeSample = () => {
+          record.pending = record.pending.then(async () => {
+            if (!record.active) return;
+            const result = await sample(`planner_worker:${pid}`);
+            peakDuringRun = Math.max(peakDuringRun, result.totalBytes);
+            const processInfo = result.byProcess.find((item) => item.key === `${pid}:${creationTime}` && item.label === "external:planner");
+            if (processInfo && Number.isFinite(processInfo.bytes)) {
+              record.sampleCount += 1;
+              record.bytes = Math.max(record.bytes || 0, processInfo.bytes);
+            }
+          }).catch(() => {});
+          plannerWorkerSamplePromises.push(record.pending);
+        };
+        // The OS can expose a just-spawned pid before Node has loaded the
+        // runtime. Poll while the child is registered so initialized RSS,
+        // not only that transient early value, contributes to the peak.
+        takeSample();
+        record.timer = setInterval(takeSample, 20);
+      },
+      onWorkerExit: ({ pid, creationTime }) => {
+        const record = plannerWorkerRecords.get(`${pid}:${creationTime}`);
+        if (record) {
+          clearInterval(record.timer);
+          record.active = false;
+        }
+        memoryMonitor.unregister(pid, creationTime);
+      },
+    });
   }
 
   const approve = (taskId, descriptor) =>
@@ -165,11 +229,13 @@ async function main() {
   const store1 = await TaskStore.create(goal1, { storageRoot });
   const taskId1 = store1.taskId;
 
-  let peakDuringRun = 0;
+  const scenario1StageTotals = {};
+  const scenario1ResetTimings = [];
   const pollTimer = setInterval(() => {
-    sample("during_scenario1").then((r) => {
+    const pending = sample("during_long_horizon_run").then((r) => {
       if (r.totalBytes > peakDuringRun) peakDuringRun = r.totalBytes;
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => backgroundSamples.delete(pending));
+    backgroundSamples.add(pending);
   }, samplingIntervalMs);
 
   const CONTEXT_RESETS = 4; // real page loads + real approver round-trips are slow; see honest-limitations note in the final report
@@ -188,7 +254,10 @@ async function main() {
   // prove noDuplicateNavigation: if the harness ever re-issued a navigate
   // the evidence log already satisfied, this would catch it.
   const browser = makeBrowser();
+  measureMethod(browser, "observe", scenario1StageTotals, "browser_observe");
+  measureMethod(browser, "execute", scenario1StageTotals, "browser_execute");
   for (let i = 0; i < CONTEXT_RESETS; i++) {
+    const resetStartedAt = performance.now();
     // Reload from disk on every iteration -- a genuine "context reset": no
     // in-memory continuity is trusted, only what TaskStore.load() replays
     // from the durable journal/checkpoint.
@@ -196,9 +265,25 @@ async function main() {
       await store.close();
       store = await TaskStore.load(taskId1, { storageRoot });
     }
+    measureMethod(store, "append", scenario1StageTotals, "durable_store");
+    measureMethod(store, "checkpoint", scenario1StageTotals, "durable_store");
     originalRequestAcrossResets.push(store.getGoal().originalRequest);
-    const planner = new PlannerStdioAdapter({ command: process.execPath, args: [LONG_HORIZON_PLANNER], cwd: APP_ROOT, env: { ELECTRON_RUN_AS_NODE: "1" } });
-    const controller = new TaskController({ store, planner, browser, approve: (d) => approve(taskId1, d), hostVerifier: defaultHostVerifier, memoryMonitor });
+    const planner = makePlanner();
+    measureMethod(planner, "next", scenario1StageTotals, "planner_roundtrip");
+    const measuredApprove = async (...args) => {
+      const started = performance.now();
+      try {
+        return await approve(taskId1, ...args);
+      } finally {
+        const entry = scenario1StageTotals.approver_roundtrip || { count: 0, totalMs: 0, maxMs: 0 };
+        const elapsedMs = performance.now() - started;
+        entry.count += 1;
+        entry.totalMs += elapsedMs;
+        entry.maxMs = Math.max(entry.maxMs, elapsedMs);
+        scenario1StageTotals.approver_roundtrip = entry;
+      }
+    };
+    const controller = new TaskController({ store, planner, browser, approve: measuredApprove, hostVerifier: defaultHostVerifier, memoryMonitor });
     const state = controller.getSnapshot().state;
     if (state === "idle") {
       await controller.start();
@@ -220,10 +305,10 @@ async function main() {
       await controller.approve(pending[0].id);
     }
     await planner.close().catch(() => {});
+    scenario1ResetTimings.push({ reset: i, elapsedMs: performance.now() - resetStartedAt });
     if (controller.getSnapshot().state === "completed") break;
   }
 
-  clearInterval(pollTimer);
   const goalPreservedAcrossResets = originalRequestAcrossResets.every((r) => r === goal1.originalRequest);
 
   // Re-load once more to get the authoritative final state honestly (the
@@ -254,7 +339,7 @@ async function main() {
   const store2 = await TaskStore.create(goal2, { storageRoot });
   const taskId2 = store2.taskId;
   const browser2 = makeBrowser();
-  const planner2 = new PlannerStdioAdapter({ command: process.execPath, args: [LONG_HORIZON_PLANNER], cwd: APP_ROOT, env: { ELECTRON_RUN_AS_NODE: "1" } });
+  const planner2 = makePlanner();
   const controller2 = new TaskController({ store: store2, planner: planner2, browser: browser2, approve: (d) => approve(taskId2, d), hostVerifier: defaultHostVerifier, memoryMonitor });
 
   const startPromise2 = controller2.start();
@@ -267,7 +352,7 @@ async function main() {
   await store2.close();
   const resumedStore2 = await TaskStore.load(taskId2, { storageRoot });
   const browser2b = makeBrowser();
-  const planner2b = new PlannerStdioAdapter({ command: process.execPath, args: [LONG_HORIZON_PLANNER], cwd: APP_ROOT, env: { ELECTRON_RUN_AS_NODE: "1" } });
+  const planner2b = makePlanner();
   const controller2b = new TaskController({ store: resumedStore2, planner: planner2b, browser: browser2b, approve: (d) => approve(taskId2, d), hostVerifier: defaultHostVerifier, memoryMonitor });
   const pauseResumeWorks = pausedMidflightState === "paused" || pausedMidflightState === "completed";
   if (controller2b.getSnapshot().state === "paused") {
@@ -325,7 +410,10 @@ async function main() {
   const postConfirmedResumeState = controller3.getSnapshot().state;
   await reloadedStore3.close();
 
+  clearInterval(pollTimer);
+  await Promise.all([...backgroundSamples]);
   await sample("after_scenario3");
+  await Promise.all(plannerWorkerSamplePromises);
 
   // --- cleanup ---
   approverProcess.kill();
@@ -334,6 +422,7 @@ async function main() {
 
   const peakBytes = Math.max(peakDuringRun, ...memorySamples.map((s) => s.totalBytes));
   const limitBytes = 1_000_000_000;
+  const plannerWorkerSamples = [...plannerWorkerRecords.values()].map(({ pid, bytes, sampleCount }) => ({ pid, bytes, sampleCount }));
   const allUnmeasurable = [...new Set(memorySamples.flatMap((s) => s.unmeasurable))];
 
   const result = {
@@ -348,6 +437,8 @@ async function main() {
       finalOriginalRequest: finalSnapshot1.goalVersion ? goal1.originalRequest : null,
       noDuplicateNavigation,
       requestPathCounts,
+      resetTimings: scenario1ResetTimings,
+      stageTotals: scenario1StageTotals,
     },
     scenario2: {
       pausedMidflightState,
@@ -369,6 +460,9 @@ async function main() {
       pass: peakBytes < limitBytes,
       unmeasurable: allUnmeasurable,
       sampleCount: memorySamples.length,
+      plannerSamplingIntervalMs: 20,
+      limitation: "sampled peak only; polling cannot guarantee detection of a short instantaneous spike between samples",
+      plannerWorkerSamples,
       samples: memorySamples.map((s) => ({ label: s.label, at: s.at, totalBytes: s.totalBytes, unmeasurableCount: s.unmeasurable.length })),
     },
   };

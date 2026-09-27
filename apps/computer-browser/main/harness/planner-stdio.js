@@ -54,13 +54,15 @@ function buildWorkerEnv(extraEnv) {
 }
 
 class PlannerStdioAdapter {
-  constructor({ command, args = [], cwd, env, timeoutMs, spawnFn } = {}) {
+  constructor({ command, args = [], cwd, env, timeoutMs, spawnFn, onWorkerStart, onWorkerExit } = {}) {
     this._command = command || null;
     this._args = args;
     this._cwd = cwd;
     this._env = env;
     this._timeoutMs = typeof timeoutMs === "number" ? timeoutMs : contracts.PLANNER_RESPONSE_TIMEOUT_MS;
     this._spawnFn = spawnFn || nodeSpawn;
+    this._onWorkerStart = typeof onWorkerStart === "function" ? onWorkerStart : null;
+    this._onWorkerExit = typeof onWorkerExit === "function" ? onWorkerExit : null;
     this._child = null;
     this._inFlight = null; // { requestId, resolve, reject, timer, onAbort, signal }
     this._stdoutBuffer = "";
@@ -69,6 +71,15 @@ class PlannerStdioAdapter {
 
   isConnected() {
     return this._command !== null;
+  }
+
+  // Start the trusted worker before the first planner request so process
+  // startup can overlap with the browser's initial observation. This does
+  // not send a prompt or execute any worker action.
+  warm() {
+    if (!this._command) return false;
+    this._ensureChild();
+    return true;
   }
 
   getStderrTail() {
@@ -86,6 +97,7 @@ class PlannerStdioAdapter {
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    const creationTime = Date.now();
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => this._onStdoutData(chunk));
     child.stderr.setEncoding("utf8");
@@ -95,8 +107,30 @@ class PlannerStdioAdapter {
     child.on("exit", () => {
       this._child = null;
       this._failInFlight(new PlannerTransportError("transport_closed", "planner worker exited while a request was in flight"));
+      if (this._onWorkerExit && Number.isInteger(child.pid)) {
+        try {
+          this._onWorkerExit({ pid: child.pid, creationTime });
+        } catch {
+          // Worker teardown must not throw from an event callback. Host-side
+          // accounting owns its own error reporting and is best-effort here.
+        }
+      }
     });
     this._child = child;
+    if (this._onWorkerStart && Number.isInteger(child.pid)) {
+      try {
+        this._onWorkerStart({ pid: child.pid, creationTime });
+      } catch (error) {
+        this._child = null;
+        try {
+          child.kill();
+        } catch {
+          // Preserve the registration failure; the child is no longer trusted
+          // to be accounted by the host memory budget.
+        }
+        throw new PlannerTransportError("worker_registration_failed", `planner worker could not be registered for memory accounting: ${error.message}`);
+      }
+    }
     return child;
   }
 

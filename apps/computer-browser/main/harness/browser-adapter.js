@@ -144,6 +144,103 @@ class BrowserAdapter {
     this._observeSeq = 0;
     this._disposed = false;
     this._readyEnsured = false;
+    this._listeners = new Set();
+    this._pageListeners = [];
+    const wc = view.webContents;
+    const listen = (name, listener) => {
+      if (typeof wc.on !== "function") return;
+      wc.on(name, listener);
+      this._pageListeners.push([name, listener]);
+    };
+    listen("did-navigate", () => { this._documentEpoch += 1; this._emitBrowserChange(); });
+    listen("did-navigate-in-page", (_event, _url, isMainFrame) => {
+      if (isMainFrame !== false) { this._documentEpoch += 1; this._emitBrowserChange(); }
+    });
+    listen("page-title-updated", () => this._emitBrowserChange());
+    listen("did-stop-loading", () => this._emitBrowserChange());
+  }
+
+  onChange(listener) {
+    this._listeners.add(listener);
+    return () => this._listeners.delete(listener);
+  }
+
+  _emitBrowserChange() {
+    if (this._disposed) return;
+    const snapshot = this.getBrowserSnapshot();
+    for (const listener of this._listeners) {
+      try { listener(snapshot); } catch { /* Observers cannot interrupt navigation. */ }
+    }
+  }
+
+  getBrowserSnapshot() {
+    const wc = this._view.webContents;
+    if (this._disposed || wc.isDestroyed?.()) {
+      return { tabs: [], activeTabId: null, documentEpoch: this._documentEpoch };
+    }
+    const history = wc.navigationHistory || wc;
+    return {
+      tabs: [{ id: "page", url: wc.getURL?.() || "about:blank", title: wc.getTitle?.() || "",
+        canGoBack: Boolean(history.canGoBack?.()), canGoForward: Boolean(history.canGoForward?.()) }],
+      activeTabId: "page",
+      documentEpoch: this._documentEpoch,
+    };
+  }
+
+  // Only TaskHost's serialized, drained human-control path calls this.
+  async userNavigate(action) {
+    if (this._disposed) throw new BrowserAdapterError("disposed", "browser has been closed");
+    if (!action || !["navigate", "back", "forward"].includes(action.type)) {
+      throw new BrowserAdapterError("invalid_action", "unknown browser command");
+    }
+    if (action.type === "navigate") {
+      let url;
+      try { url = new URL(action.url); } catch { throw new BrowserAdapterError("invalid_url", "Enter an http or https address"); }
+      if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) {
+        throw new BrowserAdapterError("invalid_url", "Only http and https addresses without credentials are supported");
+      }
+      const result = await this._navigate(url.href);
+      if (result.status !== "ok") throw new BrowserAdapterError(result.errorCode, "Could not open this page");
+    } else {
+      const wc = this._view.webContents;
+      const history = wc.navigationHistory || wc;
+      const back = action.type === "back";
+      if (back ? history.canGoBack?.() : history.canGoForward?.()) {
+        // Electron history traversal returns void. Hold the host's admission
+        // barrier until the load event (or timeout), not just the method call.
+        if (typeof history.goToIndex !== "function" || typeof history.getActiveIndex !== "function") {
+          throw new BrowserAdapterError("unsupported_action", "Navigation history is unavailable");
+        }
+        await this._traverseHistory(wc, history, history.getActiveIndex() + (back ? -1 : 1));
+      }
+    }
+    this._emitBrowserChange();
+    return this.getBrowserSnapshot();
+  }
+
+  _traverseHistory(wc, history, index) {
+    return new Promise((resolve, reject) => {
+      const finish = (error) => {
+        clearTimeout(timer);
+        wc.removeListener("did-stop-loading", loaded);
+        wc.removeListener("did-fail-load", failed);
+        wc.removeListener("destroyed", destroyed);
+        if (error) reject(error); else resolve();
+      };
+      const loaded = () => finish();
+      const failed = (_event, _code, _description, _url, isMainFrame) => {
+        if (isMainFrame !== false) finish(new BrowserAdapterError("navigation_error", "Could not load history entry"));
+      };
+      const destroyed = () => finish(new BrowserAdapterError("disposed", "Browser closed during navigation"));
+      const timer = setTimeout(() => {
+        finish(new BrowserAdapterError("navigation_timeout", "History navigation timed out"));
+        wc.stop();
+      }, this._navigationTimeoutMs);
+      wc.on("did-stop-loading", loaded);
+      wc.on("did-fail-load", failed);
+      wc.on("destroyed", destroyed);
+      try { history.goToIndex(index); } catch (error) { finish(error); }
+    });
   }
 
   getDocumentEpoch() {
@@ -173,12 +270,24 @@ class BrowserAdapter {
     }
   }
 
-  async observe({ signal } = {}) {
+  async observe({ signal, initial = false } = {}) {
     void signal; // no cancellable long-running observe op yet -- accepted for interface symmetry
     if (this._disposed) {
       throw new BrowserAdapterError("disposed", "observe() called after dispose()");
     }
     const wc = this._view.webContents;
+    if (initial && this._documentEpoch === 0 && typeof wc.getURL === "function" && ["", "about:blank"].includes(wc.getURL())) {
+      this._observeSeq += 1;
+      return {
+        id: this._randomId(),
+        documentEpoch: this._documentEpoch,
+        url: "about:blank",
+        title: "",
+        text: "",
+        elements: [],
+        at: this._now(),
+      };
+    }
     await this._ensureReadyForScriptExecution(wc);
     this._observeSeq += 1;
     let raw;
@@ -214,6 +323,8 @@ class BrowserAdapter {
     if (this._disposed) return;
     this._disposed = true;
     const wc = this._view && this._view.webContents;
+    for (const [name, listener] of this._pageListeners) wc?.removeListener?.(name, listener);
+    this._listeners.clear();
     if (wc && typeof wc.close === "function") {
       wc.close();
     } else if (wc && typeof wc.destroy === "function") {
@@ -271,6 +382,7 @@ class BrowserAdapter {
     }
     const wc = this._view.webContents;
     const mySeq = ++this._navSeq;
+    const epochBeforeLoad = this._documentEpoch;
     const outcome = await this._loadWithTimeout(wc, url, mySeq);
     // Cross-event isolation: if a NEWER navigate() call has already started
     // since this one's load settled/timed out, this call's result must not
@@ -280,7 +392,8 @@ class BrowserAdapter {
       return { status: "cancelled", errorCode: "superseded" };
     }
     if (outcome.outcome === "ok") {
-      this._documentEpoch += 1;
+      if (this._documentEpoch === epochBeforeLoad) this._documentEpoch += 1;
+      this._emitBrowserChange();
       // "host_check": the host itself (not the model, not the page) directly
       // observed this navigation complete -- see shared/harness-contracts.js's
       // EVIDENCE_KINDS. verifyCriterion() still requires a "host"-kind

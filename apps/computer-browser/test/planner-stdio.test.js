@@ -75,6 +75,48 @@ test("spawns with shell:false, argv from host config, and an env allowlist that 
   }
 });
 
+test("warm() starts the configured worker early and next() reuses that child", async () => {
+  const fakeChild = makeFakeChild();
+  let spawnCount = 0;
+  const adapter = new PlannerStdioAdapter({
+    command: "node",
+    args: [],
+    spawnFn: () => { spawnCount += 1; return fakeChild; },
+  });
+
+  assert.equal(adapter.warm(), true);
+  assert.equal(spawnCount, 1);
+  const pending = adapter.next(makeContext(), {});
+  const sentRequest = JSON.parse(fakeChild.stdin.written[0]);
+  fakeChild.stdout.emit("data", `${JSON.stringify({ requestId: sentRequest.requestId, proposal: { ok: true } })}\n`);
+
+  assert.deepEqual(await pending, { ok: true });
+  assert.equal(spawnCount, 1);
+  await adapter.close();
+});
+
+test("reports planner worker start and exit so host memory accounting includes its RSS", async () => {
+  const child = makeFakeChild();
+  child.pid = 4321;
+  const lifecycle = [];
+  const adapter = new PlannerStdioAdapter({
+    command: "node",
+    spawnFn: () => child,
+    onWorkerStart: (processInfo) => lifecycle.push({ event: "start", ...processInfo }),
+    onWorkerExit: (processInfo) => lifecycle.push({ event: "exit", ...processInfo }),
+  });
+
+  adapter.warm();
+  assert.equal(lifecycle.length, 1);
+  assert.equal(lifecycle[0].event, "start");
+  assert.equal(lifecycle[0].pid, 4321);
+  assert.equal(typeof lifecycle[0].creationTime, "number");
+
+  child.emit("exit", 0);
+  assert.deepEqual(lifecycle.slice(1), [{ event: "exit", pid: 4321, creationTime: lifecycle[0].creationTime }]);
+  await adapter.close();
+});
+
 test("refuses to spawn a worker whose caller-supplied env carries a secret-shaped key", async () => {
   const fakeChild = makeFakeChild();
   const adapter = new PlannerStdioAdapter({
