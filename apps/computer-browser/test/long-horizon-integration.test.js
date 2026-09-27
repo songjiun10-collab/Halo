@@ -112,27 +112,28 @@ test(
 
     // --- Goal preservation across real context resets ---
     assert.equal(result.scenario1.goalPreservedAcrossResets, true, "originalRequest must survive every real context reset verbatim");
-    assert.ok(["completed", "paused"].includes(result.scenario1.finalState), `unexpected final state: ${result.scenario1.finalState}`);
+    // 2026-09-27 follow-up: the full 3-page journey (navigate -> follow_link
+    // -> follow_link -> finish) now reliably reaches "completed" in the real
+    // Electron run -- three real bugs that silently blocked it were found
+    // and fixed (see docs/reviews/REPORT_REMEDIATION.ko.md, 후속 22): a
+    // one-shot approver channel race also surfacing as ECONNREFUSED (not
+    // just the already-handled ENOENT), follow_link/scroll/observe missing
+    // from the approver's action vocabulary (silently denied forever), and
+    // buildObserveScript()'s text extraction never actually capturing an
+    // ordinary element's own text. A prior version of this test asserted
+    // only "paused" as an acceptable outcome; that is no longer honest now
+    // that the real cause is fixed, so this asserts actual completion.
+    assert.equal(result.scenario1.finalState, "completed", `expected the real 3-page journey to complete, got ${result.scenario1.finalState} (pauseReason: ${result.scenario1.finalPauseReason})`);
     t.diagnostic(`scenario1 finalState=${result.scenario1.finalState} pauseReason=${result.scenario1.finalPauseReason} requestPathCounts=${JSON.stringify(result.scenario1.requestPathCounts)}`);
 
     // --- No replay of already-completed navigation across resets/resume ---
     assert.equal(result.scenario1.noDuplicateNavigation, true, `a page was requested more than once: ${JSON.stringify(result.scenario1.requestPathCounts)}`);
+    assert.deepEqual(result.scenario1.requestPathCounts, { "/": 1, "/page2": 1, "/page3": 1 }, "each of the 3 fixture pages must be requested exactly once");
 
-    // --- Pause mid-flight + fresh re-attachment (simulated restart) recovers cleanly ---
-    // KNOWN LIMITATION (see docs/superpowers/plans/2026-09-27-long-horizon-browser-harness.md,
-    // Task 6 notes): the fresh-reattached controller reliably resumes and
-    // re-engages the real approval gate (proven below), but has not been
-    // observed to walk the fixture's full 3-page chain through to
-    // "completed" in the real-Electron run within this test's time budget --
-    // only the fake-based task-controller.test.js multi-step suite verifies
-    // full multi-action completion at scale. Asserting hard completion here
-    // would be dishonest until that gap is closed, so this only asserts the
-    // state machine reaches a real, non-crashed terminal state.
+    // --- Pause mid-flight + fresh re-attachment (simulated restart) completes the journey ---
     assert.equal(result.scenario2.pauseResumeWorks, true);
-    assert.ok(
-      ["completed", "paused", "awaiting_approval", "awaiting_verification"].includes(result.scenario2.finalState),
-      `fresh reattach must reach a stable, non-crashed state, got ${result.scenario2.finalState} (pauseReason: ${result.scenario2.finalPauseReason})`,
-    );
+    assert.equal(result.scenario2.completedAfterFreshReattach, true, "resuming from a fresh TaskController after pause must still reach completion");
+    assert.equal(result.scenario2.finalState, "completed");
     t.diagnostic(
       `scenario2 completedAfterFreshReattach=${result.scenario2.completedAfterFreshReattach} finalState=${result.scenario2.finalState} pauseReason=${result.scenario2.finalPauseReason}`,
     );

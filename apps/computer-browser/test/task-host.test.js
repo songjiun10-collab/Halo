@@ -16,6 +16,7 @@ const path = require("node:path");
 
 const { TaskHost, TaskHostError } = require("../main/harness/task-host");
 const { TaskStore } = require("../main/harness/task-store");
+const { TaskController } = require("../main/harness/task-controller");
 
 async function mkTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "halo-task-host-"));
@@ -82,6 +83,57 @@ test("listTasks() lists both attached and never-attached (saved-only) tasks", as
   const b = list.find((t) => t.originalRequest === "task B");
   assert.equal(a.active, true);
   assert.equal(b.active, false);
+});
+
+// 2026-09-27 follow-up: listTasks()'s never-attached "peek" path derived
+// state purely from store.recoveryReason, so a task that had already
+// reached "completed" (checkpointed as such) was peeked as plain
+// "paused"/"recovered" -- indistinguishable from one merely interrupted
+// mid-flight. Same root cause and fix as task-controller.js's constructor.
+test("listTasks() peeks a completed-but-detached task as completed, not paused/recovered", async () => {
+  const storageRoot = await mkTempRoot();
+
+  // Drive a task to completed directly via TaskStore/TaskController (not
+  // host.createTask(), which would keep it attached and holding the
+  // writer.lock -- this test needs the store fully closed first, to
+  // simulate a real process restart where nothing is attached anymore).
+  const store = await TaskStore.create(
+    { originalRequest: "finish me", criteria: [{ id: "c1", text: "done", required: true, verification: "host" }] },
+    { storageRoot },
+  );
+  const taskId = store.taskId;
+  let plannerCalls = 0;
+  const controller = new TaskController({
+    store,
+    planner: {
+      next: async (context) => {
+        plannerCalls += 1;
+        if (plannerCalls === 1) {
+          return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: ["c1"], kind: "actions", actions: [{ type: "observe" }] };
+        }
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: ["c1"], kind: "finish", evidenceIds: [] };
+      },
+    },
+    browser: {
+      observe: async () => ({ id: "obs" }),
+      execute: async () => ({ status: "ok", evidenceCandidate: { kind: "host_check", sourceUrl: "https://example.com" } }),
+    },
+    approve: async () => ({ decision: "allow", reasons: [] }),
+    hostVerifier: () => true,
+  });
+  await controller.start();
+  assert.equal(controller.getSnapshot().state, "completed");
+  await store.close();
+
+  // Simulate a real process restart: a brand-new TaskHost that never
+  // attached this task, only listTasks()'s detached-peek path reads it
+  // back off disk.
+  const freshHost = makeHost(storageRoot, { makePlanner: () => ({ next: async () => { throw new Error("must never be called for a peeked task"); } }) });
+  const list = await freshHost.listTasks();
+  const peeked = list.find((t) => t.taskId === taskId);
+  assert.ok(peeked, "the completed task must still be listed");
+  assert.equal(peeked.state, "completed", "a completed task must be peeked as completed, not paused/recovered");
+  assert.equal(peeked.active, false);
 });
 
 test("resumeSavedTask() attaches a never-seen-before saved task and resumes it if paused", async () => {

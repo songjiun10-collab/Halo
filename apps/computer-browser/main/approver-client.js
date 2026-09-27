@@ -12,7 +12,31 @@ const REQUEST_TIMEOUT_MS = 5000;
 // connect() attempt can legitimately race an ENOENT for a few milliseconds.
 // This is a known, documented property of reusing a one-shot channel as a
 // standing service (see the design doc) -- not a bug to paper over silently.
+//
+// The SAME race also surfaces as ECONNREFUSED, not just ENOENT (found via a
+// real Electron end-to-end run, 2026-09-27 follow-up: after ~234 rapid
+// approve() round-trips, requestDecision rejected with a real ECONNREFUSED
+// and the controller paused approver_error, even though the approver
+// process itself was still alive and healthy). Root cause, confirmed by
+// reading UnixSocketChannel.listen() (experiments/e007_dual_agent_
+// provenance_gate/channel.py): it closes its listening socket and unlinks
+// the path in a `finally` block executed the instant accept() returns --
+// before the request is even read, let alone answered -- then only rebinds
+// on the *next* iteration of approver_service.py's `while True` loop, after
+// evaluate() has run. A connect() landing in the narrow window where the
+// path is bound but listen() hasn't been called yet, or where the previous
+// listener already closed but the path hasn't been unlinked by the kernel
+// yet, fails with ECONNREFUSED rather than ENOENT -- same underlying cause
+// (this channel design being reused sequentially as a long-running service
+// instead of a true persistent accept() loop), different OS-level error
+// code depending on exactly which sub-instant the connect() lands in.
+// Retrying ECONNREFUSED with the same short, bounded budget as ENOENT is
+// therefore the same fix for the same gap, not a new broad-retry policy: if
+// the approver is genuinely down (crashed, never rebinding), ECONNREFUSED
+// persists past this budget too and requestDecision still rejects, exactly
+// as before.
 const RETRY_DELAYS_MS = [10, 25, 50, 100, 200, 400];
+const RETRYABLE_CONNECT_ERROR_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
 const VALID_DECISIONS = new Set(["allow", "review", "deny", "quarantine"]);
 
 class ApproverProtocolError extends Error {
@@ -120,7 +144,7 @@ function requestDecision(socketPath, request, { signal } = {}) {
 
       socket.on("error", (error) => {
         if (settled) return;
-        if (error.code === "ENOENT" && attempt < RETRY_DELAYS_MS.length) {
+        if (RETRYABLE_CONNECT_ERROR_CODES.has(error.code) && attempt < RETRY_DELAYS_MS.length) {
           clearTimeout(currentTimeout);
           const delay = RETRY_DELAYS_MS[attempt++];
           socket.removeAllListeners();

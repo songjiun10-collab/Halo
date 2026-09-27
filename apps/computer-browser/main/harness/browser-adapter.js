@@ -57,6 +57,19 @@ class BrowserAdapterError extends Error {
 // straight from the (untrusted) page must never be treated as anything but
 // display data -- this script only ever runs inline JS WE wrote, never
 // anything the page or the model supplied.
+//
+// Inside the generated script, `ownText` is captured only when
+// childElementCount === 0 -- i.e. no ELEMENT children -- not when
+// childNodes.length === 0 (no children AT ALL). An ordinary text-bearing
+// element like <p>hello</p> has exactly one child (a Text node), so
+// childNodes.length is 1, never 0; the original childNodes.length===0
+// check therefore matched almost no real elements and silently produced an
+// empty page `text` field for any ordinary page. Found via a real Electron
+// run against fixtures/long-horizon-site.js: page3's own literal
+// "DONE-XYZ" completion marker never appeared in the observation at all,
+// which blocked every real 3-page journey from ever reaching "finish"
+// (2026-09-27 follow-up; see test/browser-adapter.test.js's vm-based
+// regression test that runs this exact script string against a fake DOM).
 function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes) {
   return `(() => {
     const INTERACTIVE_TAGS = new Set(["A", "BUTTON", "INPUT", "TEXTAREA", "SELECT", "H1", "H2", "H3"]);
@@ -71,7 +84,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes) {
       while (node && visited < ${maxNodesVisited}) {
         visited += 1;
         if (node.nodeType === 1) {
-          const ownText = (node.childNodes.length === 0 ? (node.textContent || "") : "").trim().slice(0, 200);
+          const ownText = (node.childElementCount === 0 ? (node.textContent || "") : "").trim().slice(0, 200);
           if (ownText && textBytes < ${maxTextBytes}) {
             const encoded = ownText + " ";
             if (textBytes + encoded.length <= ${maxTextBytes}) {
@@ -347,4 +360,4 @@ class BrowserAdapter {
   }
 }
 
-module.exports = { BrowserAdapter, BrowserAdapterError, MAX_NODES_VISITED, MAX_ELEMENTS, MAX_TEXT_BYTES };
+module.exports = { BrowserAdapter, BrowserAdapterError, MAX_NODES_VISITED, MAX_ELEMENTS, MAX_TEXT_BYTES, buildObserveScript };

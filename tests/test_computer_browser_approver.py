@@ -98,6 +98,35 @@ def test_download_always_denies_outside_known_vocabulary():
     assert result["decision"] == "deny"
 
 
+# 2026-09-27 follow-up: main/harness/browser-adapter.js's execute() actually
+# implements four action types -- navigate, follow_link, scroll, observe --
+# but VALID_ACTIONS/_ACTION_MAPPING above were never updated past the older
+# control-api.js demo's vocabulary (click/type/submit_form/navigate/
+# download). follow_link/scroll/observe fell outside VALID_ACTIONS, so
+# build_event() raised ValueError and evaluate() denied them unconditionally
+# on every request regardless of provenance -- these three real harness
+# action types never reached evaluate_trace()/decide() at all. Confirmed via
+# direct reproduction (real Electron + real approver process): every real
+# multi-page journey stalled forever on the first follow_link, burning the
+# entire planner-call budget on repeated denials. See
+# docs/reviews/REPORT_REMEDIATION.ko.md, 2026-09-27 후속 22.
+@pytest.mark.parametrize("action", ["follow_link", "scroll", "observe"])
+def test_real_harness_action_types_get_the_same_evaluated_treatment_as_navigate(action):
+    # follow_link/scroll/observe must be classified into halo's vocabulary
+    # (like navigate/click/type already are) and receive the SAME
+    # provenance-aware policy evaluation -- not a new leniency, the same
+    # treatment navigate already gets, extended to cover the harness's real
+    # action set.
+    for source, self_provenance, expected in (
+        ("user_prompt", "trusted", "allow"),
+        ("page_content", "untrusted", "review"),
+        ("page_content", "trusted", "deny"),  # self-report disagrees with host provenance
+    ):
+        got = svc.evaluate(_request(action=action, source=source, self_provenance=self_provenance))
+        nav = svc.evaluate(_request(action="navigate", source=source, self_provenance=self_provenance))
+        assert got["decision"] == expected == nav["decision"], (action, source, self_provenance, got)
+
+
 @pytest.fixture
 def private_socket_path():
     # macOS sockaddr_un has a short path limit; pytest's own tmp_path lives

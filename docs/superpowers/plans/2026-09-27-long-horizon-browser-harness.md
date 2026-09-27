@@ -166,8 +166,78 @@ Files: create `test/integration/long-horizon-electron.js`, `test/fixtures/long-h
 2. Electron 메인 프로세스 안에서 `process.execPath`는 Node가 아니라 Electron 바이너리 자체를 가리켜, `ELECTRON_RUN_AS_NODE=1` 없이 planner worker를 spawn하면 스크립트를 실행하지 못함(500회 근접까지 planner 응답이 사실상 무의미하게 진행). `integration/long-horizon-electron.js`의 3곳 `PlannerStdioAdapter` 생성에 `env:{ELECTRON_RUN_AS_NODE:"1"}` 추가로 수정.
 3. **(하네스 본체의 실제 결함, regression test 추가)** `task-controller.js`의 `observationKey()`가 `JSON.stringify(observation)`을 그대로 사용해, 실제 `BrowserAdapter`가 매 observe()마다 부여하는 임의 `id`(`_randomId()`) 때문에 동일 페이지를 반복 관찰해도 키가 절대 일치하지 않아 no-progress 감지(design doc 5절)가 사실상 완전히 무력화됨 -- 기존 가짜 기반 테스트는 고정 id를 쓰는 fake만 사용해 이 결함을 잡지 못했다. `id` 필드를 제외하고 키를 계산하도록 수정, `test/task-controller.test.js`에 임의 id를 흉내 내는 회귀 테스트 추가(수정 전 재현 확인 후 수정 -- TDD).
 
+### Task 6 후속: approver_error 근본원인 규명·수정, 20회 연속 실제 완주 검증 (2026-09-27)
+
+이전 판(위 "정직한 한계")이 미해결로 남긴 `approver_error`를 실제 Electron·실제
+Python approver·실제 planner worker로 재현해 근본원인 3건을 규명·수정했고,
+관련해 범위 안에서 발견한 체크포인트 복원 결함도 함께 고쳤다. 상세 근거는
+`docs/reviews/REPORT_REMEDIATION.ko.md`의 "2026-09-27 후속 22" 항목 참고.
+
+- [x] 재현: 세션 scratchpad의 계측 스크립트로 실제 approve() 왕복마다 sanitized
+  진단(`requestId`/`action`/`errorName`/`errorCode`/approver `exitCode`/`signalCode`/
+  bounded stderr — role key·approval token 없음)을 수집해 `errorCode:"ECONNREFUSED"`
+  (approver는 생존)를 확인.
+- [x] 근본원인 1 — `main/approver-client.js`: approver의 1회용 `UnixSocketChannel`이
+  `accept()` 직후 즉시 close+unlink하는 재사용 루프의 레이스가 ENOENT뿐 아니라
+  ECONNREFUSED로도 나타남. `RETRYABLE_CONNECT_ERROR_CODES`로 재시도 코드 확장(예산은
+  기존과 동일, 무제한 재시도 아님). 회귀 테스트 2건(`test/approver-client.test.js`,
+  실제 SIGKILL로 소켓만 남긴 재현).
+- [x] 근본원인 2 — `approver/approver_service.py`: 실제 하네스 어휘
+  `follow_link`/`scroll`/`observe`가 `VALID_ACTIONS`/`_ACTION_MAPPING`에 없어
+  무조건 deny(정책 판단이 아니라 어휘 누락). navigate/click과 동일한 "read" 취급으로
+  매핑. 회귀 테스트(`tests/test_computer_browser_approver.py`, navigate와 동일한
+  provenance별 결정을 확인).
+- [x] 근본원인 3 — `main/harness/browser-adapter.js`의 `buildObserveScript()`:
+  `childNodes.length===0` 조건이 텍스트 노드를 가진 보통 element에는 거의 맞지 않아
+  관찰 텍스트가 사실상 항상 비어 완료 마커를 planner가 절대 못 봄.
+  `childElementCount===0`으로 수정. 회귀 테스트 2건(`test/browser-adapter.test.js`,
+  Node `vm`으로 실제 프로덕션 스크립트를 fake DOM에 실행해 검증).
+- [x] 관련 결함(범위 안) — `TaskController` 생성자·`TaskHost.listTasks()`의 peek 경로가
+  `store.recoveryReason`만으로 상태를 도출해, 이미 completed/stopped에 도달한 task를
+  리로드하면 항상 paused/recovered로 오분류(resume()이 이를 무조건 받아들임 — 이번
+  20회 검증 자체가 이 버그에 처음 걸릴 뻔했다). `store.lastCheckpoint`의 종결 상태를
+  우선하도록 좁게 수정(진행 중 task의 전체 상태 재구성은 다루지 않음). 회귀 테스트
+  각 1건(`test/task-controller.test.js`, `test/task-host.test.js`).
+- [x] 신규 `integration/repeat-journey-verification.js` + `test/repeat-journey-verification.test.js`
+  (routine 회귀용 5회 버전)로 20회 연속 독립 실제 3페이지 여정 검증: 하나의 실제
+  Electron 앱 + 하나의 실제 Python approver를 재사용하되, 매 반복은 완전히 독립된
+  새 TaskStore/taskId/WebContentsView/PlannerStdioAdapter. 명령:
+  `HALO_PYTHON=.venv/bin/python HALO_REPEAT_COUNT=20 node_modules/.bin/electron
+  integration/repeat-journey-verification.js`. 결과: **20/20 성공, 0 실패**,
+  elapsed 최소/평균/최대 = 395/404.95/423ms, 총 wall 8329ms, 매 반복 `/`·`/page2`·
+  `/page3` 정확히 1회씩만 요청.
+- [x] 메모리 재점검(approver 포함): 300ms 간격 27샘플, 실측 피크 약 446MB(<1GB
+  통과), 커버리지 = Electron main/renderer/GPU/utility(`app.getAppMetrics()`) +
+  Python approver(`ps` rss). planner worker 자체는 별도 등록하지 않음(정직한 한계
+  참고).
+- [x] `long-horizon-integration.test.js`의 관대한 단언(`"paused"`도 허용)을 근본원인
+  수정 후 더 이상 정직하지 않다고 판단해 `finalState==="completed"` 엄격 단언 +
+  `requestPathCounts` 정확히 1회씩 단언으로 강화.
+- [x] 전체 회귀 재확인: `node --test`(apps/computer-browser) 218/218 통과,
+  `.venv/bin/python -m pytest -q`(repo root) 497/497 통과.
+- [x] 100단계/10회 컨텍스트 초기화 검증과 재시작/execution_uncertain 검증은 이번
+  20회 여정 검증과 evidential하게 분리 유지(아래 정직한 한계 참고, 세 검증 축을
+  하나의 숫자로 섞지 않음).
+
 **정직한 한계 (미해결로 남은 것, 숨기지 않음):**
-- 실제 Electron 통합 실행에서 3페이지 전체 여정(navigate → follow_link → follow_link → finish)이 완주("completed")하는 것을 아직 안정적으로 확인하지 못했다. 실제 Python approver가 각 gated action에 대해 반복적으로 "review"만 반환하는 게 아니라 상당수 호출 뒤 예외를 던지는("approver_error") 사례가 관찰되었고, 근본 원인(반복되는 소켓 왕복 자체의 부하인지, 다른 원인인지)은 이번 세션에서 완전히 규명하지 못했다. `test/long-horizon-integration.test.js`는 이를 숨기지 않고 `scenario2.finalState`가 crash 없는 안정 상태(`completed|paused|awaiting_approval|awaiting_verification`) 중 하나임만 확인하며, 완주 여부는 `t.diagnostic`으로만 보고한다.
-- 100단계/10회 컨텍스트 초기화 규모의 장기 목표 보존은 가짜(fake) 기반 `task-controller.test.js`에서만 검증했다. 실제 Electron 실행에서는 4회 컨텍스트 초기화만 수행했다(실제 페이지 로드·실제 approver 왕복이 느리기 때문).
+- ~~실제 3페이지 전체 여정 완주 미확인~~ → **해결됨**(위 Task 6 후속, 20/20 실제
+  연속 완주로 검증). 이 항목은 더 이상 유효하지 않다.
+- criteriaStatus/budgets/segment를 진행 중(터미널이 아닌) task의 리로드에서
+  체크포인트+저널로부터 전체 재구성하는 문제는 이번에 다루지 않았다 —
+  completed/stopped 두 종결 상태만 좁게 고쳤다. `awaiting_verification` 상태의
+  리로드/peek 표시도 마찬가지로 미해결이다.
+- 20회 연속 검증의 실측 메모리 합계에 planner worker 프로세스 자체가 포함됐는지
+  별도로 확인하지 않았다(Electron이 같은 UID 자식 프로세스를 `app.getAppMetrics()`로
+  함께 보고하는지 미검증 — 실측 피크가 한도 대비 충분히 낮아 결론을 바꾸지는 않을
+  것으로 판단하나 검증하지 않았다).
+- 100단계/10회 컨텍스트 초기화 규모의 장기 목표 보존은 여전히 가짜(fake) 기반
+  `task-controller.test.js`에서만 검증했다. 실제 Electron 실행에서는 여전히 4회
+  컨텍스트 초기화만 수행한다(scenario 1) — 이번 20회 반복 검증은 매 반복이 독립된
+  단일 연속 실행(컨텍스트 리셋 없음)이라 이 규모 축을 대체하지 않는다.
+- 재시작 중 pause/fresh-reattach(scenario 2)와 execution_uncertain 게이팅
+  (scenario 3)은 `long-horizon-electron.js`에 별도로 유지되며, 20회 반복 검증
+  스크립트에는 포함되지 않는다.
+- 20회는 전부 같은 macOS 머신의 같은 프로세스 안에서 순차 실행한 결과다 — 여러
+  머신·여러 프로세스에 걸친 반복이나 동시(병렬) 다중 task 실행은 검증하지 않았다.
 - 단일 macOS 머신·단일 실행 기준 측정치이며, 여러 번 반복한 통계적 분포는 없다.
 - 실제 자연어 planner는 한 번도 연결되지 않았다 -- scripted/protocol fixture worker만 사용.

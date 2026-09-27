@@ -617,6 +617,61 @@ test("TaskController + a real BrowserAdapter: navigate dispatches for real and b
   await store.close();
 });
 
+// 2026-09-27 follow-up: found while verifying the real-Electron 3-page
+// journey (docs/reviews/REPORT_REMEDIATION.ko.md, 후속 22). The constructor
+// derives its initial state ONLY from store.recoveryReason
+// ("execution_uncertain"/"recovered"/else-idle) and never looks at
+// store.lastCheckpoint at all -- so a task that legitimately reached
+// "completed" (or "stopped") and was checkpointed as such is reported as
+// plain "paused"/"recovered" on the very next reload, exactly like a task
+// that was merely interrupted mid-flight. This is not just a cosmetic
+// mislabel: resume() accepts state "paused" unconditionally, so a caller
+// following the correct paused->resume() protocol would re-invoke the
+// planner/browser on an already-finished task. TaskHost.listTasks()'s
+// "peek" path (main/harness/task-host.js) has the exact same
+// recoveryReason-only derivation and reports the same wrong "paused".
+test("a task reloaded after reaching completed reports completed, not paused/recovered (TaskHost.listTasks() peeks the same way)", async () => {
+  const { store, storageRoot } = await makeStore({
+    originalRequest: "https://example.com 방문 확인",
+    criteria: [{ id: "visited", text: "page loaded", required: true, verification: "host" }],
+  });
+  const taskId = store.taskId;
+  const browser = new BrowserAdapter({ view: makeFakeElectronView() });
+  let plannerCalls = 0;
+  const planner = {
+    next: async (context) => {
+      plannerCalls += 1;
+      if (plannerCalls === 1) {
+        return {
+          taskId: context.taskId,
+          goalVersion: context.goalVersion,
+          basedOnObservationId: context.observation.id,
+          criterionIds: ["visited"],
+          kind: "actions",
+          actions: [{ type: "navigate", url: "https://example.com" }],
+        };
+      }
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: ["visited"], kind: "finish", evidenceIds: [] };
+    },
+  };
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true });
+  await controller.start();
+  assert.equal(controller.getSnapshot().state, "completed");
+  await store.close();
+
+  const reloaded = await TaskStore.load(taskId, { storageRoot });
+  assert.equal(reloaded.recoveryReason, "recovered", "a cleanly-completed task is not execution_uncertain -- it looks identical to any other clean reload without the checkpoint fix");
+  const freshController = new TaskController({
+    store: reloaded,
+    planner: { next: async () => ({ kind: "need_user", reason: "must never be called for an already-completed task" }) },
+    browser: { observe: async () => { throw new Error("must never be called for an already-completed task"); }, execute: async () => ({ status: "ok" }) },
+    approve: async () => ({ decision: "deny", reasons: [] }),
+    hostVerifier: () => true,
+  });
+  assert.equal(freshController.getSnapshot().state, "completed", "reloading a completed task must report completed, not paused/recovered");
+  await reloaded.close();
+});
+
 // --- Task 5: confirmCriterion() -- the trusted-IPC-only path that lets a
 // human satisfy a "user"-verification criterion. progress.js's
 // verifyCriterion() only ever accepts a PRE-EXISTING verified/rejected

@@ -10,7 +10,8 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { BrowserAdapter, BrowserAdapterError } = require("../main/harness/browser-adapter");
+const vm = require("node:vm");
+const { BrowserAdapter, BrowserAdapterError, buildObserveScript } = require("../main/harness/browser-adapter");
 
 function makeFakeView({ loadURL, executeJavaScript, stop } = {}) {
   return {
@@ -432,4 +433,108 @@ test("execute() after dispose() fails cleanly instead of touching a destroyed vi
 
   assert.equal(result.status, "failed");
   assert.equal(result.errorCode, "disposed");
+});
+
+// --- buildObserveScript's real text extraction, run against a minimal fake
+// DOM via vm (2026-09-27 follow-up): every other test in this file mocks
+// executeJavaScript's RETURN VALUE, so none of them actually execute the
+// generated script's own logic against anything DOM-shaped. A real
+// end-to-end run (real Electron + a real fixture page) found that the whole
+// page `text` field was silently empty for ordinary pages -- fixed below --
+// which no fake-return-value test could ever have caught. This test runs
+// the ACTUAL production script string (not a reimplementation) via vm
+// against a small hand-built DOM so the real bug (and its regression cover)
+// live in the real code path, not a parallel copy of the logic.
+
+class FakeElement {
+  constructor(tagName, { children = [], text = "", attrs = {} } = {}) {
+    this.nodeType = 1;
+    this.tagName = tagName.toUpperCase();
+    this.children = children;
+    this._ownText = text;
+    this._attrs = attrs;
+  }
+  get childElementCount() {
+    return this.children.length;
+  }
+  get childNodes() {
+    // Real DOM childNodes mixes Text and Element nodes; a plain
+    // text-bearing element like <p>hi</p> has exactly one child (a Text
+    // node), never zero -- that distinction is exactly what the fixed bug
+    // was about, so this fake preserves it instead of just matching
+    // childElementCount's shape.
+    const textNodes = this._ownText ? [{ nodeType: 3 }] : [];
+    return [...textNodes, ...this.children];
+  }
+  get textContent() {
+    const own = this._ownText || "";
+    return this.children.map((c) => c.textContent).join("") + own;
+  }
+  getAttribute(name) {
+    return Object.prototype.hasOwnProperty.call(this._attrs, name) ? this._attrs[name] : null;
+  }
+}
+
+function makeFakeTreeWalker(root) {
+  const order = [];
+  (function visit(node) {
+    order.push(node);
+    for (const child of node.children) visit(child);
+  })(root);
+  let index = 0;
+  return {
+    get currentNode() {
+      return order[index];
+    },
+    nextNode() {
+      index += 1;
+      return index < order.length ? order[index] : null;
+    },
+  };
+}
+
+function runObserveScriptAgainst(root, { maxNodesVisited = 500, maxElements = 100, maxTextBytes = 12 * 1024, baseURI = "http://example.test/" } = {}) {
+  const sandbox = {
+    document: {
+      body: root,
+      documentElement: root,
+      title: "",
+      baseURI,
+      createTreeWalker: (r) => makeFakeTreeWalker(r),
+    },
+    NodeFilter: { SHOW_ELEMENT: 1 },
+    URL,
+  };
+  vm.createContext(sandbox);
+  return vm.runInContext(buildObserveScript(maxNodesVisited, maxElements, maxTextBytes), sandbox);
+}
+
+test("buildObserveScript captures visible text from an ordinary element with a single text-node child, not just childless leaves", () => {
+  // <body><h1>Final page</h1><p>Task complete marker: DONE-XYZ</p></body> --
+  // the exact shape of fixtures/long-horizon-site.js's page3.
+  const body = new FakeElement("body", {
+    children: [
+      new FakeElement("h1", { text: "Final page" }),
+      new FakeElement("p", { text: "Task complete marker: DONE-XYZ" }),
+    ],
+  });
+  const observation = runObserveScriptAgainst(body);
+  assert.ok(
+    observation.text.includes("DONE-XYZ"),
+    `expected the page's own literal text to appear in the observation, got: ${JSON.stringify(observation.text)}`,
+  );
+});
+
+test("buildObserveScript still finds anchor elements and their href/text correctly (unaffected by the text-extraction fix)", () => {
+  const body = new FakeElement("body", {
+    children: [
+      new FakeElement("p", { text: "Still going." }),
+      new FakeElement("a", { text: "Next", attrs: { href: "/page3" } }),
+    ],
+  });
+  const observation = runObserveScriptAgainst(body, { baseURI: "http://example.test/page2" });
+  const anchor = observation.elements.find((el) => el.tag === "a");
+  assert.ok(anchor, "expected an anchor element to be captured");
+  assert.equal(anchor.text, "Next");
+  assert.equal(anchor.href, "http://example.test/page3");
 });

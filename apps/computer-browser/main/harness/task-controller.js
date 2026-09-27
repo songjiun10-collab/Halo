@@ -91,6 +91,28 @@ class TaskController {
     this._approvalQueue = [];
     this._lastObservation = null;
 
+    // A task that already reached a TERMINAL state (completed/stopped) was
+    // checkpointed synchronously the instant it got there (see the
+    // "completed" transition below and confirmCriterion()), so the last
+    // checkpoint is authoritative and must win over recoveryReason --
+    // otherwise every reload (2026-09-27 follow-up, found while verifying
+    // the real-Electron 3-page journey) reports an already-finished task as
+    // plain "paused"/"recovered", indistinguishable from one merely
+    // interrupted mid-flight. That is not just a mislabel: resume() accepts
+    // any "paused" state unconditionally, so a caller correctly following
+    // the paused->resume() protocol would re-invoke the planner/browser on
+    // a task that has nothing left to do. Only completed/stopped are
+    // restored this way -- awaiting_verification is intentionally left to
+    // the existing recovered/execution_uncertain derivation below (deciding
+    // how confirmCriterion() should interact with a peeked, not-yet-
+    // attached awaiting_verification task is a separate, broader question,
+    // not addressed here).
+    const checkpointedTask = store.lastCheckpoint && store.lastCheckpoint.payload && store.lastCheckpoint.payload.task;
+    if (checkpointedTask && (checkpointedTask.state === "completed" || checkpointedTask.state === "stopped")) {
+      this._task = { state: checkpointedTask.state, pauseReason: checkpointedTask.pauseReason ?? null };
+      return;
+    }
+
     // Initial state comes from how the store itself was opened -- a freshly
     // created task starts idle; anything loaded back off disk starts paused
     // so nothing auto-resumes without an explicit human decision (design

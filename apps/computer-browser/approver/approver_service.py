@@ -28,7 +28,7 @@ from experiments.e007_dual_agent_provenance_gate.channel import UnixSocketChanne
 from halo.policy import decide  # noqa: E402
 from halo.safety_cases import Event, evaluate_trace  # noqa: E402
 
-VALID_ACTIONS = {"click", "type", "submit_form", "navigate", "download"}
+VALID_ACTIONS = {"click", "type", "submit_form", "navigate", "download", "follow_link", "scroll", "observe"}
 VALID_SOURCES = {"user_prompt", "page_content"}
 VALID_PROVENANCE = {"trusted", "untrusted"}
 
@@ -49,6 +49,22 @@ VALID_PROVENANCE = {"trusted", "untrusted"}
 #     "buy"/"delete"/"confirm" button) is NOT distinguished here from an
 #     inert one (opening a link) -- both get "read"'s lenient treatment.
 #     Refining this by button semantics (label/aria-role) is future work.
+#   follow_link/scroll/observe -> "read": the real browser harness's actual
+#     action vocabulary (main/harness/browser-adapter.js's execute()), added
+#     2026-09-27 after a real end-to-end run found these three action types
+#     entirely missing from this table -- they fell outside VALID_ACTIONS,
+#     so build_event() raised ValueError and evaluate() denied them
+#     unconditionally, on every request, regardless of provenance. That
+#     meant every real multi-page journey stalled forever on the first
+#     follow_link (see docs/reviews/REPORT_REMEDIATION.ko.md, 2026-09-27
+#     후속 22) -- not a deliberate security posture, an out-of-date
+#     vocabulary this table was never updated for when browser-adapter.js
+#     was built. follow_link (navigating via a link found in the current
+#     page) is the same category as navigate; scroll (viewport-only, no
+#     navigation or network) and observe (re-reading the already-rendered
+#     DOM) are, if anything, strictly more benign than navigate -- so all
+#     three get the same "read" treatment navigate/click/type already have,
+#     not a new lenient category.
 #   submit_form -> "post_web" + effect "external_write": an honest match --
 #     Halo already has a category for exactly this. Because trusted_telemetry
 #     is always False in this app (no independent execution channel exists
@@ -62,6 +78,9 @@ _ACTION_MAPPING = {
     "navigate": ("read", None),
     "click": ("read", None),
     "type": ("read", None),
+    "follow_link": ("read", None),
+    "scroll": ("read", None),
+    "observe": ("read", None),
     "submit_form": ("post_web", "external_write"),
     "download": ("download", None),
 }

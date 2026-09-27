@@ -21,8 +21,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const net = require("node:net");
 const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 const { requestDecision } = require("../main/approver-client");
 
 async function mkSocketPath() {
@@ -66,6 +68,80 @@ function startFakeApprover(socketPath, respond) {
     server.listen(socketPath, () => resolve(server));
   });
 }
+
+// Reproduces the real ECONNREFUSED race found in production (2026-09-27
+// follow-up): approver_service.py's UnixSocketChannel.listen() is a
+// one-shot channel reused sequentially in a `while True` loop -- it
+// closes its listening socket and unlinks the path immediately after
+// accept() returns (before the request is even processed), then rebinds on
+// the next loop iteration. A connect() attempt landing in the narrow window
+// where the path exists but nothing is bound-and-listening on it yet (or
+// the previous listener already closed) fails with ECONNREFUSED, not
+// ENOENT -- a real Electron end-to-end run hit this after ~234 rapid
+// approve() round-trips. This helper produces a REAL ECONNREFUSED the same
+// way: bind a real process on the socket path, kill it without letting it
+// clean up, so the path is left behind as an orphaned/dead socket file that
+// nothing is listening on.
+function leaveStaleSocketFile(socketPath) {
+  return new Promise((resolve, reject) => {
+    const script = [
+      'const net = require("node:net");',
+      "const server = net.createServer();",
+      'server.listen(process.argv[1], () => process.stdout.write("READY\\n"));',
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const child = spawn(process.execPath, ["-e", script, "--", socketPath], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.on("error", reject);
+    child.stdout.on("data", (chunk) => {
+      out += chunk.toString();
+      if (out.includes("READY")) {
+        child.kill("SIGKILL");
+        child.on("exit", () => resolve());
+      }
+    });
+  });
+}
+
+test("requestDecision retries past a real transient ECONNREFUSED (dead/orphaned socket file) the same way it already retries ENOENT", async () => {
+  const socketPath = await mkSocketPath();
+  await leaveStaleSocketFile(socketPath);
+  assert.ok(fsSync.existsSync(socketPath), "the stale socket file must actually be left behind for this test to be real");
+
+  let server = null;
+  // Simulate the approver's own loop catching back up: unlink the dead
+  // file and start a real listener on the same path shortly after --
+  // exactly what a live approver process does on its next iteration.
+  const recovery = (async () => {
+    await new Promise((r) => setTimeout(r, 15));
+    await fs.unlink(socketPath).catch(() => {});
+    server = await startFakeApprover(socketPath, () => ({ decision: "allow", reasons: [] }));
+  })();
+
+  // Promise.allSettled (not a bare `await pending` racing a detached
+  // setTimeout) so that even when requestDecision rejects immediately
+  // (pre-fix, no ECONNREFUSED retry), this test still waits for `recovery`
+  // to finish starting its server before returning -- otherwise that server
+  // would be created *after* the test function already returned, with
+  // nothing left to close it, leaking an open handle that hangs the whole
+  // `node --test` process on exit.
+  const [decisionResult] = await Promise.allSettled([requestDecision(socketPath, { action: "navigate" }), recovery]);
+  try {
+    if (decisionResult.status === "rejected") throw decisionResult.reason;
+    assert.equal(decisionResult.value.decision, "allow");
+  } finally {
+    if (server) server.close();
+  }
+});
+
+test("requestDecision still fails closed (rejects) if ECONNREFUSED persists past the whole retry budget -- this is not an unbounded/broad retry", async () => {
+  const socketPath = await mkSocketPath();
+  await leaveStaleSocketFile(socketPath);
+  // Nothing ever listens again on this path -- a genuinely dead approver,
+  // not a transient rebind race. requestDecision must not hang or silently
+  // treat this as success.
+  await assert.rejects(() => requestDecision(socketPath, { action: "navigate" }), /ECONNREFUSED|ENOENT/);
+});
 
 test("requestDecision resolves a well-formed allow response", async () => {
   const socketPath = await mkSocketPath();

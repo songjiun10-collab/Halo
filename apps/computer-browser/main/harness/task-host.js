@@ -113,11 +113,19 @@ class TaskHost {
       // call (that would spawn a WebContentsView/worker per saved task just
       // to list them).
       const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
+      // Same fix as task-controller.js's constructor (2026-09-27 follow-up):
+      // a task that already reached completed/stopped was checkpointed
+      // synchronously the instant it got there, so that checkpoint is
+      // authoritative over recoveryReason -- otherwise a finished task is
+      // peeked as plain "paused"/"recovered", indistinguishable from one
+      // merely interrupted mid-flight.
+      const checkpointedTask = store.lastCheckpoint && store.lastCheckpoint.payload && store.lastCheckpoint.payload.task;
+      const isTerminal = checkpointedTask && (checkpointedTask.state === "completed" || checkpointedTask.state === "stopped");
       summaries.push({
         taskId,
         originalRequest: store.getGoal().originalRequest,
-        state: store.recoveryReason === "execution_uncertain" ? "paused" : store.recoveryReason === "recovered" ? "paused" : "idle",
-        pauseReason: store.recoveryReason === "created" ? null : store.recoveryReason,
+        state: isTerminal ? checkpointedTask.state : store.recoveryReason === "execution_uncertain" ? "paused" : store.recoveryReason === "recovered" ? "paused" : "idle",
+        pauseReason: isTerminal ? (checkpointedTask.pauseReason ?? null) : store.recoveryReason === "created" ? null : store.recoveryReason,
         active: false,
       });
       await store.close();
