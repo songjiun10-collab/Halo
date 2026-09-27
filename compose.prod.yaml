@@ -7,6 +7,10 @@
 # --worker-tmp-dir /dev/shm is required, not optional: compose.yaml sets
 # read_only: true, so gunicorn's sync worker needs a writable tmpfs for its
 # heartbeat file or it will fail to boot.
+#
+# --no-control-socket is required too: gunicorn 26+ defaults to a control
+# socket under $HOME/.gunicorn, which read_only: true also blocks (logged
+# as a startup ERROR even though the worker boots and serves fine).
 services:
   gateway:
     command:
@@ -17,6 +21,7 @@ services:
       - --threads=1
       - --worker-class=sync
       - --worker-tmp-dir=/dev/shm
+      - --no-control-socket
       - --timeout=30
       - --graceful-timeout=10
       - --keep-alive=5
