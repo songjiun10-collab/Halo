@@ -1,2 +1,14 @@
 /target/
-/results/
+# /results/* (not /results/) so the per-file exceptions below can actually
+# re-include a file -- git cannot un-ignore a file whose PARENT DIRECTORY
+# itself is excluded, only one whose directory is merely walked past.
+/results/*
+# Exceptions: cited as supporting evidence by committed report markdown
+# (HALO_EXPLOIT_V*.md, REPORT_INDEX.ko.md, rust/SANDBOX_BOUNDARY.ko.md,
+# artifacts/sandbox_benchmark/*.ko.md) -- tests/test_document_links.py checks
+# every relative Markdown link resolves on disk, which only holds in CI if
+# these two specific result files are actually tracked, not just present on
+# whichever machine last ran the benchmark. The rest of /results/ (large,
+# regenerable raw benchmark dumps) stays ignored.
+!/results/attack-100-validated-20.json
+!/results/attack-100-exec-fix.json
