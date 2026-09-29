@@ -69,6 +69,21 @@ const TASK_HOST_METHODS = new Set([
   "saveMemory",
   "removeMemory",
   "fillCredential",
+  "listRoutines",
+  "getRoutine",
+  "saveRoutine",
+  "deleteRoutine",
+  "runRoutine",
+  "startWorkGoal",
+  "getActiveWorkGoal",
+  "listWorkGoalHistory",
+  "amendWorkGoal",
+  "pauseWorkGoal",
+  "resumeWorkGoal",
+  "completeWorkGoal",
+  "archiveWorkGoal",
+  "recordWorkGoalProgress",
+  "verifyWorkGoalCriterion",
 ]);
 
 class BackgroundRuntimeService {

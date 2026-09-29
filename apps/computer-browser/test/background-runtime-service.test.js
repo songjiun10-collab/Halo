@@ -138,6 +138,52 @@ test("a TaskHost-surface method is rejected until the calling client has attache
   await service.stopService("test done");
 });
 
+test("routine and work-goal TaskHost methods reach the TaskHost over the background runtime, not just the renderer's direct IPC path", async () => {
+  // main/ipc.js's HARNESS_METHODS exposes listRoutines/getRoutine/saveRoutine/
+  // deleteRoutine/runRoutine and the nine startWorkGoal.../verifyWorkGoalCriterion
+  // methods to the renderer. BackgroundRuntimeService's TASK_HOST_METHODS
+  // allowlist is a separate, hand-maintained list guarding the same TaskHost
+  // surface for the out-of-process/background path -- it must not silently
+  // fall behind main/ipc.js's list.
+  const taskHost = makeFakeTaskHost({
+    async listRoutines() { return [{ routineId: "r1" }]; },
+    async getRoutine(routineId, revision) { return { routineId, revision }; },
+    async saveRoutine(input) { return { routineId: "new-routine", ...input }; },
+    async deleteRoutine(routineId) { return { routineId, deleted: true }; },
+    async runRoutine(routineId, revision, options) { return { taskId: "routine-task", routineId, revision, options }; },
+    async startWorkGoal(input) { return { goalId: "g1", ...input }; },
+    async getActiveWorkGoal() { return null; },
+    async listWorkGoalHistory() { return []; },
+    async amendWorkGoal(expectedVersion, nextSpec) { return { expectedVersion, nextSpec }; },
+    async pauseWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "paused" }; },
+    async resumeWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "active" }; },
+    async completeWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "completed" }; },
+    async archiveWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "archived" }; },
+    async recordWorkGoalProgress(goalId, expectedVersion, evidenceRefs) { return { goalId, expectedVersion, evidenceRefs }; },
+    async verifyWorkGoalCriterion(goalId, expectedVersion, criterionId) { return { goalId, expectedVersion, criterionId, verified: true }; },
+  });
+  const { service, socketPath, capability } = await startService(taskHost);
+  const client = await connectedClient(socketPath, capability, "ui-1");
+  await client.call("attachClient", "ui-1");
+  assert.deepEqual(await client.call("listRoutines"), [{ routineId: "r1" }]);
+  assert.deepEqual(await client.call("getRoutine", ["r1", 2]), { routineId: "r1", revision: 2 });
+  assert.deepEqual(await client.call("saveRoutine", { name: "x" }), { routineId: "new-routine", name: "x" });
+  assert.deepEqual(await client.call("deleteRoutine", "r1"), { routineId: "r1", deleted: true });
+  assert.deepEqual(await client.call("runRoutine", ["r1", 2, { standalone: true }]), { taskId: "routine-task", routineId: "r1", revision: 2, options: { standalone: true } });
+  assert.deepEqual(await client.call("startWorkGoal", { objective: "o" }), { goalId: "g1", objective: "o" });
+  assert.equal(await client.call("getActiveWorkGoal"), null);
+  assert.deepEqual(await client.call("listWorkGoalHistory"), []);
+  assert.deepEqual(await client.call("amendWorkGoal", [1, { objective: "o2" }]), { expectedVersion: 1, nextSpec: { objective: "o2" } });
+  assert.deepEqual(await client.call("pauseWorkGoal", ["g1", 1]), { goalId: "g1", expectedVersion: 1, status: "paused" });
+  assert.deepEqual(await client.call("resumeWorkGoal", ["g1", 2]), { goalId: "g1", expectedVersion: 2, status: "active" });
+  assert.deepEqual(await client.call("completeWorkGoal", ["g1", 3]), { goalId: "g1", expectedVersion: 3, status: "completed" });
+  assert.deepEqual(await client.call("archiveWorkGoal", ["g1", 4]), { goalId: "g1", expectedVersion: 4, status: "archived" });
+  assert.deepEqual(await client.call("recordWorkGoalProgress", ["g1", 1, ["e1"]]), { goalId: "g1", expectedVersion: 1, evidenceRefs: ["e1"] });
+  assert.deepEqual(await client.call("verifyWorkGoalCriterion", ["g1", 1, "c1"]), { goalId: "g1", expectedVersion: 1, criterionId: "c1", verified: true });
+  await client.close();
+  await service.stopService("test done");
+});
+
 test("an unlisted/unknown method name is rejected rather than reaching the TaskHost or any filesystem path", async () => {
   const taskHost = makeFakeTaskHost();
   const { service, socketPath, capability } = await startService(taskHost);
