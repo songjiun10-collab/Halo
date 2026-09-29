@@ -539,10 +539,21 @@ test("process death after every durable Work Goal admission append recovers held
     assert.equal(crashed.error, undefined, `${boundary}: child process failed: ${crashed.error?.message}`);
 
     let browserCreations = 0;
+    let browserExecutions = 0;
     let plannerCreations = 0;
+    let plannerTurns = 0;
     const recovered = makeHost(storageRoot, {
-      makeBrowser: () => { browserCreations += 1; throw new Error("recovery must not create a browser"); },
-      makePlanner: () => { plannerCreations += 1; throw new Error("recovery must not create a planner"); },
+      makeBrowser: () => {
+        browserCreations += 1;
+        return {
+          observe: async () => ({ id: "orphan-observation", url: "https://example.com/", elements: [] }),
+          execute: async () => { browserExecutions += 1; return { status: "ok" }; },
+        };
+      },
+      makePlanner: () => {
+        plannerCreations += 1;
+        return { next: async () => { plannerTurns += 1; throw new Error("unbound orphan must never reach planner"); } };
+      },
     });
     const tasks = await recovered.listTasks();
     assert.equal(tasks.length, 1, `${boundary}: durable Task should remain visible after process death`);
@@ -557,6 +568,13 @@ test("process death after every durable Work Goal admission append recovers held
     const recovery = await recovered.getWorkGoalRecoveryStatus(goal.goalId, goal.spec.version);
     if (boundary === "task_profile") assert.deepEqual(recovery, []);
     else assert.deepEqual(recovery.map((item) => [item.status, item.reason]), [["held", "checkpoint_missing"]]);
+    if (boundary === "task_profile") {
+      const resumed = await recovered.resumeSavedTask(tasks[0].taskId);
+      assert.equal(resumed.state, "paused", "an unreserved Task profile must fail closed on explicit recovery");
+      assert.equal(resumed.pauseReason, "context_error");
+      assert.equal(plannerTurns, 0, "the planner must never receive context for an unreserved Task");
+      assert.equal(browserExecutions, 0, "no browser action may execute for an unreserved Task");
+    }
   }
 });
 
