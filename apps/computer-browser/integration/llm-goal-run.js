@@ -21,8 +21,8 @@
 //   ends when the controller itself ends (completed / awaiting_verification /
 //   paused) or the timeout stops it.
 // Env: HALO_LLM_PROFILES (comma list, default "short,middle"), HALO_LLM_DEPTH
-//   (1..3, default 2), HALO_LLM_BRANCH (2..4, default 3), HALO_LLM_TIMEOUT_S
-//   (30..900, default 300). Emits RESULT_JSON:<json>.
+//   (1..5, default 2), HALO_LLM_BRANCH (2..4, default 3), HALO_LLM_TIMEOUT_S
+//   (30..3600, default 300). Emits RESULT_JSON:<json>.
 
 const fs = require("node:fs/promises");
 const os = require("node:os");
@@ -75,7 +75,7 @@ async function runOne({ profile, site, createBrowser, storageRoot, timeoutMs, ve
   const store = await TaskStore.create({
     originalRequest: `Find the page on this small website that contains the text TARGET-FOUND. Start at ${site.origin}/n/r . Pages link to sub-sections; some sections are dead ends.`,
     criteria: [{ id: "found", text: "reached the page containing TARGET-FOUND", required: true, verification: verified ? "host" : "user" }],
-    limits: { maxActions: 200, maxPlannerCalls: 60, maxActiveMs: 30 * 60 * 1000 },
+    limits: { maxActions: 2000, maxPlannerCalls: 600, maxActiveMs: 60 * 60 * 1000 },
   }, { storageRoot, onTiming: ({ operation }) => { if (operation === "journal_fsync") counts.journalFsyncs += 1; } });
 
   const planner = new PlannerStdioAdapter({
@@ -90,6 +90,7 @@ async function runOne({ profile, site, createBrowser, storageRoot, timeoutMs, ve
     close: () => planner.close(),
     next: async (context, options) => {
       counts.plannerCalls += 1;
+      if (counts.plannerCalls % 10 === 0) console.error(`[llm-goal-run] ${profile}: planner call ${counts.plannerCalls}, pages ${visited.length}, ${Math.round((performance.now() - startedAt) / 1000)}s`);
       const t0 = performance.now();
       try {
         const proposal = await planner.next(context, options);
@@ -157,9 +158,9 @@ async function main() {
 
   const profiles = (process.env.HALO_LLM_PROFILES || "short,middle").split(",").map((item) => item.trim());
   for (const profile of profiles) if (!HARNESS_PROFILES.includes(profile)) throw new RangeError(`unknown profile ${profile}`);
-  const depth = envInt("HALO_LLM_DEPTH", 2, { min: 1, max: 3 });
+  const depth = envInt("HALO_LLM_DEPTH", 2, { min: 1, max: 5 });
   const branch = envInt("HALO_LLM_BRANCH", 3, { min: 2, max: 4 });
-  const timeoutMs = envInt("HALO_LLM_TIMEOUT_S", 300, { min: 30, max: 900 }) * 1000;
+  const timeoutMs = envInt("HALO_LLM_TIMEOUT_S", 300, { min: 30, max: 3600 }) * 1000;
   const verified = process.env.HALO_LLM_VERIFIED === "1";
 
   await app.whenReady();
