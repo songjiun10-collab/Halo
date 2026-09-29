@@ -126,6 +126,28 @@ test("start(): spawns claude with the fixed safety flags, no shell, an env allow
   }
 });
 
+test("buildPrompt: the per-proposal action bound comes from context.progress only when it is a reviewed bound, else stays 1-3", async () => {
+  async function promptFor(progressExtra) {
+    const fakeChild = makeFakeChild();
+    const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+    const context = makeContext();
+    context.progress = { ...context.progress, ...progressExtra };
+    const pending = bridge.start(context);
+    await flush();
+    const promptText = fakeChild.stdin.written[0];
+    fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal())));
+    fakeChild.emit("close", 0);
+    await pending;
+    return promptText;
+  }
+  assert.ok((await promptFor({})).includes('kind "actions"   -> only "actions" (no "reason", no "evidenceIds")'));
+  assert.ok((await promptFor({})).includes("propose 1-3 browser actions"));
+  assert.ok((await promptFor({ maxActionsPerProposal: 8 })).includes("propose 1-8 browser actions"));
+  for (const untrusted of [4, 100, "8", null, -1]) {
+    assert.ok((await promptFor({ maxActionsPerProposal: untrusted })).includes("propose 1-3 browser actions"), String(untrusted));
+  }
+});
+
 test("start(): a constructor extraArgs-like field is ignored -- there is no way to append or override the fixed CLI_ARGS", async () => {
   let captured;
   const fakeChild = makeFakeChild();

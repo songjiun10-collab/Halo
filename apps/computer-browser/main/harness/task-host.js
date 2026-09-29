@@ -240,7 +240,8 @@ class TaskHost {
     // Profile selection is a host operation (design doc "Profile selection"):
     // TaskHost is the sole authority that decides harnessProfile, and passes
     // it in rather than letting the controller (or the task's own text)
-    // infer it independently.
+    // infer it independently. The resolved durable task profile is canonical;
+    // legacy tasks without one retain the deterministic routine default.
     const harnessProfile = taskProfile?.duration.id || selectHarnessProfile({ isRoutine: !!routine });
     const controller = new TaskController({
       store,
@@ -854,7 +855,7 @@ class TaskHost {
       };
     }
     const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
-    const harnessProfile = store.taskProfile?.duration.id || selectHarnessProfile({ isRoutine: !!store.lastCheckpoint?.payload?.routineRun });
+    const harnessProfile = store.taskProfile?.duration.id || store.lastCheckpoint?.payload?.harnessProfile || selectHarnessProfile({ isRoutine: !!store.lastCheckpoint?.payload?.routineRun });
     const detail = { taskId, goal: store.getGoal(), recoveryReason: store.recoveryReason, active: false, harnessProfile, taskProfile: store.taskProfile ?? null };
     await store.close();
     return detail;

@@ -143,3 +143,54 @@
 - [x] Update `docs/superpowers/specs/2026-09-29-harness-profiles-v2-design.md`'s Rollout section to mark Phase 2 implemented (with Task 4 noted as a narrower, real slice of "incremental observation" rather than the full tiered design), with a link to this plan.
 
 **Phase 2 status: implemented (narrowed scope on Task 4).** Safe batching, reduced planner cadence, semantic durability, and observation reuse for `short` are all implemented, tested, and benchmarked. Batching/cadence/durability turned out to be the same underlying lever (profile-aware batch width) — evidence worth keeping rather than papering over with three separate ad hoc mechanisms. Task 4 ships tier 1 of the spec's observation-preference list ("existing valid stable references") using the codebase's existing `documentEpoch` staleness authority; genuine DOM-diff delta observation (tiers 2+) remains out of scope for a dedicated future plan. `middle`/`long` execution is unchanged from `develop` before this plan.
+
+### Addendum: real-Electron validation of the batching lever (2026-09-29)
+
+The Task 2/3/5 numbers above came from an in-process fake browser. To check they hold against a real `BrowserAdapter`/`WebContentsView`, `integration/routine-vs-planner-benchmark.js` gained a `HALO_BENCH_BATCH_CAP` knob (1..8, default 3 = unchanged behavior; passed to `RoutineRunner`'s `maxBatchActions`). Scroll-heavy routine: 10 pages, 5 scrolls per page (55 actions), routine mode only, 4 cold/warm-paired iterations per setting under xvfb, Electron 44.4.5, all iterations successful:
+
+| batch cap | routine runMs (median / min) | approvals | journal fsyncs |
+|---:|---:|---:|---:|
+| 1 (batching effectively off) | 491.7 / 440.5 | 55 | 111 |
+| 3 (`middle` cap) | 387.1 / 353.0 | 28 | 57 |
+| 8 (`short` cap) | 343.4 / 316.8 | 19 | 39 |
+
+Cap 3 → 8: -11% wall time, -32% approvals, -32% fsyncs. Real, but smaller than the fake-browser ratios suggested, because real browser work (navigation, scroll, observe) dominates once round-trips shrink.
+
+Limits, stated plainly: 4 pairs is a small sample (medians, not confidence intervals); scripted local fixture, not real sites; only the routine proposal source (not a model planner) was measured; no human approval latency. Headroom finding: this workload's scroll runs are exactly 5 long and batches end at every `follow_link` (a navigation/approval boundary that must not batch), so raising the short cap above 8 would not change this workload at all — the constant is adequate here, and further gains would need a different lever, not a bigger number.
+
+### Addendum: long-task profile comparison on real Electron (2026-09-29)
+
+`integration/profile-long-task-benchmark.js` drives one long task per arm on a real `BrowserAdapter`: a 100-page local chain, and on each page 5 scrolls, one explicit `observe`, then `follow_link` (694 actions). An in-process planner fills each proposal up to the profile's own cap (as a real planner must, since the controller rejects an over-cap proposal). Only `harnessProfile` differs between arms. 5 repetitions, arm order rotated per repetition, all runs completed all 100 pages, Electron 44.4.5 under xvfb.
+
+| profile (cap) | median wall | planner calls | approver calls | controller observes | journal fsyncs |
+|---|---:|---:|---:|---:|---:|
+| short (8) | 2584 ms | 200 | 298 | 101 | 201 |
+| middle (3) | 2850 ms | 299 | 397 | 299 | 300 |
+| long (3) | 2741 ms | 299 | 397 | 299 | 300 |
+
+- short vs middle: wall -9% (4 of 5 paired reps lower; the first, cold rep was a near-tie), planner calls -33%, approver calls -25%, top-of-loop observes -66%, fsyncs -33%. The counts are deterministic; the wall-time delta is a small-sample median.
+- middle vs long: identical counts, wall times overlap (2850 vs 2741 ms, per-rep ranges intersect). This confirms Phase 3's finding that the two profiles are behaviorally the same today.
+- No long-run drift: mean ms per page over the first vs last quarter of the chain is flat for every profile (short 25.6 → 26.4 ms, middle 28.0 → 29.2 ms, long 26.6 → 27.4 ms), so per-turn cost does not grow with journal size at this scale.
+
+What this does not show: the planner here is in-process with zero latency and the pages are tiny, so the wall-time gap understates real use. What was measured is the *count* of planner round-trips saved (99 over this chain); any wall-time saving in production is that count times the real planner latency per call, which was not measured here. Also unmeasured: real sites, human approval latency, memory.
+
+### Addendum: complex task, raw browser vs harness (2026-09-29)
+
+`integration/complex-browser-vs-harness-benchmark.js` runs one complex task on a real `WebContentsView` in three arms. The task: depth-first search through a branching local site (depth 5, branching 3) for a hidden target page. Every page is read (4 scrolls, then an observation), dead ends force backtracking by direct navigation, and the walk ends after 157 pages / 942 harness actions. All arms share one exploration policy and the benchmark aborts unless every arm in every repetition visits the identical page sequence and finds the target (it did).
+
+- **raw**: `webContents.loadURL` + `executeJavaScript` only. No `TaskStore`, `TaskController`, `BrowserAdapter`, policy, approval, or journal.
+- **short / middle**: full harness (`TaskController` + `BrowserAdapter` + durable journal + approver call per action group), in-process planner that fills each proposal to the profile's cap, immediate programmatic "allow".
+
+5 repetitions, arm order rotated, Electron 44.4.5 under xvfb:
+
+| arm | median wall | per-rep wall (ms, rep 0 = cold) | planner calls | approver calls | journal fsyncs |
+|---|---:|---|---:|---:|---:|
+| raw browser | 3068 ms | 5377, 2909, 2951, 3140, 3068 | n/a | n/a | n/a |
+| harness short | 4119 ms | 8465, 4945, 4119, 3748, 3975 | 315 | 471 | 316 |
+| harness middle | 4310 ms | 5918, 4608, 4258, 4310, 4193 | 472 | 628 | 473 |
+
+- Harness overhead over the raw browser on this task: short +34%, middle +40% (median), i.e. roughly 6.7 ms (short) / 7.9 ms (middle) per visited page on top of 3068 ms / 157 ≈ 19.5 ms of raw browser work per page. The overhead buys a durable journal, per-action policy/approval, and crash recovery, none of which the raw arm has.
+- short vs middle: -4% median wall here, with -33% planner calls, -25% approver calls, -33% fsyncs. The gap is smaller than in the scroll-only benchmark because backtracking and per-page navigation dominate this task and cannot batch.
+- Repetition 0 is a cold-start outlier in every arm (the first measured arm in the rotation pays warm-up); medians are unaffected but the small sample is noisy — treat the short-vs-middle wall difference as suggestive, the call counts as exact.
+
+Limits, stated plainly: raw is a minimal implementation (a real automation stack would add its own overhead); the harness planner is in-process with zero latency and approval is instant, so real runs add planner latency and any human approval wait on top, which the raw arm has no equivalent of; peak-memory samples were collected but are whole-app poll samples that cannot be attributed to one arm, so no memory comparison is claimed; local pages only.

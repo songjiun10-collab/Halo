@@ -12,7 +12,9 @@
 // Env: HALO_BENCH_STEPS (2..64, default 50), HALO_BENCH_PAIRS (>=2, default 6),
 //   HALO_BENCH_SEED (default 1), HALO_BENCH_APPROVAL (review|allow, default
 //   review), HALO_BENCH_SCROLLS_PER_PAGE (0..5, default 0) and
-//   HALO_BENCH_BATCHING (on|off, default on; only matters with scrolls).
+//   HALO_BENCH_BATCHING (on|off, default on; only matters with scrolls) and
+//   HALO_BENCH_BATCH_CAP (1..8, default 3 = middle-profile proposal cap;
+//   8 = short-profile cap).
 // HALO_BENCH_KIND=duration-profile compares the same Browser planner workload
 // under Middle and Long; default kind remains routine-vs-planner. Emits
 // RESULT_JSON:<json>; exits nonzero on any failed iteration.
@@ -188,6 +190,7 @@ async function runIteration({
   storageRoot,
   approvalMode = "review",
   batching = true,
+  batchCap = 3,
   makePlanner = defaultMakePlanner,
   sampler,
   label = {},
@@ -279,7 +282,7 @@ async function runIteration({
     let proposer;
     const routineOptions = {};
     if (mode === "routine") {
-      const runner = new RoutineRunner({ definition: savedRoutine, cursor: 0, batchReadOnlySteps: true });
+      const runner = new RoutineRunner({ definition: savedRoutine, cursor: 0, batchReadOnlySteps: true, maxBatchActions: batchCap });
       proposer = runner;
       routineOptions.routineRunner = runner;
       routineOptions.routineRun = { routineId: savedRoutine.routineId, revision: savedRoutine.revision, digest: savedRoutine.digest, cursor: 0 };
@@ -450,6 +453,7 @@ async function runBenchmark({
   seed = 1,
   approvalMode = "review",
   batching = true,
+  batchCap = 3,
   createBrowser,
   storageRoot,
   makePlanner,
@@ -467,6 +471,7 @@ async function runBenchmark({
         storageRoot,
         approvalMode,
         batching,
+        batchCap,
         makePlanner,
         sampler,
         timeoutMs,
@@ -476,7 +481,7 @@ async function runBenchmark({
       if (!row.success) throw new Error(`iteration failed (${mode}, pair ${pair.pairIndex}): ${row.error}`);
     }
   }
-  return buildReport({ scenario, schedule, iterations, approvalMode, batching, seed, memory: sampler?.summarize?.() ?? null });
+  return buildReport({ scenario, schedule, iterations, approvalMode, batching, seed, memory: sampler?.summarize?.() ?? null, extra: { batchCap } });
 }
 
 async function runRecoveryProbe({ storageRoot, durationProfile, completedActions = 100, checkpointEvery = 10 } = {}) {
@@ -675,6 +680,7 @@ async function main() {
   const batchingRaw = process.env.HALO_BENCH_BATCHING || "on";
   if (!["on", "off"].includes(batchingRaw)) throw new RangeError("HALO_BENCH_BATCHING must be on|off");
   const batching = batchingRaw === "on";
+  const batchCap = envInt("HALO_BENCH_BATCH_CAP", 3, { min: 1, max: 8 });
   const approvalMode = process.env.HALO_BENCH_APPROVAL || "review";
   if (!["review", "allow"].includes(approvalMode)) throw new RangeError("HALO_BENCH_APPROVAL must be review|allow");
 
@@ -750,7 +756,7 @@ async function main() {
         recoveryActions: envInt("HALO_BENCH_RECOVERY_ACTIONS", 300, { min: 1, max: 1000 }),
         checkpointEvery: envInt("HALO_BENCH_CHECKPOINT_EVERY", 25, { min: 1, max: 1000 }),
       })
-      : await runBenchmark({ scenario, pairs, seed, approvalMode, batching, storageRoot, sampler, createBrowser });
+      : await runBenchmark({ scenario, pairs, seed, approvalMode, batching, batchCap, storageRoot, sampler, createBrowser });
     const pageCounts = fixture.requestLog
       .filter((item) => /^\/step\/\d+$/.test(item.path))
       .reduce((map, item) => ({ ...map, [item.path]: (map[item.path] || 0) + 1 }), {});

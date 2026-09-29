@@ -210,3 +210,18 @@ test("user memory is always an explicit untrusted context block and never change
   const empty = buildContext({ goal, state: makeState(), observation: null, recentEvents: [] });
   assert.deepEqual(empty.userMemory, { authority: "untrusted_user_memory", entries: [] });
 });
+
+test("buildContext carries navigation history labeled untrusted, or null when absent, and rejects a malformed shape", () => {
+  const goal = makeGoal();
+  const args = { goal, state: makeState(), observation: null, recentEvents: [] };
+  assert.equal(buildContext(args).navigationHistory, null);
+  const navigation = { visited: ["https://a.test/"], frontier: [{ href: "https://a.test/x", name: "X" }] };
+  assert.deepEqual(buildContext({ ...args, navigation }).navigationHistory, {
+    authority: "untrusted_page_derived",
+    visited: navigation.visited,
+    frontier: navigation.frontier,
+  });
+  for (const bad of [{}, { visited: [] }, { visited: {}, frontier: [] }, "x", []]) {
+    assert.throws(() => buildContext({ ...args, navigation: bad }), (error) => error instanceof ContextError, JSON.stringify(bad));
+  }
+});

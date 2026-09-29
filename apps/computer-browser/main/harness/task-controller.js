@@ -73,6 +73,14 @@ function observationKey(observation) {
   }
 }
 
+// Long-profile goal persistence: total finish proposals the host will reject
+// (criteria still unmet, all machine-verifiable) before pausing for a human.
+const GOAL_MAX_REJECTED_FINISHES = 5;
+const NAV_VISITED_MAX = 32;
+const NAV_FRONTIER_MAX = 32;
+const NAV_URL_MAX_CHARS = 512;
+const NAV_NAME_MAX_CHARS = 80;
+
 class TaskController {
   constructor({
     store,
@@ -116,15 +124,33 @@ class TaskController {
       throw new TaskControllerError("invalid_routine", "routine runner requires a pinned routine ID, revision, digest, and cursor");
     }
     // TaskHost/_attach is the profile-selection authority, never the model or
-    // the task's own text; this constructor only validates what it's given,
-    // defaulting via the same pure rule when omitted (e.g. a directly
-    // constructed test controller). See docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase2.md.
+    // the task's own text; this constructor only validates what it's given.
+    // A durably checkpointed harnessProfile (see _checkpoint()) always wins
+    // on reattach/recovery, exactly like _routineRun above -- otherwise an
+    // explicit "long" chosen at task creation would silently fall back to
+    // _attach()'s stateless default (isRoutine-based) after every restart,
+    // which is precisely the "durable continuation" property Long exists
+    // for. See docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase3.md.
+    const checkpointedHarnessProfile = store.lastCheckpoint?.payload?.harnessProfile;
     this._harnessProfile = validateHarnessProfile(
-      harnessProfile !== undefined ? harnessProfile : selectHarnessProfile({ isRoutine: this._routineRun !== null }),
+      checkpointedHarnessProfile !== undefined
+        ? checkpointedHarnessProfile
+        : harnessProfile !== undefined
+          ? harnessProfile
+          : selectHarnessProfile({ isRoutine: this._routineRun !== null }),
     );
     // Fixed for the task's lifetime (no setter exists) -- computed once here
     // rather than on every proposal validation in the hot per-turn loop.
     this._maxActionsPerProposal = maxActionsPerProposal(this._harnessProfile);
+    // Long only: /goal-style persistence. Recover the count from both the
+    // checkpoint and its journal tail: a crash can happen after the durable
+    // finish_rejected append but before the next checkpoint.
+    const checkpointedRejected = store.lastCheckpoint?.payload?.goalPersistence?.rejectedFinishes;
+    const checkpointCount = Number.isInteger(checkpointedRejected) && checkpointedRejected >= 0
+      ? checkpointedRejected : 0;
+    const tailCount = (store.eventsSinceCheckpoint || []).filter((event) =>
+      event?.type === "note" && event.payload?.kind === "finish_rejected").length;
+    this._rejectedFinishes = Math.min(GOAL_MAX_REJECTED_FINISHES, checkpointCount + tailCount);
     this._browser = browser;
     this._approve = approve;
     this._hostVerifier = hostVerifier;
@@ -200,6 +226,11 @@ class TaskController {
     // "observe" (see the reuse gate in the main loop and its assignment in
     // _afterActionDispatched, which is this field's one source of truth).
     this._reusableObservation = null;
+    // Host-owned navigation memory for the planner: pages actually visited and
+    // links seen but not yet visited. Without it a planner at a dead end has
+    // no way to know where it came from or what is left to try. In-memory
+    // only: a restarted controller re-discovers it from fresh observations.
+    this._navigation = { visited: [], frontier: [] };
 
     // A task that already reached a TERMINAL state (completed/stopped) was
     // checkpointed synchronously the instant it got there (see the
@@ -533,6 +564,36 @@ class TaskController {
     await this._pauseWith("routine_step_denied");
   }
 
+  // A rejected finish only makes sense when a machine can still verify the
+  // missing criteria; a criterion that needs a human ("user") keeps today's
+  // awaiting_verification handoff.
+  _onlyHostVerifiable(missingIds) {
+    return missingIds.length > 0 && missingIds.every((id) => this._goal.criteria.find((criterion) => criterion.id === id)?.verification === "host");
+  }
+
+  _goalPersistenceState() {
+    const { missingIds } = canComplete(this._goal, this._evidenceForCompletionCheck());
+    return { unmetCriterionIds: missingIds, rejectedFinishes: this._rejectedFinishes, maxRejectedFinishes: GOAL_MAX_REJECTED_FINISHES };
+  }
+
+  _recordNavigation(observation) {
+    const nav = this._navigation;
+    const url = typeof observation?.url === "string" ? observation.url.slice(0, NAV_URL_MAX_CHARS) : "";
+    if (/^https?:\/\//i.test(url) && !nav.visited.includes(url)) {
+      nav.visited.push(url);
+      if (nav.visited.length > NAV_VISITED_MAX) nav.visited.splice(0, nav.visited.length - NAV_VISITED_MAX);
+    }
+    // A link seen now supersedes an older frontier entry for the same href.
+    nav.frontier = nav.frontier.filter((entry) => !nav.visited.includes(entry.href));
+    for (const element of Array.isArray(observation?.elements) ? observation.elements : []) {
+      if (element?.role !== "link" || typeof element.href !== "string" || !/^https?:\/\//i.test(element.href)) continue;
+      const href = element.href.slice(0, NAV_URL_MAX_CHARS);
+      if (nav.visited.includes(href) || nav.frontier.some((entry) => entry.href === href)) continue;
+      nav.frontier.push({ href, name: String(element.name ?? "").slice(0, NAV_NAME_MAX_CHARS) });
+    }
+    if (nav.frontier.length > NAV_FRONTIER_MAX) nav.frontier.splice(0, nav.frontier.length - NAV_FRONTIER_MAX);
+  }
+
   _enterActive() {
     if (this._activeSince === null) this._activeSince = this._now();
   }
@@ -552,6 +613,8 @@ class TaskController {
         budgets: { ...this._budgets },
         segment: { ...this._segment },
         criteriaStatus: [...this._criteriaStatus.entries()],
+        harnessProfile: this._harnessProfile,
+        ...(this._harnessProfile === "long" ? { goalPersistence: { rejectedFinishes: this._rejectedFinishes } } : {}),
         ...(this._routineRun ? { routineRun: { ...this._routineRun } } : {}),
       });
       this._snapshotTrusted = true;
@@ -917,6 +980,7 @@ class TaskController {
         this._reusableObservation = null;
         if (this._stopHappenedSince(epoch)) break;
         this._lastObservation = observation;
+        this._recordNavigation(observation);
 
         let customMemory = [];
         try {
@@ -952,7 +1016,10 @@ class TaskController {
               segment: { ...this._segment },
               budgets: { ...this._budgets },
               plannerEffort: this._plannerEffort,
+              maxActionsPerProposal: this._maxActionsPerProposal,
+              ...(this._harnessProfile === "long" ? { goalPersistence: this._goalPersistenceState() } : {}),
             },
+            navigation: { visited: [...this._navigation.visited], frontier: [...this._navigation.frontier] },
             observation,
             recentEvents: this._store.eventsSinceCheckpoint || [],
             customMemory,
@@ -1029,6 +1096,19 @@ class TaskController {
 
         if (validated.kind === "finish") {
           const completion = canComplete(this._goal, this._evidenceForCompletionCheck());
+          if (!completion.complete && this._harnessProfile === "long" && this._onlyHostVerifiable(completion.missingIds)) {
+            this._rejectedFinishes += 1;
+            await this._store.append({ type: "note", payload: {
+              kind: "finish_rejected",
+              missingCriterionIds: completion.missingIds,
+              rejectedFinishes: this._rejectedFinishes,
+            } });
+            if (this._rejectedFinishes >= GOAL_MAX_REJECTED_FINISHES) {
+              await this._pauseWith("goal_not_reached");
+              break;
+            }
+            continue; // the goal is not met: keep working, the planner is told why via context.progress.goalPersistence
+          }
           this._leaveActive();
           if (completion.complete) {
             this._task = { state: "completed", pauseReason: null };
