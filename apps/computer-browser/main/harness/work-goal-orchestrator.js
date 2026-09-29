@@ -265,15 +265,38 @@ class WorkGoalOrchestrator {
     } catch (error) {
       if (error.code !== "not_found") throw error;
     }
-    await this._append(goalId, expectedVersion, "work_goal_task_reservation_cancelled", {
+    const next = await this._append(goalId, expectedVersion, "work_goal_task_reservation_cancelled", {
       taskId: reservation.taskId,
       reservationId,
       reason: "task_store_absent",
     });
-    // Report the absence to the operator even though the durable repair has
-    // succeeded; callers can distinguish a repaired missing allocation from
-    // a normal released Task reservation.
-    fail("not_found", "reserved TaskStore was absent; reservation cancelled to release the slot");
+    return next.reservations[reservationId];
+  }
+
+  async getWorkGoalRecoveryStatus(goalId, expectedVersion) {
+    const state = this._state(goalId, expectedVersion);
+    const held = [];
+    for (const reservation of Object.values(state.reservations)) {
+      if (["released", "cancelled"].includes(reservation.status)) continue;
+      let outcome;
+      try {
+        outcome = await this._reconcile(goalId, expectedVersion, {
+          taskId: reservation.taskId,
+          reservationId: reservation.reservationId,
+        });
+      } catch (error) {
+        outcome = { ...reservation, status: "held", reason: error.code || "reconcile_failed" };
+      }
+      if (outcome.status === "held") {
+        held.push({
+          taskId: reservation.taskId,
+          reservationId: reservation.reservationId,
+          status: "held",
+          reason: outcome.reason || "reservation_unresolved",
+        });
+      }
+    }
+    return held;
   }
 
   async _taskMaterial(taskId, suppliedStore = null) {

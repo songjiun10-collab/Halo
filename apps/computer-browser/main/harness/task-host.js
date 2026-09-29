@@ -442,6 +442,18 @@ class TaskHost {
     return this._workGoalOrchestrator.verifyWorkGoalCriterion(goalId, expectedVersion, criterionId);
   }
 
+  async getWorkGoalRecoveryStatus(goalId, expectedVersion) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.getWorkGoalRecoveryStatus(goalId, expectedVersion));
+  }
+
+  async repairWorkGoalReservation(goalId, expectedVersion, reservationId) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.repairMissingTaskReservation(goalId, expectedVersion, reservationId));
+  }
+
   _createTaskWithProfile(goalInput, selectors = {}) {
     this._assertOpen();
     if (!isPlainObject(selectors) || Object.keys(selectors).some((key) => !TASK_PROFILE_SELECTOR_FIELDS.includes(key)) ||

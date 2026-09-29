@@ -66,6 +66,26 @@ test("constructor requires storageRoot/makeBrowser/makePlanner/hostVerifier/appr
   assert.throws(() => new TaskHost({ storageRoot: "/tmp/x" }), TaskHostError);
 });
 
+test("Work Goal recovery status and repair are exposed through the serialized host boundary", async () => {
+  const storageRoot = await mkTempRoot();
+  const calls = [];
+  const host = makeHost(storageRoot, {
+    workGoalStore: { load: async () => {} },
+    workGoalOrchestrator: {
+      reconcileAll: async () => {},
+      getWorkGoalRecoveryStatus: async (...args) => { calls.push(["status", ...args]); return [{ reason: "not_found" }]; },
+      repairMissingTaskReservation: async (...args) => { calls.push(["repair", ...args]); return { status: "cancelled" }; },
+    },
+  });
+
+  assert.deepEqual(await host.getWorkGoalRecoveryStatus("goal-id", 2), [{ reason: "not_found" }]);
+  assert.deepEqual(await host.repairWorkGoalReservation("goal-id", 2, "reservation-id"), { status: "cancelled" });
+  assert.deepEqual(calls, [
+    ["status", "goal-id", 2],
+    ["repair", "goal-id", 2, "reservation-id"],
+  ]);
+});
+
 test("runRoutine pins the saved revision and uses it without creating a planner worker", async () => {
   const storageRoot = await mkTempRoot();
   const saved = await new RoutineStore({ storageRoot }).save({

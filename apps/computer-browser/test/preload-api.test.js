@@ -37,6 +37,8 @@ test("preload exposes the Work Goal API as narrow IPC invoke wrappers", async ()
     ["archiveWorkGoal", "halo:archiveWorkGoal", ["goal-id", 1]],
     ["recordWorkGoalProgress", "halo:recordWorkGoalProgress", ["goal-id", 1, []]],
     ["verifyWorkGoalCriterion", "halo:verifyWorkGoalCriterion", ["goal-id", 1, "criterion"]],
+    ["getWorkGoalRecoveryStatus", "halo:getWorkGoalRecoveryStatus", ["goal-id", 1]],
+    ["repairWorkGoalReservation", "halo:repairWorkGoalReservation", ["goal-id", 1, "reservation-id"]],
   ];
   for (const [method, channel, args] of methods) {
     assert.equal(typeof exposed[method], "function");

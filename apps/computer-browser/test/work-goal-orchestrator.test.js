@@ -447,7 +447,10 @@ test("explicit repair releases only a reserved slot whose TaskStore is provably 
   const reservationId = "99999999-9999-4999-8999-999999999999";
   await orchestrator.reserveTask(goalId, 1, { taskId, reservationId, limits: limits() });
   assert.equal(orchestrator.getContext(goalId, 1).remainingBudget.maxActions, 20 - limits().maxActions);
-  await assert.rejects(orchestrator.repairMissingTaskReservation(goalId, 1, reservationId), { code: "not_found" });
+  const recovery = await orchestrator.getWorkGoalRecoveryStatus(goalId, 1);
+  assert.deepEqual(recovery, [{ taskId, reservationId, status: "held", reason: "not_found" }]);
+  const repaired = await orchestrator.repairMissingTaskReservation(goalId, 1, reservationId);
+  assert.equal(repaired.status, "cancelled");
   assert.equal(orchestrator._store.get(goalId).reservations[reservationId].status, "cancelled");
   assert.equal(orchestrator.getContext(goalId, 1).remainingBudget.maxActions, 20);
   assert.equal(orchestrator.getContext(goalId, 1).remainingBudget.maxTasks, 5);

@@ -69,7 +69,11 @@ test("runConcurrentIteration reaches the requested concurrency when slots and me
     storageRoot: await mkTempRoot(),
     memoryMonitor: roomyMonitor(),
     reserveBytes: 100_000_000,
-    createBrowser: () => makeChainBrowser(STEPS, { latencyMs: 5 }),
+    // Leave a measurable overlap window even when the full test suite is
+    // stressing the event loop; 5ms allowed an early task to finish before
+    // the third admitted browser was constructed, making peak concurrency a
+    // scheduler-timing assertion rather than an admission assertion.
+    createBrowser: () => makeChainBrowser(STEPS, { latencyMs: 30 }),
   });
   assert.equal(row.success, true, row.error);
   assert.equal(row.concurrency, 3);

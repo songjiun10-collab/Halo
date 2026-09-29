@@ -43,6 +43,7 @@ const HARNESS_METHODS = [
   "startWorkGoal", "getActiveWorkGoal", "listWorkGoalHistory", "amendWorkGoal",
   "pauseWorkGoal", "resumeWorkGoal", "completeWorkGoal", "archiveWorkGoal",
   "recordWorkGoalProgress", "verifyWorkGoalCriterion",
+  "getWorkGoalRecoveryStatus", "repairWorkGoalReservation",
 ];
 
 const api = {};

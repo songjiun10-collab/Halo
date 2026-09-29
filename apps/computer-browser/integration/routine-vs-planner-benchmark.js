@@ -792,7 +792,29 @@ module.exports = {
   runDurationProfileBenchmark,
 };
 
-if (process.versions.electron || require.main === module) {
+// Compare process.argv[1] to __filename, not require.main === module: under
+// Electron's main process, require.main is Electron's own internal bootstrap
+// module (require.main.filename === "electron"), so require.main === module
+// is always false there, even for the script actually passed to the electron
+// binary -- that check alone would silently make this file's main() never
+// run when invoked directly. process.argv[1] still holds the real entry
+// script path in both plain Node and Electron, so resolving it against
+// __filename works uniformly and correctly stays false when this file is
+// merely required by another benchmark (e.g. concurrent-throughput-
+// benchmark.js, which imports mulberry32/buildScenario from here) --
+// avoiding the earlier bug where `process.versions.electron ||` made this
+// file's own main() self-execute and app.exit() as a side effect of that
+// require, racing and sometimes killing the requiring script before it
+// could finish.
+const isDirectInvocation = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return require.resolve(process.argv[1]) === __filename;
+  } catch {
+    return false;
+  }
+})();
+if (isDirectInvocation) {
   main().catch((error) => {
     process.stdout.write(`RESULT_JSON:${JSON.stringify({ kind: "routine-vs-planner-benchmark", error: String(error?.stack || error) })}\n`);
     (process.versions.electron ? require("electron").app.exit(1) : process.exit(1));

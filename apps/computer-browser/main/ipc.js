@@ -60,6 +60,8 @@ const HARNESS_METHODS = {
   "halo:archiveWorkGoal": "archiveWorkGoal",
   "halo:recordWorkGoalProgress": "recordWorkGoalProgress",
   "halo:verifyWorkGoalCriterion": "verifyWorkGoalCriterion",
+  "halo:getWorkGoalRecoveryStatus": "getWorkGoalRecoveryStatus",
+  "halo:repairWorkGoalReservation": "repairWorkGoalReservation",
 };
 
 // win, controlApi: unchanged from before. Options:
