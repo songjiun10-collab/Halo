@@ -157,3 +157,19 @@ The Task 2/3/5 numbers above came from an in-process fake browser. To check they
 Cap 3 → 8: -11% wall time, -32% approvals, -32% fsyncs. Real, but smaller than the fake-browser ratios suggested, because real browser work (navigation, scroll, observe) dominates once round-trips shrink.
 
 Limits, stated plainly: 4 pairs is a small sample (medians, not confidence intervals); scripted local fixture, not real sites; only the routine proposal source (not a model planner) was measured; no human approval latency. Headroom finding: this workload's scroll runs are exactly 5 long and batches end at every `follow_link` (a navigation/approval boundary that must not batch), so raising the short cap above 8 would not change this workload at all — the constant is adequate here, and further gains would need a different lever, not a bigger number.
+
+### Addendum: long-task profile comparison on real Electron (2026-09-29)
+
+`integration/profile-long-task-benchmark.js` drives one long task per arm on a real `BrowserAdapter`: a 100-page local chain, and on each page 5 scrolls, one explicit `observe`, then `follow_link` (694 actions). An in-process planner fills each proposal up to the profile's own cap (as a real planner must, since the controller rejects an over-cap proposal). Only `harnessProfile` differs between arms. 5 repetitions, arm order rotated per repetition, all runs completed all 100 pages, Electron 44.4.5 under xvfb.
+
+| profile (cap) | median wall | planner calls | approver calls | controller observes | journal fsyncs |
+|---|---:|---:|---:|---:|---:|
+| short (8) | 2584 ms | 200 | 298 | 101 | 201 |
+| middle (3) | 2850 ms | 299 | 397 | 299 | 300 |
+| long (3) | 2741 ms | 299 | 397 | 299 | 300 |
+
+- short vs middle: wall -9% (4 of 5 paired reps lower; the first, cold rep was a near-tie), planner calls -33%, approver calls -25%, top-of-loop observes -66%, fsyncs -33%. The counts are deterministic; the wall-time delta is a small-sample median.
+- middle vs long: identical counts, wall times overlap (2850 vs 2741 ms, per-rep ranges intersect). This confirms Phase 3's finding that the two profiles are behaviorally the same today.
+- No long-run drift: mean ms per page over the first vs last quarter of the chain is flat for every profile (short 25.6 → 26.4 ms, middle 28.0 → 29.2 ms, long 26.6 → 27.4 ms), so per-turn cost does not grow with journal size at this scale.
+
+What this does not show: the planner here is in-process with zero latency and the pages are tiny, so the wall-time gap understates real use. What was measured is the *count* of planner round-trips saved (99 over this chain); any wall-time saving in production is that count times the real planner latency per call, which was not measured here. Also unmeasured: real sites, human approval latency, memory.
