@@ -73,6 +73,9 @@ function observationKey(observation) {
   }
 }
 
+// Long-profile goal persistence: total finish proposals the host will reject
+// (criteria still unmet, all machine-verifiable) before pausing for a human.
+const GOAL_MAX_REJECTED_FINISHES = 5;
 const NAV_VISITED_MAX = 32;
 const NAV_FRONTIER_MAX = 32;
 const NAV_URL_MAX_CHARS = 512;
@@ -139,6 +142,14 @@ class TaskController {
     // Fixed for the task's lifetime (no setter exists) -- computed once here
     // rather than on every proposal validation in the hot per-turn loop.
     this._maxActionsPerProposal = maxActionsPerProposal(this._harnessProfile);
+    // Long only: /goal-style persistence. A `finish` whose required criteria
+    // are not host-verified is rejected and the task keeps working, instead of
+    // stopping. The rejection count is checkpointed so a restart cannot reset
+    // the cap.
+    const checkpointedRejected = store.lastCheckpoint?.payload?.goalPersistence?.rejectedFinishes;
+    this._rejectedFinishes = Number.isInteger(checkpointedRejected) && checkpointedRejected >= 0 && checkpointedRejected <= GOAL_MAX_REJECTED_FINISHES
+      ? checkpointedRejected
+      : 0;
     this._browser = browser;
     this._approve = approve;
     this._hostVerifier = hostVerifier;
@@ -548,6 +559,18 @@ class TaskController {
     await this._pauseWith("routine_step_denied");
   }
 
+  // A rejected finish only makes sense when a machine can still verify the
+  // missing criteria; a criterion that needs a human ("user") keeps today's
+  // awaiting_verification handoff.
+  _onlyHostVerifiable(missingIds) {
+    return missingIds.length > 0 && missingIds.every((id) => this._goal.criteria.find((criterion) => criterion.id === id)?.verification === "host");
+  }
+
+  _goalPersistenceState() {
+    const { missingIds } = canComplete(this._goal, this._evidenceForCompletionCheck());
+    return { unmetCriterionIds: missingIds, rejectedFinishes: this._rejectedFinishes, maxRejectedFinishes: GOAL_MAX_REJECTED_FINISHES };
+  }
+
   _recordNavigation(observation) {
     const nav = this._navigation;
     const url = typeof observation?.url === "string" ? observation.url.slice(0, NAV_URL_MAX_CHARS) : "";
@@ -586,6 +609,7 @@ class TaskController {
         segment: { ...this._segment },
         criteriaStatus: [...this._criteriaStatus.entries()],
         harnessProfile: this._harnessProfile,
+        ...(this._harnessProfile === "long" ? { goalPersistence: { rejectedFinishes: this._rejectedFinishes } } : {}),
         ...(this._routineRun ? { routineRun: { ...this._routineRun } } : {}),
       });
       this._snapshotTrusted = true;
@@ -988,6 +1012,7 @@ class TaskController {
               budgets: { ...this._budgets },
               plannerEffort: this._plannerEffort,
               maxActionsPerProposal: this._maxActionsPerProposal,
+              ...(this._harnessProfile === "long" ? { goalPersistence: this._goalPersistenceState() } : {}),
             },
             navigation: { visited: [...this._navigation.visited], frontier: [...this._navigation.frontier] },
             observation,
@@ -1066,6 +1091,19 @@ class TaskController {
 
         if (validated.kind === "finish") {
           const completion = canComplete(this._goal, this._evidenceForCompletionCheck());
+          if (!completion.complete && this._harnessProfile === "long" && this._onlyHostVerifiable(completion.missingIds)) {
+            this._rejectedFinishes += 1;
+            await this._store.append({ type: "note", payload: {
+              kind: "finish_rejected",
+              missingCriterionIds: completion.missingIds,
+              rejectedFinishes: this._rejectedFinishes,
+            } });
+            if (this._rejectedFinishes >= GOAL_MAX_REJECTED_FINISHES) {
+              await this._pauseWith("goal_not_reached");
+              break;
+            }
+            continue; // the goal is not met: keep working, the planner is told why via context.progress.goalPersistence
+          }
           this._leaveActive();
           if (completion.complete) {
             this._task = { state: "completed", pauseReason: null };

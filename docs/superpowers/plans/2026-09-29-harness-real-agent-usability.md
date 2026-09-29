@@ -29,3 +29,9 @@ What this says, without overreach:
 ## Environment note
 
 Installing Electron for these runs (`npm ci` in `apps/computer-browser`; `node_modules` is gitignored) turned five previously self-skipped real-Electron tests into failures in this sandbox: they spawn Electron as root without `--no-sandbox` (and need a Python approver venv that is absent here). They fail at Electron launch, before any harness code runs. The other 723 tests pass.
+
+## Long: `/goal`-style persistence
+
+`long` now keeps working until the host verifies the goal (design spec, "Goal persistence"). Mechanism-level evidence is in the unit tests, which were mutation-checked: with the rejection branch disabled, the three tests that depend on it fail; the `user`-criterion and `short`/`middle` tests correctly do not.
+
+Real-model check (`HALO_LLM_VERIFIED=1 integration/llm-goal-run.js`, host criterion true only while the current page contains TARGET-FOUND): `middle` and `long` both completed the same way (13 planner calls, 12 actions, ~52 s). The model gathered evidence (`observe` with the criterion id) at the target page before finishing, so it never finished early and the rejection path did not fire. That means persistence was not shown to *rescue* a real premature finish here; it was shown not to interfere with a correct one, and the `goalPersistence` context reached the model without breaking its output. Whether a real model finishes prematurely often enough for this to matter is untested.

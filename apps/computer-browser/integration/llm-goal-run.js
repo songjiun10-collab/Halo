@@ -15,6 +15,11 @@
 //
 // Run from apps/computer-browser:
 //   ELECTRON_DISABLE_SANDBOX=1 xvfb-run -a node_modules/.bin/electron integration/llm-goal-run.js
+// HALO_LLM_VERIFIED=1 switches to a persistent-goal check: the criterion is
+//   host-verified (true only while the browser's current page contains
+//   TARGET-FOUND), the run does NOT stop when the marker is first seen, and it
+//   ends when the controller itself ends (completed / awaiting_verification /
+//   paused) or the timeout stops it.
 // Env: HALO_LLM_PROFILES (comma list, default "short,middle"), HALO_LLM_DEPTH
 //   (1..3, default 2), HALO_LLM_BRANCH (2..4, default 3), HALO_LLM_TIMEOUT_S
 //   (30..900, default 300). Emits RESULT_JSON:<json>.
@@ -40,7 +45,7 @@ function envInt(name, fallback, { min, max }) {
   return value;
 }
 
-async function runOne({ profile, site, createBrowser, storageRoot, timeoutMs }) {
+async function runOne({ profile, site, createBrowser, storageRoot, timeoutMs, verified }) {
   const plannerLatencies = [];
   const proposalSizes = [];
   const counts = { approvals: 0, plannerCalls: 0, journalFsyncs: 0 };
@@ -48,6 +53,7 @@ async function runOne({ profile, site, createBrowser, storageRoot, timeoutMs }) 
   const trace = [];
   let found = false;
   let foundAtMs = null;
+  let onTargetPage = false;
   const startedAt = performance.now();
   let controller = null;
 
@@ -57,17 +63,18 @@ async function runOne({ profile, site, createBrowser, storageRoot, timeoutMs }) 
     const observation = await observe(...args);
     if (observation?.url && observation.url !== "about:blank" && visited.at(-1) !== observation.url) visited.push(observation.url);
     const seen = [observation?.text || "", ...(observation?.elements || []).map((item) => item.name || "")].join(" ");
-    if (!found && seen.includes("TARGET-FOUND")) {
+    onTargetPage = seen.includes("TARGET-FOUND");
+    if (!found && onTargetPage) {
       found = true;
       foundAtMs = performance.now() - startedAt;
-      Promise.resolve().then(() => controller?.stop()).catch(() => {});
+      if (!verified) Promise.resolve().then(() => controller?.stop()).catch(() => {});
     }
     return observation;
   };
 
   const store = await TaskStore.create({
     originalRequest: `Find the page on this small website that contains the text TARGET-FOUND. Start at ${site.origin}/n/r . Pages link to sub-sections; some sections are dead ends.`,
-    criteria: [{ id: "found", text: "reached the page containing TARGET-FOUND", required: true, verification: "user" }],
+    criteria: [{ id: "found", text: "reached the page containing TARGET-FOUND", required: true, verification: verified ? "host" : "user" }],
     limits: { maxActions: 200, maxPlannerCalls: 60, maxActiveMs: 30 * 60 * 1000 },
   }, { storageRoot, onTiming: ({ operation }) => { if (operation === "journal_fsync") counts.journalFsyncs += 1; } });
 
@@ -99,7 +106,7 @@ async function runOne({ profile, site, createBrowser, storageRoot, timeoutMs }) 
     planner: timedPlanner,
     browser,
     approve: async () => { counts.approvals += 1; return { decision: "allow", reasons: [] }; },
-    hostVerifier: () => true,
+    hostVerifier: () => (verified ? onTargetPage : true),
     harnessProfile: profile,
   });
 
@@ -127,6 +134,7 @@ async function runOne({ profile, site, createBrowser, storageRoot, timeoutMs }) 
       timeToTargetMs: foundAtMs,
       totalMs: performance.now() - startedAt,
       actions,
+      finalSnapshotState: finalSnapshot.state,
       workerStderrTail,
       trace,
       pagesVisited: visited.length,
@@ -152,6 +160,7 @@ async function main() {
   const depth = envInt("HALO_LLM_DEPTH", 2, { min: 1, max: 3 });
   const branch = envInt("HALO_LLM_BRANCH", 3, { min: 2, max: 4 });
   const timeoutMs = envInt("HALO_LLM_TIMEOUT_S", 300, { min: 30, max: 900 }) * 1000;
+  const verified = process.env.HALO_LLM_VERIFIED === "1";
 
   await app.whenReady();
   const win = new BrowserWindow({ show: false, width: 1440, height: 900 });
@@ -162,7 +171,7 @@ async function main() {
     const runs = [];
     for (const profile of profiles) {
       runs.push(await runOne({
-        profile, site, storageRoot, timeoutMs,
+        profile, site, storageRoot, timeoutMs, verified,
         createBrowser: async () => {
           const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: "halo-llm-goal" } });
           win.contentView.addChildView(view);

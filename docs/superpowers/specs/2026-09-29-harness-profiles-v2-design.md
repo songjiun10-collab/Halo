@@ -400,6 +400,16 @@ An in-flight action whose outcome cannot be established remains `execution_uncer
 
 Long must not turn crash recovery into action replay.
 
+## Goal persistence (Long only; added 2026-09-29)
+
+Long behaves like a `/goal` condition: a task is not over because the model says so, it is over when the host verifies the goal.
+
+- When a `finish` proposal arrives and required criteria are still unmet **and every missing criterion is host-verifiable** (`verification: "host"`), the host rejects the finish, journals a `note` (`finish_rejected`, missing criterion ids, running count), and the loop continues. The planner is told what is missing and how many finishes were refused via `context.progress.goalPersistence`.
+- A criterion that needs a human (`verification: "user"`) keeps today's `awaiting_verification` handoff; looping cannot satisfy it.
+- Bounded: after 5 rejected finishes in total the task pauses with `goal_not_reached` for a human. The count is checkpointed, so a restart cannot reset the cap. Existing budgets (`maxActions`, `maxPlannerCalls`, `maxActiveMs`) still apply.
+- `need_user` still pauses (a genuinely blocked task needs a person), and completion still requires host-verified evidence, so this adds persistence, never authority: the model cannot complete a task by asserting it.
+- `short` and `middle` are unchanged (an unmet finish goes to `awaiting_verification`; no `goalPersistence` in context or checkpoint).
+
 ---
 
 # Profile selection

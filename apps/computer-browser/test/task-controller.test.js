@@ -1861,6 +1861,96 @@ test("navigation memory stays bounded: visited and frontier are capped and hrefs
   await store.close();
 });
 
+function goalRun({ profile, criteria, script, store }) {
+  // script: array of functions (context) => partial proposal, one per planner turn.
+  let turn = 0;
+  const contexts = [];
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      const step = script[Math.min(turn, script.length - 1)];
+      turn += 1;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], ...step(context) };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok", evidenceCandidate: { kind: "host_check" } }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    harnessProfile: profile,
+  });
+  return { controller, contexts, turns: () => turn };
+}
+
+const HOST_CRITERIA = [{ id: "reached", text: "reached the target", required: true, verification: "host" }];
+const finish = () => ({ kind: "finish", evidenceIds: [] });
+const gatherEvidence = () => ({ kind: "actions", criterionIds: ["reached"], actions: [{ type: "observe" }] });
+
+test("long: a finish with unmet host-verifiable criteria is rejected and the task keeps working until the host verifies the goal", async () => {
+  const { store } = await makeStore({ originalRequest: "persistent goal", criteria: HOST_CRITERIA });
+  const { controller, contexts, turns } = goalRun({ profile: "long", store, script: [finish, finish, gatherEvidence, finish] });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "completed");
+  assert.equal(turns(), 4);
+  // The planner is told the goal is persistent, what is missing, and how many finishes were refused.
+  assert.deepEqual(contexts[0].progress.goalPersistence, { unmetCriterionIds: ["reached"], rejectedFinishes: 0, maxRejectedFinishes: 5 });
+  assert.equal(contexts[2].progress.goalPersistence.rejectedFinishes, 2);
+  assert.deepEqual(contexts[3].progress.goalPersistence.unmetCriterionIds, []);
+  const rejected = (await store.getEvents()).filter((event) => event.type === "note" && event.payload.kind === "finish_rejected");
+  assert.deepEqual(rejected.map((event) => event.payload.rejectedFinishes), [1, 2]);
+  await store.close();
+});
+
+test("long: repeated finish attempts stop at the cap and pause for a human instead of looping forever", async () => {
+  const { store } = await makeStore({ originalRequest: "never verifiable", criteria: HOST_CRITERIA });
+  const { controller, turns } = goalRun({ profile: "long", store, script: [finish] });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "goal_not_reached");
+  assert.equal(turns(), 5);
+  assert.equal(store.lastCheckpoint.payload.goalPersistence.rejectedFinishes, 5);
+  await store.close();
+});
+
+test("long: the rejection count survives a restart, so the cap cannot be reset by reloading", async () => {
+  const { store, storageRoot } = await makeStore({ originalRequest: "restart keeps the cap", criteria: HOST_CRITERIA });
+  const first = goalRun({ profile: "long", store, script: [finish, finish, (context) => ({ kind: "need_user", reason: "stop here" })] });
+  await first.controller.start();
+  assert.equal(store.lastCheckpoint.payload.goalPersistence.rejectedFinishes, 2);
+  const taskId = store.taskId;
+  await store.close();
+
+  const reloaded = await TaskStore.load(taskId, { storageRoot });
+  const second = goalRun({ profile: "long", store: reloaded, script: [finish] });
+  assert.equal(second.controller.getHarnessProfile(), "long");
+  await second.controller.resume({ confirmed: true });
+  // 2 carried over + 3 more finishes reaches the cap of 5, not 5 fresh ones.
+  assert.equal(second.turns(), 3);
+  assert.equal(reloaded.lastCheckpoint.payload.goalPersistence.rejectedFinishes, 5);
+  await reloaded.close();
+});
+
+test("long: a criterion that needs a human keeps the awaiting_verification handoff (no rejection loop)", async () => {
+  const { store } = await makeStore({ originalRequest: "human verifies", criteria: [{ id: "human", text: "a person confirms", required: true, verification: "user" }] });
+  const { controller, turns } = goalRun({ profile: "long", store, script: [finish] });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "awaiting_verification");
+  assert.equal(turns(), 1);
+  await store.close();
+});
+
+test("short and middle keep today's behavior: an unmet finish goes to awaiting_verification and the context has no goalPersistence", async () => {
+  for (const profile of ["short", "middle"]) {
+    const { store } = await makeStore({ originalRequest: "not persistent", criteria: HOST_CRITERIA });
+    const { controller, contexts, turns } = goalRun({ profile, store, script: [finish] });
+    const snapshot = await controller.start();
+    assert.equal(snapshot.state, "awaiting_verification", profile);
+    assert.equal(turns(), 1, profile);
+    assert.equal("goalPersistence" in contexts[0].progress, false, profile);
+    assert.equal("goalPersistence" in (store.lastCheckpoint?.payload ?? {}), false, profile);
+    await store.close();
+  }
+});
+
 test("the planner context carries the profile's per-proposal action bound", async () => {
   for (const [profile, expected] of [["short", 8], ["middle", 3], ["long", 3]]) {
     const { store } = await makeStore({ originalRequest: `bound ${profile}` });
