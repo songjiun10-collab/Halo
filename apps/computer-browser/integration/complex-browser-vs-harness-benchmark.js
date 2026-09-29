@@ -295,8 +295,9 @@ async function main() {
   }
 }
 
-module.exports = { createExplorer, targetPathFor };
+module.exports = { createExplorer, targetPathFor, startSite };
 
-if (process.versions.electron || require.main === module) {
+// Only when run directly: llm-goal-run.js imports startSite from here.
+if (require.main === module) {
   main();
 }

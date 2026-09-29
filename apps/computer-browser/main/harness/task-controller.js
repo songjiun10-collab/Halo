@@ -73,6 +73,11 @@ function observationKey(observation) {
   }
 }
 
+const NAV_VISITED_MAX = 32;
+const NAV_FRONTIER_MAX = 32;
+const NAV_URL_MAX_CHARS = 512;
+const NAV_NAME_MAX_CHARS = 80;
+
 class TaskController {
   constructor({
     store,
@@ -209,6 +214,11 @@ class TaskController {
     // "observe" (see the reuse gate in the main loop and its assignment in
     // _afterActionDispatched, which is this field's one source of truth).
     this._reusableObservation = null;
+    // Host-owned navigation memory for the planner: pages actually visited and
+    // links seen but not yet visited. Without it a planner at a dead end has
+    // no way to know where it came from or what is left to try. In-memory
+    // only: a restarted controller re-discovers it from fresh observations.
+    this._navigation = { visited: [], frontier: [] };
 
     // A task that already reached a TERMINAL state (completed/stopped) was
     // checkpointed synchronously the instant it got there (see the
@@ -536,6 +546,24 @@ class TaskController {
     await this._store.append({ type: "routine_step_denied", payload: { ...binding, decision: normalizedDecision, reasons } });
     this._routineRun.blocked = "denied";
     await this._pauseWith("routine_step_denied");
+  }
+
+  _recordNavigation(observation) {
+    const nav = this._navigation;
+    const url = typeof observation?.url === "string" ? observation.url.slice(0, NAV_URL_MAX_CHARS) : "";
+    if (/^https?:\/\//i.test(url) && !nav.visited.includes(url)) {
+      nav.visited.push(url);
+      if (nav.visited.length > NAV_VISITED_MAX) nav.visited.splice(0, nav.visited.length - NAV_VISITED_MAX);
+    }
+    // A link seen now supersedes an older frontier entry for the same href.
+    nav.frontier = nav.frontier.filter((entry) => !nav.visited.includes(entry.href));
+    for (const element of Array.isArray(observation?.elements) ? observation.elements : []) {
+      if (element?.role !== "link" || typeof element.href !== "string" || !/^https?:\/\//i.test(element.href)) continue;
+      const href = element.href.slice(0, NAV_URL_MAX_CHARS);
+      if (nav.visited.includes(href) || nav.frontier.some((entry) => entry.href === href)) continue;
+      nav.frontier.push({ href, name: String(element.name ?? "").slice(0, NAV_NAME_MAX_CHARS) });
+    }
+    if (nav.frontier.length > NAV_FRONTIER_MAX) nav.frontier.splice(0, nav.frontier.length - NAV_FRONTIER_MAX);
   }
 
   _enterActive() {
@@ -923,6 +951,7 @@ class TaskController {
         this._reusableObservation = null;
         if (this._stopHappenedSince(epoch)) break;
         this._lastObservation = observation;
+        this._recordNavigation(observation);
 
         let customMemory = [];
         try {
@@ -958,7 +987,9 @@ class TaskController {
               segment: { ...this._segment },
               budgets: { ...this._budgets },
               plannerEffort: this._plannerEffort,
+              maxActionsPerProposal: this._maxActionsPerProposal,
             },
+            navigation: { visited: [...this._navigation.visited], frontier: [...this._navigation.frontier] },
             observation,
             recentEvents: this._store.eventsSinceCheckpoint || [],
             customMemory,

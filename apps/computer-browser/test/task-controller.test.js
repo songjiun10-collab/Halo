@@ -1783,6 +1783,102 @@ test("isRoutine() reflects whether the controller was constructed with a routine
   await routineStore.close();
 });
 
+test("the planner context carries visited pages and not-yet-visited links so a dead end can backtrack", async () => {
+  const { store } = await makeStore({ originalRequest: "navigation memory" });
+  const pages = {
+    "https://site.test/r": { url: "https://site.test/r", elements: [
+      { role: "link", name: "A", href: "https://site.test/a", elementId: "0" },
+      { role: "link", name: "B", href: "https://site.test/b", elementId: "1" },
+      { role: "link", name: "mailto", href: "mailto:x@y.z", elementId: "2" },
+    ] },
+    "https://site.test/a": { url: "https://site.test/a", elements: [] },
+  };
+  let current = "about:blank";
+  const seenNavigation = [];
+  let calls = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      calls += 1;
+      seenNavigation.push(context.navigationHistory);
+      const base = { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [] };
+      if (calls === 1) return { ...base, kind: "actions", actions: [{ type: "navigate", url: "https://site.test/r" }] };
+      if (calls === 2) return { ...base, kind: "actions", actions: [{ type: "navigate", url: "https://site.test/a" }] };
+      return { ...base, kind: "need_user", reason: "done" };
+    } },
+    browser: {
+      observe: async () => ({ id: `obs-${calls}`, documentEpoch: 0, ...(pages[current] || { url: current, elements: [] }) }),
+      execute: async (action) => { current = action.url; return { status: "ok" }; },
+    },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+  await controller.start();
+  assert.deepEqual(seenNavigation[0], { authority: "untrusted_page_derived", visited: [], frontier: [] });
+  assert.deepEqual(seenNavigation[1].visited, ["https://site.test/r"]);
+  assert.deepEqual(seenNavigation[1].frontier, [{ href: "https://site.test/a", name: "A" }, { href: "https://site.test/b", name: "B" }]);
+  // Visiting /a removes it from the frontier; /b (never visited) remains; the non-http link never enters it.
+  assert.deepEqual(seenNavigation[2].visited, ["https://site.test/r", "https://site.test/a"]);
+  assert.deepEqual(seenNavigation[2].frontier, [{ href: "https://site.test/b", name: "B" }]);
+  await store.close();
+});
+
+test("navigation memory stays bounded: visited and frontier are capped and hrefs are deduplicated", async () => {
+  const { store } = await makeStore({ originalRequest: "navigation bounds" });
+  let turn = 0;
+  let last = null;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      last = context.navigationHistory;
+      turn += 1;
+      const base = { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [] };
+      return turn < 40 ? { ...base, kind: "actions", actions: [{ type: "scroll", direction: "down" }] } : { ...base, kind: "need_user", reason: "done" };
+    } },
+    browser: {
+      observe: async () => ({
+        id: `obs-${turn}`,
+        documentEpoch: 0,
+        url: `https://site.test/p${turn}`,
+        elements: [
+          ...Array.from({ length: 5 }, (_, i) => ({ role: "link", name: `L${turn}-${i}`, href: `https://site.test/l${turn}-${i}`, elementId: String(i) })),
+          { role: "link", name: "dup", href: "https://site.test/dup", elementId: "9" },
+        ],
+      }),
+      execute: async () => ({ status: "ok" }),
+    },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+  await controller.start();
+  assert.equal(last.visited.length, 32);
+  assert.equal(last.visited.at(-1), "https://site.test/p39");
+  assert.equal(last.frontier.length, 32);
+  // Oldest entries are dropped at the cap, and no href ever appears twice.
+  assert.equal(new Set(last.frontier.map((entry) => entry.href)).size, last.frontier.length);
+  assert.ok(last.frontier.filter((entry) => entry.href === "https://site.test/dup").length <= 1);
+  assert.ok(!last.frontier.some((entry) => entry.href === "https://site.test/l0-0"), "the oldest frontier entry was evicted");
+  await store.close();
+});
+
+test("the planner context carries the profile's per-proposal action bound", async () => {
+  for (const [profile, expected] of [["short", 8], ["middle", 3], ["long", 3]]) {
+    const { store } = await makeStore({ originalRequest: `bound ${profile}` });
+    let seen = null;
+    const controller = new TaskController({
+      store,
+      planner: { next: async (context) => { seen = context.progress.maxActionsPerProposal; return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "n/a" }; } },
+      browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+      approve: allowApprove(),
+      hostVerifier: () => true,
+      harnessProfile: profile,
+    });
+    await controller.start();
+    assert.equal(seen, expected, profile);
+    await store.close();
+  }
+});
+
 test("constructor rejects an explicit invalid harnessProfile and accepts an explicit valid one", async () => {
   const { store: badStore } = await makeStore({ originalRequest: "bad profile" });
   assert.throws(() => new TaskController({

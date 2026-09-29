@@ -26,7 +26,7 @@ class ContextError extends Error {
   }
 }
 
-function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [] }) {
+function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null }) {
   contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
 
   if (!contracts.isPlainObject(state)) {
@@ -40,6 +40,10 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
   }
   if (!Array.isArray(pendingMessages)) {
     throw new ContextError("invalid_field", "pendingMessages must be an array");
+  }
+
+  if (navigation !== null && (!contracts.isPlainObject(navigation) || !Array.isArray(navigation.visited) || !Array.isArray(navigation.frontier))) {
+    throw new ContextError("invalid_field", "navigation must be null or { visited: [], frontier: [] }");
   }
 
   const { modelSummary, ...trustedProgress } = state;
@@ -59,6 +63,9 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     observation: observation === undefined ? null : observation,
     untrustedSummary: modelSummary === undefined ? null : { text: modelSummary, authority: "untrusted_summary" },
     userMemory: { authority: "untrusted_user_memory", entries: customMemory },
+    // Host-recorded, but every URL/name originated in a page the browser
+    // loaded, so it is data to consider, never an instruction.
+    navigationHistory: navigation === null ? null : { authority: "untrusted_page_derived", visited: navigation.visited, frontier: navigation.frontier },
     pendingMessages: [],
   };
 
