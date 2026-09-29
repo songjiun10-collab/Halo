@@ -28,13 +28,10 @@ const MAX_TASK_STORE_BYTES = 100 * 1024 * 1024;
 const MAX_CONTEXT_PACKET_BYTES = 64 * 1024; // section 5: "구조화된 packet 상한 64 KiB"
 const MAX_RECENT_EVENTS_IN_CONTEXT = 10; // section 5: "최근 action/result 10쌍"
 const MAX_ACTIONS_PER_PROPOSAL = 3; // section 8: "최대 3개 observe/scroll만 순차 묶음"
-// Harness v2 Phase 2 Task 2 (docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase2.md):
-// the only wider batch bound validateProposalEnvelope() will ever accept,
-// reserved for the "short" harness profile's aggressive-but-still-bounded
-// batching of provably safe (read-only) actions. Kept as a second named
-// constant -- not an arbitrary caller-supplied number -- so this security
-// boundary can only ever widen to one pre-reviewed value, never silently
-// to whatever a caller happens to pass.
+// The only wider batch bound validateProposalEnvelope() will ever accept
+// (harness-profile.js's maxActionsPerProposal(), short profile only) -- a
+// second named constant, not an arbitrary caller-supplied number, so this
+// security boundary can only ever widen to one pre-reviewed value.
 const MAX_ACTIONS_PER_PROPOSAL_SHORT = 8;
 const MAX_PLANNER_FRAME_BYTES = 64 * 1024; // section 6: JSONL stdio wire frame cap (envelope + payload)
 const PLANNER_RESPONSE_TIMEOUT_MS = 60 * 1000; // section 6: "응답 timeout 60초"

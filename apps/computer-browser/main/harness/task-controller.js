@@ -115,16 +115,16 @@ class TaskController {
         !Number.isInteger(this._routineRun.cursor) || this._routineRun.cursor < 0)) {
       throw new TaskControllerError("invalid_routine", "routine runner requires a pinned routine ID, revision, digest, and cursor");
     }
-    // Harness v2 Phase 2 Task 1 (see docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase2.md):
-    // the host is the profile-selection authority (selectHarnessProfile() in
-    // TaskHost/_attach), never the model or the task's own text -- this
-    // constructor only validates and stores what it is given, defaulting via
-    // the same pure rule when the caller omits it (e.g. a directly
-    // constructed test controller). Nothing yet reads _harnessProfile to
-    // change execution behavior; that starts in a later Phase 2 task.
+    // TaskHost/_attach is the profile-selection authority, never the model or
+    // the task's own text; this constructor only validates what it's given,
+    // defaulting via the same pure rule when omitted (e.g. a directly
+    // constructed test controller). See docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase2.md.
     this._harnessProfile = validateHarnessProfile(
       harnessProfile !== undefined ? harnessProfile : selectHarnessProfile({ isRoutine: this._routineRun !== null }),
     );
+    // Fixed for the task's lifetime (no setter exists) -- computed once here
+    // rather than on every proposal validation in the hot per-turn loop.
+    this._maxActionsPerProposal = maxActionsPerProposal(this._harnessProfile);
     this._browser = browser;
     this._approve = approve;
     this._hostVerifier = hostVerifier;
@@ -196,13 +196,9 @@ class TaskController {
     this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
     this._approvalQueue = [];
     this._lastObservation = null;
-    // Harness v2 Phase 2 Task 4: an already-captured Observation from the
-    // most recently dispatched action, reusable ONLY when that action was
-    // itself an "observe" (a real snapshot, not a guess) and the browser's
-    // own document epoch still matches it (see its use at the top of the
-    // main loop). Cleared on any other dispatched action so a stale
-    // reference is never carried past something that could have changed
-    // the page.
+    // Reusable-across-turns iff the last dispatched action was itself an
+    // "observe" (see the reuse gate in the main loop and its assignment in
+    // _afterActionDispatched, which is this field's one source of truth).
     this._reusableObservation = null;
 
     // A task that already reached a TERMINAL state (completed/stopped) was
@@ -892,15 +888,12 @@ class TaskController {
         }
 
         let observation;
-        // Harness v2 Phase 2 Task 4 (incremental observation, short only):
-        // reuse the last dispatched action's own observation instead of
-        // unconditionally re-observing, but only when the browser itself
-        // proves nothing has navigated since that snapshot was taken --
-        // getDocumentEpoch() is the same authority execute()'s own
-        // stale_document guard already trusts, so this is a real proof, not
-        // an assumption. A browser fake without getDocumentEpoch() (most
-        // unit-test fakes) simply never qualifies, which is the safe
-        // default: always re-observe.
+        // short only: reuse the last dispatched action's own observation
+        // instead of unconditionally re-observing, but only when
+        // getDocumentEpoch() -- the same authority execute()'s own
+        // stale_document guard trusts -- proves nothing has navigated since.
+        // No match (including a fake with no getDocumentEpoch()) means a
+        // real re-observe, same as middle/long always do.
         const reusable = this._harnessProfile === "short" ? this._reusableObservation : null;
         if (reusable && typeof this._browser.getDocumentEpoch === "function" &&
             this._browser.getDocumentEpoch() === reusable.documentEpoch) {
@@ -1022,7 +1015,7 @@ class TaskController {
 
         let validated;
         try {
-          validated = validateProposal(proposal, { goal: this._goal, maxActions: maxActionsPerProposal(this._harnessProfile) });
+          validated = validateProposal(proposal, { goal: this._goal, maxActions: this._maxActionsPerProposal });
         } catch {
           // An off-goal/stale/malformed proposal is never executed; give the
           // planner another turn with a fresh observation rather than

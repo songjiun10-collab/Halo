@@ -362,16 +362,23 @@ class TaskHost {
     const cursor = recovery ? recovery.cursor : pin.cursor;
     let runner;
     try {
-      runner = new RoutineRunner({
-        definition,
-        cursor,
-        batchReadOnlySteps: this._routineBatchReadOnlySteps,
-        maxBatchActions: maxActionsPerProposal("short"),
-      });
+      runner = this._makeRoutineRunner({ definition, cursor });
     } catch {
       throw new TaskHostError("routine_cursor_mismatch", "routine cursor is out of range");
     }
     return { runner, run: { ...pin, cursor } };
+  }
+
+  // A routine task is always harnessProfile "short" (selectHarnessProfile's
+  // one routing rule), so this is the runner's single construction site --
+  // both callers below just supply the definition/cursor that differ.
+  _makeRoutineRunner({ definition, cursor }) {
+    return new RoutineRunner({
+      definition,
+      cursor,
+      batchReadOnlySteps: this._routineBatchReadOnlySteps,
+      maxBatchActions: maxActionsPerProposal("short"),
+    });
   }
 
   _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null) {
@@ -411,12 +418,7 @@ class TaskHost {
             throw new TaskHostError("routine_cursor_mismatch", "new routine task lost its validated immutable revision");
           }
           routine = {
-            runner: new RoutineRunner({
-              definition: pinnedRoutineDefinition,
-              cursor: routineRun.cursor,
-              batchReadOnlySteps: this._routineBatchReadOnlySteps,
-              maxBatchActions: maxActionsPerProposal("short"),
-            }),
+            runner: this._makeRoutineRunner({ definition: pinnedRoutineDefinition, cursor: routineRun.cursor }),
             run: { ...routineRun },
           };
         }
