@@ -457,3 +457,34 @@ test("explicit repair releases only a reserved slot whose TaskStore is provably 
   const repeated = await orchestrator.repairMissingTaskReservation(goalId, 1, reservationId);
   assert.equal(repeated.status, "cancelled");
 });
+
+test("active and historical Goal summaries bound Task links and report truncation", async (t) => {
+  const { orchestrator, store, goalId } = await fixture(t);
+  await orchestrator.amendWorkGoal(1, { ...workGoalInput(), budget: {} });
+  const goalVersion = 2;
+  const taskIds = [];
+  for (let index = 1; index <= 101; index += 1) {
+    const suffix = String(index).padStart(12, "0");
+    const taskId = `aaaaaaaa-aaaa-4aaa-8aaa-${suffix}`;
+    const reservationId = `bbbbbbbb-bbbb-4bbb-8bbb-${suffix}`;
+    taskIds.push(taskId);
+    await orchestrator.reserveTask(goalId, goalVersion, {
+      taskId, reservationId, limits: { maxTasks: 1, maxActions: 6, maxPlannerCalls: 3, maxActiveMs: 600 },
+    });
+    await store.append({ goalId, expectedVersion: goalVersion, type: "work_goal_task_linked", payload: { taskId, reservationId } });
+  }
+
+  const active = orchestrator.getActiveWorkGoal();
+  assert.equal(active.taskCount, taskIds.length);
+  assert.equal(active.tasks.length, 100);
+  assert.equal(active.tasksTruncated, true);
+  assert.deepEqual(active.tasks, taskIds.slice(-100));
+
+  await orchestrator.pauseWorkGoal(goalId, goalVersion);
+  await orchestrator.archiveWorkGoal(goalId, goalVersion);
+  const history = await orchestrator.listWorkGoalHistory();
+  assert.equal(history[0].taskCount, taskIds.length);
+  assert.equal(history[0].tasks.length, 100);
+  assert.equal(history[0].tasksTruncated, true);
+  assert.deepEqual(history[0].tasks, taskIds.slice(-100));
+});

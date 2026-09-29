@@ -11,6 +11,7 @@ const { validateWorkGoalInput, validateWorkGoalSpec, validateWorkGoalEvent, BLOC
 
 const BUDGET_AXES = Object.freeze(["maxTasks", "maxActions", "maxPlannerCalls", "maxActiveMs"]);
 const USAGE_AXES = Object.freeze(["maxActions", "maxPlannerCalls", "maxActiveMs"]);
+const MAX_SUMMARY_TASK_LINKS = 100;
 const BLOCKER_PHASE_BY_REASON = Object.freeze({
   planner_unavailable: "planner",
   planner_error: "planner",
@@ -73,6 +74,9 @@ function remainingBudget(state, spec = state.spec) {
 
 function summary(state) {
   if (!state) return null;
+  // The aggregate maxTasks budget is optional, so summaries need their own
+  // response bound. Keep the newest links useful for continuation while
+  // making omission explicit instead of silently returning an unbounded list.
   return {
     goalId: state.goalId,
     spec: {
@@ -81,7 +85,9 @@ function summary(state) {
       budget: { ...state.spec.budget },
     },
     status: state.status,
-    tasks: [...state.tasks],
+    taskCount: state.tasks.length,
+    tasks: state.tasks.slice(-MAX_SUMMARY_TASK_LINKS),
+    tasksTruncated: state.tasks.length > MAX_SUMMARY_TASK_LINKS,
     verifiedCriteria: [...state.verifiedCriteria],
     remainingBudget: remainingBudget(state),
     blockerStreak: { ...state.blockerStreak },
