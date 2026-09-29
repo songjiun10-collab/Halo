@@ -47,15 +47,22 @@ provenance, verification, or recovery requirements.
 - Permission mode, planner effort, and sequential/parallel execution settings
   exist as separate host settings. They are authority/policy controls, not
   task-classification outputs.
+- A committed `HarnessProfile` abstraction now exists in
+  `shared/harness-profile.js`. Current host selection maps saved routines to
+  `short` and all other tasks to `middle`; Phase 2 adds wider safe batching and
+  reuse of a batch's trailing observation for `short`. This is an execution-
+  horizon profile, not a capability profile, and its current routine-based
+  default is a transitional routing rule rather than proof that capability and
+  duration are already independently classified.
 - Current BrowserAdapter supports `observe`, `scroll`, `navigate`, and
   `follow_link`. `click`, `type`, `submit_form`, and `download` are rejected.
 - Routine and multi-agent execution exist. A dedicated Research capability
   adapter and screenshot/coordinate computer-use adapter are not present in
   the current browser action contract. They must not be advertised as
   available until implemented and tested.
-- No unified duration/capability profile resolver or durable profile-selection
-  record currently exists. The working tree contains unrelated in-progress
-  changes; implementation must preserve them.
+- No unified duration/capability profile resolver or durable record binding
+  both selections currently exists. The working tree contains unrelated
+  in-progress changes; implementation must preserve them.
 
 ## Selected approach
 
@@ -75,12 +82,15 @@ diagnostic only; it cannot authorize an otherwise unavailable capability.
 ## Request and resolved profile contracts
 
 The trusted host accepts a task request containing the original user text and
-optional explicit selections:
+optional explicit selections. The duration decision runs first; capability
+routing then uses the same trusted request plus the resolved duration. The
+two result fields remain independently represented so selecting Routine or
+Multi-agent cannot silently force Short or Long:
 
 ```text
 TaskRequest = {
   goalInput,                         // existing raw TaskStore.create() input, pre-normalization
-  requestedDurationProfile?: Short | Middle | Long,
+  requestedDurationProfile?: auto | Short | Middle | Long,
   requestedCapabilityProfile?: CapabilityId,
   routineRef?: {routineId, revision} // host-validated pinned definition
 }
@@ -97,14 +107,17 @@ validates:
 ResolvedTaskProfile = {
   schemaVersion: 1,
   classifierVersion: string,
-  duration: {id, limits: {maxActiveMs, maxActions, maxPlannerCalls}},
+  duration: {id, harnessProfileVersion, policySetId},
   capability: {
     id,
     registryVersion,
     dependencies: [CapabilityId],
     adapters: [{capabilityId, adapterId, adapterVersion}]
   },
-  selection: {source, ruleId?},
+  selection: {
+    duration: {source, ruleId?},
+    capability: {source, ruleId?}
+  },
   createdAt: ISO timestamp
 }
 ```
@@ -117,26 +130,35 @@ host bounds fail before resource admission.
 
 ## Duration profiles
 
-Duration means an upper-bounded execution budget, not a promise that the task
-will take the entire interval. `maxActiveMs` uses the existing active-time
-semantics. Paused time, CAPTCHA/user intervention, approval wait, and app
-shutdown do not consume active time. Wall-clock age remains separately
-observable. A profile applies all three limits together, so exhausting any one
-pauses with `budget_exhausted`; model output cannot extend them.
+Duration is the expected execution horizon and its associated harness strategy,
+not a promise that the task will run for an exact wall-clock interval. Reuse
+the existing `HarnessProfile` implementation as the duration-profile engine;
+do not create a duplicate Short/Middle/Long enum or a combined
+`ShortRoutineHarness`-style type. `HarnessProfile` already distinguishes
+planner cadence, context, observation, batching, durability, recovery, and
+budget policy. The Router adds capability selection alongside it.
 
-Initial v1 presets:
+| Duration profile | Execution strategy | Selection intent |
+|---|---|---|
+| Short | Minimal planner cadence, compact context, incremental-first observation, aggressive but authority-bounded batching, semantic durability, execution-state recovery | Bounded, predictable work. A validated saved routine is a deterministic Short candidate because its definition is bounded; an explicit trusted profile choice may override it. |
+| Middle | Adaptive bounded segments, rolling context, periodic observation/checkpoint, task-checkpoint recovery | Default for ordinary or unknown-horizon work; preserve current general task behavior. |
+| Long | Bounded planner segments, host-reconstructed context, strongest semantic durability, restart/context reconstruction | Long-running/background work or work requiring durable continuation. |
 
-| Profile | Active time cap | Action cap | Planner-call cap |
-|---|---:|---:|---:|
-| Short | 10 minutes | 50 | 25 |
-| Middle | 60 minutes | 250 | 125 |
-| Long | 4 hours | 1,000 | 500 |
+Exact numeric limits are intentionally not fixed in this architecture. The
+existing `DEFAULT_LIMITS` (1,000 actions, 500 planner calls, four active hours)
+remain the current GoalSpec defaults/legacy ceiling until profile-specific
+limits are calibrated from comparable traces. The v2 profile design's Phase 5
+owns that calibration. `maxActiveMs` retains current semantics: paused time
+and user-wait time do not consume active time; wall-clock age is reported
+separately. Explicit per-task limits can reduce a profile's current ceiling,
+but neither classifier nor capability adapter can raise it. Any finalized
+profile budget is persisted with the task and stays fixed across restart.
 
-The Long values match the existing `DEFAULT_LIMITS`. A user may select a
-larger named preset for a new task; explicit numeric limits may only reduce the
-selected preset. No task can exceed the Long ceiling, and neither classifier
-nor capability adapter can raise it. Preset changes affect only new tasks.
-Existing tasks retain their persisted limits after restart.
+The current `selectHarnessProfile({isRoutine})` mapping is transitional. The
+final Router resolves duration using horizon signals, including the bounded
+routine metadata, and resolves capability independently. It must not infer
+Short solely from a capability label when the task's validated scope indicates
+a different horizon.
 
 ## Capability profiles and availability
 
@@ -151,7 +173,7 @@ stable error; it never silently falls back to a semantically different route.
 | Browser | Existing planner + BrowserAdapter | Available for observe/scroll/navigate/follow_link only; unsupported action kinds remain denied. |
 | Research | Future bounded research adapter on the browser/source-observation path | Unavailable until source/evidence contracts and citation verification exist. |
 | Computer-use | Future screenshot + host-mediated coordinate/action adapter | Unavailable until screenshot provenance, coordinate binding, action policy, and approval are implemented. |
-| Multi-agent | Existing parent `child_plan` + `ChildAgentCoordinator` | Available only when the parent profile permits delegation and shared memory/resource admission succeeds; child profiles are restricted and cannot nest. |
+| Multi-agent | Existing parent `child_plan` + `ChildAgentCoordinator` orchestration subsystem | Available only when host routing selects it and shared memory/resource admission succeeds. It is not part of `HarnessProfile`; every child is an ordinary HALO task that receives its own independently resolved duration and capability profiles. |
 
 Capability is not permission. The selected capability describes which
 proposal/observation mechanisms may be used. The current host permission mode
@@ -167,7 +189,7 @@ touch filesystem, browser, settings, or queue state:
 | Priority | Trusted input / condition | Resolution |
 |---:|---|---|
 | 1 | Malformed fields, conflicting explicit selections, or invalid routine reference | Reject before admission with a stable typed error. |
-| 2 | `runRoutine(routineId, revision)` after host loads and verifies the immutable definition | Routine profile, exact revision pinned; Browser is a required underlying capability. |
+| 2 | `runRoutine(routineId, revision)` after host loads and verifies the immutable definition | Routine capability, exact revision pinned; Browser is a required underlying capability. Duration is resolved independently from validated routine bounds and explicit duration intent. |
 | 3 | Explicit trusted `requestedCapabilityProfile` and/or `requestedDurationProfile` | Honor if available, host-allowed, and within limits; Routine requires a matching validated `routineRef`; otherwise fail/clarify, never silently downgrade to a different meaning. |
 | 4 | Unambiguous deterministic intent rule from the versioned bilingual rule table | Select only a registered, available capability; persist the matching stable `ruleId`. Research/Computer-use intent returns unavailable until that adapter exists. |
 | 5 | No matching specific rule | Browser + Middle defaults. |
@@ -182,11 +204,12 @@ are:
 | Computer-use | `computer use`, `use the mouse`, `use the keyboard`, `screenshot coordinates` | `컴퓨터 유즈`, `마우스로`, `키보드로`, `스크린샷 좌표`, `좌표 클릭` |
 | Multi-agent | `parallel agents`, `sub-agents`, `delegate to agents` | `병렬 에이전트`, `서브 에이전트`, `에이전트에게 분담` |
 
-An explicit routine invocation maps to Routine. Exactly one matching phrase
-group maps to its capability; no match maps to Browser. Multiple groups require
-clarification. The deterministic English/Korean ruleset is versioned and has
-positive, negative, normalization, overlap, and ambiguity fixtures. A future
-semantic model classifier is out of the v1 critical path.
+An explicit routine invocation maps to the Routine capability. Exactly one
+matching phrase group maps to its capability; no match maps to Browser.
+Multiple groups require clarification. The deterministic English/Korean
+ruleset is versioned and has positive, negative, normalization, overlap, and
+ambiguity fixtures. A future semantic model classifier is out of the v1
+critical path.
 
 Duration rules are independent of capability: explicit trusted profile choice
 wins; otherwise exact, versioned short/long intent hints select Short/Long;
@@ -195,16 +218,22 @@ all remaining tasks select Middle. In v1, normalized phrases `quick`, `brief`,
 task`, `extended task`, `장기 작업`, `오래 걸리는 작업` select Long. Matching
 is case-insensitive for English and exact normalized phrase matching for both
 languages; no model-based paraphrase inference is performed. If both groups
-match, ask for clarification. The initial hint dictionary and numeric limits
-are reviewed configuration in this spec, not model-generated estimates.
+match, ask for clarification. The initial hint dictionary is reviewed
+configuration in this spec, not model-generated estimates. A validated
+routine's declared bounds may inform horizon selection, but its Routine
+capability alone never selects Short. Exact numeric profile budgets remain
+unset until the v2 profile calibration phase; current GoalSpec limits are
+authoritative in the interim.
 
-Multi-agent is a composite capability that requires Browser for each child.
-Routine and Research may also declare Browser as a dependency. The registry
-stores the dependency closure and applies the most restrictive effective
-limits across the composite. Child agents inherit a host-resolved restricted
-profile; planner-authored assignments cannot widen child duration, permission
-mode, origin scope, or action set. Existing `child_plan` proposals are only
-accepted for a parent whose durable capability profile includes Multi-agent.
+Capability selection is a separate axis from duration selection. Routine and
+Research can declare Browser as a dependency. Multi-agent routes to the
+existing orchestration subsystem; it submits independently profiled child
+tasks rather than changing the parent's duration or harness strategy. The
+registry stores the dependency closure and pins every adapter version. Child
+agents inherit host-resolved restricted task profiles; planner-authored
+assignments cannot widen child duration, permission mode, origin scope, or
+action set. Existing `child_plan` proposals are only accepted when host
+routing and policy allow Multi-agent for that parent.
 
 Routing is performed once before queue admission. Profile updates are not
 accepted from planner output or page messages. A user-approved task amendment
@@ -223,20 +252,26 @@ generic note payload. Validate enums, limits, versions, unknown fields, and
 event/task binding on write and replay.
 
 The new `task_profile_selected` event payload contains exactly
-`profileSchemaVersion`, `classifierVersion`, `duration` (`id` plus the three
-effective limits), `capability` (`id`, `registryVersion`, sorted dependency
-IDs, and the sorted full adapter list with each component's capability ID,
-adapter ID, and adapter version), and `selection` (`source` enum plus optional
-stable `ruleId`). The `source` enum is exactly `routine_entrypoint`,
-`explicit_user_choice`, `intent_rule`, or `default`. The task journal envelope
-supplies task ID, goal version, sequence, event ID, and timestamp. The resolver
-receives raw `goalInput` before GoalSpec normalization, so it can distinguish
-omitted limits from user-provided limits. Effective limits are the per-field
-minimum of the selected preset and any explicit lower user limits; a requested
-value above the Long ceiling is rejected with `duration_limit_exceeded`
-instead of being silently raised or truncated. The normalized GoalSpec stores
-those effective limits so existing controller enforcement remains
-authoritative.
+`profileSchemaVersion`, `classifierVersion`, `duration` (`id`, pinned
+`harnessProfileVersion`, `policySetId`, and `effectiveLimits` containing
+`maxActions`, `maxPlannerCalls`, and `maxActiveMs`), `capability` (`id`,
+`registryVersion`, sorted dependency IDs, and the sorted full adapter list
+with each component's capability ID, adapter ID, and adapter version), and
+`selection` with independently attributed `duration` and `capability` entries
+(`source` plus optional stable `ruleId`). The `source` enum is exactly
+`routine_entrypoint`, `explicit_user_choice`, `intent_rule`, or `default`.
+Independent attribution is required because an explicit duration choice can
+compose with a capability selected by an intent rule. The task journal
+envelope supplies task ID, goal version, sequence, event ID, and timestamp.
+The resolver receives raw `goalInput` before GoalSpec normalization, so it can
+distinguish omitted limits from user-provided limits. Until calibrated profile
+budgets are committed, effective limits are the existing normalized GoalSpec
+limits; the resolver must not invent preset values or raise those limits. Once
+a versioned policy set supplies calibrated ceilings, effective limits are the
+per-field minimum of that ceiling and any explicit lower user limits, while
+requests above the host's maximum are rejected with
+`duration_limit_exceeded`. The normalized GoalSpec stores the effective
+limits so existing controller enforcement remains authoritative.
 
 On recovery, the host loads the pinned duration/capability profile versions
 and every adapter ID/version in the dependency closure. If any profile or
@@ -274,9 +309,10 @@ separate reviewed implementation plans in dependency order:
 1. **Profile contract and router:** deterministic input precedence, strict
    profile registry, bounded classifier rules, typed profile journal event,
    legacy task mapping, and TaskHost integration.
-2. **Duration enforcement:** preset limits, validation, active-time accounting,
-   amendment constraints, recovery, queue/admission interaction, and UI-facing
-   reason codes.
+2. **Duration enforcement:** profile-aware policy selection, validation,
+   active-time accounting, amendment constraints, recovery, queue/admission
+   interaction, and UI-facing reason codes. Numeric profile ceilings are
+   introduced only after the v2 calibration phase provides evidence.
 3. **Existing capability integration:** Routine, Browser, and Multi-agent
    registry routing; shared-core invariants and no-escalation tests.
 4. **Research capability:** bounded source acquisition, source identity,
@@ -295,8 +331,10 @@ architecture is complete while a named capability is unavailable.
 - Classifier output is deterministic for the same versioned host inputs; every
   route is explainable by a stable source/rule ID.
 - Model/page/child output cannot set, amend, or authorize profiles.
-- Short/Middle/Long enforce all three caps across checkpoint, stop/recovery,
-  and app restart without counting paused/user-wait time as active time.
+- Each selected duration profile applies its versioned execution strategy and
+  existing host-enforced GoalSpec limits across checkpoint and recovery;
+  calibrated profile ceilings may narrow, never raise, those limits. Paused
+  and user-wait time do not count as active time.
 - Routine, Browser, Research, Computer-use, and Multi-agent each either route
   to a verified adapter or fail explicitly unavailable; none bypasses shared
   policy/approval/evidence/provenance.
@@ -305,7 +343,7 @@ architecture is complete while a named capability is unavailable.
 - Existing unprofiled tasks recover through a documented legacy mapping with
   no replay or new permissions.
 - Tests cover classifier precedence/ambiguity, profile persistence/replay,
-  preset limit enforcement, unsupported capability rejection, adapter
+  policy/limit enforcement, unsupported capability rejection, adapter
   isolation, no-escalation, and the existing full TaskHost/TaskController
   regression suites.
 - Integration benchmarks report classification overhead separately and verify
