@@ -187,6 +187,21 @@ test("with read-only batching, consecutive scroll steps become one proposal capp
   assert.deepEqual(rest.actions, [{ type: "scroll", direction: "down", amount: 4 }]);
 });
 
+test("with an explicit maxBatchActions, consecutive scroll steps batch past the default three-item cap", async () => {
+  const steps = [1, 2, 3, 4, 5, 6].map((amount) => ({ kind: "scroll", direction: "down", amount }));
+  const runner = new RoutineRunner({ definition: definition(steps), batchReadOnlySteps: true, maxBatchActions: 5 });
+  const proposal = await runner.next(context());
+  assert.equal(proposal.actions.length, 5);
+  assert.deepEqual(proposal.actions, [1, 2, 3, 4, 5].map((amount) => ({ type: "scroll", direction: "down", amount })));
+});
+
+test("maxBatchActions rejects non-positive-integer values", () => {
+  const steps = [{ kind: "scroll", direction: "down" }];
+  for (const bad of [0, -1, 1.5, "3", null]) {
+    assert.throws(() => new RoutineRunner({ definition: definition(steps), maxBatchActions: bad }), { code: "invalid_routine" });
+  }
+});
+
 test("with read-only batching, a scroll batch stops at the next non-scroll step", async () => {
   const steps = [
     { kind: "scroll", direction: "down" },

@@ -27,7 +27,7 @@ const { RoutineStore } = require("./routine-store");
 const { RoutineRunner } = require("./routine-runner");
 const { ChildAgentCoordinator } = require("./child-agent-coordinator");
 const { isPlainObject } = require("../../shared/harness-contracts");
-const { selectHarnessProfile } = require("../../shared/harness-profile");
+const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
 
 // Two complete Electron task surfaces (visible + fixed hidden renderer) were
 // measured at a 590,888,960-byte increment with 50ms polling; reserve the
@@ -362,7 +362,12 @@ class TaskHost {
     const cursor = recovery ? recovery.cursor : pin.cursor;
     let runner;
     try {
-      runner = new RoutineRunner({ definition, cursor, batchReadOnlySteps: this._routineBatchReadOnlySteps });
+      runner = new RoutineRunner({
+        definition,
+        cursor,
+        batchReadOnlySteps: this._routineBatchReadOnlySteps,
+        maxBatchActions: maxActionsPerProposal("short"),
+      });
     } catch {
       throw new TaskHostError("routine_cursor_mismatch", "routine cursor is out of range");
     }
@@ -406,7 +411,12 @@ class TaskHost {
             throw new TaskHostError("routine_cursor_mismatch", "new routine task lost its validated immutable revision");
           }
           routine = {
-            runner: new RoutineRunner({ definition: pinnedRoutineDefinition, cursor: routineRun.cursor, batchReadOnlySteps: this._routineBatchReadOnlySteps }),
+            runner: new RoutineRunner({
+              definition: pinnedRoutineDefinition,
+              cursor: routineRun.cursor,
+              batchReadOnlySteps: this._routineBatchReadOnlySteps,
+              maxBatchActions: maxActionsPerProposal("short"),
+            }),
             run: { ...routineRun },
           };
         }

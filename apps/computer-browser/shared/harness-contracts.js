@@ -28,6 +28,14 @@ const MAX_TASK_STORE_BYTES = 100 * 1024 * 1024;
 const MAX_CONTEXT_PACKET_BYTES = 64 * 1024; // section 5: "구조화된 packet 상한 64 KiB"
 const MAX_RECENT_EVENTS_IN_CONTEXT = 10; // section 5: "최근 action/result 10쌍"
 const MAX_ACTIONS_PER_PROPOSAL = 3; // section 8: "최대 3개 observe/scroll만 순차 묶음"
+// Harness v2 Phase 2 Task 2 (docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase2.md):
+// the only wider batch bound validateProposalEnvelope() will ever accept,
+// reserved for the "short" harness profile's aggressive-but-still-bounded
+// batching of provably safe (read-only) actions. Kept as a second named
+// constant -- not an arbitrary caller-supplied number -- so this security
+// boundary can only ever widen to one pre-reviewed value, never silently
+// to whatever a caller happens to pass.
+const MAX_ACTIONS_PER_PROPOSAL_SHORT = 8;
 const MAX_PLANNER_FRAME_BYTES = 64 * 1024; // section 6: JSONL stdio wire frame cap (envelope + payload)
 const PLANNER_RESPONSE_TIMEOUT_MS = 60 * 1000; // section 6: "응답 timeout 60초"
 const APPROVAL_EXPIRY_MS = 60 * 1000; // section 7: "60초 후 만료"
@@ -706,7 +714,13 @@ function validateChildAssignment(assignment, label) {
 // (Task 3) is a parent-only kind -- rejecting it from a child planner's own
 // transport is planner-stdio.js's job (it knows which role it is), since
 // this function has no notion of parent/child.
-function validateProposalEnvelope(proposal, label = "proposal") {
+const ALLOWED_PROPOSAL_MAX_ACTIONS = Object.freeze([MAX_ACTIONS_PER_PROPOSAL, MAX_ACTIONS_PER_PROPOSAL_SHORT]);
+
+function validateProposalEnvelope(proposal, label = "proposal", { maxActions } = {}) {
+  if (maxActions !== undefined && !ALLOWED_PROPOSAL_MAX_ACTIONS.includes(maxActions)) {
+    throw new ContractError("invalid_field", `${label} maxActions override must be one of the pre-reviewed bounds`);
+  }
+  const actionsLimit = maxActions !== undefined ? maxActions : MAX_ACTIONS_PER_PROPOSAL;
   assertPlainObject(proposal, label);
   assertNoUnknownKeys(
     proposal,
@@ -777,8 +791,8 @@ function validateProposalEnvelope(proposal, label = "proposal") {
     if (!Array.isArray(proposal.actions) || proposal.actions.length === 0) {
       throw new ContractError("invalid_field", `${label}.actions must be a non-empty array`);
     }
-    if (proposal.actions.length > MAX_ACTIONS_PER_PROPOSAL) {
-      throw new ContractError("field_too_large", `${label}.actions exceeds the ${MAX_ACTIONS_PER_PROPOSAL}-item batch limit`);
+    if (proposal.actions.length > actionsLimit) {
+      throw new ContractError("field_too_large", `${label}.actions exceeds the ${actionsLimit}-item batch limit`);
     }
     proposal.actions.forEach((a, i) => assertPlainObject(a, `${label}.actions[${i}]`));
     disallow(["reason", "evidenceIds", ...CHILD_PLAN_FIELDS, ...SEND_MESSAGE_FIELDS]);
@@ -801,6 +815,7 @@ module.exports = {
   MAX_CONTEXT_PACKET_BYTES,
   MAX_RECENT_EVENTS_IN_CONTEXT,
   MAX_ACTIONS_PER_PROPOSAL,
+  MAX_ACTIONS_PER_PROPOSAL_SHORT,
   MAX_CHILD_ASSIGNMENTS,
   MAX_CHILD_SUBGOAL_BYTES,
   MAX_ENTRY_URL_CHARS,

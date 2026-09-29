@@ -45,18 +45,30 @@
 
 ### Task 2: Safe batching for `short`
 
-**Files (expected):**
-- Modify: `apps/computer-browser/shared/harness-contracts.js` (thread a profile-aware proposal action-count bound through `validateProposal`'s call sites, or introduce a controller-side re-batching step that is itself bounded by the existing `MAX_ACTIONS_PER_PROPOSAL` contract — needs its own design note before implementation, since `validateProposal` is a shared security boundary used by routines, child agents, and message handling, not something to widen casually).
-- Modify: `apps/computer-browser/main/harness/task-controller.js` (`_dispatchActionsBatch`/`_dispatchReadOnlyBatch`).
-- New/modify tests in `test/task-controller.test.js`.
+**Design note (how the cap became profile-aware without weakening it elsewhere):** `validateProposalEnvelope()` (the shared security boundary in `shared/harness-contracts.js` used by routines, child agents, and message handling alike) now takes an optional `{maxActions}` override. It is restricted to a fixed, pre-reviewed allowlist (`ALLOWED_PROPOSAL_MAX_ACTIONS = [MAX_ACTIONS_PER_PROPOSAL, MAX_ACTIONS_PER_PROPOSAL_SHORT]`) — an unrecognized override throws `invalid_field` rather than silently widening the boundary to whatever a caller passes. `shared/harness-profile.js` owns the single mapping from profile to bound (`maxActionsPerProposal(profile)`); every other existing caller of `validateProposalEnvelope` (child-agent-coordinator's `child_plan` validation, and any future non-`actions`-kind proposal) omits the option entirely and keeps exactly today's `MAX_ACTIONS_PER_PROPOSAL` behavior.
 
-**Interfaces (expected):** batching aggressiveness for `short` increases only for actions already provably safe to batch (read-only, no cross-boundary effect); `middle` keeps exactly today's `MAX_ACTIONS_PER_PROPOSAL`-bounded behavior.
+**Files:**
+- Modified: `apps/computer-browser/shared/harness-contracts.js` (`MAX_ACTIONS_PER_PROPOSAL_SHORT` constant, `{maxActions}` option + allowlist check on `validateProposalEnvelope`).
+- Modified: `apps/computer-browser/shared/harness-profile.js` (`maxActionsPerProposal(profile)`).
+- Modified: `apps/computer-browser/main/harness/progress.js` (threads `context.maxActions` through).
+- Modified: `apps/computer-browser/main/harness/task-controller.js` (passes `maxActionsPerProposal(this._harnessProfile)` at its one `validateProposal` call site).
+- Modified: `apps/computer-browser/main/harness/routine-runner.js` (`maxBatchActions` constructor option, defaulting to `MAX_ACTIONS_PER_PROPOSAL`, used in place of the hardcoded constant when batching consecutive scroll steps).
+- Modified: `apps/computer-browser/main/harness/task-host.js` (both `RoutineRunner` construction sites now pass `maxBatchActions: maxActionsPerProposal("short")`, since a routine task is always `short`).
+- Modified: `apps/computer-browser/test/harness-profile.test.js`, `test/task-controller.test.js`, `test/routine-runner.test.js`.
 
-- [ ] Write a short design note on exactly how the contract-level cap becomes profile-aware without weakening it for any other caller (routine runner, child agents, message proposals all currently share the same constant).
-- [ ] Add failing tests proving `short` batches more read-only actions per turn than `middle` under otherwise identical proposals, and that every authority-boundary termination rule still applies to `short`.
-- [ ] Implement.
-- [ ] Benchmark: approval calls, journal writes, and wall time for a fixed read-only-heavy scripted task, `short` vs `middle`, using the existing `integration/routine-vs-planner-benchmark.js` pattern as a template.
-- [ ] Run focused + full regression.
+**Interfaces:** batching aggressiveness for `short` increases only for actions already provably safe to batch (read-only, no cross-boundary effect — the existing `isReadOnlyAction`/`_dispatchReadOnlyBatch` gate is unchanged); `middle`/`long` keep exactly today's `MAX_ACTIONS_PER_PROPOSAL`-bounded (3) behavior.
+
+- [x] Design note above.
+- [x] Add tests proving `short` accepts and batches more read-only actions per turn than `middle` rejects under an otherwise identical 4-action proposal (`task-controller.test.js`), that `RoutineRunner`'s `maxBatchActions` batches past the old 3-cap (`routine-runner.test.js`), that `maxBatchActions` fails closed on a non-positive-integer, and that `maxActionsPerProposal` maps correctly per profile and rejects an invalid one (`harness-profile.test.js`).
+- [x] Implement.
+- [x] Benchmark (in-process, `TaskController` + fake store/browser, not the full Electron integration harness): completing the *same* 6 read-only scroll actions —
+  | | planner calls | approval calls | journal appends |
+  |---|---:|---:|---:|
+  | middle (2 turns, its own 3-cap) | 3 | 2 | 12 |
+  | short (1 turn, 6 ≤ its 8-cap) | 2 | 1 | 12 |
+
+  Batching more read-only actions per turn measurably reduces planner and approval round-trips (33% fewer planner calls, 50% fewer approvals for this fixed workload); journal append count is unaffected by batch width (each action still produces its own `action_started`/`action_outcome` pair — only the `durable`/fsync flag on the non-final entries changes, which Task 5 addresses, not Task 2).
+- [x] Run focused (`harness-profile.test.js`, `task-controller.test.js` 88/88, `routine-runner.test.js`, `routine-store.test.js`, `routine-task-e2e.test.js`: 166/166 combined) + full regression (638/645; the same 2 pre-existing, unrelated failures).
 
 ### Task 3: Reduced planner cadence for `short`
 

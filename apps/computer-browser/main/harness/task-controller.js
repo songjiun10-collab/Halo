@@ -20,7 +20,7 @@
 
 const { randomUUID } = require("node:crypto");
 const contracts = require("../../shared/harness-contracts");
-const { validateHarnessProfile, selectHarnessProfile } = require("../../shared/harness-profile");
+const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
 const { buildContext } = require("./context-builder");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
 const { isReadOnlyAction } = require("./permission-policy");
@@ -996,7 +996,7 @@ class TaskController {
 
         let validated;
         try {
-          validated = validateProposal(proposal, { goal: this._goal });
+          validated = validateProposal(proposal, { goal: this._goal, maxActions: maxActionsPerProposal(this._harnessProfile) });
         } catch {
           // An off-goal/stale/malformed proposal is never executed; give the
           // planner another turn with a fresh observation rather than

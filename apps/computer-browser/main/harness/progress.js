@@ -38,7 +38,7 @@ function wrapContractError(err) {
 function validateProposal(proposal, context) {
   let validated;
   try {
-    validated = contracts.validateProposalEnvelope(proposal);
+    validated = contracts.validateProposalEnvelope(proposal, "proposal", { maxActions: context && context.maxActions });
   } catch (err) {
     throw wrapContractError(err);
   }

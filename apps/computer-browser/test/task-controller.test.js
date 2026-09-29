@@ -1956,6 +1956,34 @@ function makeBatchController({ store, actions, approve, browser, extra = {} }) {
 
 const SCROLL = { type: "scroll", direction: "down", amount: 400 };
 
+test("harnessProfile:short accepts a read-only batch wider than the default cap; middle rejects the same proposal as malformed", async () => {
+  const fourScrolls = [1, 2, 3, 4].map((amount) => ({ type: "scroll", direction: "down", amount }));
+
+  const { store: shortStore } = await makeStore({ originalRequest: "wide batch" });
+  const { controller: shortController, executed: shortExecuted } = makeBatchController({
+    store: shortStore,
+    actions: fourScrolls,
+    extra: { harnessProfile: "short" },
+  });
+  await shortController.start();
+  assert.deepEqual(shortExecuted, ["scroll", "scroll", "scroll", "scroll"]);
+  await shortStore.close();
+
+  const { store: middleStore } = await makeStore({ originalRequest: "wide batch" });
+  const { controller: middleController, executed: middleExecuted } = makeBatchController({
+    store: middleStore,
+    actions: fourScrolls,
+    extra: { harnessProfile: "middle" },
+  });
+  await middleController.start();
+  // The contract-level cap rejects the 4-action proposal outright for
+  // middle, so the controller treats it as malformed and replans (see the
+  // main loop's `catch { continue; }` around validateProposal) instead of
+  // executing anything from it.
+  assert.deepEqual(middleExecuted, []);
+  await middleStore.close();
+});
+
 test("a read-only batch asks the approver once per distinct action type and makes only the last action_started durable", async () => {
   const { store } = await makeStore({ originalRequest: "batch" });
   const records = spyAppends(store);

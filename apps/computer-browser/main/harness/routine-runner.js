@@ -34,9 +34,12 @@ function scrollAction(step) {
 }
 
 class RoutineRunner {
-  constructor({ definition, cursor = 0, batchReadOnlySteps = false }) {
+  constructor({ definition, cursor = 0, batchReadOnlySteps = false, maxBatchActions = MAX_ACTIONS_PER_PROPOSAL }) {
     if (!definition || !Array.isArray(definition.steps) || definition.steps.length === 0 || !Array.isArray(definition.origins) || definition.origins.length === 0) {
       throw new RoutineRunnerError("invalid_routine", "validated routine definition is required");
+    }
+    if (!Number.isInteger(maxBatchActions) || maxBatchActions < 1) {
+      throw new RoutineRunnerError("invalid_routine", "maxBatchActions must be a positive integer");
     }
     if (!Number.isInteger(cursor) || cursor < 0 || cursor > definition.steps.length) {
       throw new RoutineRunnerError("routine_cursor_mismatch", "routine cursor is out of range");
@@ -57,6 +60,7 @@ class RoutineRunner {
     this._definition = JSON.parse(JSON.stringify(definition));
     this._cursor = cursor;
     this._batchReadOnlySteps = batchReadOnlySteps === true;
+    this._maxBatchActions = maxBatchActions;
     this._allowedOrigins = new Set(this._definition.origins);
   }
 
@@ -108,7 +112,7 @@ class RoutineRunner {
       if (this._batchReadOnlySteps) {
         // Consecutive scrolls have no external effect, so the controller may run them under one durable write.
         const actions = [action];
-        for (let i = this._cursor + 1; actions.length < MAX_ACTIONS_PER_PROPOSAL; i += 1) {
+        for (let i = this._cursor + 1; actions.length < this._maxBatchActions; i += 1) {
           const following = this._definition.steps[i];
           if (!following || following.kind !== "scroll") break;
           actions.push(scrollAction(following));

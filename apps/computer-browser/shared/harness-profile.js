@@ -10,6 +10,8 @@
 // selection. This module is pure (no fs/IPC) so it stays independently
 // testable and reusable, matching the pattern of shared/harness-contracts.js.
 
+const { MAX_ACTIONS_PER_PROPOSAL, MAX_ACTIONS_PER_PROPOSAL_SHORT } = require("./harness-contracts");
+
 const HARNESS_PROFILES = Object.freeze(["short", "middle", "long"]);
 
 class HarnessProfileError extends Error {
@@ -38,4 +40,21 @@ function selectHarnessProfile({ isRoutine = false } = {}) {
   return isRoutine ? "short" : "middle";
 }
 
-module.exports = { HARNESS_PROFILES, HarnessProfileError, validateHarnessProfile, selectHarnessProfile };
+// Harness v2 Phase 2 Task 2: the single source of truth for how many
+// actions a proposal may batch together, by profile. "short" is the only
+// profile that gets the wider, still-bounded batch (see
+// MAX_ACTIONS_PER_PROPOSAL_SHORT's own comment for why this is a fixed
+// second constant rather than an arbitrary number); every other profile
+// keeps today's unchanged batch bound.
+function maxActionsPerProposal(profile) {
+  validateHarnessProfile(profile);
+  return profile === "short" ? MAX_ACTIONS_PER_PROPOSAL_SHORT : MAX_ACTIONS_PER_PROPOSAL;
+}
+
+module.exports = {
+  HARNESS_PROFILES,
+  HarnessProfileError,
+  validateHarnessProfile,
+  selectHarnessProfile,
+  maxActionsPerProposal,
+};
