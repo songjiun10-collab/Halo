@@ -140,7 +140,7 @@ test("a TaskHost-surface method is rejected until the calling client has attache
 
 test("routine and work-goal TaskHost methods reach the TaskHost over the background runtime, not just the renderer's direct IPC path", async () => {
   // main/ipc.js's HARNESS_METHODS exposes listRoutines/getRoutine/saveRoutine/
-  // deleteRoutine/runRoutine and the nine startWorkGoal.../verifyWorkGoalCriterion
+  // deleteRoutine/runRoutine and the Work Goal lifecycle/recovery
   // methods to the renderer. BackgroundRuntimeService's TASK_HOST_METHODS
   // allowlist is a separate, hand-maintained list guarding the same TaskHost
   // surface for the out-of-process/background path -- it must not silently
@@ -161,6 +161,8 @@ test("routine and work-goal TaskHost methods reach the TaskHost over the backgro
     async archiveWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "archived" }; },
     async recordWorkGoalProgress(goalId, expectedVersion, evidenceRefs) { return { goalId, expectedVersion, evidenceRefs }; },
     async verifyWorkGoalCriterion(goalId, expectedVersion, criterionId) { return { goalId, expectedVersion, criterionId, verified: true }; },
+    async getWorkGoalRecoveryStatus(goalId, expectedVersion) { return [{ goalId, expectedVersion, status: "held" }]; },
+    async repairWorkGoalReservation(goalId, expectedVersion, reservationId) { return { goalId, expectedVersion, reservationId, status: "cancelled" }; },
   });
   const { service, socketPath, capability } = await startService(taskHost);
   const client = await connectedClient(socketPath, capability, "ui-1");
@@ -180,6 +182,8 @@ test("routine and work-goal TaskHost methods reach the TaskHost over the backgro
   assert.deepEqual(await client.call("archiveWorkGoal", ["g1", 4]), { goalId: "g1", expectedVersion: 4, status: "archived" });
   assert.deepEqual(await client.call("recordWorkGoalProgress", ["g1", 1, ["e1"]]), { goalId: "g1", expectedVersion: 1, evidenceRefs: ["e1"] });
   assert.deepEqual(await client.call("verifyWorkGoalCriterion", ["g1", 1, "c1"]), { goalId: "g1", expectedVersion: 1, criterionId: "c1", verified: true });
+  assert.deepEqual(await client.call("getWorkGoalRecoveryStatus", ["g1", 1]), [{ goalId: "g1", expectedVersion: 1, status: "held" }]);
+  assert.deepEqual(await client.call("repairWorkGoalReservation", ["g1", 1, "r1"]), { goalId: "g1", expectedVersion: 1, reservationId: "r1", status: "cancelled" });
   await client.close();
   await service.stopService("test done");
 });
@@ -307,7 +311,10 @@ test("getSnapshot() reflects currently attached clients and the TaskHost's own t
 // `taskHost[method](...args)` calls work unchanged. ----
 
 test("BackgroundRuntimeClient.connect() attaches in one step, and its proxied TaskHost methods reach the real TaskHost", async () => {
-  const taskHost = makeFakeTaskHost();
+  const taskHost = makeFakeTaskHost({
+    async getWorkGoalRecoveryStatus(goalId, expectedVersion) { return [{ goalId, expectedVersion, status: "held" }]; },
+    async repairWorkGoalReservation(goalId, expectedVersion, reservationId) { return { goalId, expectedVersion, reservationId, status: "cancelled" }; },
+  });
   const { service, socketPath, capability } = await startService(taskHost);
   const client = new BackgroundRuntimeClient({ socketPath, capability, clientId: "ui-1" });
   await client.connect();
@@ -315,6 +322,8 @@ test("BackgroundRuntimeClient.connect() attaches in one step, and its proxied Ta
   assert.deepEqual(tasks, [{ taskId: "t1", state: "running" }]);
   const created = await client.createTask({ originalRequest: "goal" });
   assert.deepEqual(created, { taskId: "new-task" });
+  assert.deepEqual(await client.getWorkGoalRecoveryStatus("g1", 2), [{ goalId: "g1", expectedVersion: 2, status: "held" }]);
+  assert.deepEqual(await client.repairWorkGoalReservation("g1", 2, "r1"), { goalId: "g1", expectedVersion: 2, reservationId: "r1", status: "cancelled" });
   assert.deepEqual(taskHost.calls.filter((c) => c[0] === "createTask"), [["createTask", { originalRequest: "goal" }]]);
   await client.detach();
   await service.stopService("test done");

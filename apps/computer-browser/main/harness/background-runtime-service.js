@@ -84,6 +84,8 @@ const TASK_HOST_METHODS = new Set([
   "archiveWorkGoal",
   "recordWorkGoalProgress",
   "verifyWorkGoalCriterion",
+  "getWorkGoalRecoveryStatus",
+  "repairWorkGoalReservation",
 ]);
 
 class BackgroundRuntimeService {
