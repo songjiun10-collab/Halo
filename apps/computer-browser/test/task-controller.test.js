@@ -1984,6 +1984,57 @@ test("harnessProfile:short accepts a read-only batch wider than the default cap;
   await middleStore.close();
 });
 
+test("short's wider batch durably persists fewer action_started entries than middle for the same total read-only actions", async () => {
+  // Harness v2 Phase 2 Task 5 (semantic durability): _runApprovedReadOnlyBatch
+  // already marks only the LAST action_started in a batch durable (see the
+  // `durable: index === actions.length - 1` line it's built around). Task 2's
+  // wider short-profile batch cap directly extends that same fsync-coalescing
+  // benefit -- completing the same 6 actions in one short batch of 6 durably
+  // persists one action_started, where middle's own 3-cap needs two batches
+  // (two durable action_started entries) to do the same work.
+  const sixScrolls = [1, 2, 3, 4, 5, 6].map((amount) => ({ type: "scroll", direction: "down", amount }));
+
+  function twoBatchPlanner() {
+    let calls = 0;
+    return {
+      next: async (context) => {
+        calls += 1;
+        const base = { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [] };
+        if (calls === 1) return { ...base, kind: "actions", actions: sixScrolls.slice(0, 3) };
+        if (calls === 2) return { ...base, kind: "actions", actions: sixScrolls.slice(3) };
+        return { ...base, kind: "need_user", reason: "done" };
+      },
+    };
+  }
+
+  const { store: middleStore } = await makeStore({ originalRequest: "durability" });
+  const middleRecords = spyAppends(middleStore);
+  const middleController = new TaskController({
+    store: middleStore,
+    planner: twoBatchPlanner(),
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: async () => ({ decision: "allow", reasons: [] }),
+    hostVerifier: () => true,
+    harnessProfile: "middle",
+  });
+  await middleController.start();
+  const middleDurableStarts = middleRecords.filter((r) => r.type === "action_started" && r.durable).length;
+  assert.equal(middleDurableStarts, 2);
+  await middleStore.close();
+
+  const { store: shortStore } = await makeStore({ originalRequest: "durability" });
+  const shortRecords = spyAppends(shortStore);
+  const { controller: shortController } = makeBatchController({
+    store: shortStore,
+    actions: sixScrolls,
+    extra: { harnessProfile: "short" },
+  });
+  await shortController.start();
+  const shortDurableStarts = shortRecords.filter((r) => r.type === "action_started" && r.durable).length;
+  assert.equal(shortDurableStarts, 1);
+  await shortStore.close();
+});
+
 test("a read-only batch asks the approver once per distinct action type and makes only the last action_started durable", async () => {
   const { store } = await makeStore({ originalRequest: "batch" });
   const records = spyAppends(store);

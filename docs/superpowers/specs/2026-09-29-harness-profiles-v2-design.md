@@ -700,7 +700,7 @@ Then run profile benchmarks and the full regression suite.
 
 **Phase 1 — Interface.** Introduce `HarnessProfile` without changing current execution semantics. Map existing behavior to Middle. *(Implemented 2026-09-29: see `docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase1.md`.)*
 
-**Phase 2 — Short.** Add safe batching, reduced planner cadence, incremental observation, and semantic durability. Benchmark each optimization independently.
+**Phase 2 — Short.** Add safe batching, reduced planner cadence, incremental observation, and semantic durability. Benchmark each optimization independently. *(Partially implemented 2026-09-29: see `docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase2.md`. Safe batching, planner cadence, and semantic durability shipped as one mechanism — a profile-aware proposal batch-width cap — with a benchmarked -33% planner calls / -50% approvals / -50% durable writes on a fixed 6-action workload. Incremental observation is deliberately deferred: it needs its own design doc before touching `BrowserAdapter.execute()`'s return contract, per that plan's Task 4 note.)*
 
 **Phase 3 — Long.** Move the existing long-horizon machinery behind the Long profile and verify restart/context reconstruction.
 
