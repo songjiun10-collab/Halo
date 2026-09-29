@@ -114,6 +114,7 @@ ResolvedTaskProfile = {
     dependencies: [CapabilityId],
     adapters: [{capabilityId, adapterId, adapterVersion}]
   },
+  parentBinding?: {parentTaskId, planId, parentGoalVersion},
   selection: {
     duration: {source, ruleId?},
     capability: {source, ruleId?}
@@ -180,6 +181,27 @@ proposal/observation mechanisms may be used. The current host permission mode
 and action policy remain authoritative. A capability may narrow the allowed
 surface but may never elevate `observe` to `interact`/`full`, bypass approval,
 grant credentials, or mark evidence verified.
+
+## Task-entry coverage
+
+Every path that can mint or resume an executable task must use the same
+profile contract:
+
+| Entry path | Profile source and boundary |
+|---|---|
+| `TaskHost.createTask()` | Resolve from the raw user request and host-validated explicit selectors before `TaskStore.create()`. No profile selector is accepted from a planner or page. |
+| `runRoutine()` and scheduled routine occurrences | Pin and validate the exact saved routine revision first; select Routine capability from the typed host entry point. A schedule trigger is audit/idempotency metadata, not a profile selector. Resolve duration independently under the same horizon rules. |
+| `ChildAgentCoordinator.acceptParentPlan()` | Accept `child_plan` only when the parent has a host-resolved Multi-agent capability. Reject assignment-supplied profile fields. Each child receives Browser capability (scoped to its validated entry origin and the existing child action policy); resolve its duration on the host and do not allow a longer-horizon profile than the parent. Children cannot nest Multi-agent, claim Routine, or request Research/Computer-use. |
+| Recovery / queued admission | Load the persisted profile and pinned adapters; do not reclassify a partially executed task. New marked tasks with a missing profile fail closed; historical tasks use only the legacy mapping. |
+
+Child subgoals and URLs originate in planner proposals and remain untrusted.
+They may be classifier input only for choosing a child duration no longer than
+the already host-resolved parent horizon; they are never authority to
+choose a capability, widen the action set, permission mode, origin, or profile
+ceiling. The coordinator persists each child's profile in its child store
+before the parent `child_plan_accepted` event can trigger admission. Failure
+to create or persist any child profile rolls back the entire unaccepted plan;
+no child browser or planner is constructed on that path.
 
 ## Routing rules and precedence
 
@@ -266,14 +288,18 @@ incomplete store remains non-runnable for diagnosis; it must never be
 mistakenly admitted as a legacy task.
 
 The new `task_profile_selected` event payload contains exactly
-`profileSchemaVersion`, `classifierVersion`, `duration` (`id`, pinned
+`profileSchemaVersion`, `classifierVersion`, optional `parentBinding` for
+child tasks (`parentTaskId`, `planId`, and `parentGoalVersion`), `duration`
+(`id`, pinned
 `harnessProfileVersion`, `policySetId`, and `effectiveLimits` containing
 `maxActions`, `maxPlannerCalls`, and `maxActiveMs`), `capability` (`id`,
 `registryVersion`, sorted dependency IDs, and the sorted full adapter list
 with each component's capability ID, adapter ID, and adapter version), and
 `selection` with independently attributed `duration` and `capability` entries
 (`source` plus optional stable `ruleId`). The `source` enum is exactly
-`routine_entrypoint`, `explicit_user_choice`, `intent_rule`, or `default`.
+`routine_entrypoint`, `explicit_user_choice`, `intent_rule`, `default`, or
+`parent_plan_policy`. A child `parentBinding` must match the host-authored
+parent `child_plan_accepted` event before the child can be admitted.
 Independent attribution is required because an explicit duration choice can
 compose with a capability selected by an intent rule. The task journal
 envelope supplies task ID, goal version, sequence, event ID, and timestamp.
@@ -360,8 +386,9 @@ architecture is complete while a named capability is unavailable.
   no replay or new permissions.
 - Tests cover classifier precedence/ambiguity, profile persistence/replay,
   policy/limit enforcement, unsupported capability rejection, adapter
-  isolation, no-escalation, and the existing full TaskHost/TaskController
-  regression suites.
+  isolation, no-escalation, and all creation routes (`createTask`, routine and
+  scheduled routine, accepted child plan, queued admission, and recovery), plus
+  the existing full TaskHost/TaskController regression suites.
 - Integration benchmarks report classification overhead separately and verify
   it does not add an external model call to the v1 task-start path.
 
