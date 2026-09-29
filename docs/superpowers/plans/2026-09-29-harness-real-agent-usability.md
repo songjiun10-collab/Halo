@@ -35,3 +35,24 @@ Installing Electron for these runs (`npm ci` in `apps/computer-browser`; `node_m
 `long` now keeps working until the host verifies the goal (design spec, "Goal persistence"). Mechanism-level evidence is in the unit tests, which were mutation-checked: with the rejection branch disabled, the three tests that depend on it fail; the `user`-criterion and `short`/`middle` tests correctly do not.
 
 Real-model check (`HALO_LLM_VERIFIED=1 integration/llm-goal-run.js`, host criterion true only while the current page contains TARGET-FOUND): `middle` and `long` both completed the same way (13 planner calls, 12 actions, ~52 s). The model gathered evidence (`observe` with the criterion id) at the target page before finishing, so it never finished early and the rejection path did not fire. That means persistence was not shown to *rescue* a real premature finish here; it was shown not to interfere with a correct one, and the `goalPersistence` context reached the model without breaking its output. Whether a real model finishes prematurely often enough for this to matter is untested.
+
+## Big task: 121-page site, `long` profile, real model, host-verified goal
+
+`HALO_LLM_VERIFIED=1 HALO_LLM_PROFILES=long HALO_LLM_DEPTH=4 HALO_LLM_BRANCH=3 integration/llm-goal-run.js`. Site: depth 4, branching 3 (121 pages), target `r-1-0-2-1`. The only goal text was "find the page containing TARGET-FOUND; some sections are dead ends". Completion was decided by the host (criterion `verification: "host"`, true only while the browser's current page contains the marker), not by the model. Real `claude` CLI planner, immediate programmatic approval, local synthetic pages. (An earlier attempt at this run was lost when the container restarted; this is the rerun.)
+
+| metric | value |
+|---|---:|
+| end state | `completed` (host-verified) |
+| wall time | 407 s |
+| planner calls | 89 (median 4.1 s, mean 4.6 s, max 10.5 s) |
+| actions | 103 (65 navigate, 30 follow_link, 8 observe) |
+| pages visited | 87 unique, 0 revisits |
+| proposals by size | 76 × 1 action, 9 × 2, 3 × 3 (mean 1.2) |
+| rejected finishes | 0 (one `finish`, accepted) |
+| journal fsyncs | 105 |
+
+What it shows, and what it does not:
+- The harness carried a real model through a ~7-minute, 89-call task and completed it with a host-verified result. The run crossed three context segments (25 planner calls per segment) with the goal intact, and navigation memory prevented any revisit.
+- Time is planner latency: 89 calls × ~4.6 s ≈ 409 s of the 407 s wall time. Harness cost is not visible at this scale.
+- The model was not efficient: in-order depth-first search reaches the target after 54 pages; it loaded 87 (+61%). It never batched meaningfully (mean 1.2 actions per proposal), so `long`'s cap of 3 was not the constraint.
+- Goal persistence did not fire: the model finished once, correctly. One run on one site; it does not measure how often a model finishes early or how often it fails outright.
