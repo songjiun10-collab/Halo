@@ -401,6 +401,89 @@ test("a failed continuation write closes the just-created TaskStore writer lock"
   assert.equal(host._active.has(taskId), false);
 });
 
+test("restart preserves budget and never auto-runs Tasks at every durable Work Goal admission boundary", async () => {
+  const storageRoot = await mkTempRoot();
+  const originalHost = makeHost(storageRoot);
+  const goal = await originalHost.startWorkGoal({
+    objective: "Recover each durable admission boundary",
+    successCriteria: [{ id: "review", text: "Review recovery", required: true, verification: "user" }],
+    budget: { maxTasks: 5, maxActions: 100, maxPlannerCalls: 100, maxActiveMs: 10000 },
+  });
+  const stages = [
+    { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-000000000001", at: "task_profile" },
+    { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000002", reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-000000000002", at: "reserved" },
+    { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000003", reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-000000000003", at: "linked" },
+    { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000004", reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-000000000004", at: "continuation" },
+    { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000005", reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-000000000005", at: "queue_admitted" },
+  ];
+  const goalInput = {
+    originalRequest: "A Task interrupted during durable admission",
+    limits: { maxActions: 6, maxPlannerCalls: 3, maxActiveMs: 600 },
+  };
+  const { resolveTaskProfile } = require("../shared/task-profile-router");
+  await originalHost._ensureQueue();
+
+  for (const stage of stages) {
+    const binding = { goalId: goal.goalId, goalVersion: 1, reservationId: stage.reservationId };
+    const store = await TaskStore.create(goalInput, {
+      storageRoot,
+      taskId: stage.taskId,
+      resolvedProfile: resolveTaskProfile({ goalInput }),
+      workGoalBinding: binding,
+    });
+    if (stage.at !== "task_profile") {
+      await originalHost._workGoalOrchestrator.reserveTask(goal.goalId, 1, {
+        taskId: stage.taskId,
+        reservationId: stage.reservationId,
+        limits: { maxTasks: 1, maxActions: 6, maxPlannerCalls: 3, maxActiveMs: 600 },
+      });
+    }
+    if (["linked", "continuation", "queue_admitted"].includes(stage.at)) {
+      await originalHost._workGoalOrchestrator.linkTask(goal.goalId, 1, {
+        taskId: stage.taskId, reservationId: stage.reservationId,
+      });
+    }
+    if (["continuation", "queue_admitted"].includes(stage.at)) {
+      await originalHost._workGoalOrchestrator.recordContinuation(goal.goalId, 1, {
+        taskId: stage.taskId, origin: "user",
+      });
+    }
+    await store.close();
+    if (stage.at === "queue_admitted") {
+      await originalHost._ensureQueue();
+      await originalHost._queue.enqueue(stage.taskId);
+      assert.equal(await originalHost._queue.admitNext(), stage.taskId);
+    }
+  }
+
+  hostsToClose.delete(originalHost);
+  await originalHost.close();
+
+  let browserCreations = 0;
+  let plannerCreations = 0;
+  const recoveredHost = makeHost(storageRoot, {
+    makeBrowser: () => { browserCreations += 1; return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) }; },
+    makePlanner: () => { plannerCreations += 1; return finishingPlanner(); },
+  });
+  const listed = await recoveredHost.listTasks();
+  assert.deepEqual(listed.map((item) => item.taskId).sort(), stages.map((item) => item.taskId).sort());
+  assert.ok(listed.every((item) => ["queued", "paused"].includes(item.state) && item.active === false && item.queuePosition >= 1));
+  assert.equal(browserCreations, 0, "restart/listing must not attach a browser to interrupted admission work");
+  assert.equal(plannerCreations, 0, "restart/listing must not start a planner before explicit resume");
+
+  const recovery = await recoveredHost.getWorkGoalRecoveryStatus(goal.goalId, 1);
+  assert.deepEqual(recovery.map((item) => item.taskId).sort(), stages.slice(1).map((item) => item.taskId).sort());
+  assert.ok(recovery.every((item) => item.status === "held" && item.reason === "checkpoint_missing"));
+  assert.deepEqual(Object.values(recoveredHost._workGoalStore.get(goal.goalId).reservations).map((item) => item.status), ["linked", "linked", "linked", "linked"]);
+  assert.throws(() => recoveredHost._workGoalOrchestrator.getTaskContext({
+    goalId: goal.goalId,
+    goalVersion: 1,
+    taskId: stages[0].taskId,
+    reservationId: stages[0].reservationId,
+    workGoalBinding: { goalId: goal.goalId, goalVersion: 1, reservationId: stages[0].reservationId },
+  }), { code: "invalid_binding" });
+});
+
 test("three matching durable paused continuations block the active Work Goal", async () => {
   const storageRoot = await mkTempRoot();
   const host = makeHost(storageRoot, { makePlanner: () => ({ next: async () => { throw new Error("simulated planner outage"); } }) });
