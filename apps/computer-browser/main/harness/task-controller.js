@@ -196,6 +196,14 @@ class TaskController {
     this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
     this._approvalQueue = [];
     this._lastObservation = null;
+    // Harness v2 Phase 2 Task 4: an already-captured Observation from the
+    // most recently dispatched action, reusable ONLY when that action was
+    // itself an "observe" (a real snapshot, not a guess) and the browser's
+    // own document epoch still matches it (see its use at the top of the
+    // main loop). Cleared on any other dispatched action so a stale
+    // reference is never carried past something that could have changed
+    // the page.
+    this._reusableObservation = null;
 
     // A task that already reached a TERMINAL state (completed/stopped) was
     // checkpointed synchronously the instant it got there (see the
@@ -647,8 +655,10 @@ class TaskController {
     // Any interruption's cursor is meaningless now -- resume always starts
     // the next iteration with a completely fresh observation (design doc
     // section 7: "resume은 새 observation부터 시작한다. 이미 끝난 action은
-    // 재생하지 않는다").
+    // 재생하지 않는다"). Phase 2 Task 4's reuse cache must never survive a
+    // resume either, for the same reason.
     this._lastObservation = null;
+    this._reusableObservation = null;
     this._emit();
     return this._runLoop();
   }
@@ -882,16 +892,32 @@ class TaskController {
         }
 
         let observation;
-        try {
-          observation = await this._browser.observe({
-            signal: undefined,
-            initial: this._budgets.actionsUsed === 0 && this._budgets.plannerCallsUsed === 0,
-          });
-        } catch {
-          if (this._stopHappenedSince(epoch)) break;
-          await this._pauseWith("observation_error");
-          break;
+        // Harness v2 Phase 2 Task 4 (incremental observation, short only):
+        // reuse the last dispatched action's own observation instead of
+        // unconditionally re-observing, but only when the browser itself
+        // proves nothing has navigated since that snapshot was taken --
+        // getDocumentEpoch() is the same authority execute()'s own
+        // stale_document guard already trusts, so this is a real proof, not
+        // an assumption. A browser fake without getDocumentEpoch() (most
+        // unit-test fakes) simply never qualifies, which is the safe
+        // default: always re-observe.
+        const reusable = this._harnessProfile === "short" ? this._reusableObservation : null;
+        if (reusable && typeof this._browser.getDocumentEpoch === "function" &&
+            this._browser.getDocumentEpoch() === reusable.documentEpoch) {
+          observation = reusable;
+        } else {
+          try {
+            observation = await this._browser.observe({
+              signal: undefined,
+              initial: this._budgets.actionsUsed === 0 && this._budgets.plannerCallsUsed === 0,
+            });
+          } catch {
+            if (this._stopHappenedSince(epoch)) break;
+            await this._pauseWith("observation_error");
+            break;
+          }
         }
+        this._reusableObservation = null;
         if (this._stopHappenedSince(epoch)) break;
         this._lastObservation = observation;
 
@@ -1318,6 +1344,14 @@ class TaskController {
   }
 
   async _afterActionDispatched(proposal, result, epoch) {
+    // Harness v2 Phase 2 Task 4: only a successful "observe" action leaves a
+    // reusable snapshot; any other dispatched action (even read-only ones
+    // like scroll) clears it, since this cache's only safety property is
+    // "the last thing we dispatched was itself the observation in hand."
+    this._reusableObservation = result.action?.type === "observe" && result.status === "ok" && result.observation
+      ? result.observation
+      : null;
+
     // No-progress detection: 3 consecutive dispatches of the identical
     // (action, observation) pair with no newly-verified criterion earns one
     // free forced replan; a second such streak pauses no_progress (design

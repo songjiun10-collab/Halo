@@ -86,27 +86,24 @@
 
 ### Task 4: Incremental observation for `short`
 
-**Files (expected):** `main/harness/browser-adapter.js`, `main/harness/context-builder.js`, new/modified tests.
+**Revised scope (2026-09-29):** the original design note below correctly identified that a *general* delta/DOM-diff observation system is too wide a change for this plan. But re-reading it turned up that the specific blocker it named — no staleness proof and no way to get an already-taken observation back out of `execute()` — mostly already exists: `BrowserAdapter.getDocumentEpoch()` is the exact same authority `execute()`'s own `stale_document` guard already trusts, and adding the observation payload to `execute()`'s "observe"-action return is a strictly additive field (verified against `test/browser-adapter.test.js`'s existing assertions, which check individual fields, never a `deepEqual` on the whole result). That is enough to implement tier 1 of the spec's own ordered observation-preference list — "existing valid stable references" — safely and narrowly, without touching DOM-scanning, `observationKey()`, or `_noProgressThreshold` at all. Tiers 2-5 (real delta/DOM-diff, progressive expansion, visual fallback) remain out of scope and would still need their own dedicated plan.
 
-**Interfaces (expected):** `short` prefers delta/shallow observation over full observation per the spec's ordered preference list; a document-epoch change still invalidates unproven references for every profile.
+**Files:**
+- Modified: `apps/computer-browser/main/harness/browser-adapter.js` (`execute()`'s `"observe"` case now also returns `observation`).
+- Modified: `apps/computer-browser/main/harness/task-controller.js` (`_reusableObservation` cache; consulted only for `harnessProfile === "short"`, gated by `browser.getDocumentEpoch()` matching; cleared on any non-observe dispatch and on `resume()`).
+- Modified: `apps/computer-browser/test/task-controller.test.js`.
 
-- [x] Design note (below).
-- [ ] Failing tests for delta validity/invalidation, `middle` observation behavior unchanged. **Not started.**
-- [ ] Implement. **Not started — deliberately deferred, see below.**
-- [ ] Benchmark observation bytes/time, `short` vs `middle`.
-- [ ] Run focused + full regression.
+**Interfaces:** `TaskController` tracks the most recently dispatched action's own observation, but only trusts it as reusable when (a) that action was itself a successful `"observe"`, (b) profile is `short`, and (c) `browser.getDocumentEpoch()` (when the browser implements it) still equals that observation's `documentEpoch`. Any other outcome falls back to today's unconditional `browser.observe()` call — the same behavior `middle`/`long` always keep, and the same behavior a test-fake browser without `getDocumentEpoch()` gets by default.
 
-**Design note (2026-09-29) — why this is deferred rather than shipped:**
+- [x] Design note (below) plus the revised-scope note above.
+- [x] Failing-then-passing tests: reuse across a clean 2-turn batch-ending-in-observe sequence (`middle` re-observes, `short` doesn't); no reuse across a documentEpoch mismatch (simulated navigation); no reuse when the last dispatched action wasn't itself an observe; safe fallback when the browser fake has no `getDocumentEpoch()`; the cache never survives `resume()` (existing invariant: resume always starts from a fresh observation).
+- [x] Implement.
+- [x] Benchmark: 3 turns, each batch ending in an explicit `observe` action — `middle` calls `browser.observe()` 3 times (once per turn); `short` calls it once (turn 1 only; turns 2-3 reuse their own prior batch's trailing observation).
+- [x] Run focused (`task-controller.test.js` 73/73, `browser-adapter.test.js` unchanged) + full regression (644/651 pass; same 2 pre-existing, unrelated failures).
 
-`TaskController`'s main loop (`task-controller.js`, the `while (this._task.state === "running")` loop) unconditionally calls `this._browser.observe(...)` at the top of every turn, before the planner is consulted (see the fixed sequence: observe → build context → `planner.next()`). A real "delta observation" for `short` needs at minimum:
+**Original design note (2026-09-29), on the general delta/DOM-diff case this task does NOT attempt:**
 
-1. A way to know a fresh observation is *already in hand and provably valid* — e.g. the just-dispatched batch's own trailing `observe` action, or a proof that nothing could have changed the page since the last observation (no navigation, no dispatched action other than a scroll that doesn't itself invalidate element references).
-2. `BrowserAdapter.execute()` to actually return that observation payload for an in-batch `observe` action — today it returns only `{status, evidenceCandidate: {observationId}}` (see `browser-adapter.js`'s `execute()`, `case "observe"`), not the full `Observation` object, so the controller currently has no in-hand observation to reuse even when one was just taken.
-3. A precise, testable staleness proof tied to `documentEpoch` (already tracked) plus which action types are provably non-invalidating for already-known element references — not merely "no navigation happened," since a page can mutate its own DOM without navigating.
-
-Each of these touches a genuinely different, wider surface than Task 2/3/5's batch-width lever: `BrowserAdapter.execute()`'s return contract is depended on by every action-type branch and by `_dispatchApprovedAndApplyTracked`'s durable journal payloads, and changing what "provably valid" means for a stale reference is a correctness question for the *entire* observation/no-progress-detection pipeline (`observationKey()`, `_noProgressThreshold`), not just `short`. Implementing this well within the existing test-first-with-failing-tests discipline the rest of this codebase uses is realistically its own task-by-task plan (its own design doc, its own recovery/staleness test matrix), not a same-session extension of Task 2's batching change.
-
-**Decision:** left unimplemented in this Phase 2 pass. `short` observation behavior is currently identical to `middle`/`long` (full observation every turn) — this is safe (no regression, no weakened invariant) but does not yet deliver the "incremental observation" half of the Short Harness spec. A dedicated follow-up plan should be written before touching `BrowserAdapter.observe()`/`execute()`.
+`TaskController`'s main loop (`task-controller.js`, the `while (this._task.state === "running")` loop) unconditionally calls `this._browser.observe(...)` at the top of every turn, before the planner is consulted (see the fixed sequence: observe → build context → `planner.next()`). A *general* "delta observation" for `short` (comparing DOM diffs, reusing an observation across an arbitrary read-only action rather than only a real prior `observe`) would need a precise, testable staleness proof tied to `documentEpoch` plus which action types are provably non-invalidating for already-known element references — not merely "no navigation happened," since a page can mutate its own DOM without navigating. That is a correctness question for the *entire* observation/no-progress-detection pipeline (`observationKey()`, `_noProgressThreshold`), not just `short`, and realistically needs its own task-by-task plan (its own design doc, its own recovery/staleness test matrix). The narrower "reuse a real, already-taken observation" case above sidesteps that whole question — it never guesses that a non-observe action left the DOM unchanged, it only ever reuses an observation that some action already actually captured, proven fresh via the same `documentEpoch` authority `execute()` itself relies on.
 
 ### Task 5: Semantic durability for `short`
 
@@ -125,13 +122,24 @@ Each of these touches a genuinely different, wider surface than Task 2/3/5's bat
 
 - [x] Combine Tasks 2/3/5's benchmark numbers into one ablation table, per the spec's Ablation section. Completing the same fixed workload (6 read-only scroll actions, one task, otherwise identical):
 
+  Batching/cadence/durability (6 read-only scroll actions, one task):
+
   | | planner calls | approval calls | journal appends | durable (fsync) appends |
   |---|---:|---:|---:|---:|
   | baseline / `middle` (today's unchanged 3-action cap, 2 turns) | 3 | 2 | 12 | 2 |
   | `short` + wider safe batching (Task 2; Task 3's cadence and Task 5's durability wins are the same lever, not additive) | 2 | 1 | 12 | 1 |
 
-  One real, tested change (the profile-aware batch cap) accounts for the entire measured delta: -33% planner calls, -50% approvals, -50% durable/fsync writes, with total journal-append volume unchanged. Task 4 (incremental observation) contributes nothing yet — it is deliberately unimplemented (see its design note above) — so `short`'s per-turn observation cost is currently identical to `middle`'s.
-- [x] Run `node --test` across `apps/computer-browser`; confirm no `middle`/`long` test's expected value changed. (645 tests: 638 pass, 2 pre-existing/unrelated failures reproduced identically on `develop` before Phase 2, 5 skipped; no existing assertion's expected value changed, only new tests/fields were added.)
-- [x] Update `docs/superpowers/specs/2026-09-29-harness-profiles-v2-design.md`'s Rollout section to mark Phase 2 partially implemented (batching/cadence/durability shipped via one mechanism; observation explicitly deferred), with a link to this plan.
+  One real, tested change (the profile-aware batch cap) accounts for the entire measured delta: -33% planner calls, -50% approvals, -50% durable/fsync writes, with total journal-append volume unchanged.
 
-**Phase 2 status: partially implemented.** Safe batching, reduced planner cadence, and semantic durability for `short` are implemented, tested, and benchmarked — all three turned out to be the same underlying lever (profile-aware batch width), which is itself evidence worth keeping rather than papering over with three separate ad hoc mechanisms. Incremental observation is explicitly deferred pending its own design doc, per the note under Task 4. `middle`/`long` execution is unchanged from `develop` before this plan.
+  Observation reuse (Task 4; 3 turns, each batch ending in an explicit `observe` action):
+
+  | | `browser.observe()` calls |
+  |---|---:|
+  | `middle` (always re-observes) | 3 |
+  | `short` (reuses each batch's own trailing observation) | 1 |
+
+  -67% top-of-loop observation calls for this fixed workload. This is narrower than full "delta observation" (it only ever reuses a real, already-taken observation, never a guess about which non-observe actions left the DOM unchanged), but it is a genuine, tested win, not a projection.
+- [x] Run `node --test` across `apps/computer-browser`; confirm no `middle`/`long` test's expected value changed. (651 tests: 644 pass, 2 pre-existing/unrelated failures reproduced identically on `develop` before Phase 2, 5 skipped; no existing assertion's expected value changed, only new tests/fields were added.)
+- [x] Update `docs/superpowers/specs/2026-09-29-harness-profiles-v2-design.md`'s Rollout section to mark Phase 2 implemented (with Task 4 noted as a narrower, real slice of "incremental observation" rather than the full tiered design), with a link to this plan.
+
+**Phase 2 status: implemented (narrowed scope on Task 4).** Safe batching, reduced planner cadence, semantic durability, and observation reuse for `short` are all implemented, tested, and benchmarked. Batching/cadence/durability turned out to be the same underlying lever (profile-aware batch width) — evidence worth keeping rather than papering over with three separate ad hoc mechanisms. Task 4 ships tier 1 of the spec's observation-preference list ("existing valid stable references") using the codebase's existing `documentEpoch` staleness authority; genuine DOM-diff delta observation (tiers 2+) remains out of scope for a dedicated future plan. `middle`/`long` execution is unchanged from `develop` before this plan.

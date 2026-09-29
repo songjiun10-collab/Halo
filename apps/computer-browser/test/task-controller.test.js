@@ -1955,6 +1955,141 @@ function makeBatchController({ store, actions, approve, browser, extra = {} }) {
 }
 
 const SCROLL = { type: "scroll", direction: "down", amount: 400 };
+const OBSERVE_ACTION = { type: "observe" };
+
+function makeReuseObservationBrowser() {
+  const counts = { observeCalls: 0 };
+  let epoch = 0;
+  let seq = 0;
+  const snapshot = () => ({ id: `obs-${seq++}`, documentEpoch: epoch, url: "https://example.test/", elements: [] });
+  return {
+    counts,
+    getDocumentEpoch: () => epoch,
+    navigateNow: () => { epoch += 1; },
+    observe: async () => { counts.observeCalls += 1; return snapshot(); },
+    execute: async (action) => {
+      if (action.type === "observe") {
+        const observation = snapshot();
+        return { status: "ok", evidenceCandidate: { kind: "artifact", observationId: observation.id }, observation };
+      }
+      return { status: "ok" };
+    },
+  };
+}
+
+test("harnessProfile:short reuses a batch's trailing observe action instead of re-observing next turn; middle always re-observes", async () => {
+  const { store: shortStore } = await makeStore({ originalRequest: "reuse" });
+  const shortBrowser = makeReuseObservationBrowser();
+  const { controller: shortController } = makeBatchController({
+    store: shortStore,
+    actions: [SCROLL, OBSERVE_ACTION],
+    browser: shortBrowser,
+    extra: { harnessProfile: "short" },
+  });
+  await shortController.start();
+  // 1 top-of-loop observe (turn 1) -- no second top-of-loop observe on turn
+  // 2, because the trailing OBSERVE_ACTION's own result is reused.
+  assert.equal(shortBrowser.counts.observeCalls, 1);
+  await shortStore.close();
+
+  const { store: middleStore } = await makeStore({ originalRequest: "reuse" });
+  const middleBrowser = makeReuseObservationBrowser();
+  const { controller: middleController } = makeBatchController({
+    store: middleStore,
+    actions: [SCROLL, OBSERVE_ACTION],
+    browser: middleBrowser,
+    extra: { harnessProfile: "middle" },
+  });
+  await middleController.start();
+  // middle always re-observes: turn 1's top-of-loop observe, then turn 2's.
+  assert.equal(middleBrowser.counts.observeCalls, 2);
+  await middleStore.close();
+});
+
+test("harnessProfile:short does not reuse a stale observation across a navigation (documentEpoch mismatch)", async () => {
+  const { store } = await makeStore({ originalRequest: "reuse-stale" });
+  const browser = makeReuseObservationBrowser();
+  const { controller } = makeBatchController({
+    store,
+    actions: [SCROLL, OBSERVE_ACTION],
+    browser: {
+      ...browser,
+      execute: async (action) => {
+        const result = await browser.execute(action);
+        if (action.type === "observe") browser.navigateNow(); // simulate a navigation racing in right after the observe
+        return result;
+      },
+    },
+    extra: { harnessProfile: "short" },
+  });
+  await controller.start();
+  // The cached observation's documentEpoch no longer matches the browser's
+  // current epoch, so the reuse gate must fail closed to a real re-observe.
+  assert.equal(browser.counts.observeCalls, 2);
+  await store.close();
+});
+
+test("harnessProfile:short does not reuse an observation when the last dispatched action was not itself an observe", async () => {
+  const { store } = await makeStore({ originalRequest: "reuse-non-observe" });
+  const browser = makeReuseObservationBrowser();
+  const { controller } = makeBatchController({
+    store,
+    actions: [OBSERVE_ACTION, SCROLL], // observe is NOT the last dispatched action
+    browser,
+    extra: { harnessProfile: "short" },
+  });
+  await controller.start();
+  assert.equal(browser.counts.observeCalls, 2);
+  await store.close();
+});
+
+test("harnessProfile:short falls back to re-observing against a browser without getDocumentEpoch()", async () => {
+  const { store } = await makeStore({ originalRequest: "reuse-no-epoch-support" });
+  let observeCalls = 0;
+  const { controller } = makeBatchController({
+    store,
+    actions: [SCROLL, OBSERVE_ACTION],
+    browser: {
+      observe: async () => { observeCalls += 1; return { id: `obs-${observeCalls}` }; },
+      execute: async (action) => action.type === "observe"
+        ? { status: "ok", evidenceCandidate: { kind: "artifact", observationId: "x" }, observation: { id: "in-batch" } }
+        : { status: "ok" },
+    },
+    extra: { harnessProfile: "short" },
+  });
+  await controller.start();
+  assert.equal(observeCalls, 2);
+  await store.close();
+});
+
+test("harnessProfile:short discards a stale reuse cache on resume", async () => {
+  const { store } = await makeStore({ originalRequest: "reuse-resume" });
+  const browser = makeReuseObservationBrowser();
+  let calls = 0;
+  const planner = {
+    next: async (context) => {
+      calls += 1;
+      const base = { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [] };
+      if (calls === 1) return { ...base, kind: "actions", actions: [SCROLL, OBSERVE_ACTION] };
+      return { ...base, kind: "need_user", reason: "n/a" };
+    },
+  };
+  const controller = new TaskController({
+    store,
+    planner,
+    browser,
+    approve: async () => ({ decision: "allow", reasons: [] }),
+    hostVerifier: () => true,
+    harnessProfile: "short",
+  });
+  await controller.start();
+  assert.equal(browser.counts.observeCalls, 1);
+  await controller.resume();
+  // resume() always starts from a fresh observation (existing invariant);
+  // the reuse cache must not leak a pre-resume observation across it.
+  assert.equal(browser.counts.observeCalls, 2);
+  await store.close();
+});
 
 test("harnessProfile:short accepts a read-only batch wider than the default cap; middle rejects the same proposal as malformed", async () => {
   const fourScrolls = [1, 2, 3, 4].map((amount) => ({ type: "scroll", direction: "down", amount }));

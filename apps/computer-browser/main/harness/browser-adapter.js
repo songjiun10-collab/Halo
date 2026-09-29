@@ -574,7 +574,11 @@ class BrowserAdapter {
           const observation = await this.observe({ signal });
           // "artifact": the observation itself (bounded page text/elements)
           // is the evidence -- see shared/harness-contracts.js's EVIDENCE_KINDS.
-          return { status: "ok", evidenceCandidate: { kind: "artifact", observationId: observation.id } };
+          // Harness v2 Phase 2 Task 4: also return the observation itself
+          // (not just its id) so TaskController can reuse an in-batch
+          // observe action's result instead of unconditionally re-observing
+          // next turn (short profile only; see its own reuse/staleness gate).
+          return { status: "ok", evidenceCandidate: { kind: "artifact", observationId: observation.id }, observation };
         } catch (error) {
           return { status: "failed", errorCode: error.code || "observe_failed" };
         }
