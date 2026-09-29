@@ -98,7 +98,12 @@ ResolvedTaskProfile = {
   schemaVersion: 1,
   classifierVersion: string,
   duration: {id, limits: {maxActiveMs, maxActions, maxPlannerCalls}},
-  capability: {id, adapterId, adapterVersion},
+  capability: {
+    id,
+    registryVersion,
+    dependencies: [CapabilityId],
+    adapters: [{capabilityId, adapterId, adapterVersion}]
+  },
   selection: {source, ruleId?},
   createdAt: ISO timestamp
 }
@@ -163,7 +168,7 @@ touch filesystem, browser, settings, or queue state:
 |---:|---|---|
 | 1 | Malformed fields, conflicting explicit selections, or invalid routine reference | Reject before admission with a stable typed error. |
 | 2 | `runRoutine(routineId, revision)` after host loads and verifies the immutable definition | Routine profile, exact revision pinned; Browser is a required underlying capability. |
-| 3 | Explicit trusted `requestedCapabilityProfile` and/or `requestedDurationProfile` | Honor if available, host-allowed, and within limits; otherwise fail/clarify, never silently downgrade to a different meaning. |
+| 3 | Explicit trusted `requestedCapabilityProfile` and/or `requestedDurationProfile` | Honor if available, host-allowed, and within limits; Routine requires a matching validated `routineRef`; otherwise fail/clarify, never silently downgrade to a different meaning. |
 | 4 | Unambiguous deterministic intent rule from the versioned bilingual rule table | Select only a registered, available capability; persist the matching stable `ruleId`. Research/Computer-use intent returns unavailable until that adapter exists. |
 | 5 | No matching specific rule | Browser + Middle defaults. |
 
@@ -219,9 +224,10 @@ event/task binding on write and replay.
 
 The new `task_profile_selected` event payload contains exactly
 `profileSchemaVersion`, `classifierVersion`, `duration` (`id` plus the three
-effective limits), `capability` (`id`, `adapterId`, `adapterVersion`, and its
-sorted dependency IDs), and `selection` (`source` enum plus optional stable
-`ruleId`). The `source` enum is exactly `routine_entrypoint`,
+effective limits), `capability` (`id`, `registryVersion`, sorted dependency
+IDs, and the sorted full adapter list with each component's capability ID,
+adapter ID, and adapter version), and `selection` (`source` enum plus optional
+stable `ruleId`). The `source` enum is exactly `routine_entrypoint`,
 `explicit_user_choice`, `intent_rule`, or `default`. The task journal envelope
 supplies task ID, goal version, sequence, event ID, and timestamp. The resolver
 receives raw `goalInput` before GoalSpec normalization, so it can distinguish
@@ -233,7 +239,8 @@ those effective limits so existing controller enforcement remains
 authoritative.
 
 On recovery, the host loads the pinned duration/capability profile versions
-and adapter ID. If the profile is unknown, corrupted, unavailable, or
+and every adapter ID/version in the dependency closure. If any profile or
+adapter is unknown, corrupted, unavailable, or
 inconsistent with the routine pin, fail closed for diagnosis; never reroute a
 partially executed task to a different capability. Existing pre-profile tasks
 are handled by an explicit legacy mapping to their historical goal limits and
