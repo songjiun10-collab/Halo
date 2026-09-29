@@ -143,3 +143,17 @@
 - [x] Update `docs/superpowers/specs/2026-09-29-harness-profiles-v2-design.md`'s Rollout section to mark Phase 2 implemented (with Task 4 noted as a narrower, real slice of "incremental observation" rather than the full tiered design), with a link to this plan.
 
 **Phase 2 status: implemented (narrowed scope on Task 4).** Safe batching, reduced planner cadence, semantic durability, and observation reuse for `short` are all implemented, tested, and benchmarked. Batching/cadence/durability turned out to be the same underlying lever (profile-aware batch width) — evidence worth keeping rather than papering over with three separate ad hoc mechanisms. Task 4 ships tier 1 of the spec's observation-preference list ("existing valid stable references") using the codebase's existing `documentEpoch` staleness authority; genuine DOM-diff delta observation (tiers 2+) remains out of scope for a dedicated future plan. `middle`/`long` execution is unchanged from `develop` before this plan.
+
+### Addendum: real-Electron validation of the batching lever (2026-09-29)
+
+The Task 2/3/5 numbers above came from an in-process fake browser. To check they hold against a real `BrowserAdapter`/`WebContentsView`, `integration/routine-vs-planner-benchmark.js` gained a `HALO_BENCH_BATCH_CAP` knob (1..8, default 3 = unchanged behavior; passed to `RoutineRunner`'s `maxBatchActions`). Scroll-heavy routine: 10 pages, 5 scrolls per page (55 actions), routine mode only, 4 cold/warm-paired iterations per setting under xvfb, Electron 44.4.5, all iterations successful:
+
+| batch cap | routine runMs (median / min) | approvals | journal fsyncs |
+|---:|---:|---:|---:|
+| 1 (batching effectively off) | 491.7 / 440.5 | 55 | 111 |
+| 3 (`middle` cap) | 387.1 / 353.0 | 28 | 57 |
+| 8 (`short` cap) | 343.4 / 316.8 | 19 | 39 |
+
+Cap 3 → 8: -11% wall time, -32% approvals, -32% fsyncs. Real, but smaller than the fake-browser ratios suggested, because real browser work (navigation, scroll, observe) dominates once round-trips shrink.
+
+Limits, stated plainly: 4 pairs is a small sample (medians, not confidence intervals); scripted local fixture, not real sites; only the routine proposal source (not a model planner) was measured; no human approval latency. Headroom finding: this workload's scroll runs are exactly 5 long and batches end at every `follow_link` (a navigation/approval boundary that must not batch), so raising the short cap above 8 would not change this workload at all — the constant is adequate here, and further gains would need a different lever, not a bigger number.
