@@ -616,6 +616,66 @@ test("listTasks() reconciles the durable FIFO queue after restart without eagerl
   assert.equal(browserCreations, 0);
 });
 
+function pausingPlanner() {
+  return {
+    next: async (context) => ({
+      taskId: context.taskId,
+      goalVersion: context.goalVersion,
+      basedOnObservationId: context.observation.id,
+      criterionIds: [],
+      kind: "need_user",
+      reason: "pause for restart test",
+    }),
+  };
+}
+
+test("createTask() rejects an invalid explicit harnessProfile", async () => {
+  const storageRoot = await mkTempRoot();
+  const host = makeHost(storageRoot);
+  await assert.rejects(
+    () => host.createTask({ originalRequest: "bad profile" }, { harnessProfile: "fast" }),
+    (error) => error.code === "invalid_harness_profile",
+  );
+});
+
+test("an explicit harnessProfile:\"long\" survives a full host restart; the default (no override) stays \"middle\"", async () => {
+  const storageRoot = await mkTempRoot();
+  const originalHost = makeHost(storageRoot, { makePlanner: () => pausingPlanner() });
+
+  const longTask = await originalHost.createTask({ originalRequest: "long task" }, { harnessProfile: "long" });
+  await waitForState(originalHost, longTask.taskId, ["paused"]);
+  const beforeRestart = await originalHost.getTaskDetail(longTask.taskId);
+  assert.equal(beforeRestart.harnessProfile, "long");
+
+  const defaultTask = await originalHost.createTask({ originalRequest: "default task" });
+  await waitForState(originalHost, defaultTask.taskId, ["paused"]);
+  assert.equal((await originalHost.getTaskDetail(defaultTask.taskId)).harnessProfile, "middle");
+
+  await originalHost.close();
+  hostsToClose.delete(originalHost);
+
+  // A brand-new TaskHost instance on the same storageRoot -- this is a real
+  // process-restart simulation, not just closing/reopening the same object.
+  const recoveredHost = makeHost(storageRoot, { makePlanner: () => pausingPlanner() });
+
+  // Not-yet-reattached (store-load-only) branch: proves the checkpoint
+  // itself carries the profile, not just live controller memory.
+  const recoveredLongDetail = await recoveredHost.getTaskDetail(longTask.taskId);
+  assert.equal(recoveredLongDetail.active, false);
+  assert.equal(recoveredLongDetail.harnessProfile, "long");
+  const recoveredDefaultDetail = await recoveredHost.getTaskDetail(defaultTask.taskId);
+  assert.equal(recoveredDefaultDetail.harnessProfile, "middle");
+
+  // Reattached (live controller) branch: proves TaskController itself
+  // re-derives "long" from the checkpoint on construction, not _attach()'s
+  // stateless isRoutine-based default (which would silently give "middle"
+  // to a non-routine task with no override passed at this call site).
+  await recoveredHost.resumeSavedTask(longTask.taskId);
+  const reattachedLongDetail = await recoveredHost.getTaskDetail(longTask.taskId);
+  assert.equal(reattachedLongDetail.active, true);
+  assert.equal(reattachedLongDetail.harnessProfile, "long");
+});
+
 test("credential filling is a trusted, user-controlled, exact-origin path and never returns credential values", async () => {
   const storageRoot = await mkTempRoot();
   let fillArgs;

@@ -116,11 +116,20 @@ class TaskController {
       throw new TaskControllerError("invalid_routine", "routine runner requires a pinned routine ID, revision, digest, and cursor");
     }
     // TaskHost/_attach is the profile-selection authority, never the model or
-    // the task's own text; this constructor only validates what it's given,
-    // defaulting via the same pure rule when omitted (e.g. a directly
-    // constructed test controller). See docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase2.md.
+    // the task's own text; this constructor only validates what it's given.
+    // A durably checkpointed harnessProfile (see _checkpoint()) always wins
+    // on reattach/recovery, exactly like _routineRun above -- otherwise an
+    // explicit "long" chosen at task creation would silently fall back to
+    // _attach()'s stateless default (isRoutine-based) after every restart,
+    // which is precisely the "durable continuation" property Long exists
+    // for. See docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase3.md.
+    const checkpointedHarnessProfile = store.lastCheckpoint?.payload?.harnessProfile;
     this._harnessProfile = validateHarnessProfile(
-      harnessProfile !== undefined ? harnessProfile : selectHarnessProfile({ isRoutine: this._routineRun !== null }),
+      checkpointedHarnessProfile !== undefined
+        ? checkpointedHarnessProfile
+        : harnessProfile !== undefined
+          ? harnessProfile
+          : selectHarnessProfile({ isRoutine: this._routineRun !== null }),
     );
     // Fixed for the task's lifetime (no setter exists) -- computed once here
     // rather than on every proposal validation in the hot per-turn loop.
@@ -548,6 +557,7 @@ class TaskController {
         budgets: { ...this._budgets },
         segment: { ...this._segment },
         criteriaStatus: [...this._criteriaStatus.entries()],
+        harnessProfile: this._harnessProfile,
         ...(this._routineRun ? { routineRun: { ...this._routineRun } } : {}),
       });
       this._snapshotTrusted = true;

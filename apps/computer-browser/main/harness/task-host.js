@@ -27,7 +27,7 @@ const { RoutineStore } = require("./routine-store");
 const { RoutineRunner } = require("./routine-runner");
 const { ChildAgentCoordinator } = require("./child-agent-coordinator");
 const { isPlainObject } = require("../../shared/harness-contracts");
-const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
+const { selectHarnessProfile, validateHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
 
 // Two complete Electron task surfaces (visible + fixed hidden renderer) were
 // measured at a 590,888,960-byte increment with 50ms polling; reserve the
@@ -199,7 +199,7 @@ class TaskHost {
     this._taskLeases.delete(taskId);
   }
 
-  _attach(store, routine = null) {
+  _attach(store, routine = null, harnessProfileOverride) {
     if (this._ensureResourceAdmission() && !this._taskLeases.has(store.taskId)) {
       throw new TaskHostError("memory_lease_required", "top-level task requires a memory lease before creating resources");
     }
@@ -220,8 +220,14 @@ class TaskHost {
     // Profile selection is a host operation (design doc "Profile selection"):
     // TaskHost is the sole authority that decides harnessProfile, and passes
     // it in rather than letting the controller (or the task's own text)
-    // infer it independently.
-    const harnessProfile = selectHarnessProfile({ isRoutine: !!routine });
+    // infer it independently. An explicit override (createTask()'s own
+    // caller, never the model) beats the deterministic isRoutine default;
+    // TaskController itself gives a durably checkpointed value priority
+    // over either, so a resumeSavedTask() reattach (which never passes an
+    // override here) still recovers the profile chosen at creation.
+    const harnessProfile = harnessProfileOverride !== undefined
+      ? validateHarnessProfile(harnessProfileOverride)
+      : selectHarnessProfile({ isRoutine: !!routine });
     const controller = new TaskController({
       store,
       planner,
@@ -291,8 +297,15 @@ class TaskHost {
     return entry;
   }
 
-  createTask(goalInput) {
-    return this._createNewTask(goalInput);
+  // Harness v2 Phase 3: harnessProfile is an optional, explicit host/UI
+  // choice (design doc "Profile selection": "Explicit user/host selection
+  // is allowed"). goalInput itself never carries it -- it goes through
+  // TaskStore.create() unchanged and stays validated by GoalSpec's own
+  // closed schema, so this can never smuggle a new field into the goal
+  // file. Omitted, it falls back to today's deterministic default exactly
+  // as before this phase.
+  createTask(goalInput, { harnessProfile } = {}) {
+    return this._createNewTask(goalInput, null, null, harnessProfile);
   }
 
   async listRoutines() {
@@ -381,7 +394,7 @@ class TaskHost {
     });
   }
 
-  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null) {
+  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, harnessProfileOverride) {
     this._assertOpen();
     return this._trackAttachment(async () => {
       await this._ensureQueue();
@@ -390,7 +403,21 @@ class TaskHost {
         : { mode: "budgeted", auditEventId: null, actor: null, at: null };
       const store = await TaskStore.create(goalInput, { storageRoot: this._storageRoot });
       try {
-        if (routineRun) await store.checkpoint({ task: { state: "idle", pauseReason: null }, routineRun });
+        // An explicit profile override must survive every future restart
+        // (TaskController's constructor gives a checkpointed harnessProfile
+        // priority over _attach()'s stateless isRoutine-based default), so
+        // it needs an upfront checkpoint exactly like a routine's pinned
+        // revision already gets -- otherwise a crash before the task's own
+        // first natural checkpoint would silently lose the explicit choice.
+        // The common (no override, no routine) case is unchanged: no extra
+        // checkpoint, same as before this phase.
+        if (routineRun || harnessProfileOverride !== undefined) {
+          await store.checkpoint({
+            task: { state: "idle", pauseReason: null },
+            ...(harnessProfileOverride !== undefined ? { harnessProfile: validateHarnessProfile(harnessProfileOverride) } : {}),
+            ...(routineRun ? { routineRun } : {}),
+          });
+        }
         await store.append({ type: "note", payload: {
           kind: "memory_policy_selected",
           mode: selected.mode,
@@ -434,7 +461,7 @@ class TaskHost {
         await store.close();
         return { taskId: store.taskId, snapshot: { state: "queued", queuePosition: this._queue.pendingIds().indexOf(store.taskId) + 1 }, goal };
       }
-      const { controller } = this._attach(store, routine);
+      const { controller } = this._attach(store, routine, harnessProfileOverride);
       const started = controller.start();
       return { store, controller, started };
     }).then(async (result) => {
@@ -751,7 +778,14 @@ class TaskHost {
       };
     }
     const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
-    const harnessProfile = selectHarnessProfile({ isRoutine: !!store.lastCheckpoint?.payload?.routineRun });
+    // Same priority as TaskController's own constructor: a durably
+    // checkpointed harnessProfile (present whenever the task ever ran a
+    // turn, paused, or was created with an explicit override) always wins
+    // over recomputing the stateless isRoutine-based default.
+    const checkpointedHarnessProfile = store.lastCheckpoint?.payload?.harnessProfile;
+    const harnessProfile = checkpointedHarnessProfile !== undefined
+      ? checkpointedHarnessProfile
+      : selectHarnessProfile({ isRoutine: !!store.lastCheckpoint?.payload?.routineRun });
     const detail = { taskId, goal: store.getGoal(), recoveryReason: store.recoveryReason, active: false, harnessProfile };
     await store.close();
     return detail;
