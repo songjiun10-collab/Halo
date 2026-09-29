@@ -14,6 +14,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const { TaskHost, TaskHostError } = require("../main/harness/task-host");
 const { TaskStore } = require("../main/harness/task-store");
@@ -482,6 +483,81 @@ test("restart preserves budget and never auto-runs Tasks at every durable Work G
     reservationId: stages[0].reservationId,
     workGoalBinding: { goalId: goal.goalId, goalVersion: 1, reservationId: stages[0].reservationId },
   }), { code: "invalid_binding" });
+});
+
+test("process death after every durable Work Goal admission append recovers held and never auto-runs", async () => {
+  const boundaries = ["task_profile", "reserved", "linked", "continuation", "queue_admitted"];
+  for (const boundary of boundaries) {
+    const storageRoot = await mkTempRoot();
+    const childScript = `
+      const { TaskHost } = require(${JSON.stringify(require.resolve("../main/harness/task-host"))});
+      const { TaskStore } = require(${JSON.stringify(require.resolve("../main/harness/task-store"))});
+      const { WorkGoalOrchestrator } = require(${JSON.stringify(require.resolve("../main/harness/work-goal-orchestrator"))});
+      const boundary = process.argv[1];
+      const stop = () => process.exit(73);
+      const afterDurable = (target, name) => {
+        const original = target[name];
+        target[name] = async function (...args) {
+          const result = await original.apply(this, args);
+          stop();
+        };
+      };
+      if (boundary === "task_profile") afterDurable(TaskStore, "create");
+      if (boundary === "reserved") afterDurable(WorkGoalOrchestrator.prototype, "reserveTask");
+      if (boundary === "linked") afterDurable(WorkGoalOrchestrator.prototype, "linkTask");
+      if (boundary === "continuation") afterDurable(WorkGoalOrchestrator.prototype, "recordContinuation");
+      const host = new TaskHost({
+        storageRoot: process.argv[2],
+        makeBrowser: () => { throw new Error("browser must not be created before the crash point"); },
+        makePlanner: () => { throw new Error("planner must not be created before the crash point"); },
+        hostVerifier: () => true,
+        approve: async () => ({ decision: "allow", reasons: [] }),
+      });
+      if (boundary === "queue_admitted") {
+        const admit = host._admitNext.bind(host);
+        host._admitNext = async (...args) => {
+          const taskId = await admit(...args);
+          if (taskId) stop();
+          return taskId;
+        };
+      }
+      (async () => {
+        await host.startWorkGoal({
+          objective: "Crash at a durable Task admission boundary",
+          successCriteria: [{ id: "review", text: "Review recovery", required: true, verification: "user" }],
+          budget: { maxTasks: 1, maxActions: 8, maxPlannerCalls: 4, maxActiveMs: 800 },
+        });
+        await host.createTask({ originalRequest: "Crash-injected admission", limits: { maxActions: 8, maxPlannerCalls: 4, maxActiveMs: 800 } });
+        process.exit(74);
+      })().catch(() => process.exit(75));
+    `;
+    const crashed = spawnSync(process.execPath, ["-e", childScript, boundary, storageRoot], {
+      encoding: "utf8",
+      timeout: 15000,
+    });
+    assert.equal(crashed.status, 73, `${boundary}: child did not die at the injected durable boundary; stderr=${crashed.stderr}`);
+    assert.equal(crashed.error, undefined, `${boundary}: child process failed: ${crashed.error?.message}`);
+
+    let browserCreations = 0;
+    let plannerCreations = 0;
+    const recovered = makeHost(storageRoot, {
+      makeBrowser: () => { browserCreations += 1; throw new Error("recovery must not create a browser"); },
+      makePlanner: () => { plannerCreations += 1; throw new Error("recovery must not create a planner"); },
+    });
+    const tasks = await recovered.listTasks();
+    assert.equal(tasks.length, 1, `${boundary}: durable Task should remain visible after process death`);
+    assert.equal(tasks[0].active, false, `${boundary}: recovered Task must remain detached`);
+    assert.equal(await recovered.onMemorySample(), null, `${boundary}: memory admission must not resume recovered work`);
+    assert.equal(browserCreations, 0, `${boundary}: restart/listing must not create a browser`);
+    assert.equal(plannerCreations, 0, `${boundary}: restart/listing must not create a planner`);
+
+    const goal = await recovered.getActiveWorkGoal();
+    assert.equal(goal.remainingBudget.maxTasks, boundary === "task_profile" ? 1 : 0,
+      `${boundary}: reservation accounting must survive or safely remain unconsumed`);
+    const recovery = await recovered.getWorkGoalRecoveryStatus(goal.goalId, goal.spec.version);
+    if (boundary === "task_profile") assert.deepEqual(recovery, []);
+    else assert.deepEqual(recovery.map((item) => [item.status, item.reason]), [["held", "checkpoint_missing"]]);
+  }
 });
 
 test("three matching durable paused continuations block the active Work Goal", async () => {
