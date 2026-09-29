@@ -82,7 +82,9 @@ diagnostic only; it cannot authorize an otherwise unavailable capability.
 ## Request and resolved profile contracts
 
 The trusted host accepts a task request containing the original user text and
-optional explicit selections. The duration decision runs first; capability
+optional explicit selections. Canonical wire IDs are lowercase: `short`,
+`middle`, `long`, `routine`, `browser`, `research`, `computer_use`, and
+`multi_agent`; user-facing labels may use title case. The duration decision runs first; capability
 routing then uses the same trusted request plus the resolved duration. The
 two result fields remain independently represented so selecting Routine or
 Multi-agent cannot silently force Short or Long:
@@ -90,7 +92,7 @@ Multi-agent cannot silently force Short or Long:
 ```text
 TaskRequest = {
   goalInput,                         // existing raw TaskStore.create() input, pre-normalization
-  requestedDurationProfile?: auto | Short | Middle | Long,
+  requestedDurationProfile?: auto | short | middle | long,
   requestedCapabilityProfile?: CapabilityId,
   routineRef?: {routineId, revision} // host-validated pinned definition
 }
@@ -107,9 +109,9 @@ validates:
 ResolvedTaskProfile = {
   schemaVersion: 1,
   classifierVersion: string,
-  duration: {id, harnessProfileVersion, policySetId},
+  duration: {id: short | middle | long, harnessProfileVersion, policySetId},
   capability: {
-    id,
+    id: routine | browser | research | computer_use | multi_agent,
     registryVersion,
     dependencies: [CapabilityId],
     adapters: [{capabilityId, adapterId, adapterVersion}]
