@@ -254,6 +254,13 @@ class TaskController {
     return this._goal;
   }
 
+  // Read-only signal for harness profile selection (see
+  // shared/harness-profile.js selectHarnessProfile); never itself grants or
+  // changes execution authority.
+  isRoutine() {
+    return this._routineRun !== null;
+  }
+
   setPolicySettings({ permissionMode, plannerEffort } = {}) {
     const { PERMISSION_MODES } = require("./permission-policy");
     const allowedEfforts = ["low", "medium", "high", "xhigh", "max"];

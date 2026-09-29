@@ -1750,6 +1750,37 @@ test("routine steps advance durably before the next proposal and checkpoint the 
   await store.close();
 });
 
+test("isRoutine() reflects whether the controller was constructed with a routine run", async () => {
+  const { store: plainStore } = await makeStore({ originalRequest: "plain task" });
+  const plainController = new TaskController({
+    store: plainStore,
+    planner: { next: async () => ({ kind: "need_user", reason: "n/a" }) },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+  assert.equal(plainController.isRoutine(), false);
+  await plainStore.close();
+
+  const { store: routineStore } = await makeStore({ originalRequest: "routine task" });
+  const routineRunner = {
+    next: async () => ({ kind: "need_user", reason: "n/a" }),
+    getCurrentStep: () => null,
+    advance: () => 0,
+  };
+  const routineController = new TaskController({
+    store: routineStore,
+    planner: routineRunner,
+    routineRunner,
+    routineRun: { routineId: "routine-a", revision: 1, digest: "b".repeat(64), cursor: 0 },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+  assert.equal(routineController.isRoutine(), true);
+  await routineStore.close();
+});
+
 test("routine denial is durably recorded and pauses instead of resuggesting the same step", async () => {
   const { store } = await makeStore({ originalRequest: "routine task" });
   let plannerCalls = 0;

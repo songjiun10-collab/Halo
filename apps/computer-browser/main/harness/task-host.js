@@ -27,6 +27,7 @@ const { RoutineStore } = require("./routine-store");
 const { RoutineRunner } = require("./routine-runner");
 const { ChildAgentCoordinator } = require("./child-agent-coordinator");
 const { isPlainObject } = require("../../shared/harness-contracts");
+const { selectHarnessProfile } = require("../../shared/harness-profile");
 
 // Two complete Electron task surfaces (visible + fixed hidden renderer) were
 // measured at a 590,888,960-byte increment with 50ms polling; reserve the
@@ -723,10 +724,12 @@ class TaskHost {
     this._assertOpen();
     const active = this._active.get(taskId);
     if (active) {
-      return { taskId, goal: active.controller.getGoal(), snapshot: active.controller.getSnapshot(), active: true };
+      const harnessProfile = selectHarnessProfile({ isRoutine: active.controller.isRoutine() });
+      return { taskId, goal: active.controller.getGoal(), snapshot: active.controller.getSnapshot(), active: true, harnessProfile };
     }
     const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
-    const detail = { taskId, goal: store.getGoal(), recoveryReason: store.recoveryReason, active: false };
+    const harnessProfile = selectHarnessProfile({ isRoutine: !!store.lastCheckpoint?.payload?.routineRun });
+    const detail = { taskId, goal: store.getGoal(), recoveryReason: store.recoveryReason, active: false, harnessProfile };
     await store.close();
     return detail;
   }

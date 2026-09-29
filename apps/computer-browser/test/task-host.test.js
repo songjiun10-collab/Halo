@@ -86,6 +86,7 @@ test("runRoutine pins the saved revision and uses it without creating a planner 
   assert.equal(entry.store.lastCheckpoint.payload.routineRun.routineId, saved.routineId);
   assert.equal(entry.store.lastCheckpoint.payload.routineRun.revision, saved.revision);
   assert.equal(entry.store.lastCheckpoint.payload.routineRun.digest, saved.digest);
+  assert.equal((await host.getTaskDetail(taskId)).harnessProfile, "short");
 });
 
 test("runRoutine rejects invalid revisions before creating task or browser resources", async () => {
@@ -521,10 +522,12 @@ test("getTaskDetail() works for both an active task and a saved-only one", async
   const activeDetail = await host.getTaskDetail(activeId);
   assert.equal(activeDetail.active, true);
   assert.equal(activeDetail.goal.originalRequest, "active task");
+  assert.equal(activeDetail.harnessProfile, "middle");
 
   const savedDetail = await host.getTaskDetail(savedOnly.taskId);
   assert.equal(savedDetail.active, false);
   assert.equal(savedDetail.goal.originalRequest, "saved only");
+  assert.equal(savedDetail.harnessProfile, "middle");
 });
 
 test("queued task does not create browser resources until the preceding task stops", async () => {
