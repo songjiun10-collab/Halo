@@ -25,7 +25,7 @@ const PROFILE_FIELDS = Object.freeze([
   "schemaVersion", "classifierVersion", "duration", "capability", "parentBinding", "selection",
 ]);
 const SELECTED_PAYLOAD_FIELDS = Object.freeze([
-  "profileSchemaVersion", "classifierVersion", "parentBinding", "duration", "capability", "selection",
+  "profileSchemaVersion", "classifierVersion", "parentBinding", "duration", "capability", "selection", "workGoalBinding",
 ]);
 const DURATION_FIELDS = Object.freeze(["id", "harnessProfileVersion", "policySetId"]);
 const SELECTED_DURATION_FIELDS = Object.freeze([...DURATION_FIELDS, "effectiveLimits"]);
@@ -34,6 +34,7 @@ const ADAPTER_FIELDS = Object.freeze(["capabilityId", "adapterId", "adapterVersi
 const SELECTION_FIELDS = Object.freeze(["duration", "capability"]);
 const SELECTION_ITEM_FIELDS = Object.freeze(["source", "ruleId"]);
 const PARENT_BINDING_FIELDS = Object.freeze(["parentTaskId", "planId", "parentGoalVersion"]);
+const WORK_GOAL_BINDING_FIELDS = Object.freeze(["goalId", "goalVersion", "reservationId"]);
 const LIMIT_FIELDS = Object.freeze(["maxActions", "maxPlannerCalls", "maxActiveMs"]);
 
 function assertObject(value, label, fields) {
@@ -62,6 +63,15 @@ function validateParentBinding(value, label = "parentBinding") {
   assertUuid(value.parentTaskId, `${label}.parentTaskId`);
   assertId(value.planId, `${label}.planId`);
   positiveInteger(value.parentGoalVersion, `${label}.parentGoalVersion`);
+  return value;
+}
+
+function validateWorkGoalBinding(value) {
+  assertObject(value, "workGoalBinding", WORK_GOAL_BINDING_FIELDS);
+  requireFields(value, WORK_GOAL_BINDING_FIELDS, "workGoalBinding");
+  assertUuid(value.goalId, "workGoalBinding.goalId");
+  positiveInteger(value.goalVersion, "workGoalBinding.goalVersion");
+  assertUuid(value.reservationId, "workGoalBinding.reservationId");
   return value;
 }
 
@@ -151,6 +161,11 @@ function validateProfile(value, { selected = false } = {}) {
   if (schemaVersion !== PROFILE_SCHEMA_VERSION) throw new ContractError("unknown_version", "profile schema version is not supported");
   assertId(value.classifierVersion, "classifierVersion");
   if (Object.hasOwn(value, "parentBinding")) validateParentBinding(value.parentBinding);
+  if (Object.hasOwn(value, "workGoalBinding")) {
+    if (!selected) throw new ContractError("unknown_field", "workGoalBinding is only valid in the persisted profile event");
+    validateWorkGoalBinding(value.workGoalBinding);
+    if (value.parentBinding) throw new ContractError("invalid_profile", "child profiles cannot bind independently to a Work Goal");
+  }
   validateDuration(value.duration, { selected });
   validateCapability(value.capability);
   validateSelection(value.selection);
@@ -194,5 +209,6 @@ module.exports = {
   SOURCE_IDS,
   validateResolvedTaskProfile,
   validateTaskProfileSelectedPayload,
+  validateWorkGoalBinding,
   validateProfileRequiredGoalCreatedPayload,
 };

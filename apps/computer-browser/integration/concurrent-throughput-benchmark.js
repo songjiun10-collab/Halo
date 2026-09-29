@@ -138,6 +138,12 @@ async function runConcurrentIteration({
     if (sampler) await sampler.begin();
     t0 = performance.now();
     const submitted = Array.from({ length: concurrency }, () => host.runRoutine(saved.routineId, saved.revision));
+    // The iteration timeout may win before the aggregate Promise.race below
+    // observes every submitted Task. Keep a rejection handler attached from
+    // submission time so a host shutdown racing a slow admission path cannot
+    // surface as an unrelated unhandledRejection after the benchmark row is
+    // already classified as timed out.
+    for (const pending of submitted) pending.catch(() => {});
     const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`iteration timed out after ${timeoutMs} ms`)), timeoutMs); });
     await Promise.race([allFinished, timeout]);
     const results = await Promise.race([Promise.all(submitted), timeout]);

@@ -9,6 +9,8 @@ const {
 
 const PARENT = "11111111-1111-4111-8111-111111111111";
 const CHILD = "22222222-2222-4222-8222-222222222222";
+const GOAL = "33333333-3333-4333-8333-333333333333";
+const RESERVATION = "44444444-4444-4444-8444-444444444444";
 
 function profile(overrides = {}) {
   return {
@@ -100,4 +102,18 @@ test("selected payload rejects unknown nested fields and invalid source enums", 
   assert.throws(() => validateTaskProfileSelectedPayload(selectedPayload({
     selection: { duration: { source: "model" }, capability: { source: "default" } },
   })), { code: "unknown_enum" });
+});
+
+test("persisted Task profile accepts only an exact durable Work Goal binding", () => {
+  const binding = { goalId: GOAL, goalVersion: 2, reservationId: RESERVATION };
+  assert.equal(validateTaskProfileSelectedPayload(selectedPayload({ workGoalBinding: binding })).workGoalBinding, binding);
+  assert.throws(() => validateTaskProfileSelectedPayload(selectedPayload({ workGoalBinding: { ...binding, extra: true } })), { code: "unknown_field" });
+  assert.throws(() => validateTaskProfileSelectedPayload(selectedPayload({ workGoalBinding: { ...binding, goalVersion: 0 } })), { code: "invalid_field" });
+  assert.throws(() => validateTaskProfileSelectedPayload(selectedPayload({ workGoalBinding: { ...binding, goalId: "../escape" } })), { code: "invalid_id" });
+  assert.throws(() => validateResolvedTaskProfile(profile({ workGoalBinding: binding })), { code: "unknown_field" });
+  assert.throws(() => validateTaskProfileSelectedPayload(selectedPayload({
+    parentBinding: { parentTaskId: PARENT, planId: "plan_1", parentGoalVersion: 1 },
+    selection: { duration: { source: "parent_plan_policy" }, capability: { source: "parent_plan_policy" } },
+    workGoalBinding: binding,
+  })), { code: "invalid_profile" });
 });

@@ -99,6 +99,7 @@ class TaskController {
     sendMessage,
     listPendingMessages,
     recordMessagesConsumed,
+    readWorkGoalContext,
     routineRunner,
     routineRun,
     batchReadOnlyActions = true,
@@ -172,6 +173,11 @@ class TaskController {
     this._sendMessage = typeof sendMessage === "function" ? sendMessage : null;
     this._listPendingMessages = typeof listPendingMessages === "function" ? listPendingMessages : null;
     this._recordMessagesConsumed = typeof recordMessagesConsumed === "function" ? recordMessagesConsumed : null;
+    // The binding is durable TaskStore state. The injected reader is only a
+    // host-owned lookup for that exact version; it cannot choose a different
+    // Goal for this Task or modify the Task's own GoalSpec.
+    this._workGoalBinding = store.taskProfile?.workGoalBinding ? { ...store.taskProfile.workGoalBinding } : null;
+    this._readWorkGoalContext = typeof readWorkGoalContext === "function" ? readWorkGoalContext : null;
     this._memoryMonitor = memoryMonitor || NOOP_MEMORY_MONITOR;
     this._memoryStore = memoryStore || null;
     const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
@@ -1009,6 +1015,10 @@ class TaskController {
 
         let context;
         try {
+          const workGoal = this._workGoalBinding && this._readWorkGoalContext
+            ? await this._readWorkGoalContext({ ...this._workGoalBinding, taskId: this._goal.taskId })
+            : undefined;
+          if (this._stopHappenedSince(epoch)) break;
           context = buildContext({
             goal: this._goal,
             state: {
@@ -1024,6 +1034,7 @@ class TaskController {
             recentEvents: this._store.eventsSinceCheckpoint || [],
             customMemory,
             pendingMessages,
+            ...(this._workGoalBinding ? { workGoalBinding: this._workGoalBinding, workGoal } : {}),
           });
         } catch {
           if (this._stopHappenedSince(epoch)) break;

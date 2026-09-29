@@ -1,5 +1,7 @@
 "use strict";
 
+const crypto = require("node:crypto");
+
 // TaskHost (Task 5): the multi-task coordinator behind the new IPC surface
 // (createTask/listTasks/resumeSavedTask/amendTask/confirmCriterion/
 // getTaskDetail/approveTask/denyTask). Each long-horizon task gets its own
@@ -29,11 +31,19 @@ const { RoutineRunner } = require("./routine-runner");
 const { ChildAgentCoordinator } = require("./child-agent-coordinator");
 const { Scheduler } = require("./scheduler");
 const { ScheduleStore } = require("./schedule-store");
-const { isPlainObject, validateGoalTrigger } = require("../../shared/harness-contracts");
+const { WorkGoalStore } = require("./work-goal-store");
+const { WorkGoalOrchestrator } = require("./work-goal-orchestrator");
+const { isPlainObject, validateGoalTrigger, normalizeGoalSpec, DEFAULT_LIMITS } = require("../../shared/harness-contracts");
 const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
 const { resolveTaskProfile } = require("../../shared/task-profile-router");
 
-const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile"]);
+const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone"]);
+const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
+  planner_unavailable: "planner", planner_error: "planner", observation_error: "browser_observation",
+  context_error: "context_build", no_progress: "action_progress", budget_exhausted: "budget",
+  child_plan_failed: "child_plan", message_ack_failed: "message_ack",
+  send_message_failed: "message_delivery", routine_step_failed: "routine_step",
+});
 
 // Two complete Electron task surfaces (visible + fixed hidden renderer) were
 // measured at a 590,888,960-byte increment with 50ms polling; reserve the
@@ -69,6 +79,8 @@ class TaskHost {
     memoryStore,
     settingsStore,
     credentialVault,
+    workGoalStore,
+    workGoalOrchestrator,
     routineReadOnlyBatching = true,
     scheduler: schedulerOptions = {},
   } = {}) {
@@ -95,6 +107,18 @@ class TaskHost {
     this._memoryStore = memoryStore || null;
     this._settingsStore = settingsStore || null;
     this._credentialVault = credentialVault || null;
+    this._workGoalStore = workGoalStore || new WorkGoalStore({ storageRoot, now });
+    this._workGoalOrchestrator = workGoalOrchestrator || new WorkGoalOrchestrator({
+      storageRoot,
+      store: this._workGoalStore,
+      taskStoreClass: TaskStore,
+      getOpenTaskStore: (taskId) => this._active.get(taskId)?.store || null,
+    });
+    this._workGoalReady = null;
+    // Serialize the short cross-store transaction that reserves a Goal slot,
+    // creates/binds its Task journal, and records the continuation with Goal
+    // lifecycle changes. Do not hold this gate while a Task is running.
+    this._workGoalAdmissionChain = Promise.resolve();
     this._routineStore = new RoutineStore({ storageRoot });
     if (executionMode !== "sequential" && executionMode !== "parallel") throw new TaskHostError("invalid_config", "executionMode must be sequential or parallel");
     this._executionMode = executionMode;
@@ -265,6 +289,20 @@ class TaskHost {
       sendMessage: (validated) => this._childCoordinator.handleSendMessage(store.taskId, validated),
       listPendingMessages: () => this._childCoordinator.listPendingMessages(store.taskId),
       recordMessagesConsumed: (ids, plannerCall) => this._childCoordinator.recordMessagesConsumed(store.taskId, ids, plannerCall),
+      ...(taskProfile?.workGoalBinding ? {
+        readWorkGoalContext: (binding) => {
+          const persisted = taskProfile.workGoalBinding;
+          if (binding.goalId !== persisted.goalId || binding.goalVersion !== persisted.goalVersion ||
+              binding.reservationId !== persisted.reservationId || binding.taskId !== store.taskId) {
+            throw new TaskHostError("invalid_work_goal_binding", "planner context request differs from the Task's durable Work Goal binding");
+          }
+          return this._workGoalOrchestrator.getTaskContext({
+            ...persisted,
+            taskId: store.taskId,
+            workGoalBinding: persisted,
+          });
+        },
+      } : {}),
       ...(routine ? { routineRunner: routine.runner, routineRun: routine.run } : {}),
     });
     const entry = { store, controller, browser, planner, routinePinned: !!routine, snapshot: controller.getSnapshot() };
@@ -272,6 +310,18 @@ class TaskHost {
     entry.unsubscribeController = controller.onChange((snapshot) => {
       entry.snapshot = snapshot;
       this._emit(store.taskId, snapshot, { goal: controller.getGoal(), browser: browser.getBrowserSnapshot?.() });
+      const binding = store.taskProfile?.workGoalBinding;
+      const phase = WORK_GOAL_BLOCKER_PHASE[snapshot.pauseReason];
+      if (binding && snapshot.state === "paused" && phase) {
+        // Controller pause transitions checkpoint before notifying listeners.
+        // Keep repeated blocker accounting durable and best-effort; this
+        // callback must never interfere with pausing the actual Task.
+        this._withWorkGoalAdmission(() => this._workGoalOrchestrator.observeBlocker(
+          binding.goalId, binding.goalVersion, {
+            taskId: store.taskId, reasonCode: snapshot.pauseReason, phase, taskStore: store,
+          },
+        )).catch(() => {});
+      }
       if (snapshot.state === "completed" || snapshot.state === "stopped") this._recordTerminal(store.taskId, snapshot.state);
     });
     entry.unsubscribeBrowser = browser.onChange?.((snapshot) => {
@@ -316,9 +366,86 @@ class TaskHost {
     return this._createTaskWithProfile(goalInput, selectors);
   }
 
+  async _ensureWorkGoalReady() {
+    if (this._workGoalReady) return this._workGoalReady;
+    this._workGoalReady = (async () => {
+      await this._workGoalStore.load();
+      await this._workGoalOrchestrator.reconcileAll?.();
+    })();
+    try { await this._workGoalReady; }
+    catch (error) { this._workGoalReady = null; throw error; }
+  }
+
+  _withWorkGoalAdmission(operation) {
+    const result = this._workGoalAdmissionChain.then(operation);
+    this._workGoalAdmissionChain = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async startWorkGoal(input) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.startWorkGoal(input));
+  }
+
+  async getActiveWorkGoal() {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._workGoalOrchestrator.getActiveWorkGoal();
+  }
+
+  async listWorkGoalHistory() {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._workGoalOrchestrator.listWorkGoalHistory();
+  }
+
+  async amendWorkGoal(expectedVersion, nextSpec) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.amendWorkGoal(expectedVersion, nextSpec));
+  }
+
+  async pauseWorkGoal(goalId, expectedVersion) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.pauseWorkGoal(goalId, expectedVersion));
+  }
+
+  async resumeWorkGoal(goalId, expectedVersion) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.resumeWorkGoal(goalId, expectedVersion));
+  }
+
+  async completeWorkGoal(goalId, expectedVersion) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.completeWorkGoal(goalId, expectedVersion));
+  }
+
+  async archiveWorkGoal(goalId, expectedVersion) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.archiveWorkGoal(goalId, expectedVersion));
+  }
+
+  async recordWorkGoalProgress(goalId, expectedVersion, evidenceRefs) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._workGoalOrchestrator.recordWorkGoalProgress(goalId, expectedVersion, evidenceRefs);
+  }
+
+  async verifyWorkGoalCriterion(goalId, expectedVersion, criterionId) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._workGoalOrchestrator.verifyWorkGoalCriterion(goalId, expectedVersion, criterionId);
+  }
+
   _createTaskWithProfile(goalInput, selectors = {}) {
     this._assertOpen();
-    if (!isPlainObject(selectors) || Object.keys(selectors).some((key) => !TASK_PROFILE_SELECTOR_FIELDS.includes(key))) {
+    if (!isPlainObject(selectors) || Object.keys(selectors).some((key) => !TASK_PROFILE_SELECTOR_FIELDS.includes(key)) ||
+        (Object.hasOwn(selectors, "standalone") && typeof selectors.standalone !== "boolean")) {
       return Promise.reject(new TaskHostError("invalid_selector", "task profile selectors contain unknown fields"));
     }
     let stableGoalInput;
@@ -334,7 +461,7 @@ class TaskHost {
     } catch (error) {
       return Promise.reject(new TaskHostError(error.code || "profile_resolution_failed", error.message));
     }
-    return this._createNewTask(stableGoalInput, null, null, resolvedProfile);
+    return this._createNewTask(stableGoalInput, null, null, resolvedProfile, selectors.standalone === true);
   }
 
   async listRoutines() {
@@ -492,33 +619,88 @@ class TaskHost {
     });
   }
 
-  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null) {
+  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null, standalone = false) {
     this._assertOpen();
     if (!resolvedProfile) throw new TaskHostError("profile_required", "new tasks must have a host-resolved profile before storage or admission");
     return this._trackAttachment(async () => {
       await this._ensureQueue();
+      await this._ensureWorkGoalReady();
       const selected = this._settingsStore
         ? await this._settingsStore.getMemoryPolicySelection()
         : { mode: "budgeted", auditEventId: null, actor: null, at: null };
-      const store = await TaskStore.create(goalInput, { storageRoot: this._storageRoot, resolvedProfile });
-      try {
-        if (routineRun) await store.checkpoint({ task: { state: "idle", pauseReason: null }, routineRun });
-        await store.append({ type: "note", payload: {
-          kind: "memory_policy_selected",
-          mode: selected.mode,
-          auditEventId: selected.auditEventId,
-          actor: selected.actor,
-          selectedAt: selected.at,
-        } });
-      } catch (error) {
-        await store.close();
-        throw error;
-      }
+      let taskId;
+      try { taskId = crypto.randomUUID(); }
+      catch (error) { throw new TaskHostError("task_id_unavailable", error.message); }
+      const { store, workGoalBinding } = await this._withWorkGoalAdmission(async () => {
+        let binding = null;
+        let taskGoalInput = structuredClone(goalInput);
+        const activeGoal = standalone ? null : await this._workGoalOrchestrator.getActiveWorkGoal();
+        let reservation = null;
+        if (activeGoal) {
+          if (activeGoal.status !== "active") {
+            throw new TaskHostError("work_goal_not_active", "resume or archive the current Work Goal, or explicitly create a standalone Task");
+          }
+          const currentContext = await this._workGoalOrchestrator.getContext(activeGoal.goalId, activeGoal.spec.version);
+          let normalized;
+          try { normalized = normalizeGoalSpec(taskGoalInput, { taskId, goalVersion: 1, createdAt: new Date().toISOString() }); }
+          catch (error) { throw new TaskHostError(error.code || "invalid_goal", error.message); }
+          const effectiveLimits = {};
+          for (const axis of Object.keys(DEFAULT_LIMITS)) {
+            const aggregate = currentContext.remainingBudget[axis];
+            effectiveLimits[axis] = Math.min(normalized.limits[axis], aggregate === undefined ? normalized.limits[axis] : aggregate);
+            if (!Number.isSafeInteger(effectiveLimits[axis]) || effectiveLimits[axis] <= 0) {
+              throw new TaskHostError("goal_budget_exhausted", `Work Goal has no remaining ${axis} allowance`);
+            }
+          }
+          taskGoalInput.limits = effectiveLimits;
+          reservation = {
+            taskId,
+            limits: { maxTasks: 1, ...effectiveLimits },
+            reservationId: crypto.randomUUID(),
+          };
+          binding = {
+            goalId: activeGoal.goalId,
+            goalVersion: activeGoal.spec.version,
+            reservationId: reservation.reservationId,
+          };
+        }
+        const taskStore = await TaskStore.create(taskGoalInput, {
+          storageRoot: this._storageRoot,
+          taskId,
+          resolvedProfile,
+          ...(binding ? { workGoalBinding: binding } : {}),
+        });
+        try {
+          if (reservation && binding) {
+            // Create the immutable Task profile before consuming project
+            // budget. If TaskStore.create fails before it can produce a
+            // recoverable journal, no reservation is left stranded.
+            await this._workGoalOrchestrator.reserveTask(binding.goalId, binding.goalVersion, reservation);
+            await this._workGoalOrchestrator.linkTask(binding.goalId, binding.goalVersion, {
+              reservationId: reservation.reservationId, taskId,
+            });
+          }
+          if (routineRun) await taskStore.checkpoint({ task: { state: "idle", pauseReason: null }, routineRun });
+          await taskStore.append({ type: "note", payload: {
+            kind: "memory_policy_selected",
+            mode: selected.mode,
+            auditEventId: selected.auditEventId,
+            actor: selected.actor,
+            selectedAt: selected.at,
+          } });
+          if (this._closePromise) throw new TaskHostError("host_closed", "task host is closing or closed");
+          if (binding) {
+            await this._workGoalOrchestrator.recordContinuation(binding.goalId, binding.goalVersion, {
+              taskId, origin: goalInput?.trigger ? "scheduler" : routineRun ? "routine" : "user",
+            });
+          }
+        } catch (error) {
+          await taskStore.close();
+          throw error;
+        }
+        return { store: taskStore, workGoalBinding: binding };
+      });
       this._runMemoryPolicies.set(store.taskId, { mode: selected.mode, auditEventId: selected.auditEventId });
-      if (this._closePromise) {
-        await store.close();
-        throw new TaskHostError("host_closed", "task host is closing or closed");
-      }
       // Validate the exact pinned revision while the task is still not
       // enqueued/admitted. A malformed or missing routine must never reserve
       // a browser lease and then strand an active queue entry.
@@ -563,6 +745,7 @@ class TaskHost {
   async _ensureQueue() {
     if (this._queueReady) return this._queueReady;
     this._queueReady = (async () => {
+      await this._ensureWorkGoalReady();
       await this._queue.load();
       const summaries = await this._listTaskSummaries();
       await this._queue.reconcile(summaries);
@@ -596,6 +779,12 @@ class TaskHost {
       await this._queue.complete(taskId, state);
       const entry = this._active.get(taskId);
       if (entry) {
+        const binding = entry.store.taskProfile?.workGoalBinding;
+        if (binding) {
+          await this._workGoalOrchestrator.reconcileTask(taskId, { taskStore: entry.store }).catch((error) => {
+            this._emit(taskId, entry.snapshot, { error: error.code || "work_goal_reconciliation_failed" });
+          });
+        }
         this._unsubscribe(entry);
         this._active.delete(taskId);
         this._childCoordinator.unregisterStore(taskId);
@@ -1016,6 +1205,7 @@ class TaskHost {
       }));
       this._active.clear();
       this._listeners.clear();
+      await Promise.resolve(this._workGoalStore.close?.()).catch((error) => errors.push(error));
       if (errors.length > 0) {
         throw new AggregateError(errors, "one or more task resources failed to close");
       }

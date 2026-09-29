@@ -466,7 +466,7 @@ async function streamJournalReplay(journalPath, checkpointSeq, pageOptions, chec
 // Shared body of TaskStore.create()/createChild(): both already resolved a
 // safe, not-yet-existing directory for `id` (under tasks/ or under a
 // parent's children/); this just materializes a brand-new store there.
-async function createStoreInDir(taskDir, id, goalInput, storageRoot, onTiming, resolvedProfile = null) {
+async function createStoreInDir(taskDir, id, goalInput, storageRoot, onTiming, resolvedProfile = null, workGoalBinding = null) {
   await fsp.mkdir(taskDir, { recursive: false, mode: 0o700 });
   const lockPath = await acquireLock(taskDir);
 
@@ -515,6 +515,7 @@ async function createStoreInDir(taskDir, id, goalInput, storageRoot, onTiming, r
           duration: { ...resolvedProfile.selection.duration },
           capability: { ...resolvedProfile.selection.capability },
         },
+        ...(workGoalBinding ? { workGoalBinding: { ...workGoalBinding } } : {}),
       });
       await store.append({ type: "goal_created", payload: { goalVersion: 1, profileRequired: true }, goalVersion: 1 });
       await store.append({ type: "task_profile_selected", payload: profilePayload, goalVersion: 1 });
@@ -1019,13 +1020,20 @@ class TaskStore {
     if (this._closed) throw new TaskStoreError("closed", "this TaskStore instance is closed");
   }
 
-  static async create(goalInput, { storageRoot, taskId, onTiming, resolvedProfile = null } = {}) {
+  static async create(goalInput, { storageRoot, taskId, onTiming, resolvedProfile = null, workGoalBinding = null } = {}) {
     if (!storageRoot) throw new TaskStoreError("invalid_field", "storageRoot is required");
     if (onTiming !== undefined && typeof onTiming !== "function") {
       throw new TaskStoreError("invalid_field", "onTiming must be a function when provided");
     }
     if (resolvedProfile !== null) {
       try { profileContracts.validateResolvedTaskProfile(resolvedProfile); }
+      catch (err) { throw wrapContractError(err); }
+    }
+    if (workGoalBinding !== null && resolvedProfile === null) {
+      throw new TaskStoreError("invalid_binding", "Work Goal binding requires a resolved Task profile");
+    }
+    if (workGoalBinding !== null) {
+      try { profileContracts.validateWorkGoalBinding(workGoalBinding); }
       catch (err) { throw wrapContractError(err); }
     }
     const id = taskId || crypto.randomUUID();
@@ -1035,7 +1043,7 @@ class TaskStore {
     await fsp.mkdir(root, { recursive: true, mode: 0o700 });
     const { tasksRoot, taskDir } = await resolveTaskDir(root, id);
     await fsp.mkdir(tasksRoot, { recursive: true, mode: 0o700 }).catch(() => {});
-    return createStoreInDir(taskDir, id, goalInput, root, onTiming, resolvedProfile);
+    return createStoreInDir(taskDir, id, goalInput, root, onTiming, resolvedProfile, workGoalBinding);
   }
 
   // Multi-agent background runtime plan, Task 3: creates a CHILD task's own

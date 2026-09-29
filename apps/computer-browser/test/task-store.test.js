@@ -1135,6 +1135,26 @@ test("profile-required create writes goal_created then one durable profile and r
   await reopened.close();
 });
 
+test("top-level TaskStore persists and reloads an exact optional Work Goal binding", async () => {
+  const storageRoot = await mkTempRoot();
+  const goal = { originalRequest: "inspect the page" };
+  const binding = {
+    goalId: "33333333-3333-4333-8333-333333333333",
+    goalVersion: 2,
+    reservationId: "44444444-4444-4444-8444-444444444444",
+  };
+  const store = await TaskStore.create(goal, { storageRoot, resolvedProfile: profileFor(goal), workGoalBinding: binding });
+  const taskId = store.taskId;
+  const events = await store.getEvents();
+  assert.deepEqual(events[1].payload.workGoalBinding, binding);
+  await store.close();
+
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  assert.deepEqual(reopened.taskProfile.workGoalBinding, binding);
+  await reopened.close();
+  await assert.rejects(TaskStore.create(goal, { storageRoot, workGoalBinding: binding }), { code: "invalid_binding" });
+});
+
 test("profile-required child store binds its parent, plan, and independently selected Browser route", async () => {
   const storageRoot = await mkTempRoot();
   const parentGoal = { originalRequest: "delegate to agents" };

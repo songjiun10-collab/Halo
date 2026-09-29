@@ -22,15 +22,33 @@ async function makeStore(goalInput) {
   return { store, storageRoot };
 }
 
-async function makeProfiledStore(goalInput, capability = "multi_agent") {
+async function makeProfiledStore(goalInput, capability = "multi_agent", workGoalBinding = null) {
   const storageRoot = await mkTempRoot();
   const resolvedProfile = resolveTaskProfile({ goalInput, requestedCapabilityProfile: capability });
-  const store = await TaskStore.create(goalInput, { storageRoot, resolvedProfile });
+  const store = await TaskStore.create(goalInput, { storageRoot, resolvedProfile, workGoalBinding });
   return { store, storageRoot };
 }
 
 function allowApprove() {
   return async () => ({ decision: "allow", reasons: [] });
+}
+
+const WORK_GOAL_BINDING = Object.freeze({
+  goalId: "22222222-2222-2222-2222-222222222222",
+  goalVersion: 2,
+  reservationId: "33333333-3333-3333-3333-333333333333",
+});
+
+function boundWorkGoalContext(overrides = {}) {
+  return {
+    goalId: WORK_GOAL_BINDING.goalId,
+    goalVersion: WORK_GOAL_BINDING.goalVersion,
+    objective: "프로젝트 전체 검증",
+    successCriteria: [{ id: "projectDone", text: "모든 작업 검증", required: true, verification: "host_evidence" }],
+    verifiedCriterionIds: [],
+    remainingBudget: { maxTasks: 2, maxActions: 20 },
+    ...overrides,
+  };
 }
 
 test("drives 100 actions across at least 10 injected context-reset segments while preserving the goal", async () => {
@@ -1426,6 +1444,80 @@ test("memory context overflow pauses fail-closed before contacting the planner",
   assert.equal(snapshot.state, "paused");
   assert.equal(snapshot.pauseReason, "context_error");
   assert.equal(plannerCalled, false);
+  await store.close();
+});
+
+test("each planner turn rebuilds Work Goal context from the Task's durable binding", async () => {
+  const { store } = await makeProfiledStore({ originalRequest: "현재 페이지만 요약" }, "browser", WORK_GOAL_BINDING);
+  const reads = [];
+  const contexts = [];
+  const controller = new TaskController({
+    store,
+    readWorkGoalContext: async (binding) => {
+      reads.push(binding);
+      return boundWorkGoalContext(reads.length === 1
+        ? { remainingBudget: { maxTasks: 2, maxActions: 20 } }
+        : { verifiedCriterionIds: ["projectDone"], remainingBudget: { maxTasks: 1, maxActions: 19 } });
+    },
+    planner: {
+      next: async (context) => {
+        contexts.push(context);
+        return contexts.length === 1
+          ? { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "observe" }] }
+          : { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "finish", evidenceIds: [] };
+      },
+    },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(), hostVerifier: () => true,
+  });
+  await controller.start();
+
+  assert.equal(contexts.length, 2);
+  assert.deepEqual(reads, [
+    { ...WORK_GOAL_BINDING, taskId: store.taskId },
+    { ...WORK_GOAL_BINDING, taskId: store.taskId },
+  ]);
+  assert.deepEqual(contexts.map((context) => context.workGoal.verifiedCriterionIds), [[], ["projectDone"]]);
+  assert.deepEqual(contexts.map((context) => context.workGoal.remainingBudget.maxActions), [20, 19]);
+  assert.equal(contexts[1].goal.originalRequest, "현재 페이지만 요약");
+  assert.equal(contexts[1].goalVersion, 1);
+  assert.equal(contexts[1].workGoal.goalVersion, 2);
+  await store.close();
+});
+
+test("bound Task pauses before planner when Work Goal context is unavailable or stale", async () => {
+  for (const readWorkGoalContext of [undefined, async () => boundWorkGoalContext({ goalVersion: 3 })]) {
+    const { store } = await makeProfiledStore({ originalRequest: "goal" }, "browser", WORK_GOAL_BINDING);
+    let plannerCalls = 0;
+    const controller = new TaskController({
+      store, readWorkGoalContext,
+      planner: { next: async () => { plannerCalls += 1; throw new Error("planner must not be contacted"); } },
+      browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+      approve: allowApprove(), hostVerifier: () => true,
+    });
+    const snapshot = await controller.start();
+    assert.equal(snapshot.state, "paused");
+    assert.equal(snapshot.pauseReason, "context_error");
+    assert.equal(plannerCalls, 0);
+    await store.close();
+  }
+});
+
+test("a legacy Task does not query or receive Work Goal context", async () => {
+  const { store } = await makeStore({ originalRequest: "standalone" });
+  let readerCalled = false;
+  const controller = new TaskController({
+    store,
+    readWorkGoalContext: async () => { readerCalled = true; throw new Error("not bound"); },
+    planner: { next: async (context) => {
+      assert.equal(Object.hasOwn(context, "workGoal"), false);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "finish", evidenceIds: [] };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(), hostVerifier: () => true,
+  });
+  await controller.start();
+  assert.equal(readerCalled, false);
   await store.close();
 });
 
