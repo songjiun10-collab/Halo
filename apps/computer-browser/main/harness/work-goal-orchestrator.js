@@ -99,8 +99,9 @@ class WorkGoalOrchestrator {
   constructor({ storageRoot, store, taskStoreClass = TaskStore, getOpenTaskStore } = {}) {
     if (typeof storageRoot !== "string" || !storageRoot) fail("invalid_config", "storageRoot is required");
     if (!store || typeof store.create !== "function" || typeof store.append !== "function" ||
-        typeof store.get !== "function" || typeof store.getActive !== "function" || typeof store.listHistory !== "function") {
-      fail("invalid_config", "a WorkGoalStore with create/append/get/getActive/listHistory is required");
+        typeof store.get !== "function" || typeof store.getActive !== "function" ||
+        typeof store.listHistory !== "function" || typeof store.listHistoryPage !== "function") {
+      fail("invalid_config", "a WorkGoalStore with create/append/get/getActive/listHistory/listHistoryPage is required");
     }
     if (!taskStoreClass || typeof taskStoreClass.readEvents !== "function" || typeof taskStoreClass.load !== "function") {
       fail("invalid_config", "taskStoreClass must provide readEvents/load");
@@ -142,12 +143,12 @@ class WorkGoalOrchestrator {
 
   getActiveWorkGoal() { return summary(this._store.getActive()); }
 
-  async listWorkGoalHistory() {
-    const states = this._store.listHistory();
-    for (const state of states) {
+  async listWorkGoalHistory(options) {
+    const page = this._store.listHistoryPage(options);
+    for (const state of page.items) {
       if (this._claimsCompletedCriteria(state)) await this._requireCurrentEvidence(state);
     }
-    return states.map(summary);
+    return { items: page.items.map(summary), nextCursor: page.nextCursor };
   }
 
   async amendWorkGoal(expectedVersion, nextInput) {

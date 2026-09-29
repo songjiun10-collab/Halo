@@ -72,6 +72,32 @@ test("a second active Goal is rejected until the first is archived", async (t) =
   await store.close();
 });
 
+test("history pages are stable, bounded, and reject malformed cursors or limits", async (t) => {
+  const storageRoot = await tempRoot(t);
+  const store = new WorkGoalStore({ storageRoot });
+  await store.load();
+  const ids = [];
+  for (let index = 0; index < 3; index += 1) {
+    const goal = await store.create(input(`Goal ${index}`));
+    ids.push(goal.goalId);
+    await store.append({ goalId: goal.goalId, expectedVersion: 1, type: "work_goal_paused", payload: { actor: "user" } });
+    await store.append({ goalId: goal.goalId, expectedVersion: 1, type: "work_goal_archived", payload: { actor: "user" } });
+  }
+
+  const ordered = [...ids].sort();
+  const first = store.listHistoryPage({ limit: 2 });
+  assert.deepEqual(first.items.map((goal) => goal.goalId), ordered.slice(0, 2));
+  assert.equal(first.nextCursor, ordered[1]);
+  const second = store.listHistoryPage({ limit: 2, cursor: first.nextCursor });
+  assert.deepEqual(second.items.map((goal) => goal.goalId), ordered.slice(2));
+  assert.equal(second.nextCursor, null);
+  assert.throws(() => store.listHistoryPage({ limit: 0 }), { code: "invalid_history_page" });
+  assert.throws(() => store.listHistoryPage({ limit: 101 }), { code: "invalid_history_page" });
+  assert.throws(() => store.listHistoryPage({ cursor: "not-a-uuid" }), { code: "invalid_history_page" });
+  assert.throws(() => store.listHistoryPage({ unexpected: true }), { code: "invalid_history_page" });
+  await store.close();
+});
+
 test("concurrent amendments cannot both pass the same expected version", async (t) => {
   const storageRoot = await tempRoot(t);
   const store = new WorkGoalStore({ storageRoot });

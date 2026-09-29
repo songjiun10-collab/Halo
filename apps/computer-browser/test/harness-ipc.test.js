@@ -193,7 +193,7 @@ test("Work Goal lifecycle IPC maps only to trusted host methods", async () => {
   const calls = [
     ["halo:startWorkGoal", [{ objective: "x" }], "startWorkGoal"],
     ["halo:getActiveWorkGoal", [], "getActiveWorkGoal"],
-    ["halo:listWorkGoalHistory", [], "listWorkGoalHistory"],
+    ["halo:listWorkGoalHistory", [{ limit: 25, cursor: "00000000-0000-4000-8000-000000000001" }], "listWorkGoalHistory"],
     ["halo:amendWorkGoal", [1, { objective: "y" }], "amendWorkGoal"],
     ["halo:pauseWorkGoal", ["goal-id", 1], "pauseWorkGoal"],
     ["halo:resumeWorkGoal", ["goal-id", 1], "resumeWorkGoal"],
@@ -270,7 +270,7 @@ test("every harness channel rejects a request from an untrusted (non-main-frame)
     ["halo:setTaskViewport", ["task-1", { x: 1, y: 94, width: 10, height: 10, visible: true }]],
     ["halo:startWorkGoal", [{ objective: "hi" }]],
     ["halo:getActiveWorkGoal", []],
-    ["halo:listWorkGoalHistory", []],
+    ["halo:listWorkGoalHistory", [{ limit: 7, cursor: null }]],
     ["halo:amendWorkGoal", [1, { objective: "new" }]],
     ["halo:pauseWorkGoal", ["goal-1", 1]],
     ["halo:resumeWorkGoal", ["goal-1", 1]],

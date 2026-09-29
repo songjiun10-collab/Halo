@@ -157,7 +157,7 @@ test("routine and work-goal TaskHost methods reach the TaskHost over the backgro
     async runRoutine(routineId, revision, options) { return { taskId: "routine-task", routineId, revision, options }; },
     async startWorkGoal(input) { return { goalId: "g1", ...input }; },
     async getActiveWorkGoal() { return null; },
-    async listWorkGoalHistory() { return []; },
+    async listWorkGoalHistory(options) { return { options }; },
     async amendWorkGoal(expectedVersion, nextSpec) { return { expectedVersion, nextSpec }; },
     async pauseWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "paused" }; },
     async resumeWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "active" }; },
@@ -178,7 +178,9 @@ test("routine and work-goal TaskHost methods reach the TaskHost over the backgro
   assert.deepEqual(await client.call("runRoutine", ["r1", 2, { standalone: true }]), { taskId: "routine-task", routineId: "r1", revision: 2, options: { standalone: true } });
   assert.deepEqual(await client.call("startWorkGoal", { objective: "o" }), { goalId: "g1", objective: "o" });
   assert.equal(await client.call("getActiveWorkGoal"), null);
-  assert.deepEqual(await client.call("listWorkGoalHistory"), []);
+  assert.deepEqual(await client.call("listWorkGoalHistory", { limit: 9, cursor: "00000000-0000-4000-8000-000000000001" }), {
+    options: { limit: 9, cursor: "00000000-0000-4000-8000-000000000001" },
+  });
   assert.deepEqual(await client.call("amendWorkGoal", [1, { objective: "o2" }]), { expectedVersion: 1, nextSpec: { objective: "o2" } });
   assert.deepEqual(await client.call("pauseWorkGoal", ["g1", 1]), { goalId: "g1", expectedVersion: 1, status: "paused" });
   assert.deepEqual(await client.call("resumeWorkGoal", ["g1", 2]), { goalId: "g1", expectedVersion: 2, status: "active" });

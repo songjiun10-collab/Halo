@@ -57,6 +57,10 @@ class MemoryGoalStore {
   }
 
   listHistory() { return this.events.length ? [this.get(GOAL_ID)] : []; }
+  listHistoryPage({ limit = 50, cursor = null } = {}) {
+    const items = this.listHistory().filter((state) => cursor === null || state.goalId.localeCompare(cursor) > 0).slice(0, limit);
+    return { items, nextCursor: null };
+  }
 }
 
 function workGoalInput() {
@@ -151,7 +155,7 @@ test("amendment and lifecycle reject stale versions and keep old-version context
   await orchestrator.pauseWorkGoal(goalId, 2);
   await orchestrator.archiveWorkGoal(goalId, 2);
   assert.equal(orchestrator.getActiveWorkGoal(), null);
-  assert.equal((await orchestrator.listWorkGoalHistory())[0].status, "archived");
+  assert.equal((await orchestrator.listWorkGoalHistory()).items[0].status, "archived");
 });
 
 test("host evidence plus user verification are both required for completion", async (t) => {
@@ -329,7 +333,7 @@ test("completed Goal history fails closed after restart when cited Task evidence
   await orchestrator.recordWorkGoalProgress(goalId, 1, [task.evidenceRef]);
   await orchestrator.verifyWorkGoalCriterion(goalId, 1, "userCheck");
   await orchestrator.completeWorkGoal(goalId, 1);
-  assert.equal((await orchestrator.listWorkGoalHistory())[0].status, "complete");
+  assert.equal((await orchestrator.listWorkGoalHistory()).items[0].status, "complete");
 
   await taskStore.close();
   await first.close();
@@ -352,7 +356,7 @@ test("user-only completed Goal history needs no Task evidence file", async (t) =
   });
   await orchestrator.verifyWorkGoalCriterion(goal.goalId, 1, "userCheck");
   await orchestrator.completeWorkGoal(goal.goalId, 1);
-  assert.equal((await orchestrator.listWorkGoalHistory())[0].status, "complete");
+  assert.equal((await orchestrator.listWorkGoalHistory()).items[0].status, "complete");
   assert.deepEqual(await orchestrator.reconcileAll(), []);
 });
 
@@ -483,8 +487,8 @@ test("active and historical Goal summaries bound Task links and report truncatio
   await orchestrator.pauseWorkGoal(goalId, goalVersion);
   await orchestrator.archiveWorkGoal(goalId, goalVersion);
   const history = await orchestrator.listWorkGoalHistory();
-  assert.equal(history[0].taskCount, taskIds.length);
-  assert.equal(history[0].tasks.length, 100);
-  assert.equal(history[0].tasksTruncated, true);
-  assert.deepEqual(history[0].tasks, taskIds.slice(-100));
+  assert.equal(history.items[0].taskCount, taskIds.length);
+  assert.equal(history.items[0].tasks.length, 100);
+  assert.equal(history.items[0].tasksTruncated, true);
+  assert.deepEqual(history.items[0].tasks, taskIds.slice(-100));
 });

@@ -29,7 +29,7 @@ test("preload exposes the Work Goal API as narrow IPC invoke wrappers", async ()
   const methods = [
     ["startWorkGoal", "halo:startWorkGoal", [{ objective: "goal" }]],
     ["getActiveWorkGoal", "halo:getActiveWorkGoal", []],
-    ["listWorkGoalHistory", "halo:listWorkGoalHistory", []],
+    ["listWorkGoalHistory", "halo:listWorkGoalHistory", [{ limit: 2, cursor: null }]],
     ["amendWorkGoal", "halo:amendWorkGoal", [1, { objective: "next" }]],
     ["pauseWorkGoal", "halo:pauseWorkGoal", ["goal-id", 1]],
     ["resumeWorkGoal", "halo:resumeWorkGoal", ["goal-id", 1]],

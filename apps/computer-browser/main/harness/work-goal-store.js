@@ -375,6 +375,29 @@ class WorkGoalStore {
       .map(copy);
   }
 
+  listHistoryPage(options = {}) {
+    this._assertLoaded();
+    if (!isPlainObject(options)
+      || Object.keys(options).some((key) => !["limit", "cursor"].includes(key))) {
+      fail("invalid_history_page", "history page options may contain only limit and cursor");
+    }
+    const limit = options.limit === undefined ? 50 : options.limit;
+    const cursor = options.cursor === undefined ? null : options.cursor;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100
+      || (cursor !== null && (typeof cursor !== "string" || !UUID_RE.test(cursor)))) {
+      fail("invalid_history_page", "history limit must be 1..100 and cursor must be a UUID or null");
+    }
+
+    const states = [...this._states.values()]
+      .filter((state) => !NONTERMINAL.has(state.status) && (cursor === null || state.goalId.localeCompare(cursor) > 0))
+      .sort((a, b) => a.goalId.localeCompare(b.goalId));
+    const selected = states.slice(0, limit);
+    return {
+      items: selected.map(copy),
+      nextCursor: states.length > limit ? selected[selected.length - 1].goalId : null,
+    };
+  }
+
   async create(input) {
     validateWorkGoalInput(input);
     const frozenInput = copy(input);

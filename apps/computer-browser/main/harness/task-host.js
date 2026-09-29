@@ -394,10 +394,10 @@ class TaskHost {
     return this._workGoalOrchestrator.getActiveWorkGoal();
   }
 
-  async listWorkGoalHistory() {
+  async listWorkGoalHistory(options) {
     this._assertOpen();
     await this._ensureWorkGoalReady();
-    return this._workGoalOrchestrator.listWorkGoalHistory();
+    return this._workGoalOrchestrator.listWorkGoalHistory(options);
   }
 
   async amendWorkGoal(expectedVersion, nextSpec) {
