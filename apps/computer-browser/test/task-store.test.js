@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { TaskStore } = require("../main/harness/task-store");
+const { resolveTaskProfile } = require("../shared/task-profile-router");
 const {
   ContractError,
   normalizeGoalSpec,
@@ -1105,4 +1106,153 @@ test("removeChild() deletes a created child's directory so it no longer loads", 
 
   await assert.rejects(TaskStore.loadChild(childId, { storageRoot, parentTaskId: parent.taskId }), { code: "not_found" });
   await parent.close();
+});
+
+function profileFor(goalInput, capability = "browser") {
+  return resolveTaskProfile({
+    goalInput,
+    ...(capability === "browser" ? {} : { requestedCapabilityProfile: capability }),
+  });
+}
+
+test("profile-required create writes goal_created then one durable profile and reloads the same selection", async () => {
+  const storageRoot = await mkTempRoot();
+  const goal = { originalRequest: "inspect the page" };
+  const resolvedProfile = profileFor(goal);
+  const store = await TaskStore.create(goal, { storageRoot, resolvedProfile });
+  const taskId = store.taskId;
+  const events = await store.getEvents();
+
+  assert.deepEqual(events.map((event) => event.type), ["goal_created", "task_profile_selected"]);
+  assert.deepEqual(events.map((event) => event.seq), [1, 2]);
+  assert.deepEqual(events[0].payload, { goalVersion: 1, profileRequired: true });
+  assert.deepEqual(events[1].payload.duration.effectiveLimits, store.getGoal().limits);
+  assert.deepEqual(store.taskProfile.selection, resolvedProfile.selection);
+  await store.close();
+
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  assert.deepEqual(reopened.taskProfile, events[1].payload);
+  await reopened.close();
+});
+
+test("profile-required child store binds its parent, plan, and independently selected Browser route", async () => {
+  const storageRoot = await mkTempRoot();
+  const parentGoal = { originalRequest: "delegate to agents" };
+  const parentProfile = profileFor(parentGoal, "multi_agent");
+  const parent = await TaskStore.create(parentGoal, { storageRoot, resolvedProfile: parentProfile });
+  const childGoal = { originalRequest: "quickly inspect the assigned page" };
+  const resolvedProfile = resolveTaskProfile({
+    goalInput: childGoal,
+    parentProfile,
+    parentBinding: { parentTaskId: parent.taskId, planId: "33333333-3333-4333-8333-333333333333", parentGoalVersion: 1 },
+  });
+  const child = await TaskStore.createChild(childGoal, {
+    storageRoot, parentTaskId: parent.taskId, resolvedProfile,
+  });
+  const childId = child.taskId;
+  assert.equal(child.taskProfile.capability.id, "browser");
+  assert.equal(child.taskProfile.parentBinding.parentTaskId, parent.taskId);
+  await child.close();
+
+  const reopened = await TaskStore.loadChild(childId, { storageRoot, parentTaskId: parent.taskId });
+  assert.deepEqual(reopened.taskProfile.parentBinding, resolvedProfile.parentBinding);
+  await reopened.close();
+  await parent.close();
+});
+
+test("profile-required replay rejects a missing, non-adjacent, or duplicate profile event", async (t) => {
+  const cases = [
+    ["missing", "profile_incomplete", (lines) => lines.slice(0, 1)],
+    ["non-adjacent", "profile_corrupt", (lines) => {
+      const first = JSON.parse(lines[0]);
+      const profile = JSON.parse(lines[1]);
+      profile.seq = 3;
+      const note = { ...profile, seq: 2, eventId: "44444444-4444-4444-8444-444444444444", type: "note", payload: { text: "gap" } };
+      return [JSON.stringify(first), JSON.stringify(note), JSON.stringify(profile)];
+    }],
+    ["duplicate", "profile_corrupt", (lines) => {
+      const duplicate = JSON.parse(lines[1]);
+      duplicate.seq = 3;
+      duplicate.eventId = "55555555-5555-4555-8555-555555555555";
+      return [...lines, JSON.stringify(duplicate)];
+    }],
+  ];
+
+  for (const [name, errorCode, rewrite] of cases) {
+    await t.test(name, async () => {
+      const storageRoot = await mkTempRoot();
+      const store = await TaskStore.create({ originalRequest: "inspect" }, {
+        storageRoot, resolvedProfile: profileFor({ originalRequest: "inspect" }),
+      });
+      const taskId = store.taskId;
+      await store.close();
+      const journalPath = path.join(storageRoot, "tasks", taskId, "events.jsonl");
+      const lines = (await fs.readFile(journalPath, "utf8")).trimEnd().split("\n");
+      await fs.writeFile(journalPath, `${rewrite(lines).join("\n")}\n`);
+      await assert.rejects(TaskStore.load(taskId, { storageRoot }), { code: errorCode });
+    });
+  }
+});
+
+test("profile replay rejects corrupt adapter versions and mismatched journal goal versions", async (t) => {
+  const cases = [
+    ["adapter version", (event) => { event.payload.capability.registryVersion = 99; }],
+    ["goal version", (event) => { event.goalVersion = 2; }],
+    ["task binding", (event) => { event.taskId = "66666666-6666-4666-8666-666666666666"; }],
+  ];
+  for (const [name, mutate] of cases) {
+    await t.test(name, async () => {
+      const storageRoot = await mkTempRoot();
+      const store = await TaskStore.create({ originalRequest: "inspect" }, {
+        storageRoot, resolvedProfile: profileFor({ originalRequest: "inspect" }),
+      });
+      const taskId = store.taskId;
+      await store.close();
+      const journalPath = path.join(storageRoot, "tasks", taskId, "events.jsonl");
+      const lines = (await fs.readFile(journalPath, "utf8")).trimEnd().split("\n");
+      const event = JSON.parse(lines[1]);
+      mutate(event);
+      lines[1] = JSON.stringify(event);
+      await fs.writeFile(journalPath, `${lines.join("\n")}\n`);
+      await assert.rejects(TaskStore.load(taskId, { storageRoot }), { code: name === "goal version" ? "profile_corrupt" : "storage_corrupt" });
+    });
+  }
+});
+
+test("profile append failure after marked goal_created leaves a non-runnable partial store", async (t) => {
+  const storageRoot = await mkTempRoot();
+  const originalOpen = TaskStore.prototype._openJournalFh;
+  t.after(() => { TaskStore.prototype._openJournalFh = originalOpen; });
+  TaskStore.prototype._openJournalFh = async function openWithProfileFailure() {
+    const fh = await originalOpen.call(this);
+    if (this._nextSeq === 2) {
+      fh.appendFile = async () => { throw new Error("simulated profile append failure"); };
+    }
+    return fh;
+  };
+
+  await assert.rejects(TaskStore.create({ originalRequest: "inspect" }, {
+    storageRoot, resolvedProfile: profileFor({ originalRequest: "inspect" }),
+  }), { code: "journal_write_failed" });
+
+  const taskDirs = await fs.readdir(path.join(storageRoot, "tasks"));
+  assert.equal(taskDirs.length, 1);
+  const taskId = taskDirs[0];
+  const lines = (await fs.readFile(path.join(storageRoot, "tasks", taskId, "events.jsonl"), "utf8")).trimEnd().split("\n");
+  assert.equal(lines.length, 1);
+  assert.deepEqual(JSON.parse(lines[0]).payload, { goalVersion: 1, profileRequired: true });
+  await assert.rejects(TaskStore.load(taskId, { storageRoot }), { code: "profile_incomplete" });
+});
+
+test("legacy stores remain replayable and are not rewritten or implicitly profiled", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "historical path" }, { storageRoot });
+  const taskId = store.taskId;
+  await store.close();
+  const journalPath = path.join(storageRoot, "tasks", taskId, "events.jsonl");
+  const before = await fs.readFile(journalPath, "utf8");
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  assert.equal(reopened.taskProfile, undefined);
+  await reopened.close();
+  assert.equal(await fs.readFile(journalPath, "utf8"), before);
 });

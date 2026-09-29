@@ -1,0 +1,105 @@
+{
+  "kind": "checkpoint_envelope",
+  "cases": [
+    {
+      "name": "minimal",
+      "valid": true,
+      "value": {
+        "seq": 3,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "payload": {
+          "state": "running"
+        },
+        "at": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "seq zero",
+      "valid": true,
+      "value": {
+        "seq": 0,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "payload": {
+          "state": "running"
+        },
+        "at": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "unknown field",
+      "valid": false,
+      "code": "unknown_field",
+      "value": {
+        "seq": 3,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "payload": {
+          "state": "running"
+        },
+        "at": "2026-09-29T00:00:00.000Z",
+        "extra": 1
+      }
+    },
+    {
+      "name": "payload array",
+      "valid": false,
+      "code": "invalid_shape",
+      "value": {
+        "seq": 3,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "payload": [],
+        "at": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "taskId not uuid",
+      "valid": false,
+      "code": "invalid_id",
+      "value": {
+        "seq": 3,
+        "taskId": "t",
+        "goalVersion": 1,
+        "payload": {
+          "state": "running"
+        },
+        "at": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "goalVersion zero",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "seq": 3,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 0,
+        "payload": {
+          "state": "running"
+        },
+        "at": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "checkpoint too large",
+      "valid": false,
+      "code": "checkpoint_too_large",
+      "value": {
+        "seq": 3,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "payload": {
+          "blob": ""
+        },
+        "at": "2026-09-29T00:00:00.000Z"
+      },
+      "pad": {
+        "path": "payload.blob",
+        "char": "x",
+        "length": 2200000
+      }
+    }
+  ]
+}

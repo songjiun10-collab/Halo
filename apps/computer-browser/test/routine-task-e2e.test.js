@@ -115,6 +115,33 @@ test("a saved routine runs end-to-end through the real TaskController/BrowserAda
   assert.equal(events.some((event) => event.type === "routine_step_denied" || event.type === "routine_step_failed"), false);
 });
 
+test("a middle-duration routine batches within the middle proposal limit and executes every step", async () => {
+  const storageRoot = await mkTempRoot();
+  const steps = Array.from({ length: 5 }, (_, index) => ({
+    kind: "scroll", direction: "down", amount: 100 + index,
+  }));
+  const saved = await new RoutineStore({ storageRoot }).save({
+    name: "Five scrolls", origins: ["https://example.com"], steps,
+  });
+  const executed = [];
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => ({
+      observe: async () => ({ id: "obs-middle", url: "https://example.com", elements: [] }),
+      execute: async (action) => { executed.push(action); return { status: "ok" }; },
+    }),
+  });
+
+  const { taskId, snapshot } = await host.runRoutine(saved.routineId, saved.revision, {
+    requestedDurationProfile: "middle",
+  });
+
+  assert.equal(snapshot.state, "awaiting_verification");
+  assert.equal(executed.length, 5);
+  const events = await host.getTaskEvents(taskId);
+  assert.equal(events.filter((event) => event.type === "routine_step_advanced").length, 5);
+  assert.equal(events.filter((event) => event.type === "routine_step_failed").length, 0);
+});
+
 test("a task whose journal already durably advanced past step 0 resumes on a fresh TaskHost from that cursor, without replaying the completed step", async () => {
   const storageRoot = await mkTempRoot();
   const saved = await saveTwoStepRoutine(storageRoot);

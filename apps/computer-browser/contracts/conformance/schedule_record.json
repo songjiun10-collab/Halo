@@ -1,0 +1,276 @@
+{
+  "kind": "schedule_record",
+  "cases": [
+    {
+      "name": "fresh interval",
+      "valid": true,
+      "value": {
+        "schemaVersion": 1,
+        "scheduleId": "22222222-2222-4222-8222-222222222222",
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "enabled": true,
+        "disabledReason": null,
+        "trigger": {
+          "kind": "interval",
+          "everyMs": 60000,
+          "anchor": "2026-09-29T00:00:00.000Z"
+        },
+        "overlap": "skip",
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "lastOccurrenceAt": null,
+        "lastTaskId": null,
+        "lastError": null,
+        "consecutiveFailures": 0,
+        "skippedCount": 0,
+        "nextRunAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "disabled after failures",
+      "valid": true,
+      "value": {
+        "schemaVersion": 1,
+        "scheduleId": "22222222-2222-4222-8222-222222222222",
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "enabled": false,
+        "disabledReason": "too_many_failures",
+        "trigger": {
+          "kind": "interval",
+          "everyMs": 60000,
+          "anchor": "2026-09-29T00:00:00.000Z"
+        },
+        "overlap": "skip",
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "lastOccurrenceAt": null,
+        "lastTaskId": null,
+        "lastError": "revision missing",
+        "consecutiveFailures": 3,
+        "skippedCount": 0,
+        "nextRunAt": null
+      }
+    },
+    {
+      "name": "ran once",
+      "valid": true,
+      "value": {
+        "schemaVersion": 1,
+        "scheduleId": "22222222-2222-4222-8222-222222222222",
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "enabled": false,
+        "disabledReason": "completed",
+        "trigger": {
+          "kind": "once",
+          "at": "2026-09-29T00:00:00.000Z"
+        },
+        "overlap": "skip",
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "lastOccurrenceAt": "2026-09-29T00:00:00.000Z",
+        "lastTaskId": "33333333-3333-4333-8333-333333333333",
+        "lastError": null,
+        "consecutiveFailures": 0,
+        "skippedCount": 0,
+        "nextRunAt": null
+      }
+    },
+    {
+      "name": "missing field",
+      "valid": false,
+      "code": "invalid_shape",
+      "value": {
+        "schemaVersion": 1,
+        "scheduleId": "22222222-2222-4222-8222-222222222222",
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "enabled": true,
+        "disabledReason": null,
+        "trigger": {
+          "kind": "interval",
+          "everyMs": 60000,
+          "anchor": "2026-09-29T00:00:00.000Z"
+        },
+        "overlap": "skip",
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "lastOccurrenceAt": null,
+        "lastTaskId": null,
+        "lastError": null,
+        "consecutiveFailures": 0,
+        "nextRunAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "unknown field",
+      "valid": false,
+      "code": "unknown_field",
+      "value": {
+        "schemaVersion": 1,
+        "scheduleId": "22222222-2222-4222-8222-222222222222",
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "enabled": true,
+        "disabledReason": null,
+        "trigger": {
+          "kind": "interval",
+          "everyMs": 60000,
+          "anchor": "2026-09-29T00:00:00.000Z"
+        },
+        "overlap": "skip",
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "lastOccurrenceAt": null,
+        "lastTaskId": null,
+        "lastError": null,
+        "consecutiveFailures": 0,
+        "skippedCount": 0,
+        "nextRunAt": "2026-09-29T00:00:00.000Z",
+        "extra": 1
+      }
+    },
+    {
+      "name": "schema version",
+      "valid": false,
+      "code": "unsupported_schema",
+      "value": {
+        "schemaVersion": 2,
+        "scheduleId": "22222222-2222-4222-8222-222222222222",
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "enabled": true,
+        "disabledReason": null,
+        "trigger": {
+          "kind": "interval",
+          "everyMs": 60000,
+          "anchor": "2026-09-29T00:00:00.000Z"
+        },
+        "overlap": "skip",
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "lastOccurrenceAt": null,
+        "lastTaskId": null,
+        "lastError": null,
+        "consecutiveFailures": 0,
+        "skippedCount": 0,
+        "nextRunAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "negative failures",
+      "valid": false,
+      "code": "invalid_shape",
+      "value": {
+        "schemaVersion": 1,
+        "scheduleId": "22222222-2222-4222-8222-222222222222",
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "enabled": true,
+        "disabledReason": null,
+        "trigger": {
+          "kind": "interval",
+          "everyMs": 60000,
+          "anchor": "2026-09-29T00:00:00.000Z"
+        },
+        "overlap": "skip",
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "lastOccurrenceAt": null,
+        "lastTaskId": null,
+        "lastError": null,
+        "consecutiveFailures": -1,
+        "skippedCount": 0,
+        "nextRunAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "lastError too long",
+      "valid": false,
+      "code": "invalid_shape",
+      "value": {
+        "schemaVersion": 1,
+        "scheduleId": "22222222-2222-4222-8222-222222222222",
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "enabled": true,
+        "disabledReason": null,
+        "trigger": {
+          "kind": "interval",
+          "everyMs": 60000,
+          "anchor": "2026-09-29T00:00:00.000Z"
+        },
+        "overlap": "skip",
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "lastOccurrenceAt": null,
+        "lastTaskId": null,
+        "lastError": "",
+        "consecutiveFailures": 0,
+        "skippedCount": 0,
+        "nextRunAt": "2026-09-29T00:00:00.000Z"
+      },
+      "pad": {
+        "path": "lastError",
+        "char": "x",
+        "length": 501
+      }
+    },
+    {
+      "name": "scheduleId not uuid",
+      "valid": false,
+      "code": "invalid_schedule_id",
+      "value": {
+        "schemaVersion": 1,
+        "scheduleId": "s",
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "enabled": true,
+        "disabledReason": null,
+        "trigger": {
+          "kind": "interval",
+          "everyMs": 60000,
+          "anchor": "2026-09-29T00:00:00.000Z"
+        },
+        "overlap": "skip",
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "lastOccurrenceAt": null,
+        "lastTaskId": null,
+        "lastError": null,
+        "consecutiveFailures": 0,
+        "skippedCount": 0,
+        "nextRunAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "nextRunAt bad",
+      "valid": false,
+      "code": "invalid_time",
+      "value": {
+        "schemaVersion": 1,
+        "scheduleId": "22222222-2222-4222-8222-222222222222",
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "enabled": true,
+        "disabledReason": null,
+        "trigger": {
+          "kind": "interval",
+          "everyMs": 60000,
+          "anchor": "2026-09-29T00:00:00.000Z"
+        },
+        "overlap": "skip",
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "lastOccurrenceAt": null,
+        "lastTaskId": null,
+        "lastError": null,
+        "consecutiveFailures": 0,
+        "skippedCount": 0,
+        "nextRunAt": "soon"
+      }
+    }
+  ]
+}

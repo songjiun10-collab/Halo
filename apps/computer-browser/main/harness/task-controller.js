@@ -483,6 +483,10 @@ class TaskController {
     const op = (async () => {
       const result = await this._dispatchApproved(descriptor, action, epoch, { durable });
       if (this._stopHappenedSince(epoch)) return { stale: true, result };
+      if (result.status === "uncertain") {
+        await this._pauseWith("execution_uncertain");
+        return { stale: false, result };
+      }
       if (this._routineRunner && result.status !== "not_dispatched") {
         const binding = this._routineRunner.getCurrentStep?.();
         if (!binding) {
@@ -1046,6 +1050,10 @@ class TaskController {
         }
 
         if (validated.kind === "child_plan") {
+          if (this._store.taskProfile?.capability?.id !== "multi_agent") {
+            await this._pauseWith("child_plan_not_authorized");
+            break;
+          }
           if (!this._onChildPlan) {
             // No parent-level delegation handler wired on this controller --
             // never silently pretend to have spawned anything; give the
@@ -1316,7 +1324,12 @@ class TaskController {
       const documentEpoch = this._lastObservation ? this._lastObservation.documentEpoch : null;
       result = await this._browser.execute(action, { signal: undefined, documentEpoch });
     } catch {
-      result = { status: "failed", errorCode: "execute_threw" };
+      // A rejected/timeout response cannot prove that the remote or local
+      // browser did not apply the action. Keep action_started open so reload
+      // derives execution_uncertain and requires explicit human confirmation
+      // instead of making an unsafe retry look like an ordinary failure.
+      this._budgets.actionsUsed += 1;
+      return { status: "uncertain", errorCode: "execute_threw", actionId, action, descriptor };
     }
     // Count every committed execution regardless of whether ownership
     // changed (resume -> takeover) while it was in flight: action_started,

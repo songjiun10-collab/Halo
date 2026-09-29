@@ -1,0 +1,533 @@
+{
+  "kind": "goal_spec",
+  "cases": [
+    {
+      "name": "minimal",
+      "valid": true,
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "with trigger",
+      "valid": true,
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "trigger": {
+          "scheduleId": "22222222-2222-4222-8222-222222222222",
+          "occurrenceAt": "2026-09-29T00:00:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "with amendment",
+      "valid": true,
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 2,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [
+          {
+            "id": "A1",
+            "text": "Also skip ads",
+            "at": "2026-09-29T00:00:00.000Z",
+            "supersedesConstraintIds": [],
+            "authority": "user"
+          }
+        ],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "default user criterion",
+      "valid": true,
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "done",
+            "required": true,
+            "verification": "user"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "unknown field",
+      "valid": false,
+      "code": "unknown_field",
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "extra": 1
+      }
+    },
+    {
+      "name": "wrong schema version",
+      "valid": false,
+      "code": "unknown_version",
+      "value": {
+        "schemaVersion": 2,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "taskId not uuid",
+      "valid": false,
+      "code": "invalid_id",
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "not-a-uuid",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "goalVersion zero",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 0,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "empty criteria",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "criterion bad verification",
+      "valid": false,
+      "code": "unknown_enum",
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "model"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "amendment authority not user",
+      "valid": false,
+      "code": "unknown_enum",
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [
+          {
+            "id": "A1",
+            "text": "x",
+            "at": "2026-09-29T00:00:00.000Z",
+            "supersedesConstraintIds": [],
+            "authority": "page"
+          }
+        ],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "trigger extra key",
+      "valid": false,
+      "code": "unknown_field",
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "trigger": {
+          "scheduleId": "22222222-2222-4222-8222-222222222222",
+          "occurrenceAt": "2026-09-29T00:00:00.000Z",
+          "x": 1
+        }
+      }
+    },
+    {
+      "name": "trigger bad schedule id",
+      "valid": false,
+      "code": "invalid_id",
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "trigger": {
+          "scheduleId": "s1",
+          "occurrenceAt": "2026-09-29T00:00:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "limits missing",
+      "valid": false,
+      "code": "invalid_shape",
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "createdAt": "2026-09-29T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "createdAt not a date",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "schemaVersion": 1,
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "originalRequest": "Open the inbox and read the first message",
+        "amendments": [],
+        "constraints": [
+          {
+            "id": "K1",
+            "text": "Do not send email"
+          }
+        ],
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "The first message is visible",
+            "required": true,
+            "verification": "host"
+          }
+        ],
+        "limits": {
+          "maxActions": 100,
+          "maxPlannerCalls": 50,
+          "maxActiveMs": 600000
+        },
+        "createdAt": "yesterday"
+      }
+    },
+    {
+      "name": "not an object",
+      "valid": false,
+      "code": "invalid_shape",
+      "value": [
+        {
+          "schemaVersion": 1,
+          "taskId": "11111111-1111-4111-8111-111111111111",
+          "goalVersion": 1,
+          "originalRequest": "Open the inbox and read the first message",
+          "amendments": [],
+          "constraints": [
+            {
+              "id": "K1",
+              "text": "Do not send email"
+            }
+          ],
+          "criteria": [
+            {
+              "id": "C1",
+              "text": "The first message is visible",
+              "required": true,
+              "verification": "host"
+            }
+          ],
+          "limits": {
+            "maxActions": 100,
+            "maxPlannerCalls": 50,
+            "maxActiveMs": 600000
+          },
+          "createdAt": "2026-09-29T00:00:00.000Z"
+        }
+      ]
+    }
+  ]
+}

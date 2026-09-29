@@ -11,6 +11,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -86,7 +87,16 @@ test("runRoutine pins the saved revision and uses it without creating a planner 
   assert.equal(entry.store.lastCheckpoint.payload.routineRun.routineId, saved.routineId);
   assert.equal(entry.store.lastCheckpoint.payload.routineRun.revision, saved.revision);
   assert.equal(entry.store.lastCheckpoint.payload.routineRun.digest, saved.digest);
-  assert.equal((await host.getTaskDetail(taskId)).harnessProfile, "short");
+  const detail = await host.getTaskDetail(taskId);
+  assert.equal(detail.harnessProfile, "short");
+  assert.equal(detail.taskProfile.capability.id, "routine");
+  assert.equal(detail.taskProfile.selection.capability.source, "routine_entrypoint");
+
+  const longRun = await host.runRoutine(saved.routineId, saved.revision, { requestedDurationProfile: "long" });
+  const longDetail = await host.getTaskDetail(longRun.taskId);
+  assert.equal(longDetail.taskProfile.capability.id, "routine");
+  assert.equal(longDetail.taskProfile.duration.id, "long");
+  assert.equal(longDetail.taskProfile.selection.duration.source, "explicit_user_choice");
 });
 
 test("runRoutine rejects invalid revisions before creating task or browser resources", async () => {
@@ -100,6 +110,30 @@ test("runRoutine rejects invalid revisions before creating task or browser resou
   await assert.rejects(() => host.runRoutine(saved.routineId, 999));
   assert.equal(browsers, 0);
   assert.deepEqual(await host.listTasks(), []);
+});
+
+test("an incomplete profile store is isolated from TaskHost queue recovery", async () => {
+  const storageRoot = await mkTempRoot();
+  const originalOpen = TaskStore.prototype._openJournalFh;
+  TaskStore.prototype._openJournalFh = async function openWithProfileFailure() {
+    const fh = await originalOpen.call(this);
+    if (this._nextSeq === 2) fh.appendFile = async () => { throw new Error("simulated profile append failure"); };
+    return fh;
+  };
+  try {
+    await assert.rejects(() => TaskStore.create({ originalRequest: "partial profile" }, {
+      storageRoot,
+      resolvedProfile: require("../shared/task-profile-router").resolveTaskProfile({ goalInput: { originalRequest: "partial profile" } }),
+    }), { code: "journal_write_failed" });
+  } finally {
+    TaskStore.prototype._openJournalFh = originalOpen;
+  }
+
+  const host = makeHost(storageRoot);
+  assert.deepEqual(await host.listTasks(), []);
+  const fresh = await host.createTask({ originalRequest: "valid new task" });
+  assert.equal(fresh.snapshot.state, "awaiting_verification");
+  assert.deepEqual((await host.listTasks()).map((task) => task.taskId), [fresh.taskId]);
 });
 
 test("routine recovery rejects a wrong step digest before browser or planner creation", async () => {
@@ -173,6 +207,49 @@ test("createTask() creates and auto-starts a brand-new task", async () => {
   // this lands on awaiting_verification, not completed -- proves start()
   // actually ran the loop rather than leaving the task idle.
   assert.equal(snapshot.state, "awaiting_verification");
+});
+
+test("createTask resolves and durably records the profile before browser or planner construction", async () => {
+  const storageRoot = await mkTempRoot();
+  const observedAtConstruction = [];
+  const host = makeHost(storageRoot, {
+    makeBrowser: (taskId) => {
+      const events = fsSync.readFileSync(path.join(storageRoot, "tasks", taskId, "events.jsonl"), "utf8")
+        .trimEnd().split("\n").map((line) => JSON.parse(line));
+      observedAtConstruction.push(events.map((event) => event.type));
+      assert.deepEqual(events.slice(0, 2).map((event) => event.type), ["goal_created", "task_profile_selected"]);
+      assert.equal(events[1].payload.duration.id, "short");
+      return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) };
+    },
+  });
+  const { taskId } = await host.createTask(
+    { originalRequest: "quick inspect this page" },
+    { requestedCapabilityProfile: "browser" },
+  );
+  const detail = await host.getTaskDetail(taskId);
+  assert.equal(detail.harnessProfile, "short");
+  assert.equal(detail.taskProfile.capability.id, "browser");
+  assert.equal(detail.taskProfile.selection.capability.source, "explicit_user_choice");
+  assert.equal(observedAtConstruction.length, 1);
+});
+
+test("unavailable or invalid routing creates no task store and constructs no resources", async () => {
+  const storageRoot = await mkTempRoot();
+  let resources = 0;
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => { resources += 1; throw new Error("unexpected browser construction"); },
+    makePlanner: () => { resources += 1; throw new Error("unexpected planner construction"); },
+  });
+  await assert.rejects(() => host.createTask(
+    { originalRequest: "inspect the page" },
+    { requestedCapabilityProfile: "research" },
+  ), { code: "capability_unavailable" });
+  await assert.rejects(() => host.createTask(
+    { originalRequest: "inspect the page" },
+    { requestedDurationProfile: "Long" },
+  ), { code: "invalid_selector" });
+  assert.deepEqual(await TaskStore.listTaskIds({ storageRoot }), []);
+  assert.equal(resources, 0);
 });
 
 test("listTasks() lists both attached and never-attached (saved-only) tasks", async () => {
@@ -523,11 +600,13 @@ test("getTaskDetail() works for both an active task and a saved-only one", async
   assert.equal(activeDetail.active, true);
   assert.equal(activeDetail.goal.originalRequest, "active task");
   assert.equal(activeDetail.harnessProfile, "middle");
+  assert.equal(activeDetail.taskProfile.duration.id, "middle");
 
   const savedDetail = await host.getTaskDetail(savedOnly.taskId);
   assert.equal(savedDetail.active, false);
   assert.equal(savedDetail.goal.originalRequest, "saved only");
   assert.equal(savedDetail.harnessProfile, "middle");
+  assert.equal(savedDetail.taskProfile, null);
 });
 
 test("queued task does not create browser resources until the preceding task stops", async () => {
@@ -571,6 +650,28 @@ test("a queued plain task actually runs to completion after the preceding task s
   await host.stopTask(first.taskId);
   const finished = await waitForState(host, second.taskId, ["awaiting_verification", "completed"]);
   assert.notEqual(finished.pauseReason, "queue_start_failed");
+});
+
+test("a queued task still starts while listTasks() is polled without pause (peek/attach lock race)", async () => {
+  for (let round = 0; round < 8; round += 1) {
+    const storageRoot = await mkTempRoot();
+    const host = makeHost(storageRoot);
+    const first = await host.createTask({ originalRequest: "a" });
+    const second = await host.createTask({ originalRequest: "b" });
+    assert.equal(second.snapshot.state, "queued");
+    let polling = true;
+    const pollers = Array.from({ length: 4 }, async () => {
+      while (polling) await host.listTasks();
+    });
+    await host.stopTask(first.taskId);
+    try {
+      const finished = await waitForState(host, second.taskId, ["awaiting_verification", "completed"], 10000);
+      assert.notEqual(finished.pauseReason, "queue_start_failed");
+    } finally {
+      polling = false;
+      await Promise.all(pollers);
+    }
+  }
 });
 
 test("a queued routine task actually runs to awaiting_verification after the preceding task stops", async () => {
@@ -817,7 +918,7 @@ test("the trusted host audits a memory override and freezes it for the existing 
   await host.updateHostSettings({ memoryPolicy: "user_override" });
   const audit = (await settingsStore.listMemoryPolicyAudit())[0];
   assert.equal(audit.actor, "user");
-  const parent = await host.createTask({ originalRequest: "keep my selected policy" });
+  const parent = await host.createTask({ originalRequest: "keep my selected policy" }, { requestedCapabilityProfile: "multi_agent" });
   assert.equal(parent.snapshot.state, "awaiting_verification", "the override also bypasses the HALO pressure pause for this run");
   assert.equal(host._resourceAdmission.getSnapshot().leases[0].mode, "user_override");
 
@@ -971,7 +1072,7 @@ test("resumeSavedTask() re-attaches fresh browser/planner instances after a memo
 test("listChildren() returns [] for a task with no child plan, and reflects an accepted plan via the coordinator", async () => {
   const storageRoot = await mkTempRoot();
   const host = makeHost(storageRoot);
-  const { taskId } = await host.createTask({ originalRequest: "parent goal" });
+  const { taskId } = await host.createTask({ originalRequest: "parent goal" }, { requestedCapabilityProfile: "multi_agent" });
 
   assert.deepEqual(await host.listChildren(taskId), []);
 
@@ -999,7 +1100,7 @@ test("listChildren() returns [] for a task with no child plan, and reflects an a
 test("a child's taskId is absent from listTasks() and rejected by resumeSavedTask()", async () => {
   const storageRoot = await mkTempRoot();
   const host = makeHost(storageRoot);
-  const { taskId: parentTaskId } = await host.createTask({ originalRequest: "parent goal" });
+  const { taskId: parentTaskId } = await host.createTask({ originalRequest: "parent goal" }, { requestedCapabilityProfile: "multi_agent" });
   const { store } = host._require(parentTaskId);
 
   const { childIds } = await host._childCoordinator.acceptParentPlan(

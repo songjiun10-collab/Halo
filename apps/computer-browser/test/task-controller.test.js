@@ -10,6 +10,7 @@ const { TaskStore } = require("../main/harness/task-store");
 const { TaskController, TaskControllerError } = require("../main/harness/task-controller");
 const { BrowserAdapter } = require("../main/harness/browser-adapter");
 const { RoutineRunner } = require("../main/harness/routine-runner");
+const { resolveTaskProfile } = require("../shared/task-profile-router");
 
 async function mkTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "halo-task-controller-"));
@@ -18,6 +19,13 @@ async function mkTempRoot() {
 async function makeStore(goalInput) {
   const storageRoot = await mkTempRoot();
   const store = await TaskStore.create(goalInput, { storageRoot });
+  return { store, storageRoot };
+}
+
+async function makeProfiledStore(goalInput, capability = "multi_agent") {
+  const storageRoot = await mkTempRoot();
+  const resolvedProfile = resolveTaskProfile({ goalInput, requestedCapabilityProfile: capability });
+  const store = await TaskStore.create(goalInput, { storageRoot, resolvedProfile });
   return { store, storageRoot };
 }
 
@@ -361,6 +369,43 @@ test("a task recovered as execution_uncertain requires an explicit confirmed res
   assert.equal(executeCalls, 0);
   assert.ok(plannerCalls >= 1);
   await reloaded.close();
+});
+
+test("an execute error after dispatch remains execution_uncertain instead of recording a definitive failure", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "submit once" }, { storageRoot });
+  let externalEffects = 0;
+  const controller = new TaskController({
+    store,
+    permissionMode: "full",
+    planner: { next: async (context) => ({
+      taskId: context.taskId,
+      goalVersion: context.goalVersion,
+      basedOnObservationId: context.observation.id,
+      criterionIds: [],
+      kind: "actions",
+      actions: [{ type: "click", elementId: "submit" }],
+    }) },
+    browser: {
+      observe: async () => ({ id: "dispatch-observation" }),
+      execute: async () => { externalEffects += 1; throw Object.assign(new Error("reply lost"), { code: "timeout" }); },
+    },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+
+  const snapshot = await controller.start();
+  assert.equal(externalEffects, 1);
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "execution_uncertain");
+  const events = await TaskStore.readEvents(store.taskId, { storageRoot });
+  assert.equal(events.filter((event) => event.type === "action_started").length, 1);
+  assert.equal(events.filter((event) => event.type === "action_outcome").length, 0);
+  await store.close();
+
+  const recovered = await TaskStore.load(store.taskId, { storageRoot });
+  assert.equal(recovered.recoveryReason, "execution_uncertain");
+  await recovered.close();
 });
 
 test("a criterion verified before an amend() does not silently satisfy the amended goal", async () => {
@@ -1398,7 +1443,7 @@ function makeChildPlanProposal(context) {
 }
 
 test("onChildPlan hook: a child_plan proposal is delegated to the host, and the host rejecting it pauses the parent with child_plan_failed", async () => {
-  const { store } = await makeStore({ originalRequest: "부모 작업" });
+  const { store } = await makeProfiledStore({ originalRequest: "부모 작업" });
   let onChildPlanCalls = 0;
   let dispatched = 0;
   const controller = new TaskController({
@@ -1427,7 +1472,25 @@ test("onChildPlan hook: a child_plan proposal is delegated to the host, and the 
   await store.close();
 });
 
-test("onChildPlan hook: without one configured, a child_plan proposal is skipped and the parent keeps looping on a fresh observation instead of silently spawning anything", async () => {
+test("onChildPlan hook is not invoked for a non-Multi-agent task profile", async () => {
+  const { store } = await makeProfiledStore({ originalRequest: "normal browser task" }, "browser");
+  let onChildPlanCalls = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => makeChildPlanProposal(context) },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    onChildPlan: async () => { onChildPlanCalls += 1; },
+  });
+  const snapshot = await controller.start();
+  assert.equal(onChildPlanCalls, 0);
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "child_plan_not_authorized");
+  await store.close();
+});
+
+test("unprofiled parent cannot accept child_plan even when no host hook is configured", async () => {
   const { store } = await makeStore({ originalRequest: "부모 작업" });
   let plannerCalls = 0;
   const controller = new TaskController({
@@ -1450,8 +1513,9 @@ test("onChildPlan hook: without one configured, a child_plan proposal is skipped
     // children, not merely be told not to.
   });
   const snapshot = await controller.start();
-  assert.equal(plannerCalls, 2, "the first child_plan proposal must be skipped, giving the planner a second turn");
-  assert.equal(snapshot.state, "awaiting_verification");
+  assert.equal(plannerCalls, 1);
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "child_plan_not_authorized");
   await store.close();
 });
 

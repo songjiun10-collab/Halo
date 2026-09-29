@@ -161,6 +161,18 @@ test("harness channels dispatch to taskHost for a trusted sender", async () => {
   );
 });
 
+test("trusted createTask IPC forwards the optional host profile selectors unchanged", async () => {
+  const ipcMain = makeFakeIpcMain();
+  const win = makeFakeWin();
+  const taskHost = makeFakeTaskHost();
+  registerIpc(win, makeFakeControlApi(), { ipcMain, taskHost });
+
+  const goal = { originalRequest: "quickly inspect this page" };
+  const selectors = { requestedDurationProfile: "long", requestedCapabilityProfile: "browser" };
+  const result = await ipcMain._invoke("halo:createTask", trustedEvent(win), goal, selectors);
+  assert.deepEqual(result, { ok: "createTask", args: [goal, selectors] });
+});
+
 test("routine channels dispatch exactly five trusted host operations and reject untrusted senders", async () => {
   const ipcMain = makeFakeIpcMain();
   const win = makeFakeWin();

@@ -19,6 +19,7 @@ const { performance } = require("node:perf_hooks");
 
 const contracts = require("../../shared/harness-contracts");
 const routineContracts = require("../../shared/routine-contracts");
+const profileContracts = require("../../shared/task-profile-contracts");
 const MAX_EVENTS_PER_PAGE = 200;
 
 class TaskStoreError extends Error {
@@ -34,6 +35,12 @@ function wrapContractError(err) {
     return new TaskStoreError(err.code, err.message);
   }
   return err;
+}
+
+function freezeProfile(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) freezeProfile(child);
+  return Object.freeze(value);
 }
 
 function goalFileName(version) {
@@ -251,13 +258,14 @@ function assertRoutineEventBinding(recovery, payload, label) {
   }
 }
 
-async function streamJournalReplay(journalPath, checkpointSeq, pageOptions, checkpointRoutineRun = null) {
+async function streamJournalReplay(journalPath, checkpointSeq, pageOptions, checkpointRoutineRun = null, expectedTaskId = null) {
   let routineRecovery = makeRoutineRecovery(checkpointRoutineRun);
   let fh;
   try {
     fh = await fsp.open(journalPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   } catch (err) {
     if (err.code === "ENOENT") {
+      if (!pageOptions) throw new TaskStoreError("storage_corrupt", "task journal is missing");
       return { nextSeq: 1, bytesKept: 0, tornTailDropped: false, recentEvents: [], openActionId: null, routineRecovery };
     }
     throw err;
@@ -268,6 +276,9 @@ async function streamJournalReplay(journalPath, checkpointSeq, pageOptions, chec
   let openActionId = null;
   const recentEvents = [];
   const events = [];
+  let profileState = "unseen";
+  let profileGoalVersion = null;
+  let taskProfile;
   let residual = "";
   let tornTailDropped = false;
 
@@ -287,6 +298,33 @@ async function streamJournalReplay(journalPath, checkpointSeq, pageOptions, chec
     }
     if (parsed.seq !== lastSeq + 1) {
       throw new TaskStoreError("storage_corrupt", `journal seq out of order: expected ${lastSeq + 1}, got ${parsed.seq}`);
+    }
+    if (expectedTaskId && parsed.taskId !== expectedTaskId) {
+      throw new TaskStoreError("storage_corrupt", "journal event belongs to a different task");
+    }
+    if (lastSeq === 0 && parsed.type !== "goal_created") {
+      throw new TaskStoreError("storage_corrupt", "journal must begin with goal_created");
+    }
+    if (parsed.type === "goal_created" && parsed.seq === 1) {
+      profileState = parsed.payload.profileRequired === true ? "awaiting_profile" : "legacy";
+      profileGoalVersion = parsed.goalVersion;
+      if (profileState === "awaiting_profile" && parsed.goalVersion !== 1) {
+        throw new TaskStoreError("profile_corrupt", "initial profile-required goal must use goalVersion 1");
+      }
+    } else if (parsed.type === "task_profile_selected") {
+      if (profileState !== "awaiting_profile" || parsed.seq !== 2) {
+        throw new TaskStoreError("profile_corrupt", "task_profile_selected must appear exactly once immediately after a profile-required goal_created");
+      }
+      if (parsed.goalVersion !== profileGoalVersion) {
+        throw new TaskStoreError("profile_corrupt", "task_profile_selected goalVersion does not match goal_created");
+      }
+      if (parsed.taskId !== (expectedTaskId || pageOptions?.taskId || parsed.taskId)) {
+        throw new TaskStoreError("profile_corrupt", "task_profile_selected belongs to a different task");
+      }
+      profileState = "selected";
+      taskProfile = parsed.payload;
+    } else if (profileState === "awaiting_profile") {
+      throw new TaskStoreError("profile_corrupt", "profile-required task has an event before task_profile_selected");
     }
     if (parsed.type === "action_started") {
       if (routineRecovery?.blocked && parsed.seq > checkpointSeq) {
@@ -411,21 +449,28 @@ async function streamJournalReplay(journalPath, checkpointSeq, pageOptions, chec
     await fh.close();
   }
 
+  if (!pageOptions && lastSeq === 0) {
+    throw new TaskStoreError("storage_corrupt", "task journal has no complete goal_created event");
+  }
+  if (profileState === "awaiting_profile") {
+      throw new TaskStoreError("profile_incomplete", "profile-required task is missing its initial task_profile_selected event");
+  }
   if (routineRecovery && routineRecovery.pendingOutcome) routineRecovery.incomplete = true;
   if (routineRecovery) {
     delete routineRecovery.pendingActionId;
     delete routineRecovery.pendingOutcome;
   }
-  return { nextSeq: lastSeq + 1, bytesKept, tornTailDropped, recentEvents, openActionId, events, routineRecovery };
+  return { nextSeq: lastSeq + 1, bytesKept, tornTailDropped, recentEvents, openActionId, events, routineRecovery, taskProfile };
 }
 
 // Shared body of TaskStore.create()/createChild(): both already resolved a
 // safe, not-yet-existing directory for `id` (under tasks/ or under a
 // parent's children/); this just materializes a brand-new store there.
-async function createStoreInDir(taskDir, id, goalInput, storageRoot, onTiming) {
+async function createStoreInDir(taskDir, id, goalInput, storageRoot, onTiming, resolvedProfile = null) {
   await fsp.mkdir(taskDir, { recursive: false, mode: 0o700 });
   const lockPath = await acquireLock(taskDir);
 
+  let store = null;
   try {
     const goal = contracts.normalizeGoalSpec(goalInput, {
       taskId: id,
@@ -440,7 +485,7 @@ async function createStoreInDir(taskDir, id, goalInput, storageRoot, onTiming) {
     const journalPath = path.join(taskDir, "events.jsonl");
     await writeFileDurable(journalPath, "", 0o600);
 
-    const store = new TaskStore({
+    store = new TaskStore({
       taskId: id,
       storageRoot,
       taskDir,
@@ -452,11 +497,36 @@ async function createStoreInDir(taskDir, id, goalInput, storageRoot, onTiming) {
       onTiming,
     });
 
-    await store.append({ type: "goal_created", payload: { goalVersion: 1 }, goalVersion: 1 });
+    if (resolvedProfile) {
+      const profilePayload = profileContracts.validateTaskProfileSelectedPayload({
+        profileSchemaVersion: resolvedProfile.schemaVersion,
+        classifierVersion: resolvedProfile.classifierVersion,
+        ...(resolvedProfile.parentBinding ? { parentBinding: { ...resolvedProfile.parentBinding } } : {}),
+        duration: {
+          ...resolvedProfile.duration,
+          effectiveLimits: { ...goal.limits },
+        },
+        capability: {
+          ...resolvedProfile.capability,
+          dependencies: [...resolvedProfile.capability.dependencies],
+          adapters: resolvedProfile.capability.adapters.map((adapter) => ({ ...adapter })),
+        },
+        selection: {
+          duration: { ...resolvedProfile.selection.duration },
+          capability: { ...resolvedProfile.selection.capability },
+        },
+      });
+      await store.append({ type: "goal_created", payload: { goalVersion: 1, profileRequired: true }, goalVersion: 1 });
+      await store.append({ type: "task_profile_selected", payload: profilePayload, goalVersion: 1 });
+      store.taskProfile = freezeProfile(profilePayload);
+    } else {
+      await store.append({ type: "goal_created", payload: { goalVersion: 1 }, goalVersion: 1 });
+    }
     store.recoveryReason = "created";
     return store;
   } catch (err) {
-    await releaseLock(lockPath);
+    if (store) await store.close().catch(() => {});
+    else await releaseLock(lockPath);
     throw wrapContractError(err);
   }
 }
@@ -506,12 +576,23 @@ async function loadStoreFromDir(taskDir, taskId, storageRoot) {
     const checkpointSeq = checkpoint ? checkpoint.seq : 0;
 
     const journalPath = path.join(taskDir, "events.jsonl");
-    const { nextSeq, bytesKept, tornTailDropped, recentEvents, openActionId, routineRecovery } = await streamJournalReplay(
+    const { nextSeq, bytesKept, tornTailDropped, recentEvents, openActionId, routineRecovery, taskProfile } = await streamJournalReplay(
       journalPath,
       checkpointSeq,
       undefined,
       checkpoint?.payload?.routineRun || null,
+      taskId,
     );
+
+    if (taskProfile) {
+      const initialGoalPath = path.join(taskDir, goalFileName(1));
+      let initialGoal;
+      try { initialGoal = contracts.validateGoalSpec(JSON.parse(await readFileNoFollow(initialGoalPath))); }
+      catch (err) { throw new TaskStoreError("profile_corrupt", `initial goal required for profile validation is invalid: ${err.message}`); }
+      if (JSON.stringify(taskProfile.duration.effectiveLimits) !== JSON.stringify(initialGoal.limits)) {
+        throw new TaskStoreError("profile_corrupt", "profile effective limits differ from the initial normalized GoalSpec");
+      }
+    }
 
     if (tornTailDropped) {
       // Truncate the journal file to drop the incomplete trailing write so
@@ -538,6 +619,7 @@ async function loadStoreFromDir(taskDir, taskId, storageRoot) {
     store.lastCheckpoint = checkpoint;
     store.eventsSinceCheckpoint = recentEvents;
     store.routineRecovery = routineRecovery;
+    store.taskProfile = freezeProfile(taskProfile);
     store.recoveryReason = openActionId !== null ? "execution_uncertain" : "recovered";
     return store;
   } catch (err) {
@@ -558,13 +640,14 @@ function eventCursor(options) {
 }
 
 class TaskStore {
-  constructor({ taskId, storageRoot, taskDir, lockPath, journalPath, goal, nextSeq, totalBytes, onTiming }) {
+  constructor({ taskId, storageRoot, taskDir, lockPath, journalPath, goal, nextSeq, totalBytes, onTiming, taskProfile }) {
     this.taskId = taskId;
     this._storageRoot = storageRoot;
     this._taskDir = taskDir;
     this._lockPath = lockPath;
     this._journalPath = journalPath;
     this._goal = goal;
+    this.taskProfile = freezeProfile(taskProfile);
     this._nextSeq = nextSeq;
     this._totalBytes = totalBytes;
     this._onTiming = typeof onTiming === "function" ? onTiming : null;
@@ -936,10 +1019,14 @@ class TaskStore {
     if (this._closed) throw new TaskStoreError("closed", "this TaskStore instance is closed");
   }
 
-  static async create(goalInput, { storageRoot, taskId, onTiming } = {}) {
+  static async create(goalInput, { storageRoot, taskId, onTiming, resolvedProfile = null } = {}) {
     if (!storageRoot) throw new TaskStoreError("invalid_field", "storageRoot is required");
     if (onTiming !== undefined && typeof onTiming !== "function") {
       throw new TaskStoreError("invalid_field", "onTiming must be a function when provided");
+    }
+    if (resolvedProfile !== null) {
+      try { profileContracts.validateResolvedTaskProfile(resolvedProfile); }
+      catch (err) { throw wrapContractError(err); }
     }
     const id = taskId || crypto.randomUUID();
     if (!contracts.UUID_RE.test(id)) throw new TaskStoreError("invalid_task_id", "taskId must be a UUID");
@@ -948,7 +1035,7 @@ class TaskStore {
     await fsp.mkdir(root, { recursive: true, mode: 0o700 });
     const { tasksRoot, taskDir } = await resolveTaskDir(root, id);
     await fsp.mkdir(tasksRoot, { recursive: true, mode: 0o700 }).catch(() => {});
-    return createStoreInDir(taskDir, id, goalInput, root, onTiming);
+    return createStoreInDir(taskDir, id, goalInput, root, onTiming, resolvedProfile);
   }
 
   // Multi-agent background runtime plan, Task 3: creates a CHILD task's own
@@ -957,14 +1044,21 @@ class TaskStore {
   // TaskStore afterwards (same append/checkpoint/close/getEvents); the only
   // difference is where it lives on disk and that ChildAgentCoordinator, not
   // TaskHost, owns its lifecycle.
-  static async createChild(goalInput, { storageRoot, parentTaskId, childId } = {}) {
+  static async createChild(goalInput, { storageRoot, parentTaskId, childId, resolvedProfile = null } = {}) {
     if (!storageRoot) throw new TaskStoreError("invalid_field", "storageRoot is required");
+    if (resolvedProfile !== null) {
+      try { profileContracts.validateResolvedTaskProfile(resolvedProfile); }
+      catch (err) { throw wrapContractError(err); }
+      if (resolvedProfile.parentBinding?.parentTaskId !== parentTaskId) {
+        throw new TaskStoreError("profile_binding_mismatch", "child profile parentTaskId does not match its parent directory");
+      }
+    }
     const { taskDir: parentTaskDir } = await resolveTaskDir(path.resolve(storageRoot), parentTaskId);
     const id = childId || crypto.randomUUID();
     if (!contracts.UUID_RE.test(id)) throw new TaskStoreError("invalid_task_id", "childId must be a UUID");
     const { childrenRoot, childDir } = await resolveChildDir(parentTaskDir, id);
     await fsp.mkdir(childrenRoot, { recursive: true, mode: 0o700 }).catch(() => {});
-    return createStoreInDir(childDir, id, goalInput, path.resolve(storageRoot));
+    return createStoreInDir(childDir, id, goalInput, path.resolve(storageRoot), undefined, resolvedProfile);
   }
 
   // listTasks() (Task 5's task-host.js) needs to enumerate saved tasks

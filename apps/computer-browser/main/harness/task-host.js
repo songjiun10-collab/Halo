@@ -23,17 +23,22 @@ const { TaskStore } = require("./task-store");
 const { TaskController, TaskControllerError } = require("./task-controller");
 const { TaskQueue, TaskQueueError } = require("./task-queue");
 const { ResourceAdmission } = require("./resource-admission");
+const { CoordinatorCore } = require("./coordinator-core");
 const { RoutineStore } = require("./routine-store");
 const { RoutineRunner } = require("./routine-runner");
 const { ChildAgentCoordinator } = require("./child-agent-coordinator");
-const { isPlainObject } = require("../../shared/harness-contracts");
+const { Scheduler } = require("./scheduler");
+const { ScheduleStore } = require("./schedule-store");
+const { isPlainObject, validateGoalTrigger } = require("../../shared/harness-contracts");
 const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
+const { resolveTaskProfile } = require("../../shared/task-profile-router");
+
+const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile"]);
 
 // Two complete Electron task surfaces (visible + fixed hidden renderer) were
 // measured at a 590,888,960-byte increment with 50ms polling; reserve the
 // rounded-up per-task half plus margin. Planner subtree reserve is added
 // dynamically from the measured live worker high-water mark below.
-const MEASURED_BROWSER_TASK_RESERVE_BYTES = 370_000_000;
 
 class TaskHostError extends Error {
   constructor(code, message) {
@@ -65,6 +70,7 @@ class TaskHost {
     settingsStore,
     credentialVault,
     routineReadOnlyBatching = true,
+    scheduler: schedulerOptions = {},
   } = {}) {
     if (!storageRoot) throw new TaskHostError("invalid_config", "storageRoot is required");
     if (typeof makeBrowser !== "function") throw new TaskHostError("invalid_config", "makeBrowser is required");
@@ -97,12 +103,17 @@ class TaskHost {
     this._parallelTaskReserveBytes = parallelTaskReserveBytes;
     this._queue = new TaskQueue({ storageRoot });
     this._queueReady = null;
-    this._queueRecoveredBlocked = false;
     this._queueTransition = Promise.resolve();
     this._listeners = new Set();
     // taskId -> {store, controller, browser, planner}
     this._active = new Map();
     this._pendingAttachments = new Set();
+    this._storeGate = Promise.resolve();
+    this._triggeredRuns = new Map();
+    this._schedulerOptions = schedulerOptions;
+    this._scheduleStore = null;
+    this._scheduler = null;
+    this._schedulerStarting = null;
     this._closePromise = null;
     // All top-level reservations use the same ledger as child agents. Built
     // lazily (see
@@ -110,10 +121,19 @@ class TaskHost {
     // TaskController's own pressure check (no canAdmitTask) never trips
     // ResourceAdmission's stricter constructor requirements.
     this._resourceAdmission = null;
-    // taskId -> leaseId. A lease is required before a task builds resources.
-    this._taskLeases = new Map();
     this._runMemoryPolicies = new Map();
-    this._admissionChain = Promise.resolve();
+    // Admission (parallel cap, memory reserve, lease ledger) lives behind the
+    // coordinator seam; a lease is required before a task builds resources.
+    this._coordinator = new CoordinatorCore({
+      queue: this._queue,
+      ensureQueue: () => this._ensureQueue(),
+      getResourceAdmission: () => this._ensureResourceAdmission(),
+      getRunMemoryPolicy: (taskId) => this._getRunMemoryPolicy(taskId),
+      getExternalProcessHighWaterBytes: (kind) => this._memoryMonitor?.getExternalProcessHighWaterBytes?.(kind),
+      executionMode: this._executionMode,
+      maxParallelTasks: this._maxParallelTasks,
+      parallelTaskReserveBytes: this._parallelTaskReserveBytes,
+    });
     // Task 3: parent<->child linkage/lifecycle authority, shared across every
     // task this host manages (a child's own coordination never depends on
     // which task happens to be active in this._active).
@@ -192,16 +212,16 @@ class TaskHost {
     return this._resourceAdmission;
   }
 
-  async _releaseTaskLease(taskId) {
-    const leaseId = this._taskLeases.get(taskId);
-    if (!leaseId) return;
-    await this._resourceAdmission?.release(leaseId);
-    this._taskLeases.delete(taskId);
-  }
-
   _attach(store, routine = null) {
-    if (this._ensureResourceAdmission() && !this._taskLeases.has(store.taskId)) {
+    if (this._ensureResourceAdmission() && !this._coordinator.hasLease(store.taskId)) {
       throw new TaskHostError("memory_lease_required", "top-level task requires a memory lease before creating resources");
+    }
+    const taskProfile = store.taskProfile ?? null;
+    if (taskProfile?.capability.id === "routine" && !routine) {
+      throw new TaskHostError("profile_routine_pin_missing", "profile-selected Routine task has no validated pinned definition");
+    }
+    if (taskProfile && (taskProfile.capability.id === "routine") !== !!routine) {
+      throw new TaskHostError("profile_capability_mismatch", "task profile capability does not match its pinned execution source");
     }
     const runPolicy = this._runMemoryPolicies.get(store.taskId);
     if (!runPolicy) throw new TaskHostError("memory_policy_missing", "top-level task policy must be captured before attachment");
@@ -221,7 +241,7 @@ class TaskHost {
     // TaskHost is the sole authority that decides harnessProfile, and passes
     // it in rather than letting the controller (or the task's own text)
     // infer it independently.
-    const harnessProfile = selectHarnessProfile({ isRoutine: !!routine });
+    const harnessProfile = taskProfile?.duration.id || selectHarnessProfile({ isRoutine: !!routine });
     const controller = new TaskController({
       store,
       planner,
@@ -246,7 +266,7 @@ class TaskHost {
       recordMessagesConsumed: (ids, plannerCall) => this._childCoordinator.recordMessagesConsumed(store.taskId, ids, plannerCall),
       ...(routine ? { routineRunner: routine.runner, routineRun: routine.run } : {}),
     });
-    const entry = { store, controller, browser, planner, snapshot: controller.getSnapshot() };
+    const entry = { store, controller, browser, planner, routinePinned: !!routine, snapshot: controller.getSnapshot() };
     this._active.set(store.taskId, entry);
     entry.unsubscribeController = controller.onChange((snapshot) => {
       entry.snapshot = snapshot;
@@ -291,8 +311,29 @@ class TaskHost {
     return entry;
   }
 
-  createTask(goalInput) {
-    return this._createNewTask(goalInput);
+  createTask(goalInput, selectors = {}) {
+    return this._createTaskWithProfile(goalInput, selectors);
+  }
+
+  _createTaskWithProfile(goalInput, selectors = {}) {
+    this._assertOpen();
+    if (!isPlainObject(selectors) || Object.keys(selectors).some((key) => !TASK_PROFILE_SELECTOR_FIELDS.includes(key))) {
+      return Promise.reject(new TaskHostError("invalid_selector", "task profile selectors contain unknown fields"));
+    }
+    let stableGoalInput;
+    try { stableGoalInput = structuredClone(goalInput); }
+    catch (error) { return Promise.reject(new TaskHostError("invalid_goal", `goalInput cannot be snapshotted: ${error.message}`)); }
+    let resolvedProfile;
+    try {
+      resolvedProfile = resolveTaskProfile({
+        goalInput: stableGoalInput,
+        requestedDurationProfile: Object.hasOwn(selectors, "requestedDurationProfile") ? selectors.requestedDurationProfile : "auto",
+        requestedCapabilityProfile: Object.hasOwn(selectors, "requestedCapabilityProfile") ? selectors.requestedCapabilityProfile : null,
+      });
+    } catch (error) {
+      return Promise.reject(new TaskHostError(error.code || "profile_resolution_failed", error.message));
+    }
+    return this._createNewTask(stableGoalInput, null, null, resolvedProfile);
   }
 
   async listRoutines() {
@@ -312,14 +353,64 @@ class TaskHost {
 
   async deleteRoutine(routineId) {
     this._assertOpen();
-    return this._routineStore.delete(routineId);
+    const result = await this._routineStore.delete(routineId);
+    await this.getScheduleStore().disableForRoutine(routineId, "routine_deleted");
+    return result;
   }
 
-  async runRoutine(routineId, revision) {
+  getScheduleStore() {
+    if (!this._scheduleStore) {
+      this._scheduleStore = new ScheduleStore({ storageRoot: this._storageRoot, now: this._schedulerOptions.now });
+    }
+    return this._scheduleStore;
+  }
+
+  // Starts the routine scheduler over this host's storage root. The scheduler
+  // only calls runRoutine/listTasks/stopTask, so scheduled runs go through the
+  // same queue, admission and approval path as manual ones.
+  async startScheduler() {
     this._assertOpen();
+    if (!this._schedulerStarting) {
+      this._schedulerStarting = (async () => {
+        await this._ensureQueue();
+        const scheduler = new Scheduler({ ...this._schedulerOptions, host: this, store: this.getScheduleStore() });
+        this._scheduler = scheduler;
+        await scheduler.start();
+        return scheduler;
+      })();
+      this._schedulerStarting.catch(() => { this._schedulerStarting = null; this._scheduler = null; });
+    }
+    return this._schedulerStarting;
+  }
+
+  async runRoutine(routineId, revision, options = {}) {
+    this._assertOpen();
+    if (!isPlainObject(options) || Object.keys(options).some((key) => !["trigger", "requestedDurationProfile"].includes(key))) {
+      throw new TaskHostError("invalid_selector", "routine options contain unknown fields");
+    }
+    const { trigger, requestedDurationProfile = "auto" } = options;
     if (!Number.isInteger(revision) || revision < 1) {
       throw new TaskHostError("invalid_revision", "runRoutine requires an exact positive revision");
     }
+    if (trigger === undefined) return this._runRoutineNow(routineId, revision, undefined, requestedDurationProfile);
+    validateGoalTrigger(trigger, "trigger");
+    // Idempotent per occurrence: a repeat of the same scheduled occurrence
+    // returns the task it already produced instead of creating a second one.
+    const key = `${trigger.scheduleId}@${trigger.occurrenceAt}`;
+    const inflight = this._triggeredRuns.get(key);
+    if (inflight) return inflight;
+    const run = (async () => {
+      await this._ensureQueue();
+      const existing = (await this._listTaskSummaries()).find((task) => task.routinePinned && task.trigger
+        && task.trigger.scheduleId === trigger.scheduleId && task.trigger.occurrenceAt === trigger.occurrenceAt);
+      if (existing) return { taskId: existing.taskId, snapshot: { state: existing.state, pauseReason: existing.pauseReason }, existing: true };
+      return this._runRoutineNow(routineId, revision, trigger, requestedDurationProfile);
+    })().finally(() => this._triggeredRuns.delete(key));
+    this._triggeredRuns.set(key, run);
+    return run;
+  }
+
+  async _runRoutineNow(routineId, revision, trigger, requestedDurationProfile = "auto") {
     // The current-index read enforces the tombstone: an explicit get of an
     // old revision is allowed for recovery, but deletion forbids new runs.
     await this._routineStore.get(routineId);
@@ -327,6 +418,7 @@ class TaskHost {
     const goal = {
       originalRequest: `Run saved routine: ${definition.name}`,
       criteria: [{ id: "routine-complete", text: "Confirm the saved routine completed", required: true, verification: "user" }],
+      ...(trigger ? { trigger } : {}),
     };
     const run = {
       routineId: definition.routineId,
@@ -334,7 +426,22 @@ class TaskHost {
       digest: definition.digest,
       cursor: 0,
     };
-    return this._createNewTask(goal, run, definition);
+    let resolvedProfile;
+    try {
+      resolvedProfile = resolveTaskProfile({
+        goalInput: goal,
+        requestedDurationProfile,
+        routineMetadata: {
+          routineId: definition.routineId,
+          revision: definition.revision,
+          digest: definition.digest,
+          stepCount: definition.steps.length,
+        },
+      });
+    } catch (error) {
+      throw new TaskHostError(error.code || "profile_resolution_failed", error.message);
+    }
+    return this._createNewTask(goal, run, definition, resolvedProfile);
   }
 
   async _resolveRoutineForStore(store) {
@@ -362,33 +469,37 @@ class TaskHost {
     const cursor = recovery ? recovery.cursor : pin.cursor;
     let runner;
     try {
-      runner = this._makeRoutineRunner({ definition, cursor });
+      runner = this._makeRoutineRunner({
+        definition,
+        cursor,
+        durationProfile: store.taskProfile?.duration?.id || "short",
+      });
     } catch {
       throw new TaskHostError("routine_cursor_mismatch", "routine cursor is out of range");
     }
     return { runner, run: { ...pin, cursor } };
   }
 
-  // A routine task is always harnessProfile "short" (selectHarnessProfile's
-  // one routing rule), so this is the runner's single construction site --
-  // both callers below just supply the definition/cursor that differ.
-  _makeRoutineRunner({ definition, cursor }) {
+  // The runner's proposal cap follows the independently selected duration
+  // profile, both for a new routine and for recovery from its pinned store.
+  _makeRoutineRunner({ definition, cursor, durationProfile = "short" }) {
     return new RoutineRunner({
       definition,
       cursor,
       batchReadOnlySteps: this._routineBatchReadOnlySteps,
-      maxBatchActions: maxActionsPerProposal("short"),
+      maxBatchActions: maxActionsPerProposal(durationProfile),
     });
   }
 
-  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null) {
+  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null) {
     this._assertOpen();
+    if (!resolvedProfile) throw new TaskHostError("profile_required", "new tasks must have a host-resolved profile before storage or admission");
     return this._trackAttachment(async () => {
       await this._ensureQueue();
       const selected = this._settingsStore
         ? await this._settingsStore.getMemoryPolicySelection()
         : { mode: "budgeted", auditEventId: null, actor: null, at: null };
-      const store = await TaskStore.create(goalInput, { storageRoot: this._storageRoot });
+      const store = await TaskStore.create(goalInput, { storageRoot: this._storageRoot, resolvedProfile });
       try {
         if (routineRun) await store.checkpoint({ task: { state: "idle", pauseReason: null }, routineRun });
         await store.append({ type: "note", payload: {
@@ -418,7 +529,11 @@ class TaskHost {
             throw new TaskHostError("routine_cursor_mismatch", "new routine task lost its validated immutable revision");
           }
           routine = {
-            runner: this._makeRoutineRunner({ definition: pinnedRoutineDefinition, cursor: routineRun.cursor }),
+            runner: this._makeRoutineRunner({
+              definition: pinnedRoutineDefinition,
+              cursor: routineRun.cursor,
+              durationProfile: resolvedProfile.duration.id,
+            }),
             run: { ...routineRun },
           };
         }
@@ -450,59 +565,13 @@ class TaskHost {
       await this._queue.load();
       const summaries = await this._listTaskSummaries();
       await this._queue.reconcile(summaries);
-      this._queueRecoveredBlocked = this._queue.pendingIds().length > 0;
+      this._coordinator.recoveredBlocked = this._queue.pendingIds().length > 0;
     })();
     try { await this._queueReady; } catch (error) { this._queueReady = null; throw error; }
   }
 
-  async _admitNext(options = {}) {
-    const operation = this._admissionChain.then(() => this._admitNextLocked(options));
-    this._admissionChain = operation.then(() => {}, () => {});
-    return operation;
-  }
-
-  async _admitNextLocked({ recoveredHead = false } = {}) {
-    await this._ensureQueue();
-    if (this._queueRecoveredBlocked && !recoveredHead) return null;
-    const candidateId = this._queue.pendingIds()[0];
-    if (!candidateId) return null;
-    const activeCount = this._queue.activeIds().length;
-    const maxActive = this._executionMode === "parallel" ? this._maxParallelTasks : 1;
-    if (activeCount >= maxActive) return null;
-    const selected = await this._getRunMemoryPolicy(candidateId);
-    const resourceAdmission = this._ensureResourceAdmission();
-    // Monitor-less injected hosts retain sequential behavior. Production
-    // supplies MemoryMonitor and always takes this shared lease path.
-    if (!resourceAdmission) return this._queue.admitNext({ maxActive: 1 });
-    let reserveBytes = this._parallelTaskReserveBytes;
-    if (reserveBytes === undefined) {
-      const plannerHighWater = this._memoryMonitor.getExternalProcessHighWaterBytes?.("planner");
-      // The first task bootstraps the planner measurement in a single slot.
-      // Any additional budgeted task needs the measured planner increment.
-      if (activeCount > 0 && selected.mode === "budgeted" && (!Number.isFinite(plannerHighWater) || plannerHighWater <= 0)) return null;
-      reserveBytes = MEASURED_BROWSER_TASK_RESERVE_BYTES +
-        (Number.isFinite(plannerHighWater) && plannerHighWater > 0 ? Math.ceil(plannerHighWater * 1.25) : 0);
-    }
-    if (!Number.isFinite(reserveBytes) || reserveBytes <= 0) return null;
-    const admission = await resourceAdmission.acquire({
-      ownerId: candidateId,
-      reserveBytes,
-      maxAgeMs: 7500,
-      parentPolicy: { mode: selected.mode, parentTaskId: candidateId, requestedAgentCount: 1 },
-    });
-    if (!admission.admitted) return null;
-    try {
-      const admittedId = await this._queue.admitNext({ maxActive });
-      if (admittedId === candidateId) {
-        this._taskLeases.set(candidateId, admission.leaseId);
-        return admittedId;
-      }
-      await resourceAdmission.release(admission.leaseId);
-      return null;
-    } catch (error) {
-      await resourceAdmission.release(admission.leaseId);
-      throw error;
-    }
+  _admitNext(options = {}) {
+    return this._coordinator.admitNext(options);
   }
 
   onMemorySample() {
@@ -530,10 +599,10 @@ class TaskHost {
         this._active.delete(taskId);
         this._childCoordinator.unregisterStore(taskId);
         const cleanup = await Promise.allSettled([entry.planner.close?.(), entry.browser.dispose?.(), entry.store.close()]);
-        if (cleanup.every((result) => result.status === "fulfilled")) await this._releaseTaskLease(taskId);
+        if (cleanup.every((result) => result.status === "fulfilled")) await this._coordinator.releaseLease(taskId);
         else this._emit(taskId, entry.snapshot, { error: "resource_teardown_failed" });
       } else {
-        await this._releaseTaskLease(taskId);
+        await this._coordinator.releaseLease(taskId);
       }
       this._runMemoryPolicies.delete(taskId);
       if (this._closePromise) return;
@@ -543,9 +612,18 @@ class TaskHost {
     this._queueTransition = transition.catch(() => {});
   }
 
+  // listTasks() peeks stores under their writer lock. In-process peeks and the
+  // load that attaches a queued task go through one gate so they can never
+  // collide on that lock (a collision left an admitted task queued forever).
+  _withStoreGate(fn) {
+    const run = this._storeGate.then(fn);
+    this._storeGate = run.then(() => {}, () => {});
+    return run;
+  }
+
   async _startQueued(taskId) {
     return this._trackAttachment(async () => {
-      const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
+      const store = await this._withStoreGate(() => TaskStore.load(taskId, { storageRoot: this._storageRoot }));
       if (this._closePromise) { await store.close(); return; }
       try {
         const routine = await this._resolveRoutineForStore(store);
@@ -581,6 +659,8 @@ class TaskHost {
           state: active.controller.getSnapshot().state,
           pauseReason: active.controller.getSnapshot().pauseReason,
           active: true,
+          trigger: active.controller.getGoal().trigger ?? null,
+          routinePinned: active.routinePinned === true,
         });
         continue;
       }
@@ -588,13 +668,49 @@ class TaskHost {
       // controller/browser/planner for every saved task on every listTasks()
       // call (that would spawn a WebContentsView/worker per saved task just
       // to list them).
-      let store;
-      try {
-        store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
-      } catch (error) {
-        // An in-flight attachment (a queued task being started) holds the
-        // store's writer lock; wait for it, then report the attached task.
-        if (error?.code !== "writer_conflict" || this._pendingAttachments.size === 0) throw error;
+      const peeked = await this._withStoreGate(async () => {
+        let store;
+        try {
+          store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
+        } catch (error) {
+          return { error };
+        }
+        try {
+          // Same fix as task-controller.js's constructor (2026-09-27 follow-up):
+          // a task that already reached completed/stopped was checkpointed
+          // synchronously the instant it got there, so that checkpoint is
+          // authoritative over recoveryReason -- otherwise a finished task is
+          // peeked as plain "paused"/"recovered", indistinguishable from one
+          // merely interrupted mid-flight.
+          const checkpointedTask = store.lastCheckpoint && store.lastCheckpoint.payload && store.lastCheckpoint.payload.task;
+          const isTerminal = checkpointedTask && (checkpointedTask.state === "completed" || checkpointedTask.state === "stopped");
+          return {
+            summary: {
+              taskId,
+              originalRequest: store.getGoal().originalRequest,
+              createdAt: store.getGoal().createdAt,
+              state: isTerminal ? checkpointedTask.state : store.recoveryReason === "execution_uncertain" ? "paused" : store.recoveryReason === "recovered" ? "paused" : "idle",
+              pauseReason: isTerminal ? (checkpointedTask.pauseReason ?? null) : store.recoveryReason === "created" ? null : store.recoveryReason,
+              active: false,
+              trigger: store.getGoal().trigger ?? null,
+              routinePinned: !!store.lastCheckpoint?.payload?.routineRun,
+            },
+          };
+        } finally {
+          await store.close();
+        }
+      });
+      if (peeked.error) {
+        const error = peeked.error;
+        // A profile-required store can be left with only goal_created if the
+        // second durable append failed during creation. It is intentionally
+        // non-runnable, but it must not make unrelated valid tasks invisible
+        // or prevent TaskHost queue recovery after restart.
+        if (error?.code === "profile_incomplete") continue;
+        // An in-flight or just-finished attachment (a queued task being
+        // started) holds the store's writer lock; wait for it, then report the
+        // attached task.
+        if (error?.code !== "writer_conflict") throw error;
         await Promise.allSettled([...this._pendingAttachments]);
         const attached = this._active.get(taskId);
         if (!attached) throw error;
@@ -605,26 +721,12 @@ class TaskHost {
           state: attached.controller.getSnapshot().state,
           pauseReason: attached.controller.getSnapshot().pauseReason,
           active: true,
+          trigger: attached.controller.getGoal().trigger ?? null,
+          routinePinned: attached.routinePinned === true,
         });
         continue;
       }
-      // Same fix as task-controller.js's constructor (2026-09-27 follow-up):
-      // a task that already reached completed/stopped was checkpointed
-      // synchronously the instant it got there, so that checkpoint is
-      // authoritative over recoveryReason -- otherwise a finished task is
-      // peeked as plain "paused"/"recovered", indistinguishable from one
-      // merely interrupted mid-flight.
-      const checkpointedTask = store.lastCheckpoint && store.lastCheckpoint.payload && store.lastCheckpoint.payload.task;
-      const isTerminal = checkpointedTask && (checkpointedTask.state === "completed" || checkpointedTask.state === "stopped");
-      summaries.push({
-        taskId,
-        originalRequest: store.getGoal().originalRequest,
-        createdAt: store.getGoal().createdAt,
-        state: isTerminal ? checkpointedTask.state : store.recoveryReason === "execution_uncertain" ? "paused" : store.recoveryReason === "recovered" ? "paused" : "idle",
-        pauseReason: isTerminal ? (checkpointedTask.pauseReason ?? null) : store.recoveryReason === "created" ? null : store.recoveryReason,
-        active: false,
-      });
-      await store.close();
+      summaries.push(peeked.summary);
     }
     if (this._queue.isLoaded()) {
       const pending = this._queue.pendingIds();
@@ -647,11 +749,11 @@ class TaskHost {
       try { await this._resolveRoutineForStore(preflight); }
       finally { await preflight.close(); }
     }
-    if (this._queueRecoveredBlocked) {
+    if (this._coordinator.recoveredBlocked) {
       if (this._queue.pendingIds()[0] !== taskId) throw new TaskHostError("queued_behind_other_task", "resume the oldest queued task first");
       const admitted = await this._admitNext({ recoveredHead: true });
       if (admitted !== taskId) throw new TaskHostError("memory_admission_denied", "the queued task is waiting for a measured memory lease");
-      this._queueRecoveredBlocked = false;
+      this._coordinator.recoveredBlocked = false;
     }
     if (this._queue.pendingIds().includes(taskId)) {
       throw new TaskHostError("queued_behind_other_task", "a queued task must wait for its FIFO admission");
@@ -748,11 +850,12 @@ class TaskHost {
         snapshot: active.controller.getSnapshot(),
         active: true,
         harnessProfile: active.controller.getHarnessProfile(),
+        taskProfile: active.store.taskProfile ?? null,
       };
     }
     const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
-    const harnessProfile = selectHarnessProfile({ isRoutine: !!store.lastCheckpoint?.payload?.routineRun });
-    const detail = { taskId, goal: store.getGoal(), recoveryReason: store.recoveryReason, active: false, harnessProfile };
+    const harnessProfile = store.taskProfile?.duration.id || selectHarnessProfile({ isRoutine: !!store.lastCheckpoint?.payload?.routineRun });
+    const detail = { taskId, goal: store.getGoal(), recoveryReason: store.recoveryReason, active: false, harnessProfile, taskProfile: store.taskProfile ?? null };
     await store.close();
     return detail;
   }
@@ -875,6 +978,9 @@ class TaskHost {
   close() {
     if (this._closePromise) return this._closePromise;
     this._closePromise = (async () => {
+      // Stop scheduling first so no new occurrence is launched during shutdown.
+      // This never stops or cancels tasks; they are paused below like any other.
+      await this._scheduler?.stop();
       // A create/load that started before close() must either attach before
       // this snapshot (so it gets cleaned up below) or observe the closed
       // state after its await, close its store, and reject. Never let a late
@@ -904,7 +1010,7 @@ class TaskHost {
           if (result.status === "rejected") errors.push(result.reason);
         }
         if (cleanup.every((result) => result.status === "fulfilled")) {
-          try { await this._releaseTaskLease(entry.store.taskId); } catch (error) { errors.push(error); }
+          try { await this._coordinator.releaseLease(entry.store.taskId); } catch (error) { errors.push(error); }
         }
       }));
       this._active.clear();

@@ -12,9 +12,16 @@ const { ChildAgentCoordinator, ChildAgentCoordinatorError } = require("../main/h
 const { BrowserAdapter } = require("../main/harness/browser-adapter");
 const { ResourceAdmission } = require("../main/harness/resource-admission");
 const { TaskController } = require("../main/harness/task-controller");
+const { resolveTaskProfile } = require("../shared/task-profile-router");
 
 async function mkTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "halo-child-coordinator-"));
+}
+
+async function createMultiAgentParent(storageRoot) {
+  const goalInput = { originalRequest: "parent goal" };
+  const resolvedProfile = resolveTaskProfile({ goalInput, requestedCapabilityProfile: "multi_agent" });
+  return TaskStore.create(goalInput, { storageRoot, resolvedProfile });
 }
 
 function makeChildPlanProposal(parentTaskId, overrides = {}) {
@@ -36,7 +43,7 @@ function makeChildPlanProposal(parentTaskId, overrides = {}) {
 
 test("acceptParentPlan() mints one child TaskStore per assignment and records ONE child_plan_accepted event before returning", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   const result = await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
@@ -49,6 +56,13 @@ test("acceptParentPlan() mints one child TaskStore per assignment and records ON
 
   for (const childId of result.childIds) {
     const childStore = await TaskStore.loadChild(childId, { storageRoot, parentTaskId: parent.taskId });
+    assert.equal(childStore.taskProfile.capability.id, "browser");
+    assert.deepEqual(childStore.taskProfile.parentBinding, {
+      parentTaskId: parent.taskId,
+      planId: result.planId,
+      parentGoalVersion: 1,
+    });
+    assert.ok(["short", "middle"].includes(childStore.taskProfile.duration.id));
     await childStore.close();
   }
 
@@ -61,12 +75,25 @@ test("acceptParentPlan() mints one child TaskStore per assignment and records ON
   await parent.close();
 });
 
+test("acceptParentPlan() refuses an unprofiled parent before creating child storage", async () => {
+  const storageRoot = await mkTempRoot();
+  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  await assert.rejects(
+    coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), { parentStore: parent, memoryPolicy: "budgeted" }),
+    (error) => error.code === "capability_not_authorized",
+  );
+  assert.equal((await parent.getEvents()).some((event) => event.type === "child_plan_accepted"), false);
+  await assert.rejects(fs.access(path.join(storageRoot, "tasks", parent.taskId, "children")));
+  await parent.close();
+});
+
 test("acceptParentPlan() cleans up already-created children when persisting the plan event fails, leaving no orphaned child directories", async () => {
   // If append() itself fails (here: the store was already closed), no child
   // directory should be left dangling on disk for a plan the parent journal
   // never actually recorded.
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   await parent.close(); // a closed store's append() always throws "closed"
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
@@ -89,7 +116,7 @@ test("acceptParentPlan() cleans up already-created children when persisting the 
 
 test("acceptParentPlan() rejects a proposal whose kind is not child_plan", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   await assert.rejects(
@@ -105,7 +132,7 @@ test("acceptParentPlan() rejects a proposal whose kind is not child_plan", async
 
 test("acceptParentPlan() rejects when proposal.parentGoalVersion is stale (parent goal amended while children queued)", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   await parent.amendGoal({ text: "amendment bumps goalVersion to 2" });
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
@@ -124,7 +151,7 @@ test("acceptParentPlan() rejects when proposal.parentGoalVersion is stale (paren
 
 test("acceptParentPlan() rejects a second plan while one is already active for the same parent", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
   await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
     parentStore: parent,
@@ -143,7 +170,7 @@ test("acceptParentPlan() rejects a second plan while one is already active for t
 
 test("cancelPlan() then acceptParentPlan() allows a fresh plan to be accepted", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
   const first = await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
     parentStore: parent,
@@ -165,7 +192,7 @@ test("cancelPlan() then acceptParentPlan() allows a fresh plan to be accepted", 
 
 test("distinct-origin assignments are recorded with their own normalized origins", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
@@ -183,7 +210,7 @@ test("distinct-origin assignments are recorded with their own normalized origins
 
 test("same-origin assignments both serialize to the identical normalized origin", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   await coordinator.acceptParentPlan(
@@ -205,7 +232,7 @@ test("same-origin assignments both serialize to the identical normalized origin"
 
 test("acceptParentPlan() rejects an invalid entryUrl before minting any child store", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   await assert.rejects(
@@ -232,7 +259,7 @@ test("acceptParentPlan() rejects an invalid entryUrl before minting any child st
 
 test("acceptParentPlan() rejects requestedAgentCount that does not match assignments.length", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   await assert.rejects(
@@ -246,7 +273,7 @@ test("acceptParentPlan() rejects requestedAgentCount that does not match assignm
 
 test("no child browser/planner construction happens during acceptParentPlan() -- it only creates closed TaskStores", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   const result = await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
@@ -262,9 +289,9 @@ test("no child browser/planner construction happens during acceptParentPlan() --
     // load() would still succeed (load() does not require exclusivity from
     // itself), but there must be no leftover in-flight worker/browser state:
     // the only thing on disk is the immutable goal + a single goal_created
-    // event, nothing resembling action_started/observation activity.
+    // profile-selected event, nothing resembling action_started/observation activity.
     const events = await childStore.getEvents();
-    assert.deepEqual(events.map((e) => e.type), ["goal_created"]);
+    assert.deepEqual(events.map((e) => e.type), ["goal_created", "task_profile_selected"]);
     await childStore.close();
   }
   await parent.close();
@@ -276,7 +303,7 @@ test("no child browser/planner construction happens during acceptParentPlan() --
 
 test("listChildren() throws corrupt_child_link when a referenced child's directory was deleted out from under the parent", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
   const result = await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
     parentStore: parent,
@@ -298,7 +325,7 @@ test("listChildren() throws corrupt_child_link when a referenced child's directo
 
 test("acceptParentPlan() on a fresh coordinator instance also fails closed on a corrupt existing child link, refusing to start a new plan", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
   const result = await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
     parentStore: parent,
@@ -319,7 +346,7 @@ test("acceptParentPlan() on a fresh coordinator instance also fails closed on a 
 
 test("listChildren() reconstructs a queued plan from the journal alone on a fresh coordinator instance (process-restart recovery)", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
   const result = await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
     parentStore: parent,
@@ -338,7 +365,7 @@ test("listChildren() reconstructs a queued plan from the journal alone on a fres
 
 test("listChildren() reconstructs a cancelled plan as empty on a fresh coordinator instance", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
   await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
     parentStore: parent,
@@ -353,7 +380,7 @@ test("listChildren() reconstructs a cancelled plan as empty on a fresh coordinat
 
 test("listChildren() returns [] for a parent that never accepted any child plan", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   assert.deepEqual(await coordinator.listChildren(parent.taskId), []);
@@ -362,7 +389,7 @@ test("listChildren() returns [] for a parent that never accepted any child plan"
 
 test("cancelPlan() rejects when there is no active plan to cancel", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   await assert.rejects(
@@ -381,7 +408,7 @@ test("constructor requires storageRoot", () => {
 
 test("acceptParentPlan() rejects an unknown memoryPolicy", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   await assert.rejects(
@@ -396,7 +423,7 @@ test("acceptParentPlan() rejects an unknown memoryPolicy", async () => {
 
 test("acceptParentPlan() durably carries the trusted memory-policy audit event ID into the parent plan record", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
@@ -412,7 +439,7 @@ test("acceptParentPlan() durably carries the trusted memory-policy audit event I
 
 test("acceptParentPlan() rejects a memory-policy audit event ID that is empty or too long", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
 
   for (const memoryPolicyAuditEventId of ["", "x".repeat(257)]) {
@@ -492,7 +519,7 @@ async function waitFor(fn, { timeoutMs = 2000, intervalMs = 10 } = {}) {
 
 test("one view per child: startChild() constructs a unique BrowserAdapter and planner per child, sharing no webContents id across live siblings", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
 
   const madeBrowsers = [];
   const madePlannerChildIds = [];
@@ -542,7 +569,7 @@ test("one view per child: startChild() constructs a unique BrowserAdapter and pl
 
 test("child read only: a child's navigate proposal is never dispatched through the controller, and the child's own adapter also denies it directly", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
 
   let executeCalls = [];
   let liveBrowser = null;
@@ -633,7 +660,7 @@ test("child read only: a child's navigate proposal is never dispatched through t
 
 test("child evidence: verifyChildResult() rejects a fabricated self-report with no durable evidence_recorded backing it", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
   const { childIds } = await coordinator.acceptParentPlan(
     parent.taskId,
@@ -666,7 +693,7 @@ test("child evidence: verifyChildResult() rejects a fabricated self-report with 
 
 test("child evidence: verifyChildResult() rejects a child with no checkpoint at all", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
   const { childIds } = await coordinator.acceptParentPlan(
     parent.taskId,
@@ -685,7 +712,7 @@ test("child evidence: verifyChildResult() rejects a child with no checkpoint at 
 
 test("child evidence: verifyChildResult() accepts and durably records a criterion backed by a real evidence_recorded event in the child's own journal", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const coordinator = new ChildAgentCoordinator({ storageRoot });
   const { childIds, planId } = await coordinator.acceptParentPlan(
     parent.taskId,
@@ -737,7 +764,7 @@ test("child evidence: verifyChildResult() accepts and durably records a criterio
 
 test("cancelPlan() stops a live child's controller and releases its resource lease, unblocking a same-origin sibling that was serialized behind it", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
 
   const resourceAdmission = makeAlwaysAdmittingResourceAdmission();
   const disposedChildIds = [];
@@ -796,7 +823,7 @@ test("cancelPlan() stops a live child's controller and releases its resource lea
 });
 
 async function createQueuedChildPlan(storageRoot) {
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const plannerlessCoordinator = new ChildAgentCoordinator({ storageRoot });
   const { childIds } = await plannerlessCoordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId, {
     assignments: [{ subgoal: "child goal", entryUrl: "https://a.example/start" }],
@@ -934,7 +961,7 @@ function makeSendMessageProposal(overrides = {}) {
 }
 
 async function setUpAcceptedPlan(coordinator, storageRoot) {
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   coordinator.registerStore(parent.taskId, parent);
   const { childIds } = await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId), {
     parentStore: parent,
@@ -1225,7 +1252,7 @@ test("recordMessagesConsumed() removes consumed IDs from a later listPendingMess
 
 test("end-to-end: a live child's own planner proposes send_message and it durably lands in the child's own journal, discoverable by the parent via listPendingMessages()", async () => {
   const storageRoot = await mkTempRoot();
-  const parent = await TaskStore.create({ originalRequest: "parent goal" }, { storageRoot });
+  const parent = await createMultiAgentParent(storageRoot);
   const resourceAdmission = makeAlwaysAdmittingResourceAdmission();
 
   let sentMessageProposal = false;

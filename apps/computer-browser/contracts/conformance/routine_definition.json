@@ -1,0 +1,299 @@
+{
+  "kind": "routine_definition",
+  "cases": [
+    {
+      "name": "navigate only",
+      "valid": true,
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "navigate",
+            "url": "https://example.com/inbox"
+          }
+        ],
+        "digest": "8d49973e249b42551012478b8ae6921dfa5baa5fc64db89d8fa604b3461d0eb4"
+      }
+    },
+    {
+      "name": "all step kinds",
+      "valid": true,
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "navigate",
+            "url": "https://example.com/inbox"
+          },
+          {
+            "kind": "follow_link",
+            "name": "First",
+            "expectedHref": "https://example.com/m/1"
+          },
+          {
+            "kind": "scroll",
+            "direction": "down",
+            "amount": 3
+          }
+        ],
+        "digest": "bb0ed8e6ce58a0d565a399333b98f5269e3fd8ba3af63cfe38ffc391747273e8"
+      }
+    },
+    {
+      "name": "unknown field",
+      "valid": false,
+      "code": "unknown_field",
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "navigate",
+            "url": "https://example.com/inbox"
+          }
+        ],
+        "digest": "8d49973e249b42551012478b8ae6921dfa5baa5fc64db89d8fa604b3461d0eb4",
+        "extra": 1
+      }
+    },
+    {
+      "name": "empty steps",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [],
+        "digest": "80dc0b2a66cba7e19826c0f3e8f9eb1c66479e8ad81d9aef9542526b6c4e72d9"
+      }
+    },
+    {
+      "name": "unknown step kind",
+      "valid": false,
+      "code": "unknown_step_kind",
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "run_shell",
+            "command": "ls"
+          }
+        ],
+        "digest": "9ddab1fe711ac7ec34f393d04957821f2f398adb5ec080fe0acebf0e7d08fa63"
+      }
+    },
+    {
+      "name": "step with extra key",
+      "valid": false,
+      "code": "unknown_field",
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "navigate",
+            "url": "https://example.com/inbox",
+            "code": "x"
+          }
+        ],
+        "digest": "c9bf10b640dc28a102f4f182ca7e5d25e5c461fbed0307ae1c560fb7e7eb4f4b"
+      }
+    },
+    {
+      "name": "url outside origins",
+      "valid": false,
+      "code": "origin_not_allowed",
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "navigate",
+            "url": "https://evil.example.org/"
+          }
+        ],
+        "digest": "1e0b3bc75b1b5f51a3a672557d29ab3d3ae505bf9064835c032af1e47fb1e473"
+      }
+    },
+    {
+      "name": "scroll direction",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "scroll",
+            "direction": "sideways"
+          }
+        ],
+        "digest": "8a0ff9cb9500706e2395db223bdb6d9a7bc97c3d59cb3aece5defbb515a7d8ae"
+      }
+    },
+    {
+      "name": "scroll amount zero",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "scroll",
+            "direction": "up",
+            "amount": 0
+          }
+        ],
+        "digest": "7bc1a331e152b85a12c7096809bb2b0a875f06e13c6e69cd27cf200adaca2dbd"
+      }
+    },
+    {
+      "name": "digest wrong shape",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "navigate",
+            "url": "https://example.com/inbox"
+          }
+        ],
+        "digest": "xyz"
+      }
+    },
+    {
+      "name": "revision zero",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 0,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "navigate",
+            "url": "https://example.com/inbox"
+          }
+        ],
+        "digest": "8d49973e249b42551012478b8ae6921dfa5baa5fc64db89d8fa604b3461d0eb4"
+      }
+    },
+    {
+      "name": "credentials in url",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "schemaVersion": 1,
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "createdAt": "2026-09-29T00:00:00.000Z",
+        "updatedAt": "2026-09-29T00:00:00.000Z",
+        "name": "Check inbox",
+        "description": "",
+        "origins": [
+          "https://example.com"
+        ],
+        "steps": [
+          {
+            "kind": "navigate",
+            "url": "https://u:p@example.com/x"
+          }
+        ],
+        "digest": "89234dbee3bac8196c260e60d8f0410305941a9a9fd8258e49d17db4a76da39b"
+      }
+    }
+  ]
+}
