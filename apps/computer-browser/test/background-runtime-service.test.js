@@ -131,6 +131,10 @@ test("a TaskHost-surface method is rejected until the calling client has attache
     assert.equal(error.code, "not_attached");
     return true;
   });
+  await assert.rejects(() => client.call("getWorkGoalRecoveryStatus", ["g1", 1]), (error) => {
+    assert.equal(error.code, "not_attached");
+    return true;
+  });
   await client.call("attachClient", "ui-1");
   const tasks = await client.call("listTasks");
   assert.deepEqual(tasks, [{ taskId: "t1", state: "running" }]);
