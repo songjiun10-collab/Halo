@@ -23,6 +23,7 @@
 // main/harness/*.js and main/approver-client.js, unmodified.
 
 const path = require("node:path");
+const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const { spawn, execFile } = require("node:child_process");
@@ -241,6 +242,7 @@ function makeBrowser() {
   const CONTEXT_RESETS = 4; // real page loads + real approver round-trips are slow; see honest-limitations note in the final report
   let store = store1;
   let originalRequestAcrossResets = [];
+  let compactObservationVerified = false;
   // The real WebContentsView is created ONCE, outside the loop, and reused
   // across every reset. Only the TaskStore/TaskController/planner are torn
   // down and rebuilt each iteration -- that is the actual thing this
@@ -254,6 +256,13 @@ function makeBrowser() {
   // prove noDuplicateNavigation: if the harness ever re-issued a navigate
   // the evidence log already satisfied, this would catch it.
   const browser = makeBrowser();
+  const browserObservations = [];
+  const observeWithCapture = browser.observe.bind(browser);
+  browser.observe = async (...args) => {
+    const observation = await observeWithCapture(...args);
+    browserObservations.push(observation);
+    return observation;
+  };
   measureMethod(browser, "observe", scenario1StageTotals, "browser_observe");
   measureMethod(browser, "execute", scenario1StageTotals, "browser_execute");
   for (let i = 0; i < CONTEXT_RESETS; i++) {
@@ -290,6 +299,16 @@ function makeBrowser() {
     } else if (state === "paused") {
       await controller.resume();
     }
+    if (!compactObservationVerified) {
+      const firstObservation = browserObservations.find((observation) => observation.elements.length > 0);
+      if (firstObservation) {
+        assert.ok(firstObservation.elements.some((element) => element.role === "heading" && element.name === "Welcome" && element.level === 1),
+          "the compact snapshot should expose the fixture's accessible heading");
+        assert.ok(firstObservation.elements.some((element) => element.role === "link" && element.name === "Next" && element.href.endsWith("/page2")),
+          "the compact snapshot should retain the real link name and href for host-owned follow_link execution");
+        compactObservationVerified = true;
+      }
+    }
     // The real Python approver returns "review" (not "allow") for every
     // gated action here (untrusted self-provenance, external target scope --
     // see the descriptor built in _dispatchActionsBatch), so the loop stops
@@ -308,6 +327,8 @@ function makeBrowser() {
     scenario1ResetTimings.push({ reset: i, elapsedMs: performance.now() - resetStartedAt });
     if (controller.getSnapshot().state === "completed") break;
   }
+
+  assert.equal(compactObservationVerified, true, "the real Chromium journey should verify at least one content-page accessibility snapshot");
 
   const goalPreservedAcrossResets = originalRequestAcrossResets.every((r) => r === goal1.originalRequest);
 

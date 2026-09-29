@@ -53,8 +53,13 @@ function buildWorkerEnv(extraEnv) {
   return env;
 }
 
+const PLANNER_ROLES = ["parent", "child"];
+
 class PlannerStdioAdapter {
-  constructor({ command, args = [], cwd, env, timeoutMs, spawnFn, onWorkerStart, onWorkerExit } = {}) {
+  constructor({ command, args = [], cwd, env, timeoutMs, spawnFn, onWorkerStart, onWorkerExit, role = "parent" } = {}) {
+    if (!PLANNER_ROLES.includes(role)) {
+      throw new PlannerTransportError("invalid_config", `role must be one of ${PLANNER_ROLES.join("|")}`);
+    }
     this._command = command || null;
     this._args = args;
     this._cwd = cwd;
@@ -63,6 +68,7 @@ class PlannerStdioAdapter {
     this._spawnFn = spawnFn || nodeSpawn;
     this._onWorkerStart = typeof onWorkerStart === "function" ? onWorkerStart : null;
     this._onWorkerExit = typeof onWorkerExit === "function" ? onWorkerExit : null;
+    this._role = role;
     this._child = null;
     this._inFlight = null; // { requestId, resolve, reject, timer, onAbort, signal }
     this._stdoutBuffer = "";
@@ -104,9 +110,17 @@ class PlannerStdioAdapter {
     child.stderr.on("data", (chunk) => {
       this._stderrTail = (this._stderrTail + chunk).slice(-STDERR_TAIL_MAX_BYTES);
     });
-    child.on("exit", () => {
+    // A spawn that fails asynchronously (missing/non-executable path, etc.)
+    // emits 'error' on the child; Node terminates the whole process on an
+    // unhandled child 'error' event, so this needs its own listener just
+    // like 'exit' -- and, depending on platform, 'error' and 'exit' can both
+    // fire for the same failure, so `settled` makes cleanup run once.
+    let settled = false;
+    const handleTermination = (err) => {
+      if (settled) return;
+      settled = true;
       this._child = null;
-      this._failInFlight(new PlannerTransportError("transport_closed", "planner worker exited while a request was in flight"));
+      this._failInFlight(err ?? new PlannerTransportError("transport_closed", "planner worker exited while a request was in flight"));
       if (this._onWorkerExit && Number.isInteger(child.pid)) {
         try {
           this._onWorkerExit({ pid: child.pid, creationTime });
@@ -115,7 +129,9 @@ class PlannerStdioAdapter {
           // accounting owns its own error reporting and is best-effort here.
         }
       }
-    });
+    };
+    child.on("exit", () => handleTermination());
+    child.on("error", (err) => handleTermination(new PlannerTransportError("planner_unavailable", `planner worker failed to start or crashed: ${err.message}`)));
     this._child = child;
     if (this._onWorkerStart && Number.isInteger(child.pid)) {
       try {
@@ -164,6 +180,30 @@ class PlannerStdioAdapter {
     if (parsed.requestId !== this._inFlight.requestId) {
       // Wrong / duplicate / late requestId: never accepted as the answer to
       // the current request. Keep waiting for the real one (or the timeout).
+      return;
+    }
+    // Multi-agent background runtime plan, Task 3: a child agent's planner
+    // must never be able to spawn grandchildren. child_plan is a parent-only
+    // proposal kind (see shared/harness-contracts.js); a child-role transport
+    // rejects it here at the wire boundary rather than trusting the worker
+    // process (which is untrusted model-provider code) to police its own role.
+    if (this._role === "child" && contracts.isPlainObject(parsed.proposal) && parsed.proposal.kind === "child_plan") {
+      this._failInFlight(new PlannerTransportError("child_plan_forbidden", "a child planner returned a forbidden child_plan proposal"));
+      return;
+    }
+    // Subagent communication protocol Task 3 (spec section 10): steer is a
+    // parent-to-child-only message kind. Same rationale as the child_plan
+    // gate above -- reject it at the wire boundary rather than trusting the
+    // (untrusted model-provider) worker process to police its own role.
+    // Recipient-relationship/stale-goal checks stay out of scope here; this
+    // transport has no authoritative task-relationship view (Task 4's job).
+    if (
+      this._role === "child" &&
+      contracts.isPlainObject(parsed.proposal) &&
+      parsed.proposal.kind === "send_message" &&
+      parsed.proposal.messageKind === "steer"
+    ) {
+      this._failInFlight(new PlannerTransportError("steer_forbidden", "a child planner returned a forbidden steer send_message proposal"));
       return;
     }
     this._resolveInFlight(parsed.proposal);

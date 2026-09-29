@@ -79,6 +79,24 @@ class ManualClock:
         self.wall_value -= wall
 
 
+class _Rendezvous:
+    """Two-event gate for fault injection: separates "the worker actually
+    reached the injection point" from "release the worker to continue", so a
+    caller can deterministically wait for entry before racing a concurrent
+    action against it, instead of a single Event that -- if set right after
+    starting the worker thread -- releases (or never even blocks) whatever
+    later calls wait_here(), silently skipping the intended block entirely.
+    """
+
+    def __init__(self):
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def wait_here(self, timeout=10):
+        self.entered.set()
+        self.release.wait(timeout=timeout)
+
+
 class _EchoTool:
     """Side-effect-free in-memory echo counter with optional fault hooks.
 
@@ -100,7 +118,7 @@ class _EchoTool:
 
     def execute(self, args):
         if self._delay_event is not None:
-            self._delay_event.wait(timeout=10)
+            self._delay_event.wait_here(timeout=10)
         if self._raise_before:
             raise RuntimeError("injected adapter failure before effect")
         self.effects += 1
@@ -122,7 +140,7 @@ def _tool_spec(*, raise_before=False, raise_after=False, delay_event=None,
 
     if slow_validate_event is not None:
         def validate(args):
-            slow_validate_event.wait(timeout=10)
+            slow_validate_event.wait_here(timeout=10)
             return True
     else:
         def validate(args):
@@ -267,11 +285,11 @@ def _concurrent_revoke_faults(root):
     for name, slow in (("slow_validator_concurrent_revoke", "validate"),
                        ("slow_adapter_concurrent_revoke", "adapter")):
         state_dir, db_path = _fresh_state(root, "slow-" + slow)
-        block = threading.Event()
+        gate = _Rendezvous()
         if slow == "validate":
-            tool, spec = _tool_spec(slow_validate_event=block)
+            tool, spec = _tool_spec(slow_validate_event=gate)
         else:
-            tool, spec = _tool_spec(delay_event=block)
+            tool, spec = _tool_spec(delay_event=gate)
         app = _open_gateway(db_path, spec)
         token = _approve(app, "slow-" + slow)
         before = tool.effects
@@ -282,14 +300,12 @@ def _concurrent_revoke_faults(root):
 
         worker = threading.Thread(target=run_execute)
         worker.start()
-        block.set()  # the worker is now blocked at the chosen phase
-        deadline = _time.monotonic() + 10
-        while not outcome["status"] and _time.monotonic() < deadline:
-            if slow == "validate" and worker.is_alive():
-                # give the worker time to enter the preflight transaction
-                _time.sleep(0.05)
-                break
-            _time.sleep(0.01)
+        # Wait for the worker to actually reach the injected block point
+        # before racing the revoke against it -- a fixed sleep/is_alive()
+        # guess cannot confirm that, and the worker may not have even
+        # entered its wait yet.
+        if not gate.entered.wait(timeout=10):
+            raise RuntimeError(f"{name}: worker never reached the injected block point")
         if slow == "adapter":
             # wait until the claim has committed (state no longer pending)
             with sqlite3.connect(db_path) as db:
@@ -304,7 +320,7 @@ def _concurrent_revoke_faults(root):
         except Rejected as exc:
             revoke_result = {"revoked": False,
                              "rejected": _classify(exc)}
-        block.set()
+        gate.release.set()
         worker.join(timeout=15)
         row = _row(before, tool, outcome["status"] or "timeout")
         row["revoke_result"] = revoke_result

@@ -44,6 +44,93 @@ test("human navigation rejects privileged protocols and reports real load errors
   assert.equal(calls.length, 1);
 });
 
+test("credential autofill is origin-bound, fills only a unique login pair, and never submits or returns secrets", async () => {
+  let script;
+  let currentUrl = "https://accounts.example/login";
+  const browser = new BrowserAdapter({ view: makeFakeView({
+    getURL: () => currentUrl,
+    executeJavaScript: async (value) => { script = value; return { status: "ok", usernameFilled: true, passwordFilled: true }; },
+  }) });
+  const result = await browser.fillCredential({ username: "alice@example.com", password: "supersecret", origin: "https://accounts.example" });
+  assert.deepEqual(result, { status: "ok", usernameFilled: true, passwordFilled: true });
+  assert.ok(script.includes("alice@example.com"));
+  assert.ok(script.includes("supersecret"));
+  assert.doesNotMatch(JSON.stringify(result), /supersecret|alice@example/);
+  assert.match(script, /dispatchEvent/);
+  assert.doesNotMatch(script, /requestSubmit|\.submit\(/);
+  assert.deepEqual(await browser.fillCredential({ username: "a", password: "p", origin: "https://other.example" }), { status: "failed", errorCode: "credential_origin_mismatch" });
+  currentUrl = "http://accounts.example/login";
+  assert.deepEqual(await browser.fillCredential({ username: "a", password: "p", origin: "http://accounts.example" }), { status: "failed", errorCode: "credential_origin_mismatch" });
+});
+
+test("BrowserAdapter repeats the current permission boundary for direct execute calls", async () => {
+  let navigations = 0;
+  const browser = new BrowserAdapter({ view: makeFakeView({ loadURL: async () => { navigations += 1; } }) });
+  browser.setPermissionMode("observe");
+  assert.deepEqual(await browser.execute({ type: "navigate", url: "https://example.com" }), { status: "failed", errorCode: "permission_mode_denied" });
+  assert.equal(navigations, 0);
+  browser.setPermissionMode("browse");
+  assert.equal((await browser.execute({ type: "navigate", url: "https://example.com" })).status, "ok");
+  assert.equal(navigations, 1);
+});
+
+// --- Task 4 (multi-agent background runtime plan): child origin lock.
+// A child agent is constructed with `assignedOrigin` (the host-derived
+// normalized origin of its entryUrl) and must reject any PAGE-initiated
+// navigation or redirect away from that origin -- independent of
+// permissionMode/execute(), since a page can navigate itself without ever
+// going through execute().
+
+test("assignedOrigin rejects a page-initiated will-navigate to a different origin", () => {
+  const wc = new EventEmitter();
+  Object.assign(wc, { getURL: () => "", close() {} });
+  new BrowserAdapter({ view: { webContents: wc }, assignedOrigin: "https://example.com" });
+  let prevented = false;
+  wc.emit("will-navigate", { preventDefault: () => { prevented = true; } }, "https://evil.example/steal");
+  assert.equal(prevented, true);
+});
+
+test("assignedOrigin allows navigation that stays within the assigned origin", () => {
+  const wc = new EventEmitter();
+  Object.assign(wc, { getURL: () => "", close() {} });
+  new BrowserAdapter({ view: { webContents: wc }, assignedOrigin: "https://example.com" });
+  let prevented = false;
+  wc.emit("will-navigate", { preventDefault: () => { prevented = true; } }, "https://example.com/path?query=1");
+  assert.equal(prevented, false);
+});
+
+test("assignedOrigin rejects a server/page redirect (will-redirect) to a different origin", () => {
+  const wc = new EventEmitter();
+  Object.assign(wc, { getURL: () => "", close() {} });
+  new BrowserAdapter({ view: { webContents: wc }, assignedOrigin: "https://example.com" });
+  let prevented = false;
+  wc.emit("will-redirect", { preventDefault: () => { prevented = true; } }, "https://attacker.example/");
+  assert.equal(prevented, true);
+});
+
+test("assignedOrigin rejects an unparseable redirect URL fail-closed", () => {
+  const wc = new EventEmitter();
+  Object.assign(wc, { getURL: () => "", close() {} });
+  new BrowserAdapter({ view: { webContents: wc }, assignedOrigin: "https://example.com" });
+  let prevented = false;
+  wc.emit("will-redirect", { preventDefault: () => { prevented = true; } }, "not a url");
+  assert.equal(prevented, true);
+});
+
+test("without assignedOrigin (top-level tasks), no origin-lock listener is registered", () => {
+  const wc = new EventEmitter();
+  Object.assign(wc, { getURL: () => "", close() {} });
+  new BrowserAdapter({ view: { webContents: wc } });
+  assert.equal(wc.listenerCount("will-navigate"), 0);
+  assert.equal(wc.listenerCount("will-redirect"), 0);
+});
+
+test("assignedOrigin must be a non-empty string when provided", () => {
+  const wc = new EventEmitter();
+  Object.assign(wc, { getURL: () => "", close() {} });
+  assert.throws(() => new BrowserAdapter({ view: { webContents: wc }, assignedOrigin: "" }), BrowserAdapterError);
+});
+
 test("history traversal stays pending until load settles and cleans up listeners", async () => {
   const wc = new EventEmitter();
   let index;
@@ -231,7 +318,7 @@ test("execute(follow_link) navigates to the anchor's ACTUAL current href, ignori
         url: "https://example.com/",
         title: "",
         text: "",
-        elements: [{ tag: "a", text: "Next", href: "https://example.com/real-target" }],
+        elements: [{ role: "link", name: "Next", href: "https://example.com/real-target" }],
       };
     },
     loadURL: async () => {},
@@ -266,7 +353,7 @@ test("execute(follow_link) rejects a stale documentEpoch without re-resolving an
   const view = makeFakeView({
     executeJavaScript: async () => {
       observeCalls += 1;
-      return { url: "https://example.com/", title: "", text: "", elements: [{ tag: "a", text: "x", href: "https://example.com/x" }] };
+      return { url: "https://example.com/", title: "", text: "", elements: [{ role: "link", name: "x", href: "https://example.com/x" }] };
     },
     loadURL: async () => {},
   });
@@ -346,8 +433,8 @@ test("observe() assigns host-owned sequential elementIds and includes the curren
       title: "Example",
       text: "hello world",
       elements: [
-        { tag: "a", text: "One", href: "https://example.com/1" },
-        { tag: "button", text: "Go" },
+        { role: "link", name: "One", href: "https://example.com/1", index: 0, parentIndex: null },
+        { role: "button", name: "Go", index: 1, parentIndex: 0 },
       ],
     }),
   });
@@ -358,6 +445,12 @@ test("observe() assigns host-owned sequential elementIds and includes the curren
   assert.equal(observation.documentEpoch, 0);
   assert.equal(observation.elements[0].elementId, "0");
   assert.equal(observation.elements[1].elementId, "1");
+  assert.equal(observation.elements[0].parentElementId, null);
+  assert.equal(observation.elements[1].parentElementId, "0");
+  assert.equal("parentIndex" in observation.elements[1], false, "raw DOM traversal indices stay internal");
+  assert.equal("index" in observation.elements[1], false, "the public contract uses host-owned elementIds");
+  assert.equal("tag" in observation.elements[1], false);
+  assert.equal("text" in observation.elements[1], false);
   assert.equal(observation.url, "https://example.com/");
   assert.ok(observation.id);
   assert.ok(typeof observation.at === "number");
@@ -543,9 +636,10 @@ class FakeElement {
 
 function makeFakeTreeWalker(root) {
   const order = [];
-  (function visit(node) {
+  (function visit(node, parent = null) {
+    node.parentElement = parent;
     order.push(node);
-    for (const child of node.children) visit(child);
+    for (const child of node.children) visit(child, node);
   })(root);
   let index = 0;
   return {
@@ -560,12 +654,20 @@ function makeFakeTreeWalker(root) {
 }
 
 function runObserveScriptAgainst(root, { maxNodesVisited = 500, maxElements = 100, maxTextBytes = 12 * 1024, baseURI = "http://example.test/" } = {}) {
+  const all = [];
+  (function visit(node) { all.push(node); for (const child of node.children) visit(child); })(root);
+  const byId = new Map(all.filter((node) => node.getAttribute("id")).map((node) => [node.getAttribute("id"), node]));
+  for (const node of all) {
+    const id = node.getAttribute("id");
+    node.labels = id ? all.filter((label) => label.tagName === "LABEL" && label.getAttribute("for") === id) : [];
+  }
   const sandbox = {
     document: {
       body: root,
       documentElement: root,
       title: "",
       baseURI,
+      getElementById: (id) => byId.get(id) || null,
       createTreeWalker: (r) => makeFakeTreeWalker(r),
     },
     NodeFilter: { SHOW_ELEMENT: 1 },
@@ -586,8 +688,8 @@ test("buildObserveScript captures visible text from an ordinary element with a s
   });
   const observation = runObserveScriptAgainst(body);
   assert.ok(
-    observation.text.includes("DONE-XYZ"),
-    `expected the page's own literal text to appear in the observation, got: ${JSON.stringify(observation.text)}`,
+    observation.elements.some((element) => element.role === "text" && element.name.includes("DONE-XYZ")),
+    `expected the page's own literal text to appear in the compact accessibility snapshot, got: ${JSON.stringify(observation)}`,
   );
 });
 
@@ -599,8 +701,70 @@ test("buildObserveScript still finds anchor elements and their href/text correct
     ],
   });
   const observation = runObserveScriptAgainst(body, { baseURI: "http://example.test/page2" });
-  const anchor = observation.elements.find((el) => el.tag === "a");
+  const anchor = observation.elements.find((el) => el.role === "link");
   assert.ok(anchor, "expected an anchor element to be captured");
-  assert.equal(anchor.text, "Next");
+  assert.equal(anchor.name, "Next");
   assert.equal(anchor.href, "http://example.test/page3");
+  assert.equal("tag" in anchor, false, "raw tag names are replaced by the semantic role");
+  assert.equal("text" in anchor, false, "accessible name is the single compact source for the link label");
+});
+
+test("compact observation adds accessible role, name, state, and compressed semantic ancestry", () => {
+  const body = new FakeElement("body", { children: [
+    new FakeElement("div", { attrs: { role: "main" }, children: [
+      new FakeElement("div", { attrs: { class: "layout-wrapper" }, children: [
+        new FakeElement("h2", { text: "Account settings" }),
+        new FakeElement("button", { text: "Save", attrs: { disabled: "", "aria-expanded": "false" } }),
+      ] }),
+    ] }),
+  ] });
+
+  const observation = runObserveScriptAgainst(body);
+  const main = observation.elements.find((node) => node.role === "main");
+  const heading = observation.elements.find((node) => node.role === "heading");
+  const button = observation.elements.find((node) => node.role === "button");
+  assert.ok(main);
+  assert.equal(heading.name, "Account settings");
+  assert.equal(heading.level, 2);
+  assert.equal(button.name, "Save");
+  assert.equal(button.disabled, true);
+  assert.equal(button.expanded, false);
+  assert.equal(button.parentIndex, main.index);
+  assert.equal(heading.parentIndex, main.index);
+  assert.ok(observation.elements.every((node) => !("tag" in node) && !("text" in node)), "the snapshot excludes raw DOM fields");
+});
+
+test("compact observation derives ARIA and native labels without exposing input values", () => {
+  const body = new FakeElement("body", { children: [
+    new FakeElement("label", { text: "Email address", attrs: { for: "email" } }),
+    new FakeElement("input", { attrs: { id: "email", type: "email", value: "person@example.test", required: "" } }),
+    new FakeElement("input", { attrs: { type: "password", "aria-label": "Password", value: "do-not-leak" } }),
+    new FakeElement("button", { attrs: { "aria-label": "Continue to payment", "aria-pressed": "true" } }),
+  ] });
+  const observation = runObserveScriptAgainst(body);
+  const email = observation.elements.find((node) => node.role === "textbox");
+  const password = observation.elements.find((node) => node.inputType === "password");
+  const payment = observation.elements.find((node) => node.name === "Continue to payment");
+
+  assert.equal(email.name, "Email address");
+  assert.equal(email.required, true);
+  assert.equal(password.name, "Password");
+  assert.equal(password.value, undefined);
+  assert.equal(observation.text.includes("do-not-leak"), false);
+  assert.equal(observation.text.includes("person@example.test"), false);
+  assert.equal(payment.pressed, true);
+});
+
+test("compact observation excludes hidden controls and remains bounded by the existing element/text budgets", () => {
+  const body = new FakeElement("body", { children: [
+    new FakeElement("button", { text: "Visible", attrs: { id: "visible" } }),
+    new FakeElement("button", { text: "Hidden", attrs: { id: "hidden", hidden: "" } }),
+    new FakeElement("button", { text: "Second", attrs: { id: "second" } }),
+    new FakeElement("p", { text: "한글" }),
+  ] });
+  const observation = runObserveScriptAgainst(body, { maxElements: 1, maxTextBytes: 8 });
+  assert.equal(observation.elements.length, 1);
+  assert.equal(observation.elements[0].name, "Visible");
+  assert.ok(Buffer.byteLength(observation.text, "utf8") <= 8);
+  assert.equal(observation.text.includes("한글"), false, "the text budget counts UTF-8 bytes, not UTF-16 characters");
 });

@@ -131,8 +131,9 @@ code { font-family: var(--font-mono); }
 .hx-toolbar:focus-within .hx-omni { border-color: rgba(255, 255, 255, 0.18); }
 .hx-omni__lock { display: inline-grid; }
 .hx-omni__lock .hx-ic { width: 15px; height: 15px; }
-.hx-omni__url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hx-omni__url b { color: var(--foreground); font-weight: 400; }
+.hx-omni__form { display: flex; flex: 1; min-width: 0; }
+.hx-omni__input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--foreground); font: inherit; }
+.hx-omni__input:disabled { color: var(--muted-foreground); }
 
 /* Who is driving: part of the address field, like a site-permission icon. */
 .hx-chip {
@@ -177,6 +178,7 @@ code { font-family: var(--font-mono); }
 
 .hx-body { position: relative; flex: 1; min-height: 0; display: flex; }
 .hx-page { position: relative; flex: 1; min-width: 0; display: flex; }
+.hx-native-page { flex: 1; min-width: 0; background: var(--site-bg); }
 .hx-site {
   flex: 1; min-width: 0; overflow: auto; padding: 40px 48px;
   background: var(--site-bg); color: var(--site-fg); font: 400 16px/1.5 var(--font-body);
@@ -316,7 +318,9 @@ code { font-family: var(--font-mono); }
 .hx-chat__close:hover { background: var(--hover); color: var(--foreground); }
 
 .hx-chat__recent { display: grid; gap: 2px; margin: 0 0 10px; padding: 0 0 10px; border-bottom: 1px solid var(--border); list-style: none; }
-.hx-chat__recent li { display: flex; justify-content: space-between; gap: var(--space-sm); padding: 4px 2px; color: var(--muted-foreground); font-size: 13px; }
+.hx-chat__recent li { list-style: none; }
+.hx-chat__recent-task { display: flex; width: 100%; justify-content: space-between; gap: var(--space-sm); padding: 4px 2px; border: 0; background: transparent; color: var(--muted-foreground); font: 400 13px/1.4 var(--font-body); text-align: start; cursor: pointer; }
+.hx-chat__recent-task:hover { color: var(--foreground); background: var(--hover); }
 .hx-chat__recent-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hx-chat__recent-meta { flex: none; font-size: 12px; }
 
@@ -327,6 +331,7 @@ code { font-family: var(--font-mono); }
 .hx-msg p { margin: 0; padding: 6px 10px; border-radius: var(--radius-md); background: var(--toolbar); max-width: 90%; overflow-wrap: anywhere; }
 .hx-msg[data-from="you"] p { background: var(--primary-fill); color: var(--on-primary); }
 .hx-msg__who { font-size: 11px; font-weight: 600; color: var(--muted-foreground); }
+.hx-msg__actions { display: flex; justify-content: flex-end; gap: var(--space-xs); }
 
 .hx-chat__composer { display: flex; gap: var(--space-sm); }
 .hx-chat__input {

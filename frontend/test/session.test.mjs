@@ -5,6 +5,7 @@ import * as session from '../src/session/session.ts'
 const goal = (id, request = id) => ({ schemaVersion: 1, taskId: id, goalVersion: 1, originalRequest: request, amendments: [], constraints: [], criteria: [{ id: 'C1', text: 'Check the result', required: true, verification: 'user' }], limits: { maxActions: 1000, maxPlannerCalls: 500, maxActiveMs: 14400000 }, createdAt: '2026-09-27T00:00:00Z' })
 const snapshot = (state = 'running', extra = {}) => ({ state, pauseReason: null, goalVersion: 1, budgets: { actions: 0, plannerCalls: 0, activeMs: 0 }, segment: {}, criteriaStatus: [], approvalQueue: [], ...extra })
 const browser = (url = 'https://example.com/') => ({ tabs: [{ id: 'page', url, title: 'Example', canGoBack: false, canGoForward: false }], activeTabId: 'page', documentEpoch: 1 })
+const childPlan = (count, active = 0) => ({ requestedAgentCount: count, activeAgentCount: active, queuedAgentCount: count - active, parentGoalVersion: 1, memoryPolicy: 'budgeted', agents: Array.from({ length: count }, (_, i) => ({ agentId: `agent-${i}`, status: i < active ? 'running' : 'queued', assignedOrigin: `https://site-${i}.example`, evidenceCount: i })) })
 const event = (taskId, seq) => ({ seq, eventId: `event-${seq}`, taskId, goalVersion: 1, type: 'note', payload: { msg: `Event ${seq}` }, at: '2026-09-27T00:00:00Z' })
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve() }
@@ -14,6 +15,7 @@ function harness(overrides = {}) {
   const api = {
     listTasks: async () => [],
     getTaskDetail: async (id) => ({ taskId: id, goal: goal(id), snapshot: snapshot(), active: true }),
+    getChildPlan: async () => null,
     getTaskBrowser: async () => browser(),
     getTaskEvents: async () => [],
     resumeSavedTask: async () => snapshot(),
@@ -152,4 +154,32 @@ test('navigation is denied while the agent owns the page', async () => {
   await store.navigate({ type: 'navigate', url: 'https://example.org/' })
   assert.equal(calls, 1)
   assert.equal(store.getState().tabs[0].history[0], 'https://example.org/')
+})
+
+test('human navigation remains enabled while a task waits for evidence confirmation', () => {
+  const state = session.initialSession(true)
+  state.activeTaskId = 'task'
+  state.snapshot = snapshot('awaiting_verification')
+  assert.equal(session.canNavigate(state), true)
+})
+
+test('selected parent task loads host-proposed child count and live child updates replace that summary', async () => {
+  const { store, emit } = harness({ getChildPlan: async () => childPlan(2, 1) })
+  await store.selectTask('parent')
+  assert.equal(store.getState().childPlan.requestedAgentCount, 2)
+  assert.equal(store.getState().childPlan.activeAgentCount, 1)
+  emit({ taskId: 'parent', snapshot: snapshot('running'), childPlan: childPlan(3, 2) })
+  assert.equal(store.getState().childPlan.requestedAgentCount, 3)
+  assert.equal(store.getState().childPlan.agents.length, 3)
+})
+
+test('a stale child-plan read cannot overwrite a newer task event', async () => {
+  const pending = deferred()
+  const { store, emit } = harness({ getChildPlan: () => pending.promise })
+  const selecting = store.selectTask('parent')
+  await settle()
+  emit({ taskId: 'parent', snapshot: snapshot('running'), childPlan: childPlan(2, 1) })
+  pending.resolve(childPlan(1, 0))
+  await selecting
+  assert.equal(store.getState().childPlan.requestedAgentCount, 2)
 })

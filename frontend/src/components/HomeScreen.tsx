@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AGENT_ROLE } from '../session/session'
+import { nonEmptyVerbatim } from '../session/composer'
 import { Forward } from './Icons'
 import { HaloMark } from './Logo'
 
@@ -24,8 +25,8 @@ export function HomeScreen({ activeTask, onSelectTab, onSubmit }: Props) {
         className="hx-home__form"
         onSubmit={(e) => {
           e.preventDefault()
-          const text = value.trim()
-          if (text) onSubmit(text)
+          const text = nonEmptyVerbatim(value)
+          if (text !== null) onSubmit(text)
         }}
       >
         <input

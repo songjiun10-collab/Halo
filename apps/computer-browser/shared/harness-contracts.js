@@ -60,6 +60,14 @@ const EVENT_TYPES = Object.freeze([
   "evidence_recorded",
   "approval_cancelled",
   "note",
+  "child_plan_accepted",
+  "child_plan_cancelled",
+  "child_result_verified",
+  "message_sent",
+  "message_turn_consumed",
+  "routine_step_advanced",
+  "routine_step_denied",
+  "routine_step_failed",
 ]);
 
 const VERIFICATION_KINDS = Object.freeze(["host", "user"]);
@@ -74,7 +82,54 @@ const AMENDMENT_AUTHORITY = Object.freeze(["user"]); // pages/models can never a
 const EVIDENCE_KINDS = Object.freeze(["host_check", "user_confirmation", "artifact"]);
 const EVIDENCE_VERIFICATION_STATES = Object.freeze(["pending", "verified", "rejected"]);
 
-const PROPOSAL_KINDS = Object.freeze(["actions", "replan", "finish", "need_user"]);
+const PROPOSAL_KINDS = Object.freeze(["actions", "replan", "finish", "need_user", "child_plan", "send_message"]);
+const CHILD_PLAN_FIELDS = Object.freeze(["parentGoalVersion", "requestedAgentCount", "assignments"]);
+const SEND_MESSAGE_FIELDS = Object.freeze([
+  "recipientTaskId",
+  "messageKind",
+  "idempotencyKey",
+  "text",
+  "handoff",
+  "evidenceRefs",
+  "inReplyToMessageId",
+]);
+
+// Multi-agent background runtime plan, Task 3: a parent-only proposal kind
+// that spawns isolated child browser agents. Kept intentionally small so a
+// maximally-sized child_plan_accepted journal event (Task 3 persists one
+// assignment-for-assignment copy of this into the parent journal) still fits
+// MAX_EVENT_BYTES -- this is a defense-in-depth SHAPE bound against a
+// degenerate/hostile planner payload, NOT a product concurrency policy (the
+// design spec is explicit: "the user does not enter the count and it is not
+// a fixed product concurrency constant"). Actual concurrent execution is
+// gated by ResourceAdmission (Task 2) and same-origin serialization (Task 4).
+const MAX_CHILD_ASSIGNMENTS = 8;
+const MAX_CHILD_SUBGOAL_BYTES = 2000;
+const MAX_ENTRY_URL_CHARS = 2048;
+// Mirrors host-settings.js's own MEMORY_POLICIES enum (that module is
+// filesystem-backed and this one is deliberately pure/fs-free, so the two
+// are not shared code) -- keep both in sync if a third policy is ever added.
+const MEMORY_POLICIES = Object.freeze(["budgeted", "user_override"]);
+
+// Subagent communication protocol (spec:
+// docs/superpowers/specs/2026-09-28-subagent-communication-protocol-design.md,
+// plan: docs/superpowers/plans/2026-09-28-subagent-communication-protocol.md).
+// Bounds mirror the spec's section 8.1/10 "proposed v1 defaults for review";
+// they are enforced at the coordinator/controller layer (Task 4), not here --
+// this module only validates message SHAPE.
+const MESSAGE_KINDS = Object.freeze(["progress", "question", "answer", "steer", "handoff", "evidence"]);
+const MAX_MESSAGE_TEXT_BYTES = 8 * 1024; // section 6: "at most 8 KiB UTF-8 in v1"
+const MAX_IDEMPOTENCY_KEY_CHARS = 128;
+const MAX_MESSAGE_EVIDENCE_REFS = 8;
+const MAX_HANDOFF_FIELD_CHARS = 2000;
+const MAX_HANDOFF_LIST_ITEMS = 16;
+const MAX_MESSAGES_PER_TURN = 4; // section 8.1/10 proposed default
+const MAX_MESSAGE_TURN_CONTEXT_BYTES = 8 * 1024; // section 8.1/10 proposed default
+const MAX_PENDING_MESSAGES_PER_CONVERSATION = 50; // section 10: both directions combined
+const MAX_UNOBSERVED_STEER_PER_CHILD = 1; // section 10
+const MAX_STEER_PER_CHILD_PER_WINDOW = 3; // section 10
+const STEER_RATE_WINDOW_MS = 60 * 1000; // section 10: "rolling 60-second window"
+const MAX_MESSAGE_PREVIEW_CHARS = 200; // section 10/14-6
 
 class ContractError extends Error {
   constructor(code, message) {
@@ -143,12 +198,12 @@ function assertIsoTimestamp(value, label) {
   if (Number.isNaN(parsed.getTime())) throw new ContractError("invalid_field", `${label} must be an ISO timestamp`);
 }
 
-function assertStringArray(value, label, { itemLabel, maxLength } = {}) {
+function assertStringArray(value, label, { itemLabel, maxLength, itemMaxChars } = {}) {
   if (!Array.isArray(value)) throw new ContractError("invalid_field", `${label} must be an array`);
   if (typeof maxLength === "number" && value.length > maxLength) {
     throw new ContractError("field_too_large", `${label} exceeds ${maxLength} entries`);
   }
-  value.forEach((entry, i) => assertString(entry, itemLabel || `${label}[${i}]`));
+  value.forEach((entry, i) => assertString(entry, itemLabel || `${label}[${i}]`, { maxChars: itemMaxChars }));
 }
 
 function validateConstraint(constraint, label) {
@@ -306,6 +361,102 @@ function applyAmendment(goal, amendmentInput, host) {
   return validateGoalSpec(nextGoal, "goal");
 }
 
+// Subagent communication protocol handoff (spec section 8.2): the bounded,
+// structured checkpoint/completion summary for kind="handoff" messages.
+// verifiedResults entries cite the existing Evidence.id namespace rather
+// than duplicating evidence content (section 9).
+const HANDOFF_FIELDS = ["objective", "currentState", "verifiedResults", "unresolved", "risks", "suggestedNextAction"];
+
+function validateHandoff(handoff, label) {
+  assertPlainObject(handoff, label);
+  assertNoUnknownKeys(handoff, HANDOFF_FIELDS, label);
+  assertString(handoff.objective, `${label}.objective`, { maxChars: MAX_HANDOFF_FIELD_CHARS });
+  assertString(handoff.currentState, `${label}.currentState`, { maxChars: MAX_HANDOFF_FIELD_CHARS });
+  if (!Array.isArray(handoff.verifiedResults) || handoff.verifiedResults.length > MAX_HANDOFF_LIST_ITEMS) {
+    throw new ContractError("field_too_large", `${label}.verifiedResults must be an array of at most ${MAX_HANDOFF_LIST_ITEMS} entries`);
+  }
+  handoff.verifiedResults.forEach((v, i) => {
+    assertPlainObject(v, `${label}.verifiedResults[${i}]`);
+    assertNoUnknownKeys(v, ["text", "evidenceId"], `${label}.verifiedResults[${i}]`);
+    assertString(v.text, `${label}.verifiedResults[${i}].text`, { maxChars: MAX_HANDOFF_FIELD_CHARS });
+    assertId(v.evidenceId, `${label}.verifiedResults[${i}].evidenceId`);
+  });
+  assertStringArray(handoff.unresolved, `${label}.unresolved`, { maxLength: MAX_HANDOFF_LIST_ITEMS, itemMaxChars: MAX_HANDOFF_FIELD_CHARS });
+  assertStringArray(handoff.risks, `${label}.risks`, { maxLength: MAX_HANDOFF_LIST_ITEMS, itemMaxChars: MAX_HANDOFF_FIELD_CHARS });
+  assertString(handoff.suggestedNextAction, `${label}.suggestedNextAction`, { maxChars: MAX_HANDOFF_FIELD_CHARS });
+  return handoff;
+}
+
+// Validates the kind-dependent content fields shared by a persisted
+// message_sent envelope and a planner-authored send_message proposal: kind
+// determines whether text or handoff is required, and never both (spec
+// section 6: "Do not duplicate the full handoff into text"). Does not check
+// messageId/conversationId/sender-recipient/parentGoalVersion -- those are
+// envelope-only (host-derived) fields, validated by validateMessageEnvelope.
+function validateMessageContent(payload, label) {
+  if (!MESSAGE_KINDS.includes(payload.kind)) {
+    throw new ContractError("unknown_enum", `${label}.kind must be one of ${MESSAGE_KINDS.join("|")}`);
+  }
+  assertString(payload.idempotencyKey, `${label}.idempotencyKey`, { maxChars: MAX_IDEMPOTENCY_KEY_CHARS });
+  if (payload.kind === "handoff") {
+    if (payload.text !== undefined) {
+      throw new ContractError("invalid_field", `${label}.text must be absent for kind="handoff"`);
+    }
+    validateHandoff(payload.handoff, `${label}.handoff`);
+  } else {
+    if (payload.handoff !== undefined) {
+      throw new ContractError("invalid_field", `${label}.handoff is only valid for kind="handoff"`);
+    }
+    assertString(payload.text, `${label}.text`, { maxBytes: MAX_MESSAGE_TEXT_BYTES });
+  }
+  if (payload.evidenceRefs !== undefined) {
+    if (!Array.isArray(payload.evidenceRefs) || payload.evidenceRefs.length > MAX_MESSAGE_EVIDENCE_REFS) {
+      throw new ContractError("field_too_large", `${label}.evidenceRefs must be an array of at most ${MAX_MESSAGE_EVIDENCE_REFS} entries`);
+    }
+    payload.evidenceRefs.forEach((id, i) => assertId(id, `${label}.evidenceRefs[${i}]`));
+  }
+  if (payload.inReplyToMessageId !== undefined) {
+    assertId(payload.inReplyToMessageId, `${label}.inReplyToMessageId`);
+  }
+}
+
+const MESSAGE_ENVELOPE_FIELDS = Object.freeze([
+  "messageId",
+  "conversationId",
+  "parentTaskId",
+  "childTaskId",
+  "senderTaskId",
+  "recipientTaskId",
+  "parentGoalVersion",
+  "kind",
+  "idempotencyKey",
+  "text",
+  "handoff",
+  "evidenceRefs",
+  "inReplyToMessageId",
+]);
+
+// Validates a message_sent journal event payload: the full, host-finalized
+// envelope (spec section 6/7). Sender/recipient AUTHENTICATION (does this
+// senderTaskId really own this journal, is recipientTaskId really its
+// accepted child/parent) is the coordinator's job (Task 4), not this
+// module's -- consistent with child_plan_accepted validating shape only.
+function validateMessageEnvelope(envelope, label = "message") {
+  assertPlainObject(envelope, label);
+  assertNoUnknownKeys(envelope, MESSAGE_ENVELOPE_FIELDS, label);
+  assertId(envelope.messageId, `${label}.messageId`);
+  assertId(envelope.conversationId, `${label}.conversationId`);
+  assertUuid(envelope.parentTaskId, `${label}.parentTaskId`);
+  assertUuid(envelope.childTaskId, `${label}.childTaskId`);
+  assertUuid(envelope.senderTaskId, `${label}.senderTaskId`);
+  assertUuid(envelope.recipientTaskId, `${label}.recipientTaskId`);
+  assertPositiveInteger(envelope.parentGoalVersion, `${label}.parentGoalVersion`);
+  validateMessageContent(envelope, label);
+  return envelope;
+}
+
+const MESSAGE_TURN_CONSUMED_FIELDS = Object.freeze(["consumedMessageIds", "observedAtPlannerCall"]);
+
 const JOURNAL_EVENT_FIELDS = ["seq", "eventId", "taskId", "goalVersion", "type", "payload", "at"];
 
 function validateJournalEvent(event, label = "event") {
@@ -330,6 +481,118 @@ function validateJournalEvent(event, label = "event") {
     assertString(event.payload.actionType, `${label}.payload.actionType`);
     assertPositiveInteger(event.payload.goalVersion, `${label}.payload.goalVersion`);
     assertString(event.payload.reason, `${label}.payload.reason`);
+  }
+  if (["routine_step_advanced", "routine_step_denied", "routine_step_failed"].includes(event.type)) {
+    const payload = event.payload;
+    const commonFields = ["routineId", "revision", "stepIndex", "stepDigest"];
+    const allowedFields = event.type === "routine_step_advanced"
+      ? [...commonFields, "actionId"]
+      : event.type === "routine_step_denied"
+        ? [...commonFields, "decision", "reasons"]
+        : [...commonFields, "actionId", "status", "errorCode"];
+    assertNoUnknownKeys(payload, allowedFields, `${label}.payload`);
+    assertId(payload.routineId, `${label}.payload.routineId`);
+    assertPositiveInteger(payload.revision, `${label}.payload.revision`);
+    assertNonNegativeInteger(payload.stepIndex, `${label}.payload.stepIndex`);
+    assertString(payload.stepDigest, `${label}.payload.stepDigest`, { maxChars: 64 });
+    if (!/^[0-9a-f]{64}$/.test(payload.stepDigest)) {
+      throw new ContractError("invalid_field", `${label}.payload.stepDigest must be a lowercase SHA-256 digest`);
+    }
+    if (event.type !== "routine_step_denied") {
+      assertId(payload.actionId, `${label}.payload.actionId`);
+    }
+    if (event.type === "routine_step_denied") {
+      if (!["deny", "quarantine"].includes(payload.decision)) {
+        throw new ContractError("unknown_enum", `${label}.payload.decision must be deny or quarantine`);
+      }
+      assertStringArray(payload.reasons, `${label}.payload.reasons`, { maxLength: 16, itemMaxChars: 256 });
+    }
+    if (event.type === "routine_step_failed") {
+      if (!["failed", "cancelled"].includes(payload.status)) {
+        throw new ContractError("unknown_enum", `${label}.payload.status must be failed or cancelled`);
+      }
+      if (payload.errorCode !== undefined) {
+        assertString(payload.errorCode, `${label}.payload.errorCode`, { maxChars: 128 });
+      }
+    }
+  }
+  // child_plan_accepted/cancelled (Task 3): host-authored record of a parent
+  // task's child plan. planId/childId/assignments are always host-minted --
+  // never accepted verbatim from planner output -- so this validates SHAPE
+  // (the coordinator is the one place that decides the actual values).
+  if (event.type === "child_plan_accepted") {
+    assertId(event.payload.planId, `${label}.payload.planId`);
+    assertPositiveInteger(event.payload.parentGoalVersion, `${label}.payload.parentGoalVersion`);
+    assertPositiveInteger(event.payload.requestedAgentCount, `${label}.payload.requestedAgentCount`);
+    if (!MEMORY_POLICIES.includes(event.payload.memoryPolicy)) {
+      throw new ContractError("unknown_enum", `${label}.payload.memoryPolicy must be one of ${MEMORY_POLICIES.join("|")}`);
+    }
+    assertString(event.payload.actor, `${label}.payload.actor`);
+    if (!Array.isArray(event.payload.assignments) || event.payload.assignments.length !== event.payload.requestedAgentCount) {
+      throw new ContractError("invalid_field", `${label}.payload.assignments must match requestedAgentCount`);
+    }
+    event.payload.assignments.forEach((a, i) => {
+      assertPlainObject(a, `${label}.payload.assignments[${i}]`);
+      assertUuid(a.childId, `${label}.payload.assignments[${i}].childId`);
+      assertString(a.subgoal, `${label}.payload.assignments[${i}].subgoal`, { maxBytes: MAX_CHILD_SUBGOAL_BYTES });
+      assertString(a.entryUrl, `${label}.payload.assignments[${i}].entryUrl`, { maxChars: MAX_ENTRY_URL_CHARS });
+      assertString(a.origin, `${label}.payload.assignments[${i}].origin`);
+    });
+  }
+  if (event.type === "child_plan_cancelled") {
+    assertId(event.payload.planId, `${label}.payload.planId`);
+    assertString(event.payload.reason, `${label}.payload.reason`, { maxChars: 2000 });
+  }
+  // child_result_verified (Task 4): host-authored record that the PARENT
+  // itself read a child's own durable checkpoint/evidence and confirmed it --
+  // never a copy of the child's self-report. verifiedCriteria always cites
+  // real evidenceIds the parent independently found in the child's own
+  // journal (ChildAgentCoordinator.verifyChildResult); this event type exists
+  // so that citation itself is durable and replayable, not just an in-memory
+  // side effect of verification.
+  if (event.type === "child_result_verified") {
+    assertUuid(event.payload.childId, `${label}.payload.childId`);
+    assertId(event.payload.planId, `${label}.payload.planId`);
+    assertPositiveInteger(event.payload.childCheckpointGoalVersion, `${label}.payload.childCheckpointGoalVersion`);
+    if (!Array.isArray(event.payload.verifiedCriteria) || event.payload.verifiedCriteria.length === 0) {
+      throw new ContractError("invalid_field", `${label}.payload.verifiedCriteria must be a non-empty array`);
+    }
+    event.payload.verifiedCriteria.forEach((v, i) => {
+      assertPlainObject(v, `${label}.payload.verifiedCriteria[${i}]`);
+      assertId(v.criterionId, `${label}.payload.verifiedCriteria[${i}].criterionId`);
+      assertId(v.evidenceId, `${label}.payload.verifiedCriteria[${i}].evidenceId`);
+    });
+  }
+  // message_sent/message_turn_consumed (subagent communication protocol
+  // Task 1): the sender's own journal stores message_sent; the recipient's
+  // own journal stores message_turn_consumed. Neither event type implies
+  // anything about which task this journal belongs to -- that cross-check
+  // is the coordinator's job (Task 4).
+  if (event.type === "message_sent") {
+    validateMessageEnvelope(event.payload, `${label}.payload`);
+  }
+  if (event.type === "message_turn_consumed") {
+    assertNoUnknownKeys(event.payload, MESSAGE_TURN_CONSUMED_FIELDS, `${label}.payload`);
+    if (!Array.isArray(event.payload.consumedMessageIds) || event.payload.consumedMessageIds.length === 0) {
+      throw new ContractError("invalid_field", `${label}.payload.consumedMessageIds must be a non-empty array`);
+    }
+    if (event.payload.consumedMessageIds.length > MAX_MESSAGES_PER_TURN) {
+      throw new ContractError(
+        "field_too_large",
+        `${label}.payload.consumedMessageIds exceeds the ${MAX_MESSAGES_PER_TURN}-item per-turn bound`,
+      );
+    }
+    const seenConsumedIds = new Set();
+    event.payload.consumedMessageIds.forEach((id, i) => {
+      assertId(id, `${label}.payload.consumedMessageIds[${i}]`);
+      if (seenConsumedIds.has(id)) {
+        throw new ContractError("invalid_field", `${label}.payload.consumedMessageIds has a duplicate entry`);
+      }
+      seenConsumedIds.add(id);
+    });
+    if (event.payload.observedAtPlannerCall !== undefined) {
+      assertNonNegativeInteger(event.payload.observedAtPlannerCall, `${label}.payload.observedAtPlannerCall`);
+    }
   }
   assertIsoTimestamp(event.at, `${label}.at`);
   const size = Buffer.byteLength(JSON.stringify(event), "utf8");
@@ -407,14 +670,58 @@ function validateEvidence(evidence, label = "evidence") {
   return evidence;
 }
 
+// Derives the normalized origin (scheme + lowercased/punycode host + only a
+// non-default port) HALO uses for same-origin-vs-concurrent decisions
+// (Task 4), rejecting anything that is not an exact, credential-free
+// HTTP(S) URL -- an entry URL is where the host performs the child's initial
+// navigation itself, never a value dispatched to page/model-controlled code.
+function deriveOrigin(urlString, label = "entryUrl") {
+  let parsed;
+  try {
+    parsed = new URL(urlString);
+  } catch {
+    throw new ContractError("invalid_field", `${label} must be a valid absolute URL`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ContractError("invalid_field", `${label} must use http or https`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new ContractError("invalid_field", `${label} must not contain embedded credentials`);
+  }
+  return parsed.origin;
+}
+
+function validateChildAssignment(assignment, label) {
+  assertPlainObject(assignment, label);
+  assertNoUnknownKeys(assignment, ["subgoal", "entryUrl"], label);
+  assertString(assignment.subgoal, `${label}.subgoal`, { maxBytes: MAX_CHILD_SUBGOAL_BYTES });
+  assertString(assignment.entryUrl, `${label}.entryUrl`, { maxChars: MAX_ENTRY_URL_CHARS });
+  deriveOrigin(assignment.entryUrl, `${label}.entryUrl`);
+  return assignment;
+}
+
 // Proposal is the Planner->host wire message (section 6). Only the envelope
 // shape is validated here; per-action-type payloads (navigate/follow_link/
-// scroll/observe) are the browser adapter's concern (Task 4).
+// scroll/observe) are the browser adapter's concern (Task 4). `child_plan`
+// (Task 3) is a parent-only kind -- rejecting it from a child planner's own
+// transport is planner-stdio.js's job (it knows which role it is), since
+// this function has no notion of parent/child.
 function validateProposalEnvelope(proposal, label = "proposal") {
   assertPlainObject(proposal, label);
   assertNoUnknownKeys(
     proposal,
-    ["taskId", "goalVersion", "basedOnObservationId", "criterionIds", "kind", "actions", "reason", "evidenceIds"],
+    [
+      "taskId",
+      "goalVersion",
+      "basedOnObservationId",
+      "criterionIds",
+      "kind",
+      "actions",
+      "reason",
+      "evidenceIds",
+      ...CHILD_PLAN_FIELDS,
+      ...SEND_MESSAGE_FIELDS,
+    ],
     label,
   );
   assertUuid(proposal.taskId, `${label}.taskId`);
@@ -433,10 +740,38 @@ function validateProposalEnvelope(proposal, label = "proposal") {
 
   if (proposal.kind === "finish") {
     assertStringArray(proposal.evidenceIds, `${label}.evidenceIds`);
-    disallow(["actions", "reason"]);
+    disallow(["actions", "reason", ...CHILD_PLAN_FIELDS, ...SEND_MESSAGE_FIELDS]);
   } else if (proposal.kind === "replan" || proposal.kind === "need_user") {
     assertString(proposal.reason, `${label}.reason`, { maxChars: 2000 });
-    disallow(["actions", "evidenceIds"]);
+    disallow(["actions", "evidenceIds", ...CHILD_PLAN_FIELDS, ...SEND_MESSAGE_FIELDS]);
+  } else if (proposal.kind === "child_plan") {
+    assertPositiveInteger(proposal.parentGoalVersion, `${label}.parentGoalVersion`);
+    assertPositiveInteger(proposal.requestedAgentCount, `${label}.requestedAgentCount`);
+    if (!Array.isArray(proposal.assignments) || proposal.assignments.length === 0) {
+      throw new ContractError("invalid_field", `${label}.assignments must be a non-empty array`);
+    }
+    if (proposal.assignments.length > MAX_CHILD_ASSIGNMENTS) {
+      throw new ContractError("field_too_large", `${label}.assignments exceeds the ${MAX_CHILD_ASSIGNMENTS}-item bound`);
+    }
+    if (proposal.requestedAgentCount !== proposal.assignments.length) {
+      throw new ContractError("invalid_field", `${label}.requestedAgentCount must equal assignments.length`);
+    }
+    proposal.assignments.forEach((a, i) => validateChildAssignment(a, `${label}.assignments[${i}]`));
+    disallow(["actions", "reason", "evidenceIds", ...SEND_MESSAGE_FIELDS]);
+  } else if (proposal.kind === "send_message") {
+    assertUuid(proposal.recipientTaskId, `${label}.recipientTaskId`);
+    validateMessageContent(
+      {
+        kind: proposal.messageKind,
+        idempotencyKey: proposal.idempotencyKey,
+        text: proposal.text,
+        handoff: proposal.handoff,
+        evidenceRefs: proposal.evidenceRefs,
+        inReplyToMessageId: proposal.inReplyToMessageId,
+      },
+      label,
+    );
+    disallow(["actions", "reason", "evidenceIds", ...CHILD_PLAN_FIELDS]);
   } else {
     // kind === "actions"
     if (!Array.isArray(proposal.actions) || proposal.actions.length === 0) {
@@ -446,7 +781,7 @@ function validateProposalEnvelope(proposal, label = "proposal") {
       throw new ContractError("field_too_large", `${label}.actions exceeds the ${MAX_ACTIONS_PER_PROPOSAL}-item batch limit`);
     }
     proposal.actions.forEach((a, i) => assertPlainObject(a, `${label}.actions[${i}]`));
-    disallow(["reason", "evidenceIds"]);
+    disallow(["reason", "evidenceIds", ...CHILD_PLAN_FIELDS, ...SEND_MESSAGE_FIELDS]);
   }
   return proposal;
 }
@@ -466,6 +801,26 @@ module.exports = {
   MAX_CONTEXT_PACKET_BYTES,
   MAX_RECENT_EVENTS_IN_CONTEXT,
   MAX_ACTIONS_PER_PROPOSAL,
+  MAX_CHILD_ASSIGNMENTS,
+  MAX_CHILD_SUBGOAL_BYTES,
+  MAX_ENTRY_URL_CHARS,
+  MEMORY_POLICIES,
+  MESSAGE_KINDS,
+  MAX_MESSAGE_TEXT_BYTES,
+  MAX_IDEMPOTENCY_KEY_CHARS,
+  MAX_MESSAGE_EVIDENCE_REFS,
+  MAX_HANDOFF_FIELD_CHARS,
+  MAX_HANDOFF_LIST_ITEMS,
+  MAX_MESSAGES_PER_TURN,
+  MAX_MESSAGE_TURN_CONTEXT_BYTES,
+  MAX_PENDING_MESSAGES_PER_CONVERSATION,
+  MAX_UNOBSERVED_STEER_PER_CHILD,
+  MAX_STEER_PER_CHILD_PER_WINDOW,
+  STEER_RATE_WINDOW_MS,
+  MAX_MESSAGE_PREVIEW_CHARS,
+  SEND_MESSAGE_FIELDS,
+  MESSAGE_ENVELOPE_FIELDS,
+  MESSAGE_TURN_CONSUMED_FIELDS,
   MAX_PLANNER_FRAME_BYTES,
   PLANNER_RESPONSE_TIMEOUT_MS,
   APPROVAL_EXPIRY_MS,
@@ -489,4 +844,9 @@ module.exports = {
   validateCheckpointEnvelope,
   validateEvidence,
   validateProposalEnvelope,
+  validateChildAssignment,
+  validateHandoff,
+  validateMessageContent,
+  validateMessageEnvelope,
+  deriveOrigin,
 };

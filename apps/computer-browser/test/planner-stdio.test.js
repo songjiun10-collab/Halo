@@ -6,7 +6,7 @@ const path = require("node:path");
 const { EventEmitter } = require("node:events");
 
 const { PlannerStdioAdapter, PlannerTransportError } = require("../main/harness/planner-stdio");
-const { MAX_PLANNER_FRAME_BYTES } = require("../shared/harness-contracts");
+const { MAX_PLANNER_FRAME_BYTES, ContractError, validateProposalEnvelope } = require("../shared/harness-contracts");
 
 const TASK_ID = "11111111-1111-1111-1111-111111111111";
 
@@ -231,5 +231,168 @@ test("real end-to-end: the scripted-planner.js example worker answers over real 
   const proposal = await adapter.next(context, {});
   assert.equal(proposal.kind, "actions");
   assert.deepEqual(proposal.criterionIds, ["onlyC"]);
+  await adapter.close();
+});
+
+// --- Task 3 (multi-agent background runtime plan): a child agent's planner
+// must never be able to spawn grandchildren. child_plan is a parent-only
+// proposal kind; a child-role transport rejects it at the wire boundary
+// rather than trusting the (untrusted, model-provider) worker process to
+// police its own role.
+
+test("constructor rejects an unknown role", () => {
+  assert.throws(
+    () => new PlannerStdioAdapter({ role: "grandparent" }),
+    (err) => err instanceof PlannerTransportError && err.code === "invalid_config",
+  );
+});
+
+test("defaults to role 'parent' when none is given", async () => {
+  const fakeChild = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", args: [], spawnFn: () => fakeChild });
+  const pending = adapter.next(makeContext(), {});
+  await Promise.resolve();
+  const sentRequest = JSON.parse(fakeChild.stdin.written[0]);
+  const childPlanProposal = { kind: "child_plan", parentGoalVersion: 1, requestedAgentCount: 1, assignments: [] };
+  fakeChild.stdout.emit("data", `${JSON.stringify({ requestId: sentRequest.requestId, proposal: childPlanProposal })}\n`);
+  const proposal = await pending;
+  assert.deepEqual(proposal, childPlanProposal);
+  await adapter.close();
+});
+
+test("a role:'child' transport rejects a child_plan proposal from its worker (child_plan_forbidden)", async () => {
+  const fakeChild = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", args: [], spawnFn: () => fakeChild, role: "child" });
+  const pending = adapter.next(makeContext(), {});
+  await Promise.resolve();
+  const sentRequest = JSON.parse(fakeChild.stdin.written[0]);
+  const childPlanProposal = { kind: "child_plan", parentGoalVersion: 1, requestedAgentCount: 1, assignments: [] };
+  fakeChild.stdout.emit("data", `${JSON.stringify({ requestId: sentRequest.requestId, proposal: childPlanProposal })}\n`);
+  await assert.rejects(pending, (err) => err instanceof PlannerTransportError && err.code === "child_plan_forbidden");
+  await adapter.close();
+});
+
+test("a role:'child' transport still accepts an ordinary actions proposal", async () => {
+  const fakeChild = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", args: [], spawnFn: () => fakeChild, role: "child" });
+  const pending = adapter.next(makeContext(), {});
+  await Promise.resolve();
+  const sentRequest = JSON.parse(fakeChild.stdin.written[0]);
+  const actionsProposal = { kind: "actions", actions: [{ type: "observe" }] };
+  fakeChild.stdout.emit("data", `${JSON.stringify({ requestId: sentRequest.requestId, proposal: actionsProposal })}\n`);
+  const proposal = await pending;
+  assert.deepEqual(proposal, actionsProposal);
+  await adapter.close();
+});
+
+// --- Subagent communication protocol Task 1: send_message proposal contract
+// (spec section 6/14-4). Only SHAPE is checked here via
+// contracts.validateProposalEnvelope() directly -- this adapter does not
+// itself call the full validator (see the child_plan-only role gate above),
+// so these are pure contract-level tests, matching how task-store.test.js
+// exercises validateJournalEvent directly.
+
+function baseSendMessageProposal(overrides = {}) {
+  return {
+    taskId: TASK_ID,
+    goalVersion: 1,
+    basedOnObservationId: "obs-1",
+    criterionIds: [],
+    kind: "send_message",
+    recipientTaskId: "22222222-2222-2222-2222-222222222222",
+    messageKind: "progress",
+    idempotencyKey: "idem-1",
+    text: "hello",
+    ...overrides,
+  };
+}
+
+test("validateProposalEnvelope accepts a well-formed send_message proposal", () => {
+  assert.doesNotThrow(() => validateProposalEnvelope(baseSendMessageProposal()));
+});
+
+test("validateProposalEnvelope rejects a send_message proposal with an unknown messageKind", () => {
+  assert.throws(
+    () => validateProposalEnvelope(baseSendMessageProposal({ messageKind: "not_a_real_kind" })),
+    (err) => err instanceof ContractError && err.code === "unknown_enum",
+  );
+});
+
+test("validateProposalEnvelope rejects a send_message proposal that also carries actions-kind fields", () => {
+  assert.throws(
+    () => validateProposalEnvelope(baseSendMessageProposal({ actions: [{ type: "observe" }] })),
+    (err) => err instanceof ContractError && err.code === "invalid_shape",
+  );
+});
+
+test("validateProposalEnvelope rejects an actions proposal that smuggles in send_message fields", () => {
+  assert.throws(
+    () =>
+      validateProposalEnvelope({
+        taskId: TASK_ID,
+        goalVersion: 1,
+        basedOnObservationId: "obs-1",
+        criterionIds: [],
+        kind: "actions",
+        actions: [{ type: "observe" }],
+        recipientTaskId: "22222222-2222-2222-2222-222222222222",
+      }),
+    (err) => err instanceof ContractError && err.code === "invalid_shape",
+  );
+});
+
+test("validateProposalEnvelope rejects a send_message proposal missing recipientTaskId", () => {
+  const proposal = baseSendMessageProposal();
+  delete proposal.recipientTaskId;
+  assert.throws(
+    () => validateProposalEnvelope(proposal),
+    (err) => err instanceof ContractError,
+  );
+});
+
+// --- Subagent communication protocol Task 3: planner role/direction gate.
+// steer is a parent-to-child-only message kind (spec section 10); a child
+// planner's own worker must never be trusted to police this itself, so the
+// role:'child' transport rejects it at the wire boundary -- the same
+// precedent as the child_plan_forbidden gate above. Recipient-relationship
+// and stale-goal checks are out of scope here (no authoritative
+// task-relationship view at this layer); those belong to the coordinator
+// (Task 4).
+
+test("a role:'child' transport rejects a send_message/steer proposal from its worker (steer_forbidden)", async () => {
+  const fakeChild = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", args: [], spawnFn: () => fakeChild, role: "child" });
+  const pending = adapter.next(makeContext(), {});
+  await Promise.resolve();
+  const sentRequest = JSON.parse(fakeChild.stdin.written[0]);
+  const steerProposal = baseSendMessageProposal({ messageKind: "steer" });
+  fakeChild.stdout.emit("data", `${JSON.stringify({ requestId: sentRequest.requestId, proposal: steerProposal })}\n`);
+  await assert.rejects(pending, (err) => err instanceof PlannerTransportError && err.code === "steer_forbidden");
+  await adapter.close();
+});
+
+test("a role:'child' transport still accepts a send_message proposal with a non-steer messageKind", async () => {
+  const fakeChild = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", args: [], spawnFn: () => fakeChild, role: "child" });
+  const pending = adapter.next(makeContext(), {});
+  await Promise.resolve();
+  const sentRequest = JSON.parse(fakeChild.stdin.written[0]);
+  const progressProposal = baseSendMessageProposal({ messageKind: "progress" });
+  fakeChild.stdout.emit("data", `${JSON.stringify({ requestId: sentRequest.requestId, proposal: progressProposal })}\n`);
+  const proposal = await pending;
+  assert.deepEqual(proposal, progressProposal);
+  await adapter.close();
+});
+
+test("a role:'parent' transport still accepts a send_message/steer proposal from its worker", async () => {
+  const fakeChild = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", args: [], spawnFn: () => fakeChild, role: "parent" });
+  const pending = adapter.next(makeContext(), {});
+  await Promise.resolve();
+  const sentRequest = JSON.parse(fakeChild.stdin.written[0]);
+  const steerProposal = baseSendMessageProposal({ messageKind: "steer" });
+  fakeChild.stdout.emit("data", `${JSON.stringify({ requestId: sentRequest.requestId, proposal: steerProposal })}\n`);
+  const proposal = await pending;
+  assert.deepEqual(proposal, steerProposal);
   await adapter.close();
 });

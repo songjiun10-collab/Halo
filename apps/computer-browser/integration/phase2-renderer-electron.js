@@ -127,8 +127,11 @@ async function installRendererDiagnostics(win, report) {
   });
   // Install before navigation, including on reload, so CSP violations at
   // bundle/font startup cannot disappear before a post-load listener.
+  process.stdout.write("[phase2] debugger attach\n");
   win.webContents.debugger.attach("1.3");
+  process.stdout.write("[phase2] debugger Page.enable\n");
   await win.webContents.debugger.sendCommand("Page.enable");
+  process.stdout.write("[phase2] debugger install startup probe\n");
   await win.webContents.debugger.sendCommand("Page.addScriptToEvaluateOnNewDocument", {
     source: `
       window.__phase2Diagnostics = { cspViolations: [], exceptions: [], taskPushes: [] };
@@ -146,15 +149,22 @@ async function installRendererDiagnostics(win, report) {
       }, { once: true });
     `,
   });
+  process.stdout.write("[phase2] debugger ready\n");
 }
 
 async function main() {
   const startedAt = Date.now();
+  process.on("exit", (code) => process.stdout.write(`[phase2] process exit ${code}\n`));
+  process.on("uncaughtExceptionMonitor", (error) => process.stderr.write(`[phase2] uncaught exception: ${error.stack || error}\n`));
+  process.on("unhandledRejection", (error) => process.stderr.write(`[phase2] unhandled rejection: ${error?.stack || error}\n`));
   const runRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-phase2-renderer-"));
   const storageRoot = process.env.HALO_TEST_STORAGE_ROOT || path.join(runRoot, "tasks");
   app.setPath("userData", path.join(runRoot, "electron-profile"));
   await fs.access(RENDERER).catch(() => { throw new Error("Renderer bundle missing; run npm run build first"); });
   await app.whenReady();
+  // Keep cleanup/reporting alive after the hidden test window closes. Without
+  // this, macOS may terminate Electron before RESULT_JSON is flushed.
+  app.on("window-all-closed", () => {});
 
   const report = {
     real: true,
@@ -189,13 +199,16 @@ async function main() {
   };
 
   try {
+    mark("fixture startup");
     fixture = await startFixtureServer();
     const socketDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "halo-phase2-approver-")));
     await fs.chmod(socketDir, 0o700);
     const socketPath = path.join(socketDir, "approver.sock");
     approver = spawnApprover(socketPath);
+    mark("approver startup");
     await approver.ready;
 
+    mark("Electron readiness");
     win = new BrowserWindow({
       show: false,
       width: 1280,
@@ -214,6 +227,8 @@ async function main() {
         })}`],
       },
     });
+    win.once("closed", () => process.stdout.write("[phase2] test window closed\n"));
+    mark("window created");
     const surfaces = new BrowserSurfaces(win, { isUserControlled: (taskId) => taskHost.canUseTaskBrowser(taskId) });
     taskHost = new TaskHost({
       storageRoot,
@@ -249,9 +264,15 @@ async function main() {
     registerIpc(win, new ControlApi({ window: win, socketPath }), { taskHost });
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", (event) => event.preventDefault());
-    await installRendererDiagnostics(win, report);
     ui = driver(win);
+    mark("renderer file load");
     await win.loadFile(RENDERER);
+    mark("renderer diagnostics setup");
+    await installRendererDiagnostics(win, report);
+    const reloaded = new Promise((resolve) => win.webContents.once("did-finish-load", resolve));
+    win.webContents.reload();
+    await reloaded;
+    mark("renderer readiness");
     await waitFor("React renderer and real preload", () => ui.evaluate("Boolean(document.querySelector('.hx-app') && window.haloBrowser?.onTaskEvent && window.haloBrowser?.getTaskEvents)"));
     assert.deepEqual(await taskHost.listTasks(), [], "test storage must start empty");
     const csp = await ui.evaluate("document.querySelector('meta[http-equiv=\"Content-Security-Policy\"]')?.content || ''");
@@ -291,8 +312,11 @@ async function main() {
     }
     const awaiting = await taskHost.getTaskDetail(firstId);
     assert.equal(awaiting.snapshot.state, "awaiting_verification");
-    assert.equal(awaiting.snapshot.criteriaStatus.C1.status, "pending");
+    assert.equal(awaiting.snapshot.criteriaStatus.find((criterion) => criterion.criterionId === "C1").status, "pending");
     assert.deepEqual(fixture.requestLog.map((request) => request.path), ["/", "/page2", "/page3"]);
+    await waitFor("selected browser surface restored after approval closes", () => views.get(firstId)?.getVisible() === true);
+    assert.ok([...views.entries()].every(([taskId, view]) => taskId === firstId ? view.getVisible() : !view.getVisible()),
+      "closing the approval sheet must reveal only the selected task's native browser surface");
 
     mark("DOM criterion confirmation and durable timeline");
     await ui.click('.hx-halo');
@@ -310,8 +334,11 @@ async function main() {
     await ui.click('.hx-activity__toggle');
     await waitFor("journal event rows", () => ui.evaluate(`document.querySelectorAll('.hx-steps li').length === ${firstEvents.length}`));
     report.approvalFlow = { taskId: firstId, approvalCount, finalState: "completed", journalEvents: firstEvents.length };
+    await ui.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+    await waitFor("activity panel closed", () => ui.evaluate("!document.querySelector('#hx-activity')"));
 
     mark("DOM denial never dispatches and takeover returns control");
+    await ui.click('.hx-halo');
     await ui.click('[aria-label="New task"]');
     const deniedGoal = `  Deny journey  ${fixture.url}  `;
     await ui.submit('[aria-label="What should the agent do?"]', deniedGoal);
@@ -336,19 +363,25 @@ async function main() {
 
     mark("DOM exact goal amendment and task scope switch");
     await ui.click('.hx-halo');
+    mark("goal amendment chat open");
     const amendment = "  Keep the original goal.  목표 수정: 확인만 하고 멈춰 주세요.  ";
     await ui.submit('[aria-label="Amend task goal"]', amendment);
+    mark("goal amendment submitted");
     await waitFor("amendment persisted", async () => (await taskHost.getTaskDetail(secondId)).goal.goalVersion === 2);
+    mark("goal amendment persisted");
     const amended = await taskHost.getTaskDetail(secondId);
     assert.equal(amended.goal.originalRequest, deniedGoal, "amendment must not rewrite originalRequest");
     assert.equal(amended.goal.amendments.at(-1).text, amendment, "amendment text must remain verbatim");
     assert.equal(amended.goal.amendments.at(-1).authority, "user");
     await waitFor("amendment visible in chat", async () => (await ui.text('#hx-chat')).includes(amendment));
+    mark("goal amendment rendered");
     await ui.click(`[data-task-id="${firstId}"]`);
+    mark("first task selected");
     await waitFor("first task chat selected", () => ui.evaluate(`document.querySelector('.hx-app')?.dataset.activeTaskId === ${JSON.stringify(firstId)}`));
     assert.ok(!(await ui.text('#hx-chat')).includes(amendment), "second task amendment must not appear in first task chat");
     assert.equal((await taskHost.getTaskDetail(firstId)).goal.goalVersion, 1);
     await ui.click('[aria-label="Close chat"]');
+    mark("first task chat closed");
     await waitFor("selected native task surface", () => views.get(firstId).getVisible());
     assert.equal(views.get(firstId).webContents.getURL(), `${fixture.url}page3`);
     assert.equal(views.get(secondId).getVisible(), false, "nonselected native task surface must remain hidden");
@@ -361,13 +394,18 @@ async function main() {
     mark("renderer reload and diagnostics");
     await health();
     await win.loadFile(RENDERER);
-    await waitFor("reloaded React renderer", () => ui.ready('.hx-halo'));
+    await waitFor("reloaded React renderer", () => ui.evaluate("Boolean(document.querySelector('.hx-app') && window.haloBrowser?.onTaskEvent)"));
+    await ui.evaluate("document.querySelector('.hx-halo')?.focus()");
     await ui.click('.hx-halo');
     await waitFor("saved task list after renderer reload", () => ui.ready(`[data-task-id="${firstId}"]`));
     await ui.click(`[data-task-id="${firstId}"]`);
     await waitFor("completed task reselected after renderer reload", () => ui.evaluate(`document.querySelector('.hx-app')?.dataset.activeTaskId === ${JSON.stringify(firstId)}`));
     assert.equal((await taskHost.getTaskDetail(firstId)).snapshot.state, "completed");
     assert.equal(fixture.requestLog.length, requestCountBeforeDenial, "UI task switching and reload must not replay completed navigation");
+    const beforeHumanNavigation = fixture.requestLog.length;
+    await ui.submit('[aria-label="Address"]', fixture.url);
+    await waitFor("address bar navigation on the selected native page", () => views.get(firstId).webContents.getURL() === fixture.url);
+    assert.equal(fixture.requestLog.length, beforeHumanNavigation + 1, "address entry must navigate the real task browser exactly once");
     await health();
     assert.equal(report.consoleErrors.length, 0, `renderer console errors: ${JSON.stringify(report.consoleErrors)}`);
     assert.deepEqual(report.cspViolations, [], "production renderer must not violate CSP");
@@ -377,6 +415,7 @@ async function main() {
     assert.ok(report.decisions.length >= 5 && report.decisions.every((decision) => decision.decision === "review"), "real Python approver must gate all fixture navigation");
     report.requestPaths = fixture.requestLog.map((request) => request.path);
     report.rendererReload = { savedTasksVisible: true, noNavigationReplay: true };
+    report.humanAddressNavigation = { realNativeSurface: true, requestPath: fixture.requestLog.at(-1).path };
     report.pass = true;
     mark("passed");
   } catch (error) {
@@ -387,13 +426,13 @@ async function main() {
       report.tasks = await taskHost?.listTasks().catch(() => []);
     }
   } finally {
+    if (win && !win.isDestroyed()) win.destroy();
     const cleanup = await Promise.allSettled([
       taskHost?.close(),
       fixture?.stop(),
     ]);
     const cleanupErrors = cleanup.filter((result) => result.status === "rejected").map((result) => String(result.reason));
     if (approver?.child && approver.child.exitCode === null && !approver.child.killed) approver.child.kill();
-    if (win && !win.isDestroyed()) win.destroy();
     if (cleanupErrors.length) { report.pass = false; report.cleanupErrors = cleanupErrors; }
     report.wallMs = Date.now() - startedAt;
     process.stdout.write(`RESULT_JSON:${JSON.stringify(report)}\n`);

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -91,20 +92,37 @@ def _evidence_check(root):
 
 
 def _state_dir_check(root):
+    """halo/gateway_app.py의 create_app()이 실제로 강제하는 것과 동일한 기준으로
+    검사한다 (symlink 거부 + 소유자(uid) 검사 + group/other 접근 차단) — mode만
+    보던 이전 검사는 gateway가 실제로 거부할 디렉터리를 통과로 보고할 수 있었다.
+    """
     state_dir = os.environ.get("HALO_STATE_DIR")
     if state_dir is None:
         return {"name": "HALO_STATE_DIR", "ok": None, "returncode": None,
                 "output": "미설정 — gateway는 기본 state 위치를 쓴다; 운영 배포 시 "
                           "0700 디렉터리로 설정해야 한다"}
     path = Path(state_dir)
+    if path.is_symlink():
+        return {"name": "HALO_STATE_DIR", "ok": False, "returncode": None,
+                "output": f"{state_dir} — symlink는 허용되지 않는다 (gateway_app.create_app()과 동일 기준)"}
     if not path.is_dir():
         return {"name": "HALO_STATE_DIR", "ok": False, "returncode": None,
                 "output": f"{state_dir} — 디렉터리가 존재하지 않는다"}
-    mode = path.stat().st_mode & 0o777
-    ok = mode == 0o700
-    return {"name": "HALO_STATE_DIR", "ok": ok, "returncode": None,
-            "output": f"{state_dir} — mode {oct(mode)} "
-                      f"({'0700 요구 충족' if ok else '0700 요구 미충족'})"}
+    info = path.stat()
+    mode = info.st_mode & 0o777
+    owned = info.st_uid == os.getuid()
+    private = mode & 0o077 == 0
+    ok = owned and private
+    if ok:
+        output = f"{state_dir} — mode {oct(mode)}, uid {info.st_uid} (gateway_app.create_app()과 동일 기준 충족)"
+    else:
+        problems = []
+        if not owned:
+            problems.append(f"소유자 uid {info.st_uid} != 현재 uid {os.getuid()}")
+        if not private:
+            problems.append(f"mode {oct(mode)} — group/other 접근 가능")
+        output = f"{state_dir} — " + "; ".join(problems)
+    return {"name": "HALO_STATE_DIR", "ok": ok, "returncode": None, "output": output}
 
 
 def _results_check(root):
@@ -120,8 +138,9 @@ def _results_check(root):
 
 def _rust_check(root):
     root = Path(root)
-    cargo = root / ".venv" / "cargo" / "bin" / "cargo"
-    if not cargo.is_file():
+    venv_cargo = root / ".venv" / "cargo" / "bin" / "cargo"
+    cargo = venv_cargo if venv_cargo.is_file() else shutil.which("cargo")
+    if not cargo:
         return {"name": "rust-toolchain", "ok": None, "returncode": None,
                 "output": "not-installed — 환경 미설치는 코드 실패가 아니다 "
                           "(저장소 선례); .venv/cargo 또는 PATH의 cargo로 검증 가능"}

@@ -1,4 +1,5 @@
 import type { BrowserSnapshot, GoalSpec, JournalEvent, TaskSnapshot, TaskSummary } from './api'
+import type { ChildPlanSummary } from './child-agents'
 
 export type Verdict = 'allow' | 'review' | 'deny' | 'quarantine'
 export type Control = 'claude' | 'approval' | 'you'
@@ -26,6 +27,7 @@ export interface SessionState {
   snapshot: TaskSnapshot | null
   browser: BrowserSnapshot | null
   recoveryReason: string | null
+  childPlan: ChildPlanSummary | null
   task: string
   control: Control
   finished: boolean

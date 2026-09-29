@@ -1,13 +1,14 @@
 import { getDomain } from 'tldts'
 import type { BrowserAction, HaloBrowserApi, JournalEvent, TaskEvent, TaskSnapshot } from './api'
 import type { Approval, Control, PendingCriterion, SessionState, Tab, TabActivity, TimelineEvent } from './types'
+import { summarizeChildPlan } from './child-agents.ts'
 
 export const AGENT = 'Agent'
 export const AGENT_ROLE = 'Agent'
 export const NEW_TAB_URL = 'halo://newtask'
 export const controlLabel: Record<Control, string> = { claude: 'Agent is browsing', approval: 'Agent is waiting for you', you: 'You are browsing' }
 export const currentUrl = (tab?: Tab) => tab?.history[tab.index] ?? ''
-export const canNavigate = (s: SessionState) => !!s.activeTaskId && !!s.snapshot && ['paused', 'completed', 'stopped'].includes(s.snapshot.state)
+export const canNavigate = (s: SessionState) => !!s.activeTaskId && !!s.snapshot && ['paused', 'awaiting_verification', 'completed', 'stopped'].includes(s.snapshot.state)
 export const host = (url: string) => { try { return new URL(url).hostname || url } catch { return url } }
 
 export function splitUrl(url: string): { before: string; domain: string; after: string } {
@@ -20,7 +21,7 @@ export function splitUrl(url: string): { before: string; domain: string; after: 
 }
 
 export function initialSession(connected = false): SessionState {
-  return { connected, activeTaskId: null, tasks: [], goal: null, snapshot: null, browser: null, recoveryReason: null, task: '', control: 'you', finished: true, tabs: [], activeTabId: '', timeline: [], journal: [], messages: [], loading: false, busy: null, error: null }
+  return { connected, activeTaskId: null, tasks: [], goal: null, snapshot: null, browser: null, recoveryReason: null, childPlan: null, task: '', control: 'you', finished: true, tabs: [], activeTabId: '', timeline: [], journal: [], messages: [], loading: false, busy: null, error: null }
 }
 
 function describeEvent(e: JournalEvent): TimelineEvent {
@@ -113,7 +114,10 @@ export class SessionStore {
       const revision = this.revision(taskId)
       const detail = await this.api.getTaskDetail(taskId)
       if (!this.current(taskId, selection)) return false
-      this.update({ goal: detail.goal, ...(revision === this.revision(taskId) ? { snapshot: detail.snapshot ?? null } : {}), recoveryReason: detail.recoveryReason ?? null })
+      const rawChildPlan = await this.api.getChildPlan(taskId)
+      const childPlan = rawChildPlan ? summarizeChildPlan(rawChildPlan) : null
+      if (!this.current(taskId, selection)) return false
+      this.update({ goal: detail.goal, ...(revision === this.revision(taskId) ? { childPlan, snapshot: detail.snapshot ?? null, recoveryReason: detail.recoveryReason ?? null } : {}) })
       if (!detail.active && detail.recoveryReason !== 'execution_uncertain') {
         // Attaching may start a long run; pushed state unlocks the UI immediately.
         void this.runCommand('resume', () => this.api!.resumeSavedTask(taskId), taskId)
@@ -141,6 +145,10 @@ export class SessionStore {
     const patch: Partial<SessionState> = { snapshot: event.snapshot, recoveryReason: null, loading: false }
     if (event.goal) patch.goal = event.goal
     if (event.browser) patch.browser = event.browser
+    if (event.childPlan !== undefined) {
+      try { patch.childPlan = event.childPlan ? summarizeChildPlan(event.childPlan) : null }
+      catch (error) { patch.childPlan = null; patch.error = error instanceof Error ? `Invalid child plan summary: ${error.message}` : 'Invalid child plan summary' }
+    }
     if (this.state.busy === 'resume' && event.snapshot.state !== 'paused') patch.busy = null
     this.update(patch)
     void this.refresh(event.taskId, this.selection, !event.goal, !event.browser, false)

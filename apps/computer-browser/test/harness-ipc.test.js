@@ -63,6 +63,7 @@ function makeFakeControlApi() {
 
 function makeFakeTaskHost() {
   const calls = [];
+  let listener = null;
   const record = (name) => (...args) => {
     calls.push([name, ...args]);
     return { ok: name, args };
@@ -80,6 +81,17 @@ function makeFakeTaskHost() {
     pauseTask: record("pauseTask"),
     stopTask: record("stopTask"),
     takeOverTask: record("takeOverTask"),
+    getTaskEvents: record("getTaskEvents"),
+    getTaskBrowser: record("getTaskBrowser"),
+    taskBrowserAction: record("taskBrowserAction"),
+    setTaskViewport: record("setTaskViewport"),
+    listRoutines: record("listRoutines"),
+    getRoutine: record("getRoutine"),
+    saveRoutine: record("saveRoutine"),
+    deleteRoutine: record("deleteRoutine"),
+    runRoutine: record("runRoutine"),
+    onEvent: (callback) => { listener = callback; return () => { listener = null; }; },
+    _emit: (...args) => listener?.(...args),
   };
 }
 
@@ -138,11 +150,52 @@ test("harness channels dispatch to taskHost for a trusted sender", async () => {
   await ipcMain._invoke("halo:resumeSavedTask", trustedEvent(win), "task-1");
   await ipcMain._invoke("halo:getTaskDetail", trustedEvent(win), "task-1");
   await ipcMain._invoke("halo:listTasks", trustedEvent(win));
+  await ipcMain._invoke("halo:getTaskEvents", trustedEvent(win), "task-1", { since: 3 });
+  await ipcMain._invoke("halo:getTaskBrowser", trustedEvent(win), "task-1");
+  await ipcMain._invoke("halo:taskBrowserAction", trustedEvent(win), "task-1", { type: "back" });
+  await ipcMain._invoke("halo:setTaskViewport", trustedEvent(win), "task-1", { x: 1, y: 94, width: 10, height: 10, visible: true });
 
   assert.deepEqual(
     taskHost.calls.map((c) => c[0]),
-    ["createTask", "amendTask", "confirmCriterion", "approveTask", "denyTask", "pauseTask", "stopTask", "takeOverTask", "resumeSavedTask", "getTaskDetail", "listTasks"],
+    ["createTask", "amendTask", "confirmCriterion", "approveTask", "denyTask", "pauseTask", "stopTask", "takeOverTask", "resumeSavedTask", "getTaskDetail", "listTasks", "getTaskEvents", "getTaskBrowser", "taskBrowserAction", "setTaskViewport"],
   );
+});
+
+test("routine channels dispatch exactly five trusted host operations and reject untrusted senders", async () => {
+  const ipcMain = makeFakeIpcMain();
+  const win = makeFakeWin();
+  const taskHost = makeFakeTaskHost();
+  registerIpc(win, makeFakeControlApi(), { ipcMain, taskHost });
+  const calls = [
+    ["listRoutines", []], ["getRoutine", ["routine-1", 2]],
+    ["saveRoutine", [{ name: "Routine" }]], ["deleteRoutine", ["routine-1"]],
+    ["runRoutine", ["routine-1", 2]],
+  ];
+  for (const [method, args] of calls) {
+    assert.deepEqual(await ipcMain._invoke(`halo:${method}`, trustedEvent(win), ...args), { ok: method, args });
+    await assert.rejects(() => Promise.resolve(ipcMain._invoke(`halo:${method}`, untrustedEvent(), ...args)), /untrusted sender/);
+  }
+  assert.deepEqual(taskHost.calls.map((call) => call[0]), calls.map(([method]) => method));
+});
+
+test("taskHost events are forwarded on the task-specific channel and unsubscribed on close", () => {
+  const ipcMain = makeFakeIpcMain();
+  const win = makeFakeWin();
+  let closeHandler;
+  win.on = (event, callback) => { if (event === "closed") closeHandler = callback; };
+  const taskHost = makeFakeTaskHost();
+  registerIpc(win, makeFakeControlApi(), { ipcMain, taskHost });
+
+  const snapshot = { state: "paused", approvalQueue: [] };
+  taskHost._emit("task-1", snapshot, { goal: { originalRequest: "goal" } });
+  assert.deepEqual(win._sent.at(-1), {
+    channel: "halo:taskEvent",
+    payload: { taskId: "task-1", snapshot, goal: { originalRequest: "goal" } },
+  });
+  closeHandler();
+  const sentCount = win._sent.length;
+  taskHost._emit("task-1", snapshot);
+  assert.equal(win._sent.length, sentCount);
 });
 
 test("every harness channel rejects a request from an untrusted (non-main-frame) sender without calling taskHost", async () => {
@@ -163,6 +216,10 @@ test("every harness channel rejects a request from an untrusted (non-main-frame)
     ["halo:taskPause", ["task-1"]],
     ["halo:taskStop", ["task-1"]],
     ["halo:taskTakeOver", ["task-1", "user_takeover"]],
+    ["halo:getTaskEvents", ["task-1", { since: 3 }]],
+    ["halo:getTaskBrowser", ["task-1"]],
+    ["halo:taskBrowserAction", ["task-1", { type: "back" }]],
+    ["halo:setTaskViewport", ["task-1", { x: 1, y: 94, width: 10, height: 10, visible: true }]],
   ];
 
   for (const [channel, args] of channels) {

@@ -21,7 +21,7 @@ export function HaloSheet({ approval, leaving, onApprove, onDeny, onTakeOver }: 
   // Focus the question, never the approve button: a stray Enter must not approve.
   useEffect(() => { ref.current?.focus() }, [approval])
   return (
-    <section className="hx-sheet" data-leaving={leaving || undefined} inert={leaving} role="alertdialog" aria-modal="true" aria-labelledby="hx-sheet-title" aria-describedby="hx-sheet-request">
+    <section className="hx-sheet" data-approval-id={approval.id} data-leaving={leaving || undefined} inert={leaving} role="alertdialog" aria-modal="true" aria-labelledby="hx-sheet-title" aria-describedby="hx-sheet-request">
       <p className="hx-sheet__from"><HaloMark className="hx-sheet__mark" />Halo paused {AGENT} for your approval</p>
       <h2 className="hx-sheet__title" id="hx-sheet-title" tabIndex={-1} ref={ref}>{approval.action}</h2>
       <div className="hx-sheet__actions">

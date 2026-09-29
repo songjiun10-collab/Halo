@@ -7,9 +7,9 @@
 // drive a real multi-page journey; this one adds exactly enough pattern
 // matching to walk fixtures/long-horizon-site.js's 3-page chain, still with
 // zero language understanding:
-//   - if the current observation's text contains the fixture's literal
-//     completion marker "DONE-XYZ", propose "finish"
-//   - else if the observation has an anchor element whose text matches
+//   - if the observation's text or accessible element names contain the
+//     fixture's literal completion marker "DONE-XYZ", propose "finish"
+//   - else if the compact observation has a link whose accessible name matches
 //     /next/i, propose follow_link against that element's host-assigned id
 //   - else if nothing has been navigated yet (about:blank/empty url),
 //     extract a bare https?://... URL out of the goal's own originalRequest
@@ -41,8 +41,8 @@ rl.on("line", (line) => {
   const criteria = (context.goal && context.goal.criteria) || [];
   const criterionId = criteria.length > 0 ? criteria[0].id : "C1";
   const observation = context.observation || {};
-  const text = observation.text || "";
   const elements = observation.elements || [];
+  const text = [observation.text || "", ...elements.map((element) => element.name || "")].join(" ");
   const base = {
     taskId: context.taskId,
     goalVersion: context.goalVersion,
@@ -54,7 +54,7 @@ rl.on("line", (line) => {
   if (text.includes("DONE-XYZ")) {
     proposal = { ...base, kind: "finish", evidenceIds: [] };
   } else {
-    const nextLink = elements.find((el) => el.tag === "a" && /next/i.test(el.text || ""));
+    const nextLink = elements.find((el) => el.role === "link" && /next/i.test(el.name || ""));
     if (nextLink) {
       proposal = { ...base, kind: "actions", actions: [{ type: "follow_link", elementId: nextLink.elementId }] };
     } else if (!observation.url || observation.url === "about:blank" || observation.url === "") {

@@ -1,3 +1,6 @@
+import type { BackgroundRuntimeSnapshot, MemoryPolicy } from './background-runtime'
+import type { ChildPlanSummary } from './child-agents'
+
 /** Renderer view of the existing harness contracts and trusted preload methods. */
 export type TaskState = 'idle' | 'running' | 'awaiting_approval' | 'awaiting_verification' | 'paused' | 'stopped' | 'completed'
 export interface GoalCriterion { id: string; text: string; required: boolean; verification: 'host' | 'user'; sourceMessageId?: string }
@@ -34,7 +37,7 @@ export interface BrowserSnapshot {
   activeTabId: string
   documentEpoch: number
 }
-export interface TaskEvent { taskId: string; snapshot: TaskSnapshot; goal?: GoalSpec; browser?: BrowserSnapshot }
+export interface TaskEvent { taskId: string; snapshot: TaskSnapshot; goal?: GoalSpec; browser?: BrowserSnapshot; childPlan?: ChildPlanSummary | null }
 export interface JournalEvent {
   seq: number
   eventId: string
@@ -60,8 +63,15 @@ export interface HaloBrowserApi {
   taskTakeOver(taskId: string): Promise<TaskSnapshot>
   getTaskEvents(taskId: string, options?: { since?: number }): Promise<JournalEvent[]>
   getTaskBrowser(taskId: string): Promise<BrowserSnapshot>
+  getChildPlan(taskId: string): Promise<ChildPlanSummary | null>
   taskBrowserAction(taskId: string, action: BrowserAction): Promise<BrowserSnapshot>
   setTaskViewport(taskId: string | null, viewport: BrowserViewport): Promise<unknown>
   onTaskEvent(callback: (event: TaskEvent) => void): () => void
+  getBackgroundRuntimeSnapshot(): Promise<BackgroundRuntimeSnapshot>
+  attachBackgroundRuntime(): Promise<BackgroundRuntimeSnapshot>
+  detachBackgroundRuntime(): Promise<void>
+  setMemoryPolicy(mode: MemoryPolicy): Promise<BackgroundRuntimeSnapshot>
+  stopBackgroundService(): Promise<BackgroundRuntimeSnapshot>
+  onBackgroundRuntimeEvent(callback: (snapshot: BackgroundRuntimeSnapshot) => void): () => void
 }
 declare global { interface Window { haloBrowser?: HaloBrowserApi } }

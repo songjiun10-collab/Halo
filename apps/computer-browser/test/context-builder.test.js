@@ -112,3 +112,101 @@ test("omits untrustedSummary entirely when no modelSummary was provided", () => 
   const packet = buildContext({ goal, state: makeState(), observation: null, recentEvents: [] });
   assert.equal(packet.untrustedSummary, null);
 });
+
+// --- Subagent communication protocol Task 4: pendingMessages admission
+// (spec section 8.1). buildContext() itself owns the admission decision
+// because only it can measure the true serialized packet size.
+
+function makeMessage(overrides = {}) {
+  return {
+    messageId: "m1",
+    conversationId: "c1",
+    parentTaskId: "11111111-1111-1111-1111-111111111111",
+    childTaskId: "22222222-2222-2222-2222-222222222222",
+    senderTaskId: "11111111-1111-1111-1111-111111111111",
+    recipientTaskId: "22222222-2222-2222-2222-222222222222",
+    parentGoalVersion: 1,
+    kind: "progress",
+    idempotencyKey: "idem-1",
+    text: "hello",
+    ...overrides,
+  };
+}
+
+test("pendingMessages defaults to an empty typed field and does not change ordinary context when absent", () => {
+  const goal = makeGoal();
+  const packet = buildContext({ goal, state: makeState(), observation: null, recentEvents: [] });
+  assert.deepEqual(packet.pendingMessages, []);
+  assert.deepEqual(packet.progress.criteriaStatus, [{ criterionId: "C1", status: "pending" }]);
+});
+
+test("admits pending messages in order up to the 4-message-per-turn cap", () => {
+  const goal = makeGoal();
+  const messages = Array.from({ length: 6 }, (_, i) => makeMessage({ messageId: `m${i}`, idempotencyKey: `idem-${i}` }));
+  const packet = buildContext({ goal, state: makeState(), observation: null, recentEvents: [], pendingMessages: messages });
+  assert.equal(packet.pendingMessages.length, 4);
+  assert.deepEqual(packet.pendingMessages.map((m) => m.messageId), ["m0", "m1", "m2", "m3"]);
+});
+
+test("stops admitting once the 8 KiB serialized-message-bytes budget would be exceeded", () => {
+  const goal = makeGoal();
+  const big = makeMessage({ messageId: "big", idempotencyKey: "idem-big", text: "x".repeat(7600) });
+  const second = makeMessage({ messageId: "second", idempotencyKey: "idem-second", text: "y" });
+  const packet = buildContext({ goal, state: makeState(), observation: null, recentEvents: [], pendingMessages: [big, second] });
+  assert.deepEqual(packet.pendingMessages.map((m) => m.messageId), ["big"]);
+});
+
+test("a message-budget collision leaves messages pending instead of throwing context_limit", () => {
+  const goal = makeGoal();
+  // Two messages that individually fit the base packet but together would
+  // not fit the 8 KiB per-turn message budget -- admission must stop after
+  // the first rather than pausing the task.
+  const first = makeMessage({ messageId: "first", idempotencyKey: "idem-first", text: "a".repeat(7500) });
+  const second = makeMessage({ messageId: "second", idempotencyKey: "idem-second", text: "b".repeat(7500) });
+  assert.doesNotThrow(() =>
+    buildContext({ goal, state: makeState(), observation: null, recentEvents: [], pendingMessages: [first, second] }),
+  );
+  const packet = buildContext({ goal, state: makeState(), observation: null, recentEvents: [], pendingMessages: [first, second] });
+  assert.equal(packet.pendingMessages.length, 1);
+});
+
+test("zero headroom against the total packet ceiling admits no messages without a context_error", () => {
+  const goal = makeGoal();
+  // Base packet alone fits (65509 of 65536 bytes), but its 27-byte headroom
+  // is too small for even a minimal message -- admission must yield to the
+  // total packet ceiling without pausing the task.
+  const hugeObservation = { text: "a".repeat(64900) };
+  const message = makeMessage({ text: "small but no room left" });
+  let packet;
+  assert.doesNotThrow(() => {
+    packet = buildContext({ goal, state: makeState(), observation: hugeObservation, recentEvents: [], pendingMessages: [message] });
+  });
+  assert.deepEqual(packet.pendingMessages, []);
+});
+
+test("still throws context_limit when the base packet alone (no messages) exceeds the ceiling", () => {
+  const goal = makeGoal();
+  const hugeObservation = { text: "a".repeat(70000) };
+  assert.throws(
+    () => buildContext({ goal, state: makeState(), observation: hugeObservation, recentEvents: [], pendingMessages: [makeMessage()] }),
+    (err) => err instanceof ContextError && err.code === "context_limit",
+  );
+});
+
+test("rejects a non-array pendingMessages", () => {
+  const goal = makeGoal();
+  assert.throws(
+    () => buildContext({ goal, state: makeState(), observation: null, recentEvents: [], pendingMessages: "not-an-array" }),
+    (err) => err instanceof ContextError,
+  );
+});
+
+test("user memory is always an explicit untrusted context block and never changes progress", () => {
+  const goal = makeGoal();
+  const entry = { id: "memory-1", text: "Prefer concise answers", origin: null };
+  const packet = buildContext({ goal, state: makeState(), observation: null, recentEvents: [], customMemory: [entry] });
+  assert.deepEqual(packet.userMemory, { authority: "untrusted_user_memory", entries: [entry] });
+  assert.deepEqual(packet.progress.criteriaStatus, [{ criterionId: "C1", status: "pending" }]);
+  const empty = buildContext({ goal, state: makeState(), observation: null, recentEvents: [] });
+  assert.deepEqual(empty.userMemory, { authority: "untrusted_user_memory", entries: [] });
+});

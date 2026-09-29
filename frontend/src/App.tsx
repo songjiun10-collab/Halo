@@ -14,7 +14,8 @@ import { Viewport } from './components/Viewport'
 import { usePresence } from './hooks/usePresence'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useTrackpad } from './hooks/useTrackpad'
-import { AGENT, canNavigate, currentUrl, NEW_TAB_URL, SessionStore } from './session/session'
+import { syncNativeSurface } from './session/browser-surface'
+import { AGENT, canNavigate, currentUrl, NEW_TAB_URL, pendingCriteria, SessionStore } from './session/session'
 import { tabTitle } from './session/pages'
 import type { SessionState, Tab, TimelineEvent } from './session/types'
 
@@ -42,7 +43,8 @@ export default function App() {
   const [pinned, setPinned] = useState(false)
   const [overviewOpen, setOverviewOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
-  const omniRef = useRef<HTMLDivElement>(null)
+  const omniRef = useRef<HTMLInputElement>(null)
+  const pageRef = useRef<HTMLElement>(null)
   const [toast, setToast] = useState<string | null>(null)
   useEffect(() => {
     if (!toast) return
@@ -154,7 +156,7 @@ export default function App() {
   const otherTask = s.tasks.find((t) => t.taskId !== s.activeTaskId)
   const activeTask = otherTask ? { text: otherTask.originalRequest, tabId: otherTask.taskId } : undefined
   const recentTasks = useMemo(
-    () => s.tasks.filter((t) => t.taskId !== s.activeTaskId).map((t) => ({ label: t.originalRequest, meta: t.state })),
+    () => s.tasks.filter((t) => t.taskId !== s.activeTaskId).map((t) => ({ taskId: t.taskId, label: t.originalRequest, meta: `${t.state}${t.pauseReason ? ` · ${t.pauseReason}` : ''}` })),
     [s.tasks, s.activeTaskId],
   )
 
@@ -191,10 +193,37 @@ export default function App() {
   const overviewShown = usePresence(overviewOpen ? true : null)
   const helpShown = usePresence(helpOpen ? true : null)
 
+  const nativeSurfaceVisible = !!s.activeTaskId && !!s.browser && !approval && !activityOpen && !chatOpen &&
+    !overviewOpen && !helpOpen && !noticeShown.item && !toastShown.item
+  useLayoutEffect(() => {
+    const api = window.haloBrowser
+    if (!api) return
+    let disposed = false
+    let frame = 0
+    const sync = () => {
+      if (frame) cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        if (!disposed) void syncNativeSurface(api, s.activeTaskId, pageRef.current, nativeSurfaceVisible).catch(() => {})
+      })
+    }
+    const observer = pageRef.current ? new ResizeObserver(sync) : null
+    if (pageRef.current) observer?.observe(pageRef.current)
+    window.addEventListener('resize', sync)
+    sync()
+    return () => {
+      disposed = true
+      if (frame) cancelAnimationFrame(frame)
+      observer?.disconnect()
+      window.removeEventListener('resize', sync)
+      void syncNativeSurface(api, null, null, false).catch(() => {})
+    }
+  }, [s.activeTaskId, s.browser, nativeSurfaceVisible])
+
   const tabsForDisplay = s.tabs.length ? s.tabs : [HOME_TAB]
 
   return (
-    <div className="hx-app">
+    <div className="hx-app" data-active-task-id={s.activeTaskId ?? undefined}>
       <a className="hx-skip" href="#hx-page" inert={!!approval}>Skip to page</a>
       <h1 className="hx-sr">HALO</h1>
       <p className="hx-sr" role="status" aria-live="polite">{announcement(s, notice)}</p>
@@ -217,14 +246,17 @@ export default function App() {
             onForward={() => void store.navigate({ type: 'forward' })}
             onShare={onShare}
             onOverview={toggleOverview}
+            onActivity={openActivity}
+            onNavigate={(url) => void store.navigate({ type: 'navigate', url })}
             onNewWindow={onNewWindow}
             onHelp={toggleHelp}
             controller={
               <ControllerChip
                 control={s.control}
                 finished={s.finished}
+                recoveryReason={s.recoveryReason}
                 onTakeOver={() => void store.control('takeOver')}
-                onResume={() => void store.control('resume')}
+                onResume={() => void store.control('resume', s.recoveryReason === 'execution_uncertain')}
               />
             }
             halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
@@ -232,13 +264,25 @@ export default function App() {
         </header>
         <div className="hx-body" inert={overviewOpen}>
           <div className="hx-page" inert={!!approval}>
-            <Viewport
-              tab={tab}
-              driven={driven && !folded}
-              activeTask={activeTask}
-              onSelectTab={(id) => void store.selectTask(id)}
-              onStartTask={onSendMessage}
-            />
+            {s.activeTaskId && s.browser ? (
+              <main
+                id="hx-page"
+                ref={pageRef}
+                className="hx-native-page"
+                role="tabpanel"
+                aria-labelledby={`tab-${tab.id}`}
+                aria-label="Page rendered in the isolated browser surface"
+                tabIndex={-1}
+              />
+            ) : (
+              <Viewport
+                tab={tab}
+                driven={driven && !folded}
+                activeTask={activeTask}
+                onSelectTab={(id) => void store.selectTask(id)}
+                onStartTask={onSendMessage}
+              />
+            )}
             <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
             {swipeHint && (
               <span className={`hx-swipe hx-swipe--${swipeHint}`} aria-hidden="true">
@@ -261,7 +305,19 @@ export default function App() {
             {noticeShown.item && !activityOpen && !chatOpen && !approval && <Notice event={noticeShown.item} leaving={noticeShown.leaving} blocked={!!approval} onOpen={openActivity} />}
             {activityShown.item && !approval && !chatOpen && !overviewOpen && !helpOpen && <Activity session={s} leaving={activityShown.leaving} onClose={closeActivity} />}
             {chatShown.item && !approval && !activityOpen && !overviewOpen && !helpOpen && (
-              <HaloChat taskLabel={s.task || 'New task'} messages={s.messages} recentTasks={recentTasks} leaving={chatShown.leaving} onClose={closeChat} onSend={onSendMessage} />
+              <HaloChat
+                taskLabel={s.task || 'New task'}
+                messages={s.messages}
+                recentTasks={recentTasks}
+                pendingCriteria={pendingCriteria(s)}
+                isTaskActive={!!s.activeTaskId}
+                leaving={chatShown.leaving}
+                onClose={closeChat}
+                onSend={onSendMessage}
+                onSelectTask={(taskId) => void store.selectTask(taskId)}
+                onNewTask={() => { store.newTask(); closeChat() }}
+                onConfirmCriterion={(criterion, outcome) => void store.confirmCriterion(criterion, outcome)}
+              />
             )}
             {helpShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && <ShortcutsHelp leaving={helpShown.leaving} onClose={() => setHelpOpen(false)} />}
             {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}

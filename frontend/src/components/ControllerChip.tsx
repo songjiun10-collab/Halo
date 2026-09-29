@@ -4,6 +4,7 @@ import type { Control } from '../session/types'
 interface Props {
   control: Control
   finished: boolean
+  recoveryReason: string | null
   onTakeOver: () => void
   onResume: () => void
 }
@@ -12,7 +13,14 @@ interface Props {
  * Who is driving this tab, as part of the address field (like a site-permission
  * icon), not a separate control bar. One click hands control over.
  */
-export function ControllerChip({ control, finished, onTakeOver, onResume }: Props) {
+export function ControllerChip({ control, finished, recoveryReason, onTakeOver, onResume }: Props) {
+  if (control === 'you' && recoveryReason === 'execution_uncertain') {
+    return (
+      <button className="hx-chip" data-control="you" data-recovery="uncertain" onClick={onResume} title={`${AGENT}'s last action may not have finished before this restarted. Resume to check and continue.`}>
+        <span className="hx-chip__dot" aria-hidden="true" />Confirm resume (uncertain)
+      </button>
+    )
+  }
   if (control === 'you' && finished) return null
   if (control === 'you') {
     return (

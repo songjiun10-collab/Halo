@@ -32,6 +32,24 @@ const HARNESS_METHODS = {
   "halo:taskPause": "pauseTask",
   "halo:taskStop": "stopTask",
   "halo:taskTakeOver": "takeOverTask",
+  "halo:getTaskEvents": "getTaskEvents",
+  "halo:getTaskBrowser": "getTaskBrowser",
+  "halo:taskBrowserAction": "taskBrowserAction",
+  "halo:setTaskViewport": "setTaskViewport",
+  "halo:getHostSettings": "getHostSettings",
+  "halo:updateHostSettings": "updateHostSettings",
+  "halo:listCredentials": "listCredentials",
+  "halo:saveCredential": "saveCredential",
+  "halo:removeCredential": "removeCredential",
+  "halo:listMemories": "listMemories",
+  "halo:saveMemory": "saveMemory",
+  "halo:removeMemory": "removeMemory",
+  "halo:fillCredential": "fillCredential",
+  "halo:listRoutines": "listRoutines",
+  "halo:getRoutine": "getRoutine",
+  "halo:saveRoutine": "saveRoutine",
+  "halo:deleteRoutine": "deleteRoutine",
+  "halo:runRoutine": "runRoutine",
 };
 
 // win, controlApi: unchanged from before. Options:
@@ -74,9 +92,13 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost } = {
   const unsubscribe = controlApi.onChange((snapshot) => {
     if (!win.isDestroyed()) win.webContents.send("halo:event", { snapshot });
   });
+  const unsubscribeTaskHost = taskHost?.onEvent((taskId, snapshot, detail = {}) => {
+    if (!win.isDestroyed()) win.webContents.send("halo:taskEvent", { taskId, snapshot, ...detail });
+  });
 
   win.on("closed", () => {
     unsubscribe();
+    unsubscribeTaskHost?.();
     for (const channel of handlers) ipc.removeHandler(channel);
   });
 };

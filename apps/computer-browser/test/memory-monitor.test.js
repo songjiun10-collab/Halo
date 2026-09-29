@@ -45,6 +45,59 @@ test("adds registered external process memory (Python approver, local worker) to
   assert.equal(result.totalBytes, 100_000 * 1024 + mb(40));
 });
 
+test("planner high-water memory retains the measured wrapper process tree for future parallel reservation", async () => {
+  let bytes = mb(80);
+  const monitor = new MemoryMonitor({ getAppMetrics: () => [], getExternalMemoryBytes: async () => bytes });
+  monitor.registerExternalProcess({ pid: 555, creationTime: 1000, label: "planner" });
+  await monitor.sample();
+  bytes = mb(40);
+  await monitor.sample();
+  assert.equal(monitor.getExternalProcessHighWaterBytes("planner"), mb(80));
+  monitor.unregister(555, 1000);
+  assert.equal(monitor.getExternalProcessHighWaterBytes("planner"), mb(80), "historical peak remains conservative after process exit");
+});
+
+test("parallel admission requires a fresh, fully measurable sample and conservative headroom", async () => {
+  let now = 10_000;
+  const monitor = new MemoryMonitor({
+    getAppMetrics: () => [{ pid: 1, type: "Browser", memory: { workingSetSize: 400_000 } }],
+    now: () => now,
+  });
+
+  assert.deepEqual(monitor.canAdmitTask({ reserveBytes: mb(500) }).allowed, false);
+  await monitor.sample();
+  assert.equal(monitor.canAdmitTask({ reserveBytes: mb(500) }).allowed, true);
+  assert.equal(monitor.canAdmitTask({ reserveBytes: mb(600) }).reason, "memory_budget_exceeded");
+  now += 8_000;
+  assert.equal(monitor.canAdmitTask({ reserveBytes: mb(100) }).reason, "memory_sample_stale");
+});
+
+test("parallel admission fails closed on an unmeasurable process", async () => {
+  const monitor = new MemoryMonitor({
+    getAppMetrics: () => [{ pid: 1, type: "Browser", memory: {} }],
+    now: () => 10_000,
+  });
+  await monitor.sample();
+  assert.equal(monitor.canAdmitTask({ reserveBytes: mb(1) }).reason, "memory_unmeasurable");
+});
+
+test("getLastSample exposes the same sample's identity (sampledAt) canAdmitTask consulted", async () => {
+  let now = 10_000;
+  const monitor = new MemoryMonitor({
+    getAppMetrics: () => [{ pid: 1, type: "Browser", memory: { workingSetSize: 100_000 } }],
+    now: () => now,
+  });
+  assert.equal(monitor.getLastSample(), null, "no sample yet");
+  await monitor.sample();
+  const first = monitor.getLastSample();
+  assert.equal(first.sampledAt, 10_000);
+  assert.equal(first.totalBytes, 100_000 * 1024);
+  assert.deepEqual(first.unmeasurable, []);
+  now = 20_000;
+  await monitor.sample();
+  assert.equal(monitor.getLastSample().sampledAt, 20_000, "a fresh sample advances the identity a caller can compare against");
+});
+
 test("unregister() stops counting a previously-registered external process", async () => {
   const monitor = new MemoryMonitor({
     getAppMetrics: () => [],

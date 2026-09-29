@@ -161,11 +161,14 @@ TaskStore.append(event) / load(taskId) / checkpoint(state)
 TaskController.start(goal) / pause(reason) / resume(taskId) / stop() / amend(input)
 ```
 
-`Observation`: host ID/documentEpoch/URL/time + bounded visible text/elements;
-최대 500개 방문 노드, 100개 element, text 12 KiB. 전체 querySelectorAll 후 slice만
-하는 방식은 노드 방문량 제한이 아니므로 bounded TreeWalker 등을 사용한다.
+`Observation`: host ID/documentEpoch/URL/time + bounded visible text/compact
+accessibility elements; 최대 500개 방문 노드, 100개 element, text 12 KiB.
+전체 querySelectorAll 후 slice만 하는 방식은 노드 방문량 제한이 아니므로 bounded
+TreeWalker 등을 사용한다. 요소는 `role`, accessible `name`, optional state/heading
+level/parentElementId를 담고, 필요한 링크에만 실제 href를 담는다. unnamed generic
+wrapper와 raw tag/text 중복은 제거한다. 페이지 입력값(value)은 읽지 않는다.
 elementId는 해당 문서·관측의 호스트 참조이며 모델의 임의 selector/eval은 받지 않는다.
-페이지 텍스트는 모두 untrusted. screenshot은 필요 시 요청하고 좌표 변환을 기록한다.
+페이지 텍스트와 접근성 이름은 모두 untrusted. screenshot은 필요 시 요청하고 좌표 변환을 기록한다.
 
 초기 브라우저 adapter는 `navigate`, `follow_link`, `scroll`, `observe`를 구현한다.
 모든 action은 host policy와 예산 검사를 거친다. follow_link는 실제 anchor href를

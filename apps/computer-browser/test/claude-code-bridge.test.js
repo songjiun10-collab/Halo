@@ -1,0 +1,490 @@
+"use strict";
+
+// Tests for main/harness/providers/claude-code-bridge.js: the local `claude`
+// CLI provider bridge. Every test here injects a fake spawnFn (same pattern
+// as test/planner-stdio.test.js) -- the real `claude` binary is NEVER
+// invoked, and no real browser/user data is used anywhere (contexts below
+// are synthetic fixtures only). No credential file or secret is read by
+// these tests.
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
+
+const { ClaudeCodeBridge, ClaudeCodeBridgeError, CLI_ARGS, ENV_ALLOWLIST, MAX_CLI_STDOUT_BYTES } = require("../main/harness/providers/claude-code-bridge");
+
+const TASK_ID = "11111111-1111-1111-1111-111111111111";
+
+function makeContext(overrides = {}) {
+  return {
+    taskId: TASK_ID,
+    goalVersion: 1,
+    goal: {
+      originalRequest: "find the pricing page",
+      amendments: [],
+      constraints: [],
+      criteria: [{ id: "C1", text: "pricing page found", kind: "host_check" }],
+    },
+    progress: { criteriaStatus: [], segment: { index: 0, callsInSegment: 0 }, budgets: {} },
+    recentEvents: [],
+    observation: { id: "obs-1", url: "https://example.test/", elements: [] },
+    untrustedSummary: null,
+    ...overrides,
+  };
+}
+
+function validProposal(overrides = {}) {
+  return {
+    taskId: TASK_ID,
+    goalVersion: 1,
+    basedOnObservationId: "obs-1",
+    criterionIds: ["C1"],
+    kind: "actions",
+    actions: [{ type: "observe" }],
+    ...overrides,
+  };
+}
+
+function cliEnvelope(resultText, extra = {}) {
+  return JSON.stringify({ type: "result", is_error: false, result: resultText, ...extra });
+}
+
+// A minimal fake child_process.ChildProcess, mirroring
+// test/planner-stdio.test.js's makeFakeChild(): EventEmitter + writable
+// stdin (records what was written) + readable stdout/stderr + kill() (records
+// every call, including the signal argument) + a "close" event (this bridge
+// waits for "close", not "exit", so stdout data is guaranteed flushed first).
+function makeFakeChild() {
+  const child = new EventEmitter();
+  child.stdin = {
+    written: [],
+    write: (data, enc, cb) => {
+      child.stdin.written.push(data);
+      if (cb) cb();
+    },
+    end: () => {},
+  };
+  child.stdout = new EventEmitter();
+  child.stdout.setEncoding = () => {};
+  child.stderr = new EventEmitter();
+  child.stderr.setEncoding = () => {};
+  child.killed = false;
+  child.killCalls = [];
+  child.kill = (signal) => {
+    child.killed = true;
+    child.killCalls.push(signal);
+  };
+  return child;
+}
+
+async function flush(times = 2) {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve();
+  }
+}
+
+test("start(): spawns claude with the fixed safety flags, no shell, an env allowlist excluding app secrets, and prompt via stdin (never argv)", async () => {
+  const savedKey = process.env.HALO_APPROVER_KEY;
+  process.env.HALO_APPROVER_KEY = "super-secret-should-never-leak";
+  try {
+    let captured;
+    const fakeChild = makeFakeChild();
+    const spawnFn = (command, args, options) => {
+      captured = { command, args, options };
+      return fakeChild;
+    };
+    const bridge = new ClaudeCodeBridge({ spawnFn });
+    const context = makeContext();
+    const pending = bridge.start(context);
+    await flush();
+
+    assert.equal(captured.command, "claude");
+    assert.equal(captured.options.shell, false);
+    assert.equal("HALO_APPROVER_KEY" in captured.options.env, false);
+    assert.deepEqual(
+      Object.keys(captured.options.env).sort(),
+      Object.keys(captured.options.env).filter((k) => ENV_ALLOWLIST.includes(k)).sort(),
+    );
+
+    assert.deepEqual(captured.args, [...CLI_ARGS, "--effort", "medium"]);
+    assert.ok(!captured.args.includes("--bare"), "--bare would defeat reusing the local CLI login");
+
+    // The prompt (which embeds the full context, including page-derived
+    // observation text) must go over stdin, never argv/ps.
+    assert.equal(fakeChild.stdin.written.length, 1);
+    const promptText = fakeChild.stdin.written[0];
+    assert.ok(promptText.includes(TASK_ID));
+    assert.ok(!captured.args.some((a) => a.includes(TASK_ID)));
+
+    fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal())));
+    fakeChild.emit("close", 0);
+
+    const proposal = await pending;
+    assert.deepEqual(proposal, validProposal());
+  } finally {
+    process.env.HALO_APPROVER_KEY = savedKey;
+  }
+});
+
+test("start(): a constructor extraArgs-like field is ignored -- there is no way to append or override the fixed CLI_ARGS", async () => {
+  let captured;
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({
+    spawnFn: (command, args, options) => {
+      captured = { command, args, options };
+      return fakeChild;
+    },
+    // Not a real constructor option -- must be silently ignored, not merged
+    // into argv. This guards against ever re-introducing the escape hatch.
+    extraArgs: ["--tools", "Bash,Edit", "--dangerously-skip-permissions"],
+  });
+  bridge.start(makeContext());
+  await flush();
+  assert.deepEqual(captured.args, [...CLI_ARGS, "--effort", "medium"]);
+  assert.ok(Object.isFrozen(CLI_ARGS));
+});
+
+test("planner effort is mapped only from the fixed host allowlist into the CLI flag", async () => {
+  for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+    let captured;
+    const fakeChild = makeFakeChild();
+    const bridge = new ClaudeCodeBridge({ spawnFn: (_command, args) => { captured = args; return fakeChild; } });
+    const pending = bridge.start(makeContext({ progress: { plannerEffort: effort } }));
+    await flush();
+    assert.deepEqual(captured.slice(-2), ["--effort", effort]);
+    fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal())));
+    fakeChild.emit("close", 0);
+    await pending;
+  }
+  let spawned = false;
+  const invalid = new ClaudeCodeBridge({ spawnFn: () => { spawned = true; return makeFakeChild(); } });
+  await assert.rejects(invalid.start(makeContext({ progress: { plannerEffort: "--tools=Bash" } })), { code: "invalid_effort" });
+  assert.equal(spawned, false);
+});
+
+test("start(): rejects invalid_config and never spawns for a non-allowlisted env var, including credential-shaped names beyond the old HALO_*_KEY denylist", async () => {
+  for (const key of ["HALO_EXECUTOR_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "SOME_OTHER_VAR"]) {
+    let spawnCalled = false;
+    const bridge = new ClaudeCodeBridge({
+      spawnFn: () => {
+        spawnCalled = true;
+        return makeFakeChild();
+      },
+      env: { [key]: "leaked" },
+    });
+    await assert.rejects(
+      () => bridge.start(makeContext()),
+      (err) => err instanceof ClaudeCodeBridgeError && err.code === "invalid_config",
+      `expected ${key} to be rejected`,
+    );
+    assert.equal(spawnCalled, false, `expected ${key} to prevent spawning`);
+  }
+});
+
+test("start(): credential-shaped vars already present in this process's own environment are never copied to the child", async () => {
+  const saved = {
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+    CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+  };
+  process.env.ANTHROPIC_API_KEY = "leaked-from-parent-env";
+  process.env.ANTHROPIC_AUTH_TOKEN = "leaked-from-parent-env";
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = "leaked-from-parent-env";
+  try {
+    let captured;
+    const fakeChild = makeFakeChild();
+    const bridge = new ClaudeCodeBridge({
+      spawnFn: (command, args, options) => {
+        captured = options;
+        return fakeChild;
+      },
+    });
+    bridge.start(makeContext());
+    await flush();
+    for (const key of Object.keys(saved)) {
+      assert.equal(key in captured.env, false, `expected ${key} to be excluded from the child's env`);
+    }
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("start(): allows overriding only allowlisted keys (e.g. PATH) via the constructor env option", async () => {
+  let captured;
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({
+    spawnFn: (command, args, options) => {
+      captured = options;
+      return fakeChild;
+    },
+    env: { PATH: "/custom/bin" },
+  });
+  bridge.start(makeContext());
+  await flush();
+  assert.equal(captured.env.PATH, "/custom/bin");
+});
+
+test("start(): only one request may be in flight at a time", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const first = bridge.start(makeContext());
+  await assert.rejects(
+    () => bridge.start(makeContext()),
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "busy",
+  );
+  fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal())));
+  fakeChild.emit("close", 0);
+  await first;
+});
+
+test("cancel(): rejects the in-flight call as cancelled immediately, but the bridge stays busy until the killed child is actually reaped -- a second start() cannot run two CLI processes concurrently", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  await flush();
+
+  bridge.cancel();
+
+  // The caller is notified right away...
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "cancelled",
+  );
+  assert.equal(fakeChild.killed, true);
+  // ...but the OS process is not instantly gone: a new start() must still be
+  // refused as busy until "close" actually fires for the killed child.
+  assert.equal(bridge.isBusy(), true);
+  await assert.rejects(
+    () => bridge.start(makeContext()),
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "busy",
+  );
+
+  // Only once the OS has actually reaped the cancelled child does the bridge
+  // become available again.
+  fakeChild.emit("close", null);
+  assert.equal(bridge.isBusy(), false);
+
+  const fakeChild2 = makeFakeChild();
+  bridge._spawnFn = () => fakeChild2;
+  const second = bridge.start(makeContext());
+  fakeChild2.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal())));
+  fakeChild2.emit("close", 0);
+  assert.deepEqual(await second, validProposal());
+});
+
+test("cancel(): is a no-op with nothing in flight", async () => {
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => makeFakeChild() });
+  assert.doesNotThrow(() => bridge.cancel());
+  assert.equal(bridge.isBusy(), false);
+});
+
+test("AbortSignal cancellation rejects with the same cancelled code as cancel(), and keeps the bridge busy until reaped", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const controller = new AbortController();
+  const pending = bridge.start(makeContext(), { signal: controller.signal });
+  await flush();
+
+  controller.abort();
+
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "cancelled",
+  );
+  assert.equal(fakeChild.killed, true);
+  assert.equal(bridge.isBusy(), true);
+  fakeChild.emit("close", null);
+  assert.equal(bridge.isBusy(), false);
+});
+
+test("close(): waits for the child to actually be reaped before resolving, not just for kill() to be called", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  await flush();
+
+  let closed = false;
+  const closePromise = bridge.close().then(() => {
+    closed = true;
+  });
+  await flush();
+  // kill() was requested, but the process has not "exited" yet -- close()
+  // must not have resolved.
+  assert.equal(fakeChild.killed, true);
+  assert.equal(closed, false);
+
+  fakeChild.emit("close", null);
+  await closePromise;
+  assert.equal(closed, true);
+  assert.equal(bridge.isBusy(), false);
+  await assert.rejects(() => pending, (err) => err.code === "cancelled");
+});
+
+test("close(): resolves immediately when nothing is in flight", async () => {
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => makeFakeChild() });
+  await bridge.close();
+});
+
+test("close(): escalates to SIGKILL if the child does not exit within killTimeoutMs, and still waits for the eventual close", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  await flush();
+
+  // Attach the rejection assertion before close() synchronously cancels the
+  // caller promise; otherwise Node's test runner can observe an unhandled
+  // rejection before the assertion is awaited below.
+  const cancelled = assert.rejects(() => pending, (err) => err.code === "cancelled");
+  const closePromise = bridge.close({ killTimeoutMs: 5 });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(fakeChild.killCalls, [undefined, "SIGKILL"]);
+
+  fakeChild.emit("close", null);
+  await closePromise;
+  await cancelled;
+});
+
+test("result: rejects invalid_cli_output when stdout is not JSON (on a clean exit)", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  fakeChild.stdout.emit("data", "not json at all");
+  fakeChild.emit("close", 0);
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "invalid_cli_output",
+  );
+});
+
+test("result: a nonzero exit is rejected fail-closed as cli_exit_nonzero even when stdout contains a well-formed, otherwise-valid successful envelope -- it must never resolve", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal())));
+  fakeChild.emit("close", 1);
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "cli_exit_nonzero",
+  );
+});
+
+test("result: a nonzero exit with no parseable stdout at all still rejects as cli_exit_nonzero (never hangs or crashes)", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  fakeChild.emit("close", 137);
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "cli_exit_nonzero" && /137/.test(err.message),
+  );
+});
+
+test("result: an is_error envelope on a CLEAN (code 0) exit rejects as cli_error, not cli_exit_nonzero", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  fakeChild.stdout.emit("data", JSON.stringify({ type: "result", is_error: true, result: "budget exceeded" }));
+  fakeChild.emit("close", 0);
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "cli_error" && err.message === "budget exceeded",
+  );
+});
+
+test("result: the real auth-failure shape observed from the installed CLI (is_error:true, nonzero exit) rejects as cli_exit_nonzero, using the envelope's own message", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  fakeChild.stdout.emit(
+    "data",
+    JSON.stringify({ type: "result", is_error: true, result: "Failed to authenticate: OAuth session expired and could not be refreshed" }),
+  );
+  fakeChild.emit("close", 1);
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "cli_exit_nonzero" && /OAuth session expired/.test(err.message),
+  );
+});
+
+test("result: rejects invalid_proposal_json when envelope.result isn't parseable JSON", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  fakeChild.stdout.emit("data", cliEnvelope("I think the next step is to scroll down."));
+  fakeChild.emit("close", 0);
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "invalid_proposal_json",
+  );
+});
+
+test("result: rejects invalid_proposal (never dispatches) when JSON parses but fails contracts.validateProposalEnvelope", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  // Unknown kind -- contracts.validateProposalEnvelope must reject this.
+  fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify({ ...validProposal(), kind: "delete_everything" })));
+  fakeChild.emit("close", 0);
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "invalid_proposal",
+  );
+});
+
+test("result: tolerates a markdown-fenced JSON result (```json ... ```)", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  const fenced = "```json\n" + JSON.stringify(validProposal()) + "\n```";
+  fakeChild.stdout.emit("data", cliEnvelope(fenced));
+  fakeChild.emit("close", 0);
+  assert.deepEqual(await pending, validProposal());
+});
+
+test("result: a spawn error (e.g. claude not on PATH) rejects with spawn_failed", async () => {
+  const bridge = new ClaudeCodeBridge({
+    spawnFn: () => {
+      throw new Error("ENOENT: claude not found");
+    },
+  });
+  await assert.rejects(
+    () => bridge.start(makeContext()),
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "spawn_failed",
+  );
+});
+
+test("start(): rejects invalid_field for a non-object context and never spawns", async () => {
+  let spawnCalled = false;
+  const bridge = new ClaudeCodeBridge({
+    spawnFn: () => {
+      spawnCalled = true;
+      return makeFakeChild();
+    },
+  });
+  await assert.rejects(
+    () => bridge.start(null),
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "invalid_field",
+  );
+  assert.equal(spawnCalled, false);
+});
+
+test("result: stdout is bounded -- exceeding MAX_CLI_STDOUT_BYTES kills the child and rejects output_too_large instead of buffering forever", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+
+  fakeChild.stdout.emit("data", "a".repeat(MAX_CLI_STDOUT_BYTES + 1));
+
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof ClaudeCodeBridgeError && err.code === "output_too_large",
+  );
+  assert.equal(fakeChild.killed, true);
+
+  // A "close" arriving afterward (the process finally exiting) must be a
+  // harmless no-op, never a second settle/crash.
+  assert.doesNotThrow(() => fakeChild.emit("close", null));
+});

@@ -37,7 +37,7 @@ function processKey(pid, creationTime) {
 }
 
 class MemoryMonitor {
-  constructor({ getAppMetrics, getExternalMemoryBytes, limitBytes } = {}) {
+  constructor({ getAppMetrics, getExternalMemoryBytes, limitBytes, now } = {}) {
     if (typeof getAppMetrics !== "function") {
       throw new MemoryMonitorError("invalid_config", "getAppMetrics is required");
     }
@@ -48,6 +48,10 @@ class MemoryMonitor {
     // pid -> {pid, creationTime, label}
     this._externalProcesses = new Map();
     this._lastTotalBytes = 0;
+    this._lastSampleDegraded = false;
+    this._lastSample = null;
+    this._externalHighWaterBytes = new Map();
+    this._now = typeof now === "function" ? now : Date.now;
   }
 
   // The user's own configured cap can be lowered (a more conservative
@@ -127,14 +131,59 @@ class MemoryMonitor {
         continue;
       }
       counted.set(key, bytes);
+      const highWater = this._externalHighWaterBytes.get(label) ?? 0;
+      this._externalHighWaterBytes.set(label, Math.max(highWater, bytes));
       byProcess.push({ key, label: `external:${label}`, bytes });
     }
 
     let totalBytes = 0;
     for (const bytes of counted.values()) totalBytes += bytes;
 
-    this._lastTotalBytes = totalBytes;
-    return { totalBytes, unmeasurable, byProcess };
+    // An unmeasurable process's bytes are simply missing from totalBytes --
+    // replacing _lastTotalBytes outright would silently undercount it as
+    // zero. Keep the more conservative of the two readings instead, and flag
+    // the degraded state so getPressureLevel() (which has no other
+    // visibility into per-process unmeasurable status) can fail closed.
+    const degraded = unmeasurable.length > 0;
+    this._lastTotalBytes = degraded ? Math.max(totalBytes, this._lastTotalBytes) : totalBytes;
+    this._lastSampleDegraded = degraded;
+    this._lastSample = { totalBytes, unmeasurable: [...unmeasurable], sampledAt: this._now() };
+    return { totalBytes, unmeasurable, byProcess, sampledAt: this._lastSample.sampledAt };
+  }
+
+  // Admission is stricter than pressure reporting: a stale or incomplete
+  // sample cannot justify starting another renderer/worker. `reserveBytes`
+  // must come from a measured conservative per-task increment, not a guess.
+  canAdmitTask({ reserveBytes, maxAgeMs = 7500 } = {}) {
+    if (typeof reserveBytes !== "number" || !Number.isFinite(reserveBytes) || reserveBytes < 0 ||
+        typeof maxAgeMs !== "number" || !Number.isFinite(maxAgeMs) || maxAgeMs < 0) {
+      throw new MemoryMonitorError("invalid_field", "reserveBytes and maxAgeMs must be non-negative finite numbers");
+    }
+    const sample = this._lastSample;
+    const ageMs = sample ? Math.max(0, this._now() - sample.sampledAt) : null;
+    const common = {
+      usedBytes: sample?.totalBytes ?? null,
+      reserveBytes,
+      limitBytes: this._limitBytes,
+      ageMs,
+    };
+    if (!sample || ageMs > maxAgeMs) return { ...common, allowed: false, reason: "memory_sample_stale" };
+    if (sample.unmeasurable.length > 0) return { ...common, allowed: false, reason: "memory_unmeasurable" };
+    if (sample.totalBytes + reserveBytes >= this._limitBytes) return { ...common, allowed: false, reason: "memory_budget_exceeded" };
+    return { ...common, allowed: true, reason: null };
+  }
+
+  // Exposes the same sample canAdmitTask()/getPressureLevel() already
+  // consult, so a caller (ResourceAdmission) can tell whether two admission
+  // decisions were made against the identical measurement -- canAdmitTask's
+  // own return value has no stable sample identity, only a relative ageMs.
+  getLastSample() {
+    return this._lastSample ? { ...this._lastSample, unmeasurable: [...this._lastSample.unmeasurable] } : null;
+  }
+
+  getExternalProcessHighWaterBytes(label) {
+    if (typeof label !== "string" || !label) throw new MemoryMonitorError("invalid_field", "label is required");
+    return this._externalHighWaterBytes.get(label) ?? null;
   }
 
   // Reflects the most recent sample() -- callers (task-controller.js's
@@ -142,10 +191,17 @@ class MemoryMonitor {
   // have every check trigger a fresh OS query.
   getPressureLevel() {
     const total = this._lastTotalBytes;
-    if (total >= this._limitBytes * EMERGENCY_FRACTION) return "emergency";
-    if (total >= this._limitBytes * PAUSE_FRACTION) return "pause";
-    if (total >= this._limitBytes * CAUTION_FRACTION) return "caution";
-    return "normal";
+    let level;
+    if (total >= this._limitBytes * EMERGENCY_FRACTION) level = "emergency";
+    else if (total >= this._limitBytes * PAUSE_FRACTION) level = "pause";
+    else if (total >= this._limitBytes * CAUTION_FRACTION) level = "caution";
+    else level = "normal";
+    // A degraded (partially unmeasurable) sample cannot honestly report
+    // normal/caution -- an unmeasured process could already be well past the
+    // real pressure this reading shows. Fail closed to "pause" rather than
+    // let a hot-loop caller read a falsely comfortable level.
+    if (this._lastSampleDegraded && (level === "normal" || level === "caution")) return "pause";
+    return level;
   }
 }
 

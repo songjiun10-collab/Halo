@@ -22,6 +22,7 @@ const { randomUUID } = require("node:crypto");
 const contracts = require("../../shared/harness-contracts");
 const { buildContext } = require("./context-builder");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
+const { isReadOnlyAction } = require("./permission-policy");
 
 class TaskControllerError extends Error {
   constructor(code, message) {
@@ -32,6 +33,28 @@ class TaskControllerError extends Error {
 }
 
 const NOOP_MEMORY_MONITOR = { getPressureLevel: () => "normal" };
+
+// A human (or the policy approver's secret scanner) reviewing an approval
+// request needs to see WHAT the action targets, not just its type and the
+// page it was proposed from -- otherwise a navigate/follow_link/scroll is
+// approved blind. Only derived from the host's own last observation, never
+// from planner-supplied free text.
+function describeActionTarget(action, lastObservation) {
+  if (action.type === "navigate") {
+    return typeof action.url === "string" ? action.url : null;
+  }
+  if (action.type === "follow_link") {
+    const element = lastObservation?.elements?.find((el) => el.elementId === action.elementId);
+    if (element && typeof element.href === "string") return element.href;
+    return typeof action.elementId === "string" ? `element ${action.elementId}` : null;
+  }
+  if (action.type === "scroll") {
+    const direction = typeof action.direction === "string" ? action.direction : "?";
+    const amount = action.amount !== undefined ? String(action.amount) : "?";
+    return `${direction} ${amount}`;
+  }
+  return null;
+}
 
 function observationKey(observation) {
   // A comparison key for no-progress detection, not a cryptographic hash --
@@ -60,6 +83,16 @@ class TaskController {
     now,
     segmentRotationCalls,
     noProgressThreshold,
+    memoryStore,
+    permissionMode = "browse",
+    plannerEffort = "medium",
+    onChildPlan,
+    sendMessage,
+    listPendingMessages,
+    recordMessagesConsumed,
+    routineRunner,
+    routineRun,
+    batchReadOnlyActions = true,
   } = {}) {
     if (!store) throw new TaskControllerError("invalid_config", "store is required");
     if (!planner) throw new TaskControllerError("invalid_config", "planner is required");
@@ -69,10 +102,46 @@ class TaskController {
 
     this._store = store;
     this._planner = planner;
+    this._routineRunner = routineRunner || null;
+    this._batchReadOnlyActions = batchReadOnlyActions !== false;
+    const checkpointedRoutineRun = store.lastCheckpoint?.payload?.routineRun;
+    this._routineRun = checkpointedRoutineRun ? { ...checkpointedRoutineRun } : routineRun ? { ...routineRun } : null;
+    if (this._routineRunner && (!this._routineRun ||
+        typeof this._routineRun.routineId !== "string" ||
+        !Number.isInteger(this._routineRun.revision) ||
+        typeof this._routineRun.digest !== "string" ||
+        !Number.isInteger(this._routineRun.cursor) || this._routineRun.cursor < 0)) {
+      throw new TaskControllerError("invalid_routine", "routine runner requires a pinned routine ID, revision, digest, and cursor");
+    }
     this._browser = browser;
     this._approve = approve;
     this._hostVerifier = hostVerifier;
+    // Multi-agent background runtime plan, Task 4: only a PARENT controller
+    // is ever constructed with this -- a child controller (built exclusively
+    // by ChildAgentCoordinator._attachChild) never receives it, so a
+    // child_plan proposal reaching a child's own loop (which should already
+    // be impossible -- its PlannerStdioAdapter's role:"child" rejects that
+    // proposal kind at the wire boundary) has no delegation path here either.
+    // No nested child agents (Global Constraints): a child controller can
+    // never itself accept a child_plan.
+    this._onChildPlan = typeof onChildPlan === "function" ? onChildPlan : null;
+    // Subagent communication protocol Task 4: host-derived envelope/relation-
+    // ship authority lives in ChildAgentCoordinator (task-host.js/child-
+    // agent-coordinator.js wire these), never here -- this controller only
+    // knows how to fetch its own pending messages, ask the planner, and
+    // durably acknowledge what it admitted, symmetrically for a parent's own
+    // top-level controller and a child's controller.
+    this._sendMessage = typeof sendMessage === "function" ? sendMessage : null;
+    this._listPendingMessages = typeof listPendingMessages === "function" ? listPendingMessages : null;
+    this._recordMessagesConsumed = typeof recordMessagesConsumed === "function" ? recordMessagesConsumed : null;
     this._memoryMonitor = memoryMonitor || NOOP_MEMORY_MONITOR;
+    this._memoryStore = memoryStore || null;
+    const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
+    if (!PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_config", "permissionMode is invalid");
+    this._permissionMode = permissionMode;
+    this._plannerEffort = plannerEffort;
+    this._evaluateActionPolicy = evaluateActionPolicy;
+    this._browser.setPermissionMode?.(permissionMode);
     this._now = typeof now === "function" ? now : Date.now;
     this._segmentRotationCalls =
       typeof segmentRotationCalls === "number" ? segmentRotationCalls : contracts.SEGMENT_ROTATION_CALLS;
@@ -150,10 +219,49 @@ class TaskController {
     } else {
       this._task = { state: "idle", pauseReason: null };
     }
+
+    // A nonterminal checkpoint still carries real progress -- restore it
+    // rather than let the freshly constructed zero budgets/segment/criteria
+    // silently replace it, which would let a recovered task exceed its
+    // action/planner-call/time limits or re-derive already-verified
+    // criteria as pending.
+    const checkpointedPayload = store.lastCheckpoint && store.lastCheckpoint.payload;
+    if (checkpointedPayload) {
+      if (checkpointedPayload.budgets) this._budgets = { ...checkpointedPayload.budgets };
+      if (checkpointedPayload.segment) this._segment = { ...checkpointedPayload.segment };
+      if (checkpointedPayload.criteriaStatus) this._criteriaStatus = new Map(checkpointedPayload.criteriaStatus);
+    }
+    if (this._routineRunner && this._routineRun && store.routineRecovery) {
+      const recovered = store.routineRecovery;
+      if (recovered.routineId !== this._routineRun.routineId || recovered.revision !== this._routineRun.revision || recovered.digest !== this._routineRun.digest) {
+        throw new TaskControllerError("routine_cursor_mismatch", "recovered routine pin differs from its checkpoint");
+      }
+      this._routineRun.cursor = recovered.cursor;
+      if (recovered.blocked === "denied") {
+        this._routineRun.blocked = "denied";
+        this._task = { state: "paused", pauseReason: "routine_step_denied" };
+      } else if (recovered.blocked === "failed") {
+        this._routineRun.blocked = "failed";
+        this._task = { state: "paused", pauseReason: "routine_step_failed" };
+      } else if (recovered.incomplete) {
+        this._routineRun.incomplete = true;
+        this._task = { state: "paused", pauseReason: "routine_recovery_incomplete" };
+      }
+    }
   }
 
   getGoal() {
     return this._goal;
+  }
+
+  setPolicySettings({ permissionMode, plannerEffort } = {}) {
+    const { PERMISSION_MODES } = require("./permission-policy");
+    const allowedEfforts = ["low", "medium", "high", "xhigh", "max"];
+    if (permissionMode !== undefined && !PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_permission_mode", "permissionMode is invalid");
+    if (plannerEffort !== undefined && !allowedEfforts.includes(plannerEffort)) throw new TaskControllerError("invalid_planner_effort", "plannerEffort is invalid");
+    if (permissionMode !== undefined) this._permissionMode = permissionMode;
+    if (plannerEffort !== undefined) this._plannerEffort = plannerEffort;
+    this._browser.setPermissionMode?.(this._permissionMode);
   }
 
   getSnapshot() {
@@ -164,7 +272,7 @@ class TaskController {
       budgets: { ...this._budgets },
       segment: { ...this._segment },
       criteriaStatus: [...this._criteriaStatus.entries()].map(([criterionId, v]) => ({ criterionId, ...v })),
-      approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt }) => ({ id, summary, action: actionType, createdAt })),
+      approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null })),
     };
   }
 
@@ -194,6 +302,14 @@ class TaskController {
 
   getEvents(options) {
     return this._store.getEvents(options);
+  }
+
+  async recordHostNote(payload) {
+    if (!contracts.isPlainObject(payload) || payload.kind !== "credential_autofill_requested" ||
+        typeof payload.credentialId !== "string" || typeof payload.origin !== "string") {
+      throw new TaskControllerError("invalid_host_note", "unsupported host audit note");
+    }
+    await this._store.append({ type: "note", payload });
   }
 
   isUserControlled() {
@@ -287,6 +403,12 @@ class TaskController {
     if (cancelQueue) {
       const queued = [...this._approvalQueue];
       for (const item of queued) {
+        // durable:false: this loop is always followed by this._checkpoint()
+        // below (before any other await point reachable from here), and
+        // checkpoint() itself flushes any pending non-durable bytes before
+        // it commits -- so every approval_cancelled here is guaranteed
+        // durable by the time this transition finishes, without paying for
+        // its own fsync when there are several queued at once.
         await this._store.append({
           type: "approval_cancelled",
           payload: {
@@ -295,7 +417,7 @@ class TaskController {
             goalVersion: item.goalVersion,
             reason: cancelReason,
           },
-        });
+        }, { durable: false });
         const idx = this._approvalQueue.findIndex((q) => q.id === item.id);
         if (idx !== -1) this._approvalQueue.splice(idx, 1);
       }
@@ -330,16 +452,54 @@ class TaskController {
   // action_outcome, _afterActionDispatched may still append evidence and
   // checkpoint progress. A transition must wait for that tail too, not just
   // for browser.execute() to finish.
-  async _dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch) {
+  async _dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch, { durable = true } = {}) {
     const op = (async () => {
-      const result = await this._dispatchApproved(descriptor, action, epoch);
+      const result = await this._dispatchApproved(descriptor, action, epoch, { durable });
       if (this._stopHappenedSince(epoch)) return { stale: true, result };
+      if (this._routineRunner && result.status !== "not_dispatched") {
+        const binding = this._routineRunner.getCurrentStep?.();
+        if (!binding) {
+          await this._pauseWith("routine_cursor_mismatch");
+          return { stale: false, result };
+        }
+        if (result.status === "ok") {
+          // Inside a read-only batch only the last advancement is durable; its fsync also flushes the earlier ones.
+          await this._store.append({ type: "routine_step_advanced", payload: { ...binding, actionId: result.actionId } }, { durable });
+          // No per-step checkpoint: the durable advancement record above is the cursor's source of truth and
+          // streamJournalReplay re-derives it after the last checkpoint; every pause/stop/finish checkpoints.
+          this._routineRun.cursor = this._routineRunner.advance(binding);
+        } else {
+          await this._store.append({ type: "routine_step_failed", payload: {
+            ...binding,
+            actionId: result.actionId,
+            status: result.status === "cancelled" ? "cancelled" : "failed",
+            ...(typeof result.errorCode === "string" ? { errorCode: result.errorCode } : {}),
+          } });
+          await this._pauseWith("routine_step_failed");
+          return { stale: false, result };
+        }
+      }
       await this._afterActionDispatched(proposal, result, epoch);
       return { stale: false, result };
     })();
     const result = await this._trackInFlight(op);
     this._emit();
     return result;
+  }
+
+  async _denyRoutineStep(decision) {
+    const binding = this._routineRunner?.getCurrentStep?.();
+    if (!binding || !this._routineRun) {
+      await this._pauseWith("routine_cursor_mismatch");
+      return;
+    }
+    const normalizedDecision = decision.decision === "quarantine" ? "quarantine" : "deny";
+    const reasons = Array.isArray(decision.reasons)
+      ? decision.reasons.filter((reason) => typeof reason === "string").slice(0, 16)
+      : [];
+    await this._store.append({ type: "routine_step_denied", payload: { ...binding, decision: normalizedDecision, reasons } });
+    this._routineRun.blocked = "denied";
+    await this._pauseWith("routine_step_denied");
   }
 
   _enterActive() {
@@ -361,6 +521,7 @@ class TaskController {
         budgets: { ...this._budgets },
         segment: { ...this._segment },
         criteriaStatus: [...this._criteriaStatus.entries()],
+        ...(this._routineRun ? { routineRun: { ...this._routineRun } } : {}),
       });
       this._snapshotTrusted = true;
     } catch (error) {
@@ -437,6 +598,9 @@ class TaskController {
     this._checkAdmission();
     if (this._task.state !== "paused") {
       throw new TaskControllerError("invalid_state", `resume() requires state paused, got ${this._task.state}`);
+    }
+    if (this._routineRunner && (this._routineRun?.blocked || this._routineRun?.incomplete || this._store.recoveryReason === "execution_uncertain")) {
+      throw new TaskControllerError("routine_recovery_incomplete", "a denied, failed, or uncertain routine step cannot be replayed; stop or inspect the task instead");
     }
     if (this._task.pauseReason === "execution_uncertain" && !opts.confirmed) {
       throw new TaskControllerError(
@@ -591,10 +755,19 @@ class TaskController {
     await this._store.append({ type: "evidence_recorded", payload: { evidence: confirmed } });
     this._criteriaStatus.set(criterionId, { status: outcome, evidenceId: confirmed.id, goalVersion });
 
-    if (outcome === "verified" && this._task.state === "awaiting_verification") {
-      const completion = canComplete(this._goal, this._evidenceForCompletionCheck());
-      if (completion.complete) {
-        this._task = { state: "completed", pauseReason: null };
+    if (this._task.state === "awaiting_verification") {
+      if (outcome === "verified") {
+        const completion = canComplete(this._goal, this._evidenceForCompletionCheck());
+        if (completion.complete) {
+          this._task = { state: "completed", pauseReason: null };
+          await this._checkpoint();
+        }
+      } else {
+        // A rejected criterion cannot complete the task as-is, but leaving
+        // the task stuck in awaiting_verification forever gives the user no
+        // durable path back to replanning. Fail closed into a state Resume
+        // already accepts, with a pauseReason that names why.
+        this._task = { state: "paused", pauseReason: "evidence_rejected" };
         await this._checkpoint();
       }
     }
@@ -623,8 +796,13 @@ class TaskController {
     }
     this._enterActive();
     const epoch = this._epoch;
-    const dispatched = await this._dispatchApprovedAndApplyTracked(item.proposal, item.descriptor, item.action, epoch);
-    if (dispatched.stale || this._stopHappenedSince(epoch)) return this.getSnapshot();
+    if (item.actions) {
+      const outcome = await this._runApprovedReadOnlyBatch(item.proposal, item.actions, epoch);
+      if (outcome === "stop_loop" || this._stopHappenedSince(epoch)) return this.getSnapshot();
+    } else {
+      const dispatched = await this._dispatchApprovedAndApplyTracked(item.proposal, item.descriptor, item.action, epoch);
+      if (dispatched.stale || this._stopHappenedSince(epoch)) return this.getSnapshot();
+    }
     if (this._task.state === "running") return this._runLoop();
     return this.getSnapshot();
   }
@@ -674,7 +852,8 @@ class TaskController {
           break;
         }
 
-        if (this._budgets.plannerCallsUsed >= this._goal.limits.maxPlannerCalls || this._budgets.activeMs >= this._goal.limits.maxActiveMs) {
+        const activeMs = this._budgets.activeMs + (this._activeSince !== null ? this._now() - this._activeSince : 0);
+        if (this._budgets.plannerCallsUsed >= this._goal.limits.maxPlannerCalls || activeMs >= this._goal.limits.maxActiveMs) {
           await this._pauseWith("budget_exhausted");
           break;
         }
@@ -693,21 +872,60 @@ class TaskController {
         if (this._stopHappenedSince(epoch)) break;
         this._lastObservation = observation;
 
-        const context = buildContext({
-          goal: this._goal,
-          state: {
-            criteriaStatus: this.getSnapshot().criteriaStatus,
-            segment: { ...this._segment },
-            budgets: { ...this._budgets },
-          },
-          observation,
-          recentEvents: this._store.eventsSinceCheckpoint || [],
-        });
+        let customMemory = [];
+        try {
+          if (this._memoryStore) {
+            const memory = await this._memoryStore.forContext(observation.url);
+            customMemory = memory.entries;
+          }
+        } catch {
+          if (this._stopHappenedSince(epoch)) break;
+          await this._pauseWith("context_error");
+          break;
+        }
+        if (this._stopHappenedSince(epoch)) break;
+
+        let pendingMessages = [];
+        try {
+          if (this._listPendingMessages) {
+            pendingMessages = await this._listPendingMessages();
+          }
+        } catch {
+          if (this._stopHappenedSince(epoch)) break;
+          await this._pauseWith("context_error");
+          break;
+        }
+        if (this._stopHappenedSince(epoch)) break;
+
+        let context;
+        try {
+          context = buildContext({
+            goal: this._goal,
+            state: {
+              criteriaStatus: this.getSnapshot().criteriaStatus,
+              segment: { ...this._segment },
+              budgets: { ...this._budgets },
+              plannerEffort: this._plannerEffort,
+            },
+            observation,
+            recentEvents: this._store.eventsSinceCheckpoint || [],
+            customMemory,
+            pendingMessages,
+          });
+        } catch {
+          if (this._stopHappenedSince(epoch)) break;
+          await this._pauseWith("context_error");
+          break;
+        }
+        // The admitted subset only -- never mutated after this point. Used
+        // below to durably acknowledge exactly what was actually shown to
+        // the planner, before its proposal is handled (fail-closed: see the
+        // recordMessagesConsumed block right after planner.next() resolves).
+        const admittedMessageIds = context.pendingMessages.map((m) => m.messageId);
 
         let proposal;
         try {
           proposal = await this._planner.next(context, { signal: undefined });
-          this._budgets.plannerCallsUsed += 1;
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -717,8 +935,32 @@ class TaskController {
           // as its own pause reason rather than the generic planner_error,
           // so a host UI can tell "nothing is wired up" apart from "the
           // configured planner broke".
-          await this._pauseWith(error && error.code === "planner_unavailable" ? "planner_unavailable" : "planner_error");
+          const routinePause = ["routine_step_unresolved", "routine_origin_violation", "routine_cursor_mismatch", "invalid_routine"]
+            .includes(error?.code) ? error.code : null;
+          await this._pauseWith(routinePause || (error && error.code === "planner_unavailable" ? "planner_unavailable" : "planner_error"));
           break;
+        }
+        this._budgets.plannerCallsUsed += 1;
+        if (this._stopHappenedSince(epoch)) break;
+
+        // Subagent communication protocol Task 4 (Review Focus: "crash/
+        // failure after planner response but before durable
+        // message_turn_consumed must not process the generated proposal").
+        // Durably ack exactly the admitted batch BEFORE the proposal below
+        // is ever validated/dispatched; a stop that raced in above already
+        // broke out, so a stopped controller never marks a steer observed.
+        if (admittedMessageIds.length > 0 && !this._recordMessagesConsumed) {
+          await this._pauseWith("message_ack_unavailable");
+          break;
+        }
+        if (admittedMessageIds.length > 0) {
+          try {
+            await this._recordMessagesConsumed(admittedMessageIds, this._budgets.plannerCallsUsed);
+          } catch {
+            if (this._stopHappenedSince(epoch)) break;
+            await this._pauseWith("message_ack_failed");
+            break;
+          }
         }
         if (this._stopHappenedSince(epoch)) break;
 
@@ -761,6 +1003,38 @@ class TaskController {
           continue; // model asked to reconsider; no dispatch, just loop again
         }
 
+        if (validated.kind === "child_plan") {
+          if (!this._onChildPlan) {
+            // No parent-level delegation handler wired on this controller --
+            // never silently pretend to have spawned anything; give the
+            // planner another turn with a fresh observation instead.
+            continue;
+          }
+          try {
+            await this._onChildPlan(validated);
+          } catch (error) {
+            await this._pauseWith("child_plan_failed");
+            break;
+          }
+          continue; // the parent's own loop keeps observing/planning independently of its children
+        }
+
+        if (validated.kind === "send_message") {
+          if (!this._sendMessage) {
+            // Without the coordinator boundary, the message cannot be
+            // authenticated or durably accepted. Do not silently drop it.
+            await this._pauseWith("send_message_unavailable");
+            break;
+          }
+          try {
+            await this._sendMessage(validated);
+          } catch (error) {
+            await this._pauseWith("send_message_failed");
+            break;
+          }
+          continue; // host messaging, not a browser action; never mutates an in-flight action
+        }
+
         // kind === "actions"
         const outcome = await this._dispatchActionsBatch(validated, epoch);
         if (outcome === "stop_loop") break;
@@ -787,6 +1061,10 @@ class TaskController {
   }
 
   async _dispatchActionsBatch(proposal, epoch) {
+    if (this._batchReadOnlyActions && proposal.actions.length > 1 && proposal.actions.every((action) => isReadOnlyAction(action.type))) {
+      const outcome = await this._dispatchReadOnlyBatch(proposal, epoch);
+      if (outcome !== "individual") return outcome;
+    }
     for (const action of proposal.actions) {
       if (this._budgets.actionsUsed >= this._goal.limits.maxActions) {
         await this._pauseWith("budget_exhausted");
@@ -800,19 +1078,23 @@ class TaskController {
       }
 
       const requestId = randomUUID();
-      const descriptor = {
-        requestId,
-        action: action.type,
-        origin: (this._lastObservation && this._lastObservation.url) || "",
-        summary: `Planner proposes ${action.type}`,
-        selfProvenance: "untrusted",
-        source: "page_content",
-        targetScope: "external",
-      };
+      const descriptor = this._describeAction(action, requestId);
 
       let decision;
+      const policy = this._evaluateActionPolicy(this._permissionMode, action.type);
+      if (!policy.allowed) {
+        if (this._routineRunner) {
+          await this._denyRoutineStep({ decision: "deny", reasons: [policy.reason || "permission_mode_denied"] });
+          return "stop_loop";
+        }
+        continue;
+      }
       try {
-        decision = await this._approve(descriptor);
+        decision = policy.approval === "bypass"
+          ? { decision: "allow", reasons: ["explicit_full_permission"] }
+          : policy.approval === "human"
+            ? { decision: "review", reasons: ["human_confirmation_required"] }
+            : await this._approve(descriptor);
       } catch {
         if (this._stopHappenedSince(epoch)) return "stop_loop";
         await this._pauseWith("approver_error");
@@ -846,12 +1128,121 @@ class TaskController {
       }
       if (decision.decision !== "allow") {
         // deny/quarantine: skip this action, keep the loop going with the rest.
+        if (this._routineRunner && (decision.decision === "deny" || decision.decision === "quarantine")) {
+          await this._denyRoutineStep(decision);
+          return "stop_loop";
+        }
         continue;
       }
 
       const dispatched = await this._dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch);
       if (dispatched.stale || this._stopHappenedSince(epoch)) return "stop_loop";
       if (this._stopHappenedSince(epoch) || this._task.state !== "running") return "stop_loop";
+    }
+    return "continue";
+  }
+
+  _describeAction(action, requestId, suffix = "") {
+    const target = describeActionTarget(action, this._lastObservation);
+    return {
+      requestId,
+      action: action.type,
+      origin: (this._lastObservation && this._lastObservation.url) || "",
+      target,
+      summary: `${target ? `Planner proposes ${action.type}: ${target}` : `Planner proposes ${action.type}`}${suffix}`,
+      selfProvenance: "untrusted",
+      source: "page_content",
+      targetScope: "external",
+    };
+  }
+
+  // Read-only batch (design 2026-09-29-readonly-action-batching): the approver judges each distinct action type
+  // once for the whole batch, and only the last action's records are durable. Returns "individual" when policy
+  // does not allow every action, so the ordinary per-action path keeps its own skip/deny semantics.
+  async _dispatchReadOnlyBatch(proposal, epoch) {
+    const actions = proposal.actions;
+    const firstByType = new Map();
+    for (const action of actions) {
+      if (!firstByType.has(action.type)) firstByType.set(action.type, action);
+    }
+    const policies = new Map();
+    for (const type of firstByType.keys()) {
+      const policy = this._evaluateActionPolicy(this._permissionMode, type);
+      if (!policy.allowed) return "individual";
+      policies.set(type, policy);
+    }
+
+    const suffix = ` (batch of ${actions.length} read-only actions)`;
+    let decision = { decision: "allow", reasons: [] };
+    let reviewDescriptor = null;
+    const severity = { allow: 0, review: 1, deny: 2, quarantine: 2 };
+    for (const [type, action] of firstByType) {
+      const policy = policies.get(type);
+      const descriptor = this._describeAction(action, randomUUID(), suffix);
+      let next;
+      try {
+        next = policy.approval === "bypass"
+          ? { decision: "allow", reasons: ["explicit_full_permission"] }
+          : policy.approval === "human"
+            ? { decision: "review", reasons: ["human_confirmation_required"] }
+            : await this._approve(descriptor);
+      } catch {
+        if (this._stopHappenedSince(epoch)) return "stop_loop";
+        await this._pauseWith("approver_error");
+        return "stop_loop";
+      }
+      if (this._stopHappenedSince(epoch)) return "stop_loop";
+      if ((severity[next.decision] ?? 2) > (severity[decision.decision] ?? 2)) decision = next;
+      if (next.decision === "review" && !reviewDescriptor) reviewDescriptor = descriptor;
+    }
+
+    if (decision.decision === "review") {
+      const descriptor = reviewDescriptor ?? this._describeAction(actions[0], randomUUID(), suffix);
+      this._approvalQueue.push({
+        id: descriptor.requestId,
+        summary: descriptor.summary,
+        actionType: actions[0].type,
+        createdAt: new Date().toISOString(),
+        epoch,
+        goalVersion: this._goal.goalVersion,
+        expiresAt: this._now() + contracts.APPROVAL_EXPIRY_MS,
+        descriptor,
+        action: actions[0],
+        actions,
+        proposal,
+      });
+      this._leaveActive();
+      this._task = { state: "awaiting_approval", pauseReason: null };
+      await this._checkpoint();
+      this._emit();
+      return "stop_loop";
+    }
+    if (decision.decision !== "allow") {
+      if (this._routineRunner) {
+        await this._denyRoutineStep(decision);
+        return "stop_loop";
+      }
+      return "continue";
+    }
+    return this._runApprovedReadOnlyBatch(proposal, actions, epoch);
+  }
+
+  async _runApprovedReadOnlyBatch(proposal, actions, epoch) {
+    for (let index = 0; index < actions.length; index += 1) {
+      if (this._budgets.actionsUsed >= this._goal.limits.maxActions) {
+        await this._pauseWith("budget_exhausted");
+        return "stop_loop";
+      }
+      const pressure = this._memoryMonitor.getPressureLevel();
+      if (pressure === "pause" || pressure === "emergency") {
+        await this._pauseForMemoryPressure(pressure);
+        return "stop_loop";
+      }
+      const descriptor = this._describeAction(actions[index], randomUUID());
+      const dispatched = await this._dispatchApprovedAndApplyTracked(proposal, descriptor, actions[index], epoch, {
+        durable: index === actions.length - 1,
+      });
+      if (dispatched.stale || this._stopHappenedSince(epoch) || this._task.state !== "running") return "stop_loop";
     }
     return "continue";
   }
@@ -864,22 +1255,42 @@ class TaskController {
   // "cancelled" once action_started may already be durable. A concurrent
   // pause/stop/takeOver instead WAITS for this call's true outcome via
   // _dispatchApprovedAndApplyTracked's entry in _inFlightOps.
-  async _dispatchApproved(descriptor, action, epoch) {
+  async _dispatchApproved(descriptor, action, epoch, { durable = true } = {}) {
     if (this._stopHappenedSince(epoch)) {
       return { status: "not_dispatched", actionId: null, action, descriptor };
     }
     const actionId = randomUUID();
-    await this._store.append({ type: "action_started", payload: { actionId } });
+    // action_started stays durable (default): recovery's execution_uncertain
+    // check depends on this specific write being fsync'd before execute()
+    // ever runs -- see streamJournalReplay's openActionId handling.
+    await this._store.append({ type: "action_started", payload: { actionId } }, { durable });
     let result;
     try {
-      result = await this._browser.execute(action, { signal: undefined, documentEpoch: null });
+      // Carry the epoch of the observation the proposal was actually based
+      // on, not null: null disables BrowserAdapter.execute()'s stale-
+      // document guard outright, letting a follow_link/scroll proposed
+      // against a page that has since redirected or navigated act on the
+      // wrong document instead of failing closed with stale_document.
+      const documentEpoch = this._lastObservation ? this._lastObservation.documentEpoch : null;
+      result = await this._browser.execute(action, { signal: undefined, documentEpoch });
     } catch {
       result = { status: "failed", errorCode: "execute_threw" };
     }
-    if (!this._stopHappenedSince(epoch)) {
-      this._budgets.actionsUsed += 1;
-    }
-    await this._store.append({ type: "action_outcome", payload: { actionId, status: result.status } });
+    // Count every committed execution regardless of whether ownership
+    // changed (resume -> takeover) while it was in flight: action_started,
+    // the real execute(), and action_outcome all already happened, so
+    // skipping the budget increment here would let repeated takeover during
+    // execution perform more real actions than maxActions allows.
+    this._budgets.actionsUsed += 1;
+    // durable:false: the NEXT action_started's own durable append (same
+    // loop, common case) or the checkpoint at whatever pause/stop follows
+    // this one (rare case) flushes this write before either commits
+    // anything that depends on it. Worst case on a real crash right after
+    // this line, this outcome simply isn't on disk yet -- recovery then
+    // sees an open action_started with no outcome and reports
+    // execution_uncertain, the same fail-closed result as today; it never
+    // reports success for something that did not durably complete.
+    await this._store.append({ type: "action_outcome", payload: { actionId, status: result.status } }, { durable: false });
     return { ...result, actionId, action, descriptor };
   }
 
@@ -913,7 +1324,14 @@ class TaskController {
           finalEvidence.verification = verdict.status;
           finalEvidence.verifierId = "host";
         }
-        await this._store.append({ type: "evidence_recorded", payload: { evidence: finalEvidence } });
+        // durable:false, same reasoning as action_outcome above: this is
+        // still inside the autonomous per-action hot path (right after
+        // action_outcome, before this._criteriaStatus.set() below), and the
+        // next action_started or the checkpoint before any pause/stop
+        // flushes it. checkpoint()'s own flush-before-snapshot ordering is
+        // exactly what keeps a checkpointed criteriaStatus from ever
+        // outrunning the evidence record that justified it.
+        await this._store.append({ type: "evidence_recorded", payload: { evidence: finalEvidence } }, { durable: false });
         const previous = this._criteriaStatus.get(criterionId);
         this._criteriaStatus.set(criterionId, {
           status: verdict.status,

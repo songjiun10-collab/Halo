@@ -9,6 +9,7 @@ const path = require("node:path");
 const { TaskStore } = require("../main/harness/task-store");
 const { TaskController, TaskControllerError } = require("../main/harness/task-controller");
 const { BrowserAdapter } = require("../main/harness/browser-adapter");
+const { RoutineRunner } = require("../main/harness/routine-runner");
 
 async function mkTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "halo-task-controller-"));
@@ -74,6 +75,44 @@ test("drives 100 actions across at least 10 injected context-reset segments whil
   assert.equal(snapshot.budgets.actionsUsed, ACTION_LIMIT);
   assert.ok(snapshot.segment.index >= 10, `expected >=10 segment rotations, got ${snapshot.segment.index}`);
   assert.equal(controller.getGoal().originalRequest, "100단계 작업");
+  await store.close();
+});
+
+test("permission mode is enforced by the host: observe denies click and full explicitly bypasses the approver", async () => {
+  for (const mode of ["observe", "full"]) {
+    const { store } = await makeStore({ originalRequest: "permission policy" });
+    let executions = 0;
+    let approvals = 0;
+    let plannerCalls = 0;
+    const controller = new TaskController({
+      store,
+      permissionMode: mode,
+      planner: { next: async (context) => ++plannerCalls === 1 ? ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "click", elementId: "button1", source: "user_prompt" }] }) : ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] }) },
+      browser: { observe: async () => ({ id: "obs" }), execute: async () => { executions += 1; return { status: "ok" }; } },
+      approve: async () => { approvals += 1; return { decision: "allow", reasons: [] }; },
+      hostVerifier: () => true,
+    });
+    await controller.start();
+    assert.equal(executions, mode === "full" ? 1 : 0);
+    assert.equal(approvals, mode === "full" ? 0 : 0);
+    await store.close();
+  }
+});
+
+test("interactive permission mode queues a human review before dispatching a click", async () => {
+  const { store } = await makeStore({ originalRequest: "interactive approval" });
+  let executions = 0;
+  const controller = new TaskController({
+    store,
+    permissionMode: "interact",
+    planner: { next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "click", elementId: "button1" }] }) },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => { executions += 1; return { status: "ok" }; } },
+    approve: async () => { throw new Error("human gate must not be delegated to the provenance approver"); },
+    hostVerifier: () => true,
+  });
+  await controller.start();
+  assert.equal(controller.getSnapshot().state, "awaiting_approval");
+  assert.equal(executions, 0);
   await store.close();
 });
 
@@ -721,7 +760,7 @@ test("confirmCriterion(verified) unblocks a task stuck in awaiting_verification 
   await store.close();
 });
 
-test("confirmCriterion(rejected) records the rejection but does not complete the task", async () => {
+test("confirmCriterion(rejected) does not complete the task and durably transitions back to paused so it can be resumed", async () => {
   const { controller, store, pending } = await driveToAwaitingVerification();
 
   const snapshot = await controller.confirmCriterion({
@@ -731,7 +770,8 @@ test("confirmCriterion(rejected) records the rejection but does not complete the
     outcome: "rejected",
   });
 
-  assert.equal(snapshot.state, "awaiting_verification");
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "evidence_rejected");
   assert.equal(snapshot.criteriaStatus.find((c) => c.criterionId === "c1").status, "rejected");
   await store.close();
 });
@@ -894,12 +934,12 @@ function makeGatedAppend(store, matchType) {
   const gate = new Promise((r) => {
     release = r;
   });
-  store.append = async (input) => {
+  store.append = async (input, options) => {
     if (input.type === matchType && !hit) {
       hit = true;
       await gate;
     }
-    return original(input);
+    return original(input, options);
   };
   return { release: () => release() };
 }
@@ -909,14 +949,14 @@ function makeGatedAppend(store, matchType) {
 function makeFlakyAppend(store, matchType, failCount = 1) {
   const original = store.append.bind(store);
   let calls = 0;
-  store.append = async (input) => {
+  store.append = async (input, options) => {
     if (input.type === matchType) {
       calls += 1;
       if (calls <= failCount) {
         throw new Error(`injected failure #${calls} for ${matchType}`);
       }
     }
-    return original(input);
+    return original(input, options);
   };
   return { callsFor: () => calls };
 }
@@ -1301,5 +1341,710 @@ test("K: takeOver() waits for an admitted user evidence confirmation before chec
   assert.equal(controller.getSnapshot().criteriaStatus[0].status, "verified");
   assert.equal(controller.getSnapshot().pauseReason, "user_takeover");
   assert.equal(store.lastCheckpoint.payload.criteriaStatus[0][1].status, "verified");
+  await store.close();
+});
+
+test("every planner turn receives current user memory from the host-owned memory store", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const memoryLookups = [];
+  const planner = {
+    next: async (context) => {
+      assert.deepEqual(context.userMemory, {
+        authority: "untrusted_user_memory",
+        entries: [{ id: "pref-1", text: "Keep reports short", origin: null }],
+      });
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] };
+    },
+  };
+  const controller = new TaskController({
+    store, planner,
+    browser: { observe: async () => ({ id: "obs", url: "https://example.com/" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(), hostVerifier: () => true,
+    memoryStore: { forContext: async (url) => { memoryLookups.push(url); return { entries: [{ id: "pref-1", text: "Keep reports short", origin: null }] }; } },
+  });
+  await controller.start();
+  assert.deepEqual(memoryLookups, ["https://example.com/"]);
+  await store.close();
+});
+
+test("memory context overflow pauses fail-closed before contacting the planner", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let plannerCalled = false;
+  const controller = new TaskController({
+    store,
+    planner: { next: async () => { plannerCalled = true; throw new Error("should not be called"); } },
+    browser: { observe: async () => ({ id: "obs", url: "https://example.com/" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(), hostVerifier: () => true,
+    memoryStore: { forContext: async () => { const error = new Error("memory budget exceeded"); error.code = "memory_context_overflow"; throw error; } },
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "context_error");
+  assert.equal(plannerCalled, false);
+  await store.close();
+});
+
+function makeChildPlanProposal(context) {
+  return {
+    taskId: context.taskId,
+    goalVersion: context.goalVersion,
+    basedOnObservationId: context.observation.id,
+    criterionIds: [],
+    kind: "child_plan",
+    parentGoalVersion: context.goalVersion,
+    requestedAgentCount: 1,
+    assignments: [{ subgoal: "하위 작업", entryUrl: "https://example.com/child" }],
+  };
+}
+
+test("onChildPlan hook: a child_plan proposal is delegated to the host, and the host rejecting it pauses the parent with child_plan_failed", async () => {
+  const { store } = await makeStore({ originalRequest: "부모 작업" });
+  let onChildPlanCalls = 0;
+  let dispatched = 0;
+  const controller = new TaskController({
+    store,
+    planner: {
+      next: async (context) => makeChildPlanProposal(context),
+    },
+    browser: {
+      observe: async () => ({ id: "obs" }),
+      execute: async () => { dispatched += 1; return { status: "ok" }; },
+    },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    onChildPlan: async (proposal) => {
+      onChildPlanCalls += 1;
+      assert.equal(proposal.kind, "child_plan");
+      assert.equal(proposal.assignments.length, 1);
+      throw new Error("host refused to admit any child right now");
+    },
+  });
+  const snapshot = await controller.start();
+  assert.equal(onChildPlanCalls, 1);
+  assert.equal(dispatched, 0, "a child_plan proposal must never be dispatched as a browser action");
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "child_plan_failed");
+  await store.close();
+});
+
+test("onChildPlan hook: without one configured, a child_plan proposal is skipped and the parent keeps looping on a fresh observation instead of silently spawning anything", async () => {
+  const { store } = await makeStore({ originalRequest: "부모 작업" });
+  let plannerCalls = 0;
+  const controller = new TaskController({
+    store,
+    planner: {
+      next: async (context) => {
+        plannerCalls += 1;
+        if (plannerCalls === 1) return makeChildPlanProposal(context);
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "finish", evidenceIds: [] };
+      },
+    },
+    browser: {
+      observe: async () => ({ id: "obs" }),
+      execute: async () => { throw new Error("must not dispatch a child_plan as a browser action"); },
+    },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    // no onChildPlan configured -- a child controller (or any controller
+    // never wired for delegation) must structurally be unable to spawn
+    // children, not merely be told not to.
+  });
+  const snapshot = await controller.start();
+  assert.equal(plannerCalls, 2, "the first child_plan proposal must be skipped, giving the planner a second turn");
+  assert.equal(snapshot.state, "awaiting_verification");
+  await store.close();
+});
+
+// --- Subagent communication protocol Task 4: pendingMessages context
+// admission, fail-closed recordMessagesConsumed acknowledgement (BEFORE that
+// turn's proposal is ever validated/dispatched), and the send_message
+// proposal-kind dispatch -- symmetric with the onChildPlan hook above, since
+// this controller is role-agnostic (it never knows if it is a parent's or a
+// child's own loop).
+
+test("recordMessagesConsumed() receives exactly the admitted messageIds, in order, before that turn's proposal is handled", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const recordedCalls = [];
+  let plannerCalls = 0;
+  const controller = new TaskController({
+    store,
+    planner: {
+      next: async (context) => {
+        plannerCalls += 1;
+        assert.deepEqual(context.pendingMessages.map((m) => m.messageId), ["m1", "m2"]);
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] };
+      },
+    },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    listPendingMessages: async () => [{ messageId: "m1", text: "a" }, { messageId: "m2", text: "b" }],
+    recordMessagesConsumed: async (ids, plannerCall) => {
+      recordedCalls.push({ ids, plannerCall });
+    },
+  });
+  const snapshot = await controller.start();
+  assert.deepEqual(recordedCalls, [{ ids: ["m1", "m2"], plannerCall: 1 }]);
+  assert.equal(plannerCalls, 1);
+  assert.equal(snapshot.state, "awaiting_verification");
+  await store.close();
+});
+
+test("fail-closed message ack: a throwing recordMessagesConsumed() pauses with message_ack_failed and that turn's proposal is never dispatched", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let executions = 0;
+  let recordCalls = 0;
+  const controller = new TaskController({
+    store,
+    planner: {
+      next: async (context) => ({
+        taskId: context.taskId,
+        goalVersion: context.goalVersion,
+        basedOnObservationId: "obs",
+        criterionIds: [],
+        kind: "actions",
+        actions: [{ type: "click", elementId: "e1" }],
+      }),
+    },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => { executions += 1; return { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    listPendingMessages: async () => [{ messageId: "m1" }],
+    recordMessagesConsumed: async () => {
+      recordCalls += 1;
+      throw new Error("durable append failed");
+    },
+  });
+  const snapshot = await controller.start();
+  assert.equal(recordCalls, 1);
+  assert.equal(executions, 0, "the proposal generated for the un-acknowledged turn must never be dispatched");
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "message_ack_failed");
+  await store.close();
+});
+
+test("a stop() racing in while the planner call is still in flight breaks before ever acknowledging pending messages (a steer is never marked consumed)", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let recordCalls = 0;
+  let resolvePlanner;
+  const plannerGate = new Promise((resolve) => {
+    resolvePlanner = resolve;
+  });
+  const controller = new TaskController({
+    store,
+    planner: {
+      next: async (context) => {
+        await plannerGate;
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] };
+      },
+    },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    listPendingMessages: async () => [{ messageId: "steer-1", kind: "steer" }],
+    recordMessagesConsumed: async () => {
+      recordCalls += 1;
+    },
+  });
+  const started = controller.start();
+  // Let the loop run up to (and suspend inside) planner.next() before
+  // stop() is called -- observe()/listPendingMessages() above only need
+  // microtask turns to settle, so a macrotask tick is enough headroom.
+  await new Promise((resolve) => setImmediate(resolve));
+  const stopped = controller.stop();
+  resolvePlanner();
+  await Promise.all([started, stopped]);
+  assert.equal(recordCalls, 0, "a stop() that races the planner call must prevent the pending steer from ever being marked consumed");
+  assert.equal(controller.getSnapshot().state, "stopped");
+  await store.close();
+});
+
+test("a stop after the planner response waits for the admitted batch's durable acknowledgement, then skips proposal handling", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let resolveAck;
+  let executions = 0;
+  let ackCalls = 0;
+  const ackGate = new Promise((resolve) => { resolveAck = resolve; });
+  const controller = new TaskController({
+    store,
+    planner: {
+      next: async () => ({ taskId: store.taskId, goalVersion: 1, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "click", elementId: "e1" }] }),
+    },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => { executions += 1; return { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    listPendingMessages: async () => [{ messageId: "steer-2", kind: "steer" }],
+    recordMessagesConsumed: async (ids) => {
+      ackCalls += 1;
+      assert.deepEqual(ids, ["steer-2"]);
+      await ackGate;
+    },
+  });
+
+  const started = controller.start();
+  await new Promise((resolve) => setImmediate(resolve)); // planner response has reached the ack callback
+  const stopped = controller.stop();
+  resolveAck();
+  await Promise.all([started, stopped]);
+  assert.equal(ackCalls, 1, "a planner response that reached the durable ack boundary must finish acknowledgement");
+  assert.equal(executions, 0, "stop during acknowledgement must still prevent that proposal from executing");
+  assert.equal(controller.getSnapshot().state, "stopped");
+  await store.close();
+});
+
+function makeSendMessageProposal(context, overrides = {}) {
+  return {
+    taskId: context.taskId,
+    goalVersion: context.goalVersion,
+    basedOnObservationId: context.observation.id,
+    criterionIds: [],
+    kind: "send_message",
+    recipientTaskId: "11111111-1111-1111-1111-111111111111",
+    messageKind: "progress",
+    idempotencyKey: "idem-1",
+    text: "hello parent",
+    ...overrides,
+  };
+}
+
+test("send_message hook: the host callback receives the validated proposal and it is never dispatched through the browser action pipeline", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let plannerCalls = 0;
+  let executions = 0;
+  const sendCalls = [];
+  const controller = new TaskController({
+    store,
+    planner: {
+      next: async (context) => {
+        plannerCalls += 1;
+        if (plannerCalls === 1) return makeSendMessageProposal(context);
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "finish", evidenceIds: [] };
+      },
+    },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => { executions += 1; return { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    sendMessage: async (validated) => {
+      sendCalls.push(validated);
+    },
+  });
+  const snapshot = await controller.start();
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].kind, "send_message");
+  assert.equal(sendCalls[0].text, "hello parent");
+  assert.equal(executions, 0, "send_message must never be dispatched as a browser action");
+  assert.equal(plannerCalls, 2);
+  assert.equal(snapshot.state, "awaiting_verification");
+  await store.close();
+});
+
+test("send_message hook: a throwing sendMessage callback pauses with send_message_failed instead of looping or crashing", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => makeSendMessageProposal(context) },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    sendMessage: async () => {
+      throw new Error("unauthorized_route");
+    },
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "send_message_failed");
+  await store.close();
+});
+
+test("send_message hook: without one configured, the controller fails closed instead of silently dropping the message", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let plannerCalls = 0;
+  const controller = new TaskController({
+    store,
+    planner: {
+      next: async (context) => {
+        plannerCalls += 1;
+        if (plannerCalls === 1) return makeSendMessageProposal(context);
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "finish", evidenceIds: [] };
+      },
+    },
+    browser: {
+      observe: async () => ({ id: "obs" }),
+      execute: async () => {
+        throw new Error("must not dispatch send_message as an action");
+      },
+    },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    // no sendMessage configured
+  });
+  const snapshot = await controller.start();
+  assert.equal(plannerCalls, 1, "the message proposal must not be treated as handled without a host callback");
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "send_message_unavailable");
+  await store.close();
+});
+
+test("pending messages fail closed when durable consumption callback is unavailable", async () => {
+  const { store } = await makeStore({ originalRequest: "goal" });
+  let plannerCalls = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      plannerCalls += 1;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    listPendingMessages: async () => [{ messageId: "m1", text: "untrusted input" }],
+    // No recordMessagesConsumed callback: the proposal must not be processed.
+  });
+  const snapshot = await controller.start();
+  assert.equal(plannerCalls, 1);
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "message_ack_unavailable");
+  await store.close();
+});
+
+test("routine steps advance durably before the next proposal and checkpoint the cursor at the pause", async () => {
+  const { store } = await makeStore({ originalRequest: "routine task" });
+  let cursor = 0;
+  let plannerCalls = 0;
+  const stepBinding = { routineId: "routine-a", revision: 1, stepIndex: 0, stepDigest: "a".repeat(64) };
+  const routineRunner = {
+    next: async (context) => {
+      plannerCalls += 1;
+      if (plannerCalls === 1) {
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "navigate", url: "https://example.com/" }] };
+      }
+      assert.equal((await store.getEvents()).filter((event) => event.type === "routine_step_advanced").length, 1, "the durable advancement record must land before the next proposal");
+      assert.notEqual(store.lastCheckpoint?.payload?.routineRun?.cursor, 1, "no per-step cursor checkpoint is written");
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "routine complete" };
+    },
+    getCurrentStep: () => cursor === 0 ? stepBinding : null,
+    advance: (binding) => {
+      assert.deepEqual(binding, stepBinding);
+      cursor += 1;
+      return cursor;
+    },
+  };
+  const controller = new TaskController({
+    store,
+    planner: routineRunner,
+    routineRunner,
+    routineRun: { routineId: "routine-a", revision: 1, digest: "b".repeat(64), cursor: 0 },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.equal(plannerCalls, 2);
+  assert.equal(store.lastCheckpoint.payload.routineRun.cursor, 1);
+  const events = await store.getEvents();
+  const advancement = events.find((event) => event.type === "routine_step_advanced");
+  assert.deepEqual(advancement.payload, { ...stepBinding, actionId: events.find((event) => event.type === "action_started").payload.actionId });
+  await store.close();
+});
+
+test("routine denial is durably recorded and pauses instead of resuggesting the same step", async () => {
+  const { store } = await makeStore({ originalRequest: "routine task" });
+  let plannerCalls = 0;
+  let executeCalls = 0;
+  const binding = { routineId: "routine-a", revision: 1, stepIndex: 0, stepDigest: "c".repeat(64) };
+  const routineRunner = {
+    next: async (context) => {
+      plannerCalls += 1;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "navigate", url: "https://example.com/" }] };
+    },
+    getCurrentStep: () => binding,
+    advance: () => { throw new Error("a denied routine step must not advance"); },
+  };
+  const controller = new TaskController({
+    store,
+    planner: routineRunner,
+    routineRunner,
+    routineRun: { routineId: "routine-a", revision: 1, digest: "d".repeat(64), cursor: 0 },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => { executeCalls += 1; return { status: "ok" }; } },
+    approve: async () => ({ decision: "deny", reasons: ["origin_not_allowed"] }),
+    hostVerifier: () => true,
+  });
+
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "routine_step_denied");
+  assert.equal(plannerCalls, 1);
+  assert.equal(executeCalls, 0);
+  const events = await store.getEvents();
+  const denied = events.find((event) => event.type === "routine_step_denied");
+  assert.deepEqual(denied.payload, { ...binding, decision: "deny", reasons: ["origin_not_allowed"] });
+  await store.close();
+});
+
+test("failed dispatched routine action is durably blocked rather than replayed", async () => {
+  const { store } = await makeStore({ originalRequest: "routine task" });
+  let plannerCalls = 0;
+  const binding = { routineId: "routine-a", revision: 1, stepIndex: 0, stepDigest: "e".repeat(64) };
+  const routineRunner = {
+    next: async (context) => {
+      plannerCalls += 1;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "navigate", url: "https://example.com/" }] };
+    },
+    getCurrentStep: () => binding,
+    advance: () => { throw new Error("a failed routine step must not advance"); },
+  };
+  const controller = new TaskController({
+    store,
+    planner: routineRunner,
+    routineRunner,
+    routineRun: { routineId: "routine-a", revision: 1, digest: "f".repeat(64), cursor: 0 },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "failed", errorCode: "navigation_failed" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "routine_step_failed");
+  assert.equal(plannerCalls, 1);
+  const events = await store.getEvents();
+  const started = events.find((event) => event.type === "action_started");
+  const failed = events.find((event) => event.type === "routine_step_failed");
+  assert.deepEqual(failed.payload, { ...binding, actionId: started.payload.actionId, status: "failed", errorCode: "navigation_failed" });
+  await store.close();
+});
+
+test("a recovered routine with an outcome but no durable advancement cannot resume or replay", async () => {
+  const { store: originalStore, storageRoot } = await makeStore({ originalRequest: "routine recovery" });
+  const routineId = "44444444-4444-4444-8444-444444444444";
+  const definition = {
+    routineId,
+    revision: 1,
+    origins: ["https://example.com"],
+    steps: [{ kind: "navigate", url: "https://example.com/next" }],
+  };
+  const run = { routineId, revision: 1, digest: "a".repeat(64), cursor: 0 };
+  await originalStore.checkpoint({ task: { state: "paused", pauseReason: "recovered" }, routineRun: run });
+  await originalStore.append({ type: "action_started", payload: { actionId: "action-1" } });
+  await originalStore.append({ type: "action_outcome", payload: { actionId: "action-1", status: "ok" } });
+  const taskId = originalStore.taskId;
+  await originalStore.close();
+
+  const store = await TaskStore.load(taskId, { storageRoot });
+  const runner = new RoutineRunner({ definition });
+  let plannerCalls = 0;
+  let browserCalls = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async () => { plannerCalls += 1; throw new Error("must not call routine runner"); } },
+    routineRunner: runner,
+    routineRun: run,
+    browser: {
+      observe: async () => { browserCalls += 1; return { id: "obs" }; },
+      execute: async () => { browserCalls += 1; return { status: "ok" }; },
+    },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+  assert.equal(controller.getSnapshot().pauseReason, "routine_recovery_incomplete");
+  await assert.rejects(() => controller.resume({ confirmed: true }), (error) => error.code === "routine_recovery_incomplete");
+  assert.equal(plannerCalls, 0);
+  assert.equal(browserCalls, 0);
+  await store.close();
+});
+
+// --- read-only action batching ---
+
+function makeBatchPlanner(actions) {
+  let calls = 0;
+  return {
+    next: async (context) => {
+      calls += 1;
+      const base = { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [] };
+      return calls === 1 ? { ...base, kind: "actions", actions } : { ...base, kind: "need_user", reason: "batch done" };
+    },
+  };
+}
+
+function spyAppends(store) {
+  const original = store.append.bind(store);
+  const records = [];
+  store.append = async (input, options) => {
+    records.push({ type: input.type, durable: options?.durable !== false });
+    return original(input, options);
+  };
+  return records;
+}
+
+function makeBatchController({ store, actions, approve, browser, extra = {} }) {
+  const executed = [];
+  const approvals = [];
+  const controller = new TaskController({
+    store,
+    planner: makeBatchPlanner(actions),
+    browser: browser ?? {
+      observe: async () => ({ id: "obs" }),
+      execute: async (action) => { executed.push(action.type); return { status: "ok" }; },
+    },
+    approve: approve ?? (async (descriptor) => { approvals.push(descriptor.action); return { decision: "allow", reasons: [] }; }),
+    hostVerifier: () => true,
+    ...extra,
+  });
+  return { controller, executed, approvals };
+}
+
+const SCROLL = { type: "scroll", direction: "down", amount: 400 };
+
+test("a read-only batch asks the approver once per distinct action type and makes only the last action_started durable", async () => {
+  const { store } = await makeStore({ originalRequest: "batch" });
+  const records = spyAppends(store);
+  const { controller, executed, approvals } = makeBatchController({ store, actions: [SCROLL, SCROLL, SCROLL] });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.deepEqual(executed, ["scroll", "scroll", "scroll"]);
+  assert.deepEqual(approvals, ["scroll"]);
+  assert.deepEqual(records.filter((r) => r.type === "action_started").map((r) => r.durable), [false, false, true]);
+  assert.deepEqual(records.filter((r) => r.type === "action_outcome").map((r) => r.durable), [false, false, false]);
+  await store.close();
+});
+
+test("a read-only batch mixing observe and scroll is approved once for each type", async () => {
+  const { store } = await makeStore({ originalRequest: "batch" });
+  const { controller, executed, approvals } = makeBatchController({ store, actions: [SCROLL, { type: "observe" }, SCROLL] });
+  await controller.start();
+  assert.deepEqual(executed, ["scroll", "observe", "scroll"]);
+  assert.deepEqual(approvals.sort(), ["observe", "scroll"]);
+  await store.close();
+});
+
+test("a batch containing a non-read-only action keeps per-action approval and durable action_started", async () => {
+  const { store } = await makeStore({ originalRequest: "batch" });
+  const records = spyAppends(store);
+  const { controller, executed, approvals } = makeBatchController({
+    store,
+    actions: [SCROLL, { type: "navigate", url: "https://example.com/" }],
+    extra: { permissionMode: "browse" },
+  });
+  await controller.start();
+  assert.deepEqual(executed, ["scroll", "navigate"]);
+  assert.deepEqual(approvals, ["scroll", "navigate"]);
+  assert.deepEqual(records.filter((r) => r.type === "action_started").map((r) => r.durable), [true, true]);
+  await store.close();
+});
+
+test("a single read-only action keeps its durable action_started", async () => {
+  const { store } = await makeStore({ originalRequest: "batch" });
+  const records = spyAppends(store);
+  const { controller } = makeBatchController({ store, actions: [SCROLL] });
+  await controller.start();
+  assert.deepEqual(records.filter((r) => r.type === "action_started").map((r) => r.durable), [true]);
+  await store.close();
+});
+
+test("a denied read-only batch dispatches nothing", async () => {
+  const { store } = await makeStore({ originalRequest: "batch" });
+  const { controller, executed } = makeBatchController({
+    store,
+    actions: [SCROLL, SCROLL],
+    approve: async () => ({ decision: "deny", reasons: ["no"] }),
+  });
+  await controller.start();
+  assert.deepEqual(executed, []);
+  await store.close();
+});
+
+test("a reviewed read-only batch queues one item and approve() runs every action in it", async () => {
+  const { store } = await makeStore({ originalRequest: "batch" });
+  const { controller, executed } = makeBatchController({ store, actions: [SCROLL, SCROLL, SCROLL], approve: reviewApprove() });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "awaiting_approval");
+  assert.equal(snapshot.approvalQueue.length, 1);
+  assert.deepEqual(executed, []);
+  await controller.approve(snapshot.approvalQueue[0].id);
+  assert.deepEqual(executed, ["scroll", "scroll", "scroll"]);
+  await store.close();
+});
+
+test("a routine read-only batch advances every step and only the last advancement and action_started are durable", async () => {
+  const { store } = await makeStore({ originalRequest: "routine task" });
+  const records = spyAppends(store);
+  let cursor = 0;
+  const bindingAt = (i) => ({ routineId: "routine-a", revision: 1, stepIndex: i, stepDigest: String(i).repeat(64) });
+  let plannerCalls = 0;
+  const routineRunner = {
+    next: async (context) => {
+      plannerCalls += 1;
+      const base = { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [] };
+      return plannerCalls === 1 ? { ...base, kind: "actions", actions: [SCROLL, SCROLL, SCROLL] } : { ...base, kind: "need_user", reason: "done" };
+    },
+    getCurrentStep: () => (cursor < 3 ? bindingAt(cursor) : null),
+    advance: (binding) => {
+      assert.deepEqual(binding, bindingAt(cursor));
+      cursor += 1;
+      return cursor;
+    },
+  };
+  const executed = [];
+  const controller = new TaskController({
+    store,
+    planner: routineRunner,
+    routineRunner,
+    routineRun: { routineId: "routine-a", revision: 1, digest: "b".repeat(64), cursor: 0 },
+    browser: { observe: async () => ({ id: "obs" }), execute: async (a) => { executed.push(a.type); return { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+  await controller.start();
+  assert.deepEqual(executed, ["scroll", "scroll", "scroll"]);
+  assert.deepEqual(records.filter((r) => r.type === "routine_step_advanced").map((r) => r.durable), [false, false, true]);
+  assert.deepEqual(records.filter((r) => r.type === "action_started").map((r) => r.durable), [false, false, true]);
+  const advanced = (await store.getEvents()).filter((e) => e.type === "routine_step_advanced");
+  assert.deepEqual(advanced.map((e) => e.payload.stepIndex), [0, 1, 2]);
+  await store.close();
+});
+
+test("a routine read-only batch pauses at a failed step without running the remaining actions", async () => {
+  const { store } = await makeStore({ originalRequest: "routine task" });
+  let cursor = 0;
+  const bindingAt = (i) => ({ routineId: "routine-a", revision: 1, stepIndex: i, stepDigest: String(i).repeat(64) });
+  const routineRunner = {
+    next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [SCROLL, SCROLL, SCROLL] }),
+    getCurrentStep: () => (cursor < 3 ? bindingAt(cursor) : null),
+    advance: () => { cursor += 1; return cursor; },
+  };
+  let executes = 0;
+  const controller = new TaskController({
+    store,
+    planner: routineRunner,
+    routineRunner,
+    routineRun: { routineId: "routine-a", revision: 1, digest: "b".repeat(64), cursor: 0 },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => { executes += 1; return executes === 2 ? { status: "failed", errorCode: "boom" } : { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "routine_step_failed");
+  assert.equal(executes, 2);
+  const events = await store.getEvents();
+  assert.deepEqual(events.filter((e) => e.type === "routine_step_advanced").map((e) => e.payload.stepIndex), [0]);
+  assert.deepEqual(events.filter((e) => e.type === "routine_step_failed").map((e) => e.payload.stepIndex), [1]);
+  await store.close();
+});
+
+test("batchReadOnlyActions:false restores per-action approval and durability for an all-read-only proposal", async () => {
+  const { store } = await makeStore({ originalRequest: "batch" });
+  const records = spyAppends(store);
+  const { controller, executed, approvals } = makeBatchController({
+    store,
+    actions: [SCROLL, SCROLL, SCROLL],
+    extra: { batchReadOnlyActions: false },
+  });
+  await controller.start();
+  assert.deepEqual(executed, ["scroll", "scroll", "scroll"]);
+  assert.deepEqual(approvals, ["scroll", "scroll", "scroll"]);
+  assert.deepEqual(records.filter((r) => r.type === "action_started").map((r) => r.durable), [true, true, true]);
   await store.close();
 });

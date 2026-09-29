@@ -39,6 +39,7 @@ const MAX_NODES_VISITED = 500; // design doc section 6: "최대 500개 방문 �
 const MAX_ELEMENTS = 100; // section 6: "100개 element"
 const MAX_TEXT_BYTES = 12 * 1024; // section 6: "text 12 KiB"
 const NAVIGATION_TIMEOUT_MS = 30000; // matches control-api.js's existing bound
+const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
 const UNSUPPORTED_ACTIONS = new Set(["click", "type", "submit_form", "download"]);
 const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "observe"]);
 
@@ -72,28 +73,138 @@ class BrowserAdapterError extends Error {
 // regression test that runs this exact script string against a fake DOM).
 function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes) {
   return `(() => {
-    const INTERACTIVE_TAGS = new Set(["A", "BUTTON", "INPUT", "TEXTAREA", "SELECT", "H1", "H2", "H3"]);
-    const root = document.body || document.documentElement;
+    const included = new WeakMap();
     const elements = [];
     const textParts = [];
+    const INTERACTIVE_TAGS = new Set(["A", "BUTTON", "INPUT", "TEXTAREA", "SELECT", "SUMMARY"]);
+    const LANDMARK_TAGS = new Set(["MAIN", "NAV", "ASIDE", "HEADER", "FOOTER"]);
+    const ROLE_TAGS = {
+      MAIN: "main", NAV: "navigation", ASIDE: "complementary",
+      HEADER: "banner", FOOTER: "contentinfo", FORM: "form",
+      UL: "list", OL: "list", LI: "listitem", TABLE: "table",
+      TR: "row", TH: "columnheader", TD: "cell", IMG: "img",
+    };
+    const root = document.body || document.documentElement;
     let textBytes = 0;
     let visited = 0;
+    const clean = (value, max) => (typeof value === "string" ? value : "").replace(/\\s+/g, " ").trim().slice(0, max);
+    const roleOf = (node) => {
+      const explicit = clean(node.getAttribute("role"), 40).split(/\\s+/)[0];
+      if (explicit && explicit !== "none" && explicit !== "presentation") return explicit;
+      const tag = node.tagName;
+      if (tag === "A" && node.getAttribute("href") !== null) return "link";
+      if (tag === "BUTTON" || tag === "SUMMARY") return "button";
+      if (tag === "TEXTAREA") return "textbox";
+      if (tag === "SELECT") return node.getAttribute("multiple") !== null ? "listbox" : "combobox";
+      if (tag === "INPUT") {
+        const type = (node.getAttribute("type") || "text").toLowerCase();
+        if (["hidden", "submit", "reset", "image"].includes(type)) return type === "hidden" ? null : "button";
+        return ({ checkbox: "checkbox", radio: "radio", button: "button", submit: "button", reset: "button", search: "searchbox", range: "slider" })[type] || "textbox";
+      }
+      if (/^H[1-6]$/.test(tag)) return "heading";
+      if (["MAIN", "NAV", "ASIDE"].includes(tag)) return ROLE_TAGS[tag];
+      if ((tag === "HEADER" || tag === "FOOTER") && (!node.parentElement || node.parentElement === document.body)) return ROLE_TAGS[tag];
+      if (tag === "FORM" && (node.getAttribute("aria-label") || node.getAttribute("aria-labelledby"))) return "form";
+      if (ROLE_TAGS[tag]) return ROLE_TAGS[tag];
+      if (["P", "LI", "LABEL", "DT", "DD", "FIGCAPTION"].includes(tag)) return "text";
+      return null;
+    };
+    const nameOf = (node, role) => {
+      const labelledBy = clean(node.getAttribute("aria-labelledby"), 300).split(/\\s+/).filter(Boolean);
+      if (labelledBy.length) {
+        const value = labelledBy.map((id) => document.getElementById?.(id)?.textContent || "").join(" ");
+        if (clean(value, 180)) return clean(value, 180);
+      }
+      const aria = clean(node.getAttribute("aria-label"), 180);
+      if (aria) return aria;
+      if (node.labels && node.labels.length) {
+        let value = "";
+        let labelCount = 0;
+        for (const label of node.labels) {
+          if (labelCount++ >= 10) break;
+          value += " " + (label.innerText || label.textContent || "");
+        }
+        value = clean(value, 180);
+        if (value) return value;
+      }
+      if (node.tagName === "IMG") return clean(node.getAttribute("alt"), 180);
+      if (node.tagName === "INPUT" && (node.getAttribute("type") || "").toLowerCase() === "image") return clean(node.getAttribute("alt"), 180);
+      const placeholder = clean(node.getAttribute("placeholder"), 180);
+      if (placeholder && ["textbox", "searchbox", "combobox"].includes(role)) return placeholder;
+      const title = clean(node.getAttribute("title"), 180);
+      if (title) return title;
+      if (node.tagName === "INPUT" && ["button", "submit", "reset"].includes((node.getAttribute("type") || "").toLowerCase())) {
+        return clean(node.getAttribute("value"), 180);
+      }
+      if (["main", "navigation", "complementary", "banner", "contentinfo", "form"].includes(role)) return "";
+      if (["textbox", "searchbox", "combobox", "checkbox", "radio", "slider", "switch"].includes(role)) return "";
+      return clean(node.innerText || node.textContent || "", 180);
+    };
+    const utf8Length = (value) => {
+      let bytes = 0;
+      for (const char of value) {
+        const point = char.codePointAt(0);
+        bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+      }
+      return bytes;
+    };
+    const hidden = (node) => {
+      for (let current = node; current; current = current.parentElement) {
+        if (current.hasAttribute?.("hidden") || current.getAttribute("hidden") !== null || current.getAttribute("aria-hidden") === "true") return true;
+      }
+      let display = "";
+      if (typeof getComputedStyle === "function") {
+        const style = getComputedStyle(node);
+        display = style.display;
+        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return true;
+      }
+      if (display !== "contents" && typeof node.getClientRects === "function" && node.getClientRects().length === 0) return true;
+      return false;
+    };
     if (root) {
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
       let node = walker.currentNode;
       while (node && visited < ${maxNodesVisited}) {
         visited += 1;
         if (node.nodeType === 1) {
-          const ownText = (node.childElementCount === 0 ? (node.textContent || "") : "").trim().slice(0, 200);
-          if (ownText && textBytes < ${maxTextBytes}) {
-            const encoded = ownText + " ";
-            if (textBytes + encoded.length <= ${maxTextBytes}) {
+          const ownText = (node.childElementCount === 0 && !hidden(node) && node.tagName !== "INPUT" && node.tagName !== "TEXTAREA" && node.tagName !== "SELECT" ? (node.innerText || node.textContent || "") : "").trim().slice(0, 200);
+          const role = roleOf(node);
+          const isTextNode = ["P", "LI", "LABEL", "DT", "DD", "FIGCAPTION"].includes(node.tagName);
+          const shouldInclude = role && !hidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
+          const name = shouldInclude && elements.length < ${maxElements} ? nameOf(node, role) : "";
+          // A visible leaf represented by its accessible name does not also
+          // consume the free-text channel. This avoids sending button/link/
+          // heading labels twice while preserving unstructured page copy.
+          if (ownText && !(name && name === ownText) && textBytes < ${maxTextBytes}) {
+            const encoded = (textParts.length ? " " : "") + ownText;
+            const encodedBytes = utf8Length(encoded);
+            if (textBytes + encodedBytes <= ${maxTextBytes}) {
               textParts.push(ownText);
-              textBytes += encoded.length;
+              textBytes += encodedBytes;
             }
           }
-          if (INTERACTIVE_TAGS.has(node.tagName) && elements.length < ${maxElements}) {
-            const entry = { tag: node.tagName.toLowerCase(), text: (node.textContent || "").trim().slice(0, 120) };
+          if (shouldInclude && elements.length < ${maxElements}) {
+            const index = elements.length;
+            let parent = node.parentElement;
+            while (parent && !included.has(parent)) parent = parent.parentElement;
+            const entry = {
+              index,
+              role,
+              name,
+              parentIndex: parent ? included.get(parent) : null,
+            };
+            if (/^H[1-6]$/.test(node.tagName)) entry.level = Number(node.tagName.slice(1));
+            if (node.tagName === "INPUT") {
+              const type = (node.getAttribute("type") || "text").toLowerCase();
+              entry.inputType = type;
+            }
+            if (node.disabled || node.getAttribute("disabled") !== null || node.getAttribute("aria-disabled") === "true") entry.disabled = true;
+            if (node.required || node.getAttribute("required") !== null || node.getAttribute("aria-required") === "true") entry.required = true;
+            if (node.checked || node.getAttribute("aria-checked") === "true" || node.getAttribute("aria-checked") === "mixed") entry.checked = node.getAttribute("aria-checked") === "mixed" ? "mixed" : true;
+            if (node.getAttribute("aria-checked") === "false") entry.checked = false;
+            if (node.getAttribute("aria-expanded") === "true" || node.getAttribute("aria-expanded") === "false") entry.expanded = node.getAttribute("aria-expanded") === "true";
+            if (node.getAttribute("aria-pressed") === "true" || node.getAttribute("aria-pressed") === "false") entry.pressed = node.getAttribute("aria-pressed") === "true";
+            if (node.getAttribute("aria-selected") === "true" || node.getAttribute("aria-selected") === "false") entry.selected = node.getAttribute("aria-selected") === "true";
             if (node.tagName === "A") {
               try {
                 entry.href = new URL(node.getAttribute("href") || "", document.baseURI).href;
@@ -102,6 +213,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes) {
               }
             }
             elements.push(entry);
+            included.set(node, index);
           }
         }
         node = walker.nextNode();
@@ -125,9 +237,25 @@ class BrowserAdapter {
     maxElements,
     maxTextBytes,
     randomId,
+    permissionMode = "browse",
+    assignedOrigin,
   } = {}) {
     if (!view) throw new BrowserAdapterError("invalid_config", "view is required");
     this._view = view;
+    if (!PERMISSION_MODES.includes(permissionMode)) throw new BrowserAdapterError("invalid_permission_mode", "permissionMode is invalid");
+    this._permissionMode = permissionMode;
+    if (assignedOrigin !== undefined && assignedOrigin !== null && (typeof assignedOrigin !== "string" || assignedOrigin.length === 0)) {
+      throw new BrowserAdapterError("invalid_config", "assignedOrigin must be a non-empty string when provided");
+    }
+    // Child agents only (multi-agent background runtime plan, Task 4): the
+    // host locks a child to the single origin it was dispatched into. This
+    // is deliberately independent of permissionMode/evaluateActionPolicy --
+    // those gate what the PLANNER can ask this adapter to do via execute(),
+    // but a page can navigate itself (window.location, a meta-refresh, a
+    // server redirect, a clicked link the page synthesizes) entirely outside
+    // that path. Without this listener a page under "observe" permission
+    // could still carry the child to an origin the parent never assigned it.
+    this._assignedOrigin = assignedOrigin || null;
     this._now = typeof now === "function" ? now : Date.now;
     this._navigationTimeoutMs = typeof navigationTimeoutMs === "number" ? navigationTimeoutMs : NAVIGATION_TIMEOUT_MS;
     this._maxNodesVisited = typeof maxNodesVisited === "number" ? maxNodesVisited : MAX_NODES_VISITED;
@@ -158,11 +286,29 @@ class BrowserAdapter {
     });
     listen("page-title-updated", () => this._emitBrowserChange());
     listen("did-stop-loading", () => this._emitBrowserChange());
+    if (this._assignedOrigin) {
+      const rejectIfOffAssignedOrigin = (event, url) => {
+        let origin;
+        try {
+          origin = new URL(url).origin;
+        } catch {
+          origin = null;
+        }
+        if (origin !== this._assignedOrigin) event.preventDefault();
+      };
+      listen("will-navigate", rejectIfOffAssignedOrigin);
+      listen("will-redirect", rejectIfOffAssignedOrigin);
+    }
   }
 
   onChange(listener) {
     this._listeners.add(listener);
     return () => this._listeners.delete(listener);
+  }
+
+  setPermissionMode(mode) {
+    if (!PERMISSION_MODES.includes(mode)) throw new BrowserAdapterError("invalid_permission_mode", "permissionMode is invalid");
+    this._permissionMode = mode;
   }
 
   _emitBrowserChange() {
@@ -216,6 +362,57 @@ class BrowserAdapter {
     }
     this._emitBrowserChange();
     return this.getBrowserSnapshot();
+  }
+
+  // Main-process-only autofill primitive. The only page script performs a
+  // bounded visible-field lookup and value/input/change events; it never
+  // clicks submit, calls requestSubmit(), or returns either secret. The
+  // origin is checked immediately before entering the page's main world.
+  async fillCredential({ username, password, origin } = {}) {
+    if (this._disposed) return { status: "failed", errorCode: "disposed" };
+    if (typeof username !== "string" || typeof password !== "string" || !password || typeof origin !== "string") {
+      return { status: "failed", errorCode: "invalid_credential" };
+    }
+    let expected;
+    let current;
+    try {
+      expected = new URL(origin);
+      current = new URL(this._view.webContents.getURL());
+    } catch {
+      return { status: "failed", errorCode: "invalid_origin" };
+    }
+    if (expected.protocol !== "https:" || current.protocol !== "https:" || expected.origin !== current.origin) {
+      return { status: "failed", errorCode: "credential_origin_mismatch" };
+    }
+    const payload = JSON.stringify({ username, password }).replace(/</g, "\\u003c");
+    const script = `(() => {
+      const secret = ${payload};
+      const visible = (element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return !element.disabled && style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const inputs = Array.from(document.querySelectorAll("input")).filter(visible);
+      const passwords = inputs.filter((e) => e.type === "password");
+      const users = inputs.filter((e) => e.type !== "password" && (e.autocomplete === "username" || e.type === "email" || /user|email|login/i.test(e.name + " " + e.id)));
+      if (passwords.length !== 1 || users.length > 1 || (users.length === 0 && secret.username !== "")) return { status: "failed", errorCode: "credential_fields_ambiguous" };
+      const setValue = (element, value) => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        setter.call(element, value);
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      if (users.length === 1) setValue(users[0], secret.username);
+      setValue(passwords[0], secret.password);
+      return { status: "ok", usernameFilled: users.length === 1, passwordFilled: true };
+    })()`;
+    try {
+      const result = await this._view.webContents.executeJavaScript(script, true);
+      if (result && result.status === "ok" && typeof result.usernameFilled === "boolean" && result.passwordFilled === true) return result;
+      return { status: "failed", errorCode: result?.errorCode || "credential_fill_failed" };
+    } catch {
+      return { status: "failed", errorCode: "credential_fill_failed" };
+    }
   }
 
   _traverseHistory(wc, history, index) {
@@ -306,7 +503,14 @@ class BrowserAdapter {
       url: raw.url,
       title: raw.title,
       text: raw.text,
-      elements: raw.elements.map((el, index) => ({ elementId: String(index), ...el })),
+      elements: raw.elements.map((el, index) => {
+        const { index: _index, parentIndex, ...entry } = el;
+        return {
+          ...entry,
+          elementId: String(index),
+          parentElementId: parentIndex === null || parentIndex === undefined ? null : String(parentIndex),
+        };
+      }),
       at: this._now(),
     };
   }
@@ -346,6 +550,9 @@ class BrowserAdapter {
     if (!SUPPORTED_ACTIONS.has(action.type)) {
       return { status: "failed", errorCode: "unknown_action" };
     }
+    if (!evaluateActionPolicy(this._permissionMode, action.type).allowed) {
+      return { status: "failed", errorCode: "permission_mode_denied" };
+    }
     // navigate() starts a brand-new document, so it is never itself bound to
     // a prior documentEpoch. Every other action acts ON the current
     // document, so a caller-supplied documentEpoch that no longer matches
@@ -378,6 +585,21 @@ class BrowserAdapter {
 
   async _navigate(url) {
     if (typeof url !== "string" || url.trim().length === 0) {
+      return { status: "failed", errorCode: "invalid_url" };
+    }
+    // This is the one internal chokepoint both the agent path (execute()'s
+    // navigate case) and _followLink() funnel through. userNavigate() (the
+    // human path) already validates scheme/credentials before ever calling
+    // _navigate() -- without the same check here, a planner proposal such as
+    // file:///etc/passwd would load a local file into the task view. Mirror
+    // userNavigate()'s exact allowlist so both paths fail identically.
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return { status: "failed", errorCode: "invalid_url" };
+    }
+    if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password) {
       return { status: "failed", errorCode: "invalid_url" };
     }
     const wc = this._view.webContents;
@@ -453,7 +675,7 @@ class BrowserAdapter {
       return { status: "failed", errorCode: "observe_failed" };
     }
     const current = raw.elements[index];
-    if (!current || current.tag !== "a" || typeof current.href !== "string") {
+    if (!current || current.role !== "link" || typeof current.href !== "string") {
       return { status: "failed", errorCode: "element_not_found" };
     }
     return this._navigate(current.href);

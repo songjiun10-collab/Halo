@@ -26,7 +26,7 @@ class ContextError extends Error {
   }
 }
 
-function buildContext({ goal, state, observation, recentEvents }) {
+function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [] }) {
   contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
 
   if (!contracts.isPlainObject(state)) {
@@ -35,11 +35,17 @@ function buildContext({ goal, state, observation, recentEvents }) {
   if (!Array.isArray(recentEvents)) {
     throw new ContextError("invalid_field", "recentEvents must be an array");
   }
+  if (!Array.isArray(customMemory)) {
+    throw new ContextError("invalid_field", "customMemory must be an array");
+  }
+  if (!Array.isArray(pendingMessages)) {
+    throw new ContextError("invalid_field", "pendingMessages must be an array");
+  }
 
   const { modelSummary, ...trustedProgress } = state;
   const boundedRecentEvents = recentEvents.slice(-contracts.MAX_RECENT_EVENTS_IN_CONTEXT);
 
-  const packet = {
+  const basePacket = {
     taskId: goal.taskId,
     goalVersion: goal.goalVersion,
     goal: {
@@ -52,13 +58,36 @@ function buildContext({ goal, state, observation, recentEvents }) {
     recentEvents: boundedRecentEvents,
     observation: observation === undefined ? null : observation,
     untrustedSummary: modelSummary === undefined ? null : { text: modelSummary, authority: "untrusted_summary" },
+    userMemory: { authority: "untrusted_user_memory", entries: customMemory },
+    pendingMessages: [],
   };
 
-  const size = Buffer.byteLength(JSON.stringify(packet), "utf8");
-  if (size > contracts.MAX_CONTEXT_PACKET_BYTES) {
-    throw new ContextError("context_limit", `context packet is ${size} bytes, exceeds ${contracts.MAX_CONTEXT_PACKET_BYTES}`);
+  const baseSize = Buffer.byteLength(JSON.stringify(basePacket), "utf8");
+  if (baseSize > contracts.MAX_CONTEXT_PACKET_BYTES) {
+    throw new ContextError("context_limit", `context packet is ${baseSize} bytes, exceeds ${contracts.MAX_CONTEXT_PACKET_BYTES}`);
   }
-  return packet;
+
+  // Subagent communication protocol section 8.1: admit a deterministic,
+  // ordered prefix of eligible pending messages, subject to a per-turn count
+  // cap, a serialized-message-bytes cap, AND the pre-existing total packet
+  // ceiling -- whichever is hit first. A message-budget collision never
+  // becomes a context_error/pause: if nothing fits, admit none and leave
+  // every pending message pending for a later turn (never truncated or
+  // summarized away).
+  const admitted = [];
+  let messageBytes = 0;
+  for (const message of pendingMessages) {
+    if (admitted.length >= contracts.MAX_MESSAGES_PER_TURN) break;
+    const candidateBytes = Buffer.byteLength(JSON.stringify(message), "utf8");
+    if (messageBytes + candidateBytes > contracts.MAX_MESSAGE_TURN_CONTEXT_BYTES) break;
+    const candidatePacket = { ...basePacket, pendingMessages: [...admitted, message] };
+    const candidateSize = Buffer.byteLength(JSON.stringify(candidatePacket), "utf8");
+    if (candidateSize > contracts.MAX_CONTEXT_PACKET_BYTES) break;
+    admitted.push(message);
+    messageBytes += candidateBytes;
+  }
+
+  return { ...basePacket, pendingMessages: admitted };
 }
 
 module.exports = { ContextError, buildContext };

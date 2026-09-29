@@ -34,7 +34,12 @@ const METHODS = [
 // authorized".
 const HARNESS_METHODS = [
   "createTask", "listTasks", "resumeSavedTask", "amendTask", "confirmCriterion", "getTaskDetail",
-  "taskApprove", "taskDeny", "taskPause", "taskStop", "taskTakeOver",
+  "taskApprove", "taskDeny", "taskPause", "taskStop", "taskTakeOver", "getTaskEvents",
+  "getTaskBrowser", "taskBrowserAction", "setTaskViewport", "getHostSettings", "updateHostSettings",
+  "listCredentials", "saveCredential", "removeCredential",
+  "listMemories", "saveMemory", "removeMemory",
+  "fillCredential",
+  "listRoutines", "getRoutine", "saveRoutine", "deleteRoutine", "runRoutine",
 ];
 
 const api = {};
@@ -50,6 +55,13 @@ api.onEvent = (callback) => {
   const listener = (_event, payload) => callback(payload);
   ipcRenderer.on("halo:event", listener);
   return () => ipcRenderer.removeListener("halo:event", listener);
+};
+
+api.onTaskEvent = (callback) => {
+  if (typeof callback !== "function") throw new TypeError("onTaskEvent requires a callback function");
+  const listener = (_event, payload) => callback(payload);
+  ipcRenderer.on("halo:taskEvent", listener);
+  return () => ipcRenderer.removeListener("halo:taskEvent", listener);
 };
 
 // renderer.js reads this to set CSS custom properties, so the reserved
