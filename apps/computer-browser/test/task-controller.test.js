@@ -1760,6 +1760,7 @@ test("isRoutine() reflects whether the controller was constructed with a routine
     hostVerifier: () => true,
   });
   assert.equal(plainController.isRoutine(), false);
+  assert.equal(plainController.getHarnessProfile(), "middle");
   await plainStore.close();
 
   const { store: routineStore } = await makeStore({ originalRequest: "routine task" });
@@ -1778,7 +1779,33 @@ test("isRoutine() reflects whether the controller was constructed with a routine
     hostVerifier: () => true,
   });
   assert.equal(routineController.isRoutine(), true);
+  assert.equal(routineController.getHarnessProfile(), "short");
   await routineStore.close();
+});
+
+test("constructor rejects an explicit invalid harnessProfile and accepts an explicit valid one", async () => {
+  const { store: badStore } = await makeStore({ originalRequest: "bad profile" });
+  assert.throws(() => new TaskController({
+    store: badStore,
+    planner: { next: async () => ({ kind: "need_user", reason: "n/a" }) },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    harnessProfile: "fast",
+  }));
+  await badStore.close();
+
+  const { store: longStore } = await makeStore({ originalRequest: "explicit long" });
+  const controller = new TaskController({
+    store: longStore,
+    planner: { next: async () => ({ kind: "need_user", reason: "n/a" }) },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    harnessProfile: "long",
+  });
+  assert.equal(controller.getHarnessProfile(), "long");
+  await longStore.close();
 });
 
 test("routine denial is durably recorded and pauses instead of resuggesting the same step", async () => {

@@ -217,10 +217,16 @@ class TaskHost {
     this._childCoordinator.registerStore(store.taskId, store);
     const browser = this._makeBrowser(store.taskId);
     const planner = routine ? routine.runner : this._makePlanner(store.taskId);
+    // Profile selection is a host operation (design doc "Profile selection"):
+    // TaskHost is the sole authority that decides harnessProfile, and passes
+    // it in rather than letting the controller (or the task's own text)
+    // infer it independently.
+    const harnessProfile = selectHarnessProfile({ isRoutine: !!routine });
     const controller = new TaskController({
       store,
       planner,
       browser,
+      harnessProfile,
       approve: (descriptor) => this._approve(store.taskId, descriptor),
       hostVerifier: this._hostVerifier,
       memoryMonitor: controllerMemoryMonitor,
@@ -724,8 +730,13 @@ class TaskHost {
     this._assertOpen();
     const active = this._active.get(taskId);
     if (active) {
-      const harnessProfile = selectHarnessProfile({ isRoutine: active.controller.isRoutine() });
-      return { taskId, goal: active.controller.getGoal(), snapshot: active.controller.getSnapshot(), active: true, harnessProfile };
+      return {
+        taskId,
+        goal: active.controller.getGoal(),
+        snapshot: active.controller.getSnapshot(),
+        active: true,
+        harnessProfile: active.controller.getHarnessProfile(),
+      };
     }
     const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
     const harnessProfile = selectHarnessProfile({ isRoutine: !!store.lastCheckpoint?.payload?.routineRun });

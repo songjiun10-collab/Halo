@@ -20,6 +20,7 @@
 
 const { randomUUID } = require("node:crypto");
 const contracts = require("../../shared/harness-contracts");
+const { validateHarnessProfile, selectHarnessProfile } = require("../../shared/harness-profile");
 const { buildContext } = require("./context-builder");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
 const { isReadOnlyAction } = require("./permission-policy");
@@ -93,6 +94,7 @@ class TaskController {
     routineRunner,
     routineRun,
     batchReadOnlyActions = true,
+    harnessProfile,
   } = {}) {
     if (!store) throw new TaskControllerError("invalid_config", "store is required");
     if (!planner) throw new TaskControllerError("invalid_config", "planner is required");
@@ -113,6 +115,16 @@ class TaskController {
         !Number.isInteger(this._routineRun.cursor) || this._routineRun.cursor < 0)) {
       throw new TaskControllerError("invalid_routine", "routine runner requires a pinned routine ID, revision, digest, and cursor");
     }
+    // Harness v2 Phase 2 Task 1 (see docs/superpowers/plans/2026-09-29-harness-profiles-v2-phase2.md):
+    // the host is the profile-selection authority (selectHarnessProfile() in
+    // TaskHost/_attach), never the model or the task's own text -- this
+    // constructor only validates and stores what it is given, defaulting via
+    // the same pure rule when the caller omits it (e.g. a directly
+    // constructed test controller). Nothing yet reads _harnessProfile to
+    // change execution behavior; that starts in a later Phase 2 task.
+    this._harnessProfile = validateHarnessProfile(
+      harnessProfile !== undefined ? harnessProfile : selectHarnessProfile({ isRoutine: this._routineRun !== null }),
+    );
     this._browser = browser;
     this._approve = approve;
     this._hostVerifier = hostVerifier;
@@ -259,6 +271,10 @@ class TaskController {
   // changes execution authority.
   isRoutine() {
     return this._routineRun !== null;
+  }
+
+  getHarnessProfile() {
+    return this._harnessProfile;
   }
 
   setPolicySettings({ permissionMode, plannerEffort } = {}) {
