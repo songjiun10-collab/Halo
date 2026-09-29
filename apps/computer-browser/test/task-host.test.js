@@ -578,6 +578,87 @@ test("process death after every durable Work Goal admission append recovers held
   }
 });
 
+test("Work Goal survives pause/restart, continues with bound evidence, completes, archives, and releases the project slot", async () => {
+  const storageRoot = await mkTempRoot();
+  let nextTaskCall = 0;
+  let approvals = 0;
+  const makeRuntime = () => ({
+    makeBrowser: () => ({
+      observe: async () => ({ id: "obs", url: "https://example.com/", elements: [] }),
+      execute: async () => ({ status: "ok", evidenceCandidate: { kind: "host_check", sourceUrl: "https://example.com/" } }),
+    }),
+    makePlanner: () => ({
+      next: async (context) => {
+        const call = nextTaskCall++;
+        return call % 2 === 0
+          ? { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: ["proof"], kind: "actions", actions: [{ type: "observe" }] }
+          : { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: ["proof"], kind: "finish", evidenceIds: [] };
+      },
+    }),
+    hostVerifier: () => true,
+    approve: async () => { approvals += 1; return { decision: "allow", reasons: [] }; },
+  });
+
+  let host = makeHost(storageRoot, makeRuntime());
+  const goal = await host.startWorkGoal({
+    objective: "Verify a project across durable Tasks",
+    successCriteria: [
+      { id: "proof", text: "A Task contains host-verified evidence", required: true, verification: "host_evidence" },
+      { id: "userReview", text: "The user reviewed the completed work", required: true, verification: "user" },
+    ],
+    budget: { maxTasks: 3, maxActions: 30, maxPlannerCalls: 20, maxActiveMs: 120000 },
+  });
+  const first = await host.createTask({
+    originalRequest: "Collect the first proof",
+    criteria: [{ id: "proof", text: "Collect host-verified evidence", required: true, verification: "host" }],
+    limits: { maxActions: 5, maxPlannerCalls: 4, maxActiveMs: 10000 },
+  });
+  assert.equal(first.snapshot.state, "completed");
+  assert.equal(approvals, 1, "the Work Goal must not bypass the existing action approval boundary");
+  const firstBinding = host._active.get(first.taskId).store.taskProfile.workGoalBinding;
+  for (let i = 0; i < 100 && (host._queue.activeIds().includes(first.taskId) ||
+      host._workGoalStore.get(goal.goalId).reservations[firstBinding.reservationId].status !== "released"); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(host._queue.activeIds().includes(first.taskId), false, "terminal Task usage must reconcile before restart");
+  assert.equal(host._workGoalStore.get(goal.goalId).reservations[firstBinding.reservationId].status, "released");
+
+  await host.pauseWorkGoal(goal.goalId, 1);
+  hostsToClose.delete(host);
+  await host.close();
+  host = makeHost(storageRoot, makeRuntime());
+  assert.equal((await host.getActiveWorkGoal()).status, "paused");
+  assert.deepEqual(await host.listTasks().then((items) => items.filter((item) => item.active)), [],
+    "reopening the project must not auto-attach completed or queued Tasks");
+  await assert.rejects(host.createTask({ originalRequest: "must wait for Goal resume" }), { code: "work_goal_not_active" });
+  await host.resumeWorkGoal(goal.goalId, 1);
+
+  const continuation = await host.createTask({
+    originalRequest: "Collect continuation proof",
+    criteria: [{ id: "proof", text: "Collect host-verified evidence", required: true, verification: "host" }],
+    limits: { maxActions: 5, maxPlannerCalls: 4, maxActiveMs: 10000 },
+  });
+  assert.equal(continuation.snapshot.state, "completed");
+  const continuationStore = host._active.get(continuation.taskId).store;
+  const evidenceEvent = (await continuationStore.getEvents()).find((event) =>
+    event.type === "evidence_recorded" && event.payload.evidence.criterionId === "proof" && event.payload.evidence.verification === "verified");
+  assert.ok(evidenceEvent, "continuation must durably checkpoint independently verified evidence");
+  await host.recordWorkGoalProgress(goal.goalId, 1, [{
+    criterionId: "proof", taskId: continuation.taskId, eventId: evidenceEvent.eventId,
+    evidenceId: evidenceEvent.payload.evidence.id,
+  }]);
+  await host.verifyWorkGoalCriterion(goal.goalId, 1, "userReview");
+  const completed = await host.completeWorkGoal(goal.goalId, 1);
+  assert.equal(completed.status, "complete");
+  await host.archiveWorkGoal(goal.goalId, 1);
+  const nextGoal = await host.startWorkGoal({
+    objective: "Begin the next project objective",
+    successCriteria: [{ id: "next", text: "Review the next result", required: true, verification: "user" }],
+  });
+  assert.equal(nextGoal.status, "active");
+  assert.notEqual(nextGoal.goalId, goal.goalId);
+});
+
 test("three matching durable paused continuations block the active Work Goal", async () => {
   const storageRoot = await mkTempRoot();
   const host = makeHost(storageRoot, { makePlanner: () => ({ next: async () => { throw new Error("simulated planner outage"); } }) });
