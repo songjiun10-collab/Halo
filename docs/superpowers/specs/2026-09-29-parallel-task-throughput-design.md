@@ -1,6 +1,6 @@
 # HALO Parallel Task Throughput Design
 
-Status: draft for user review (2026-09-29). Sub-project 1 of 2 for "run many tasks in a fixed time". Sub-project 2 is `2026-09-29-routine-scheduler-design.md`, which enqueues into the same queue and depends on this one only for throughput, not for correctness.
+Status: partially implemented (2026-09-29), committed on `feature/routine-scheduler`. Sub-project 1 of 2 for "run many tasks in a fixed time". Sub-project 2 is `2026-09-29-routine-scheduler-design.md`, which enqueues into the same queue and depends on this one only for throughput, not for correctness. Done: `TaskHost({ maxParallelTasks })` validated to an integer 1..8 (`main/harness/task-host.js`), the slot cap wired through `CoordinatorCore` (`main/harness/coordinator-core.js`), and `integration/concurrent-throughput-benchmark.js`. **Not done:** the benchmark has not been run against real Electron, no dated results section was added, and the conditional reserve recalibration (`ROUTINE_TASK_RESERVE_BYTES`) was not measured or decided either way — the 370 MB reserve is unchanged from before this spec. Deferred pending an explicit user request to run the Electron benchmark.
 
 ## Problem
 

@@ -1,6 +1,6 @@
 # HALO Routine Scheduler Design
 
-Status: draft for user review (2026-09-29). Sub-project 2 of 2. Builds on the routine execution design (`2026-09-28-routine-execution-design.md`, which put automatic schedules out of v1) and enqueues into the existing `TaskQueue`, so throughput comes from `2026-09-29-parallel-task-throughput-design.md`.
+Status: implemented (2026-09-29), committed on `feature/routine-scheduler`. Sub-project 2 of 2. Builds on the routine execution design (`2026-09-28-routine-execution-design.md`, which put automatic schedules out of v1) and enqueues into the existing `TaskQueue`, so throughput comes from `2026-09-29-parallel-task-throughput-design.md`. `main/harness/scheduler.js`, `main/harness/schedule-store.js`, `shared/schedule-contracts.js` implement due evaluation, missed-run coalescing, `skip`/`queue` overlap, and `host_closed` shutdown handling as described below; `TaskHost` owns and starts the `Scheduler` (`main/harness/task-host.js`). Tests: `test/scheduler.test.js`, `test/schedule-store.test.js`, `test/schedule-contracts.test.js`, `test/routine-trigger.test.js`.
 
 ## Problem
 

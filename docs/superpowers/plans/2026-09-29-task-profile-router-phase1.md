@@ -2,6 +2,8 @@
 
 > **For the implementation session:** After this plan is approved, use either `superpowers:subagent-driven-development` or `superpowers:executing-plans`, according to the user's chosen execution method. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status note (2026-09-30):** 32개 체크박스가 미체크로 남아 있지만, 재감사 결과 `shared/task-profile-contracts.js`/`main/harness/task-profile-router.js`가 존재하고 `main/harness/child-agent-coordinator.js`가 `child_plan`을 부모의 goalVersion·프로필로 게이트하며(`resolveTaskProfile` 호출, `child_plan_accepted` 이벤트로 영속화) 전체 스위트 933/933이 통과함을 확인했다. Step 3(라우터 오버헤드 측정)와 Step 4(diff 감사 보고)만은 실행 여부를 이번에 재확인하지 않았다 — 후속 세션에서 필요 시 확인할 것. 문서 맨 아래 "Follow-on plan order"가 이 계획이 Phase 1 한정이며 Long/profile-aware duration, 깊은 adapter 격리, Research, Computer-use는 각자 별도 계획이 필요하다고 명시한 대로, 그 후속 단계들은 아직 시작되지 않았다(범위 밖, 누락 아님).
+
 **Goal:** Resolve and durably bind one host-owned duration/capability profile to every newly-created executable task before it enters the queue or constructs browser/planner resources.
 
 **Architecture:** A pure deterministic router consumes the raw user request, trusted selectors, and validated typed-entry metadata. TaskStore persists the validated result immediately after `goal_created` and replays it as authoritative; TaskHost, routines, scheduled runs, and child admission all consume that same record. Existing policy, approval, evidence, provenance, resource-admission, and child permission boundaries remain authoritative.
