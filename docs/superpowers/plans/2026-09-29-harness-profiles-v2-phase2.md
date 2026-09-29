@@ -173,3 +173,24 @@ Limits, stated plainly: 4 pairs is a small sample (medians, not confidence inter
 - No long-run drift: mean ms per page over the first vs last quarter of the chain is flat for every profile (short 25.6 → 26.4 ms, middle 28.0 → 29.2 ms, long 26.6 → 27.4 ms), so per-turn cost does not grow with journal size at this scale.
 
 What this does not show: the planner here is in-process with zero latency and the pages are tiny, so the wall-time gap understates real use. What was measured is the *count* of planner round-trips saved (99 over this chain); any wall-time saving in production is that count times the real planner latency per call, which was not measured here. Also unmeasured: real sites, human approval latency, memory.
+
+### Addendum: complex task, raw browser vs harness (2026-09-29)
+
+`integration/complex-browser-vs-harness-benchmark.js` runs one complex task on a real `WebContentsView` in three arms. The task: depth-first search through a branching local site (depth 5, branching 3) for a hidden target page. Every page is read (4 scrolls, then an observation), dead ends force backtracking by direct navigation, and the walk ends after 157 pages / 942 harness actions. All arms share one exploration policy and the benchmark aborts unless every arm in every repetition visits the identical page sequence and finds the target (it did).
+
+- **raw**: `webContents.loadURL` + `executeJavaScript` only. No `TaskStore`, `TaskController`, `BrowserAdapter`, policy, approval, or journal.
+- **short / middle**: full harness (`TaskController` + `BrowserAdapter` + durable journal + approver call per action group), in-process planner that fills each proposal to the profile's cap, immediate programmatic "allow".
+
+5 repetitions, arm order rotated, Electron 44.4.5 under xvfb:
+
+| arm | median wall | per-rep wall (ms, rep 0 = cold) | planner calls | approver calls | journal fsyncs |
+|---|---:|---|---:|---:|---:|
+| raw browser | 3068 ms | 5377, 2909, 2951, 3140, 3068 | n/a | n/a | n/a |
+| harness short | 4119 ms | 8465, 4945, 4119, 3748, 3975 | 315 | 471 | 316 |
+| harness middle | 4310 ms | 5918, 4608, 4258, 4310, 4193 | 472 | 628 | 473 |
+
+- Harness overhead over the raw browser on this task: short +34%, middle +40% (median), i.e. roughly 6.7 ms (short) / 7.9 ms (middle) per visited page on top of 3068 ms / 157 ≈ 19.5 ms of raw browser work per page. The overhead buys a durable journal, per-action policy/approval, and crash recovery, none of which the raw arm has.
+- short vs middle: -4% median wall here, with -33% planner calls, -25% approver calls, -33% fsyncs. The gap is smaller than in the scroll-only benchmark because backtracking and per-page navigation dominate this task and cannot batch.
+- Repetition 0 is a cold-start outlier in every arm (the first measured arm in the rotation pays warm-up); medians are unaffected but the small sample is noisy — treat the short-vs-middle wall difference as suggestive, the call counts as exact.
+
+Limits, stated plainly: raw is a minimal implementation (a real automation stack would add its own overhead); the harness planner is in-process with zero latency and approval is instant, so real runs add planner latency and any human approval wait on top, which the raw arm has no equivalent of; peak-memory samples were collected but are whole-app poll samples that cannot be attributed to one arm, so no memory comparison is claimed; local pages only.
