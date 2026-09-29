@@ -182,3 +182,45 @@ using small differences to tune durability.
 Each benchmark iteration now resolves its host-owned duration/capability profile exactly once before `TaskStore.create()`, and reports the elapsed local resolver call as `stages.profile_resolution`. The resolved `(duration, capability)` pair is included with the iteration record. The resolver is deterministic and does not contact a model or network service.
 
 Smoke command: `HALO_BENCH_STEPS=2 HALO_BENCH_PAIRS=2 HALO_BENCH_SEED=29 HALO_BENCH_APPROVAL=allow node_modules/.bin/electron integration/routine-vs-planner-benchmark.js`. All four actual Electron iterations succeeded with matching outcomes and expected routes: Routine=`short/routine`, planner=`middle/browser`. One cold planner profile-resolution sample was 4.71 ms; the other three warm samples were 0.070–0.128 ms. This four-iteration smoke is only a wiring and order-of-magnitude check, not a stable latency estimate. The same output separately reported browser observation/execution, journal append/fsync, and checkpoint write/fsync/rename/directory-fsync stages; those spans overlap and must not be summed as additive wall time.
+
+## Middle vs Long duration profiles (2026-09-29)
+
+Fresh actual-Electron paired run:
+`HALO_BENCH_KIND=duration-profile HALO_BENCH_STEPS=50 HALO_BENCH_PAIRS=6 HALO_BENCH_RECOVERY_ACTIONS=300 HALO_BENCH_CHECKPOINT_EVERY=25 ./node_modules/.bin/electron integration/routine-vs-planner-benchmark.js`.
+All 12 iterations succeeded on Electron 44.4.5 / Node 24.21.0 / macOS arm64;
+the 50-page fixture served each page uniformly. Each duration group has six
+samples (one cold and five warm). Values below are per-iteration milliseconds,
+reported as p50 across those six samples; these are diagnostic overlapping
+spans, not additive components of `runMs`.
+
+| Stage | Middle | Long |
+| --- | ---: | ---: |
+| Run | 1,171.1 | 1,169.6 |
+| Profile resolution | 0.112 | 0.112 |
+| Action policy decision | 0.024 | 0.025 |
+| In-process approver callback | 0.033 | 0.031 |
+| Browser observe | 19.76 | 19.30 |
+| Browser execute | 293.21 | 288.09 |
+| Journal preparation | 1.25 | 1.18 |
+| Journal append write | 9.68 | 9.71 |
+| Journal fsync | 359.58 | 357.37 |
+| Checkpoint file fsync | 192.02 | 189.24 |
+| Checkpoint directory fsync | 189.10 | 180.00 |
+
+The run p50 difference is only -1.5 ms (Long minus Middle), far below the
+per-run spread (Middle 1,144.8–1,185.4 ms; Long 1,131.9–1,221.6 ms). This
+does **not** demonstrate a Long-profile benefit: in this workload both profiles
+performed the same 50 actions, 51 proposal calls, 50 policy checks and 50
+review decisions. Current `harness-profile.js` only gives Short a wider safe
+batch; Middle and Long share the same batch cap and execution behavior. This
+run therefore exposes an implementation gap against the intended duration
+profile matrix, rather than evidence that Middle and Long are interchangeable.
+
+The separate 300-action TaskStore recovery probes retained their selected
+profile and recovered the open-action case as `execution_uncertain` for both
+profiles. Each wrote 602 journal events, issued 314 journal fsyncs and 12
+checkpoints. Journal replay took 11.06 ms (Middle) and 9.96 ms (Long), one
+probe per profile; these measurements do not cover TaskHost, browser or planner
+reattachment. Profile-specific Long continuation/reconstruction behavior is
+still unimplemented and needs its own design, implementation and crash-recovery
+validation before claiming the duration axis is complete.
