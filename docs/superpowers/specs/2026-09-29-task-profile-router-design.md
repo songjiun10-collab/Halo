@@ -244,12 +244,26 @@ specify and test that transition before exposing it.
 
 ## Persistence, replay, and compatibility
 
-Persist the complete resolved profile as a strict host-authored event in the
-task journal before queue admission or construction of a browser/planner
-resource. The initial checkpoint may cache it, but journal replay is
-authoritative. Add a bounded typed journal event rather than overloading a
-generic note payload. Validate enums, limits, versions, unknown fields, and
-event/task binding on write and replay.
+Resolve the profile from the raw request and validated routine reference before
+creating the task store. Extend the TaskStore creation path to accept a
+host-validated initial profile record; after GoalSpec normalization, it writes
+`goal_created` followed by `task_profile_selected` durably before returning the
+store. The profile event copies the exact normalized effective limits, so the
+router does not duplicate GoalSpec defaults. No task may enter the queue or
+construct a browser/planner before both records are durable. The initial
+checkpoint may cache the profile, but journal replay is authoritative. Add a
+bounded typed journal event rather than overloading a generic note payload.
+Validate enums, limits, versions, unknown fields, and event/task binding on
+write and replay.
+
+Mark new `goal_created` records as requiring a profile event. Replay requires
+exactly one valid `task_profile_selected` immediately after `goal_created`
+before any other event for a marked task; a missing, duplicate, or malformed
+profile fails closed and cannot be queued or resumed. Historical
+`goal_created` records without the marker use only the explicit legacy mapping
+below. If the initial durable writes fail, creation returns an error and the
+incomplete store remains non-runnable for diagnosis; it must never be
+mistakenly admitted as a legacy task.
 
 The new `task_profile_selected` event payload contains exactly
 `profileSchemaVersion`, `classifierVersion`, `duration` (`id`, pinned
@@ -340,6 +354,8 @@ architecture is complete while a named capability is unavailable.
   policy/approval/evidence/provenance.
 - Unknown/corrupt profile records fail closed and never trigger fallback
   execution.
+- A newly-created task with a missing initial profile event cannot be
+  reconciled into the runnable queue after a crash between creation writes.
 - Existing unprofiled tasks recover through a documented legacy mapping with
   no replay or new permissions.
 - Tests cover classifier precedence/ambiguity, profile persistence/replay,
