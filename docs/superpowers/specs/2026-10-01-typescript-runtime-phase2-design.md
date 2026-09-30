@@ -92,6 +92,8 @@ type-tests는 생성 JS가 아니라 TS 원본을 타입 소비자로 읽도록 
 임시 파일은 OS 임시 디렉터리 하위의 새 private 디렉터리를 사용한다.
 입출력 경로는 CLI 사용자 입력이나 glob에서 받지 않고 고정 목록으로 제한한다.
 소스·목적지 symlink는 거부하고, 재생성 범위 밖 파일은 삭제하지 않는다.
+부모 디렉터리도 확인한다. 컴파일 전후 소스·설정의 digest가 달라지면
+새 산출물을 게시하지 않고 실패한다. 결정적 출력에 timestamp나 임시 경로를 넣지 않는다.
 
 같은 checkout의 동시 생성은 fail-fast 잠금으로 거부한다.
 컴파일 완료 후 개별 파일은 임시 sibling 파일과 rename으로 교체한다.
@@ -118,6 +120,9 @@ type-tests는 생성 JS가 아니라 TS 원본을 타입 소비자로 읽도록 
 - 기존 Python/Rust workflow는 유지한다. 별도 browser 타입/산출물 검사 job은
   Node 24에서 compiler 의존성을 설치하고 typecheck/check를 실행한다.
   Electron 전체 suite가 Linux headless 환경에서도 검증됐다고 주장하지 않는다.
+- npm을 우회하는 직접 Electron 스크립트와 LaunchAgent는 커밋된 JS를 쓴다.
+  준비·배포 시 일치 검사가 필요하며, 그 경로 자체에 runtime compiler를
+  주입하거나 모든 수동 실행을 검사한다고 주장하지 않는다.
 
 ## 협업 범위
 
