@@ -110,6 +110,8 @@ byte 감소와 실제 token 감소를 구분한다. 전체 도구 목록을 plan
 정규화한 argsDigest, 정책 revision, 짧은 expiry를 결합한다. 브라우저 관찰에 근거한
 요청이면 documentEpoch도 결합한다. provider/도구/인자/목표/스키마가 바뀌면 재승인한다.
 범용 스키마 검증은 local JSON Schema만 사용하고 remote $ref는 가져오지 않는다.
+대기열에서 꺼낸 dispatch 시점에도 expiry와 모든 revision을 다시 확인한다.
+기한이 지난 승인은 새 사람/정책 승인 없이 갱신하거나 실행하지 않는다.
 
 dispatch 전에 기존 TaskStore journal에 durable claim을 남기고 1회만 실행한다.
 중단·takeover·goal amendment의 admission/drain 경계를 MCP에도 적용한다.
@@ -134,16 +136,36 @@ durable claim은 worker에 보내기 전에 준비하고, 훅에서는 같은 cl
 불일치·추가 호출·built-in·재귀 Agent 호출은 deny한다.
 호스트 훅의 등록·호출·차단을 실제 SDK에서 증명하지 못하면 provider 실행은 비활성이다.
 
+permissionMode는 `default`로 고정하고 세션 중 변경 API를 제공하지 않는다.
+`bypassPermissions`, `acceptEdits`, `plan`, `auto`, dangerous skip 옵션은 실행 세션에서
+거부한다. MCP allowedTools 자동 승인 규칙을 넣지 않고, 내장 도구는 bare-name
+disallowedTools로 제거한다. 모든 입력에 적용되는 훅은 deny 또는 pass-through만
+반환하고 승인 결정을 자체 SDK allow로 바꾸지 않는다.
+
+canUseTool은 원래 런타임의 ask 요구를 처리하기 위해서만 추가한다. claim에 결합된
+정확한 identity/인자에 사용자 승인을 연결하고 updatedInput이나 permission rule
+갱신을 반환하지 않는다. unknown request는 deny다. 기존 HALO 승인만으로 조직 ask를
+자동 승인했다고 간주하지 않으며 runtime ask를 별도 승인 사유로 표시한다. 모든
+host 콜백은 인자를 변경하지 않는다. managed hook이 gate 이후 인자를 바꿀 수 있으면
+최종 dispatch 전 exact args 검증을 증명해야 하며, 못하면 해당 연결은 비활성이다.
+tool-use/result 이벤트의 correlation/digest 대조는 추가 감사이며 사후 대조만으로
+이미 발생한 부작용을 막았다고 주장하지 않는다.
+
 콜백 내부 오류는 명시적 deny로 변환하고, hook timeout/worker 연결 단절이 실제
 실행을 차단하는지 fault injection으로 확인한다. 외부 shell hook의 실패를 차단으로
 가정하지 않는다. SDK가 hook 실패 시 실행을 계속할 수 있으면 해당 경로는 지원하지
 않는다. 첫 모델 턴 전에 runtime tool inventory를 확인해 승인 대상 외 내장 도구나
 추가 서버가 남아 있으면 세션을 중단한다. inventory 확인이 불가능하면 활성화하지 않는다.
 
-project hook/plugin/settings는 불러오지 않고 필요한 인증/조직 정책만 공식 런타임
+user/project/local 설정의 hook·allow rule·plugin은 불러오지 않는다. 호스트 전용
+settingSources와 strictMcpConfig로 지정한 서버만 사용하며 managed 정책을 축소하거나
+우회하지 않는다. 필요한 인증/조직 정책만 공식 런타임
 경로에서 유지한다. 이 구성이 claude.ai 연결과 양립하는지는 acceptance probe에서
 검증한다. 설정을 축소했는데 연결이 사라지면 unsafe bypass가 아니라 unsupported다.
 도구 실제 결과 이벤트만 수집하고 모델의 최종 문장을 실행 결과로 인정하지 않는다.
+Claude 원격 도구 dispatch 이후 취소/worker 종료는 원격 중단의 증거가 아니므로,
+확정된 outcome이 없으면 execution_uncertain이다. 미실행이 증명된 거부만 cancelled로
+기록할 수 있다.
 
 ## 8. 수명·성능·실패 처리
 
@@ -164,12 +186,28 @@ unknown method, server permission 요청, elicitation은 runtime protocol대로 
 정확한 pending operation과 사람 승인에 결합되지 않은 요청은 decline한다. HALO 승인과
 원래 런타임 승인이 둘 다 필요한 경우 둘 다 만족해야 실행된다.
 
+직접 stdio 시작 승인은 실행 파일 실경로/해시, argv, cwd, 환경 키 및 host vault
+reference revision을 결합한다. 실제 spawn 직전에 다시 비교하며 shell은 사용하지
+않는다. 런타임 파일/의존성이 변경되면 재승인하고 자동 설치하지 않는다. 직접 연결
+인증은 사용자의 별도 인증 흐름으로 마련해 로컬 credential vault에서 관리한다.
+Claude/Codex의 기존 비밀 저장소를 읽어서 복제하는 경로는 없다.
+
+직접 HTTPS는 등록된 origin만 허용하고 cross-origin redirect를 거부한다. 기본
+public scope에서는 loopback/private/link-local/metadata 주소로 해석되는 endpoint와
+redirect를 거부하고 연결 시 DNS 결과를 검증·고정한다. 내부 서비스는 사용자가
+별도 local-network scope를 승인한 endpoint만 허용하며 auth header를 다른 origin에
+전달하지 않는다. MCP 권한 게이트는 서버 구현 자체의 악성 동작을 sandbox한다는
+보장이 아니다. 로컬 서버의 OS 권한과 외부 서버에 전송할 데이터 범위는 별도 검토한다.
+
 ## 9. 기록과 증거
 
 기본 로그는 requestId, identity, 위험 분류, 결정 이유 코드, startup/discovery/
 approval/journal/dispatch/result 지연, byte counters, RSS, 종료 상태다. args/result/
 OAuth URL/헤더/stderr/설정 원문은 로그에 넣지 않는다. 인자 원문은 승인 UI에 필요한
 경우에만 보호된 로컬 저장소에서 사용하고 durable payload는 secret scanner를 통과한다.
+원문 result artifact에도 secret scanner와 로컬 vault 암호화를 적용하고 보존 기간은
+7일을 기본으로 한다. 스캔/암호화 실패 시 원문을 보존하지 않는다. 사용자는 보존을
+끄거나 삭제할 수 있고 만료 artifact를 참조하는 evidence는 missing으로 표시한다.
 
 tool text/description/schema는 모두 untrusted다. MCP가 “trusted”라고 자기 신고해도
 독립 분류를 바꾸지 않는다. 결과를 journal에 저장했다고 목표 달성 증거가 되는 것은
@@ -191,6 +229,8 @@ tool text/description/schema는 모두 untrusted다. MCP가 “trusted”라고 
 - timeout/abort/startup hang/slow close/failed close, parent-child admission와 takeover drain.
 - Claude allowedTools auto-approval 및 내장 도구에도 host gate가 반드시 실행되는 실제 probe.
 - hook exception/timeout/disconnect, 버전 변경으로 추가된 내장 도구, project allow 주입을 차단하는 probe.
+- 금지 permission mode·user/local/plugin 주입, updatedInput 변조, 조직 ask 사람 승인과 만료 재검증.
+- stdio 실행 identity 변경, DNS rebinding/private redirect, artifact 암호화/비밀 제거 실패.
 - connected/needs_auth/unsupported를 혼동하지 않는 테스트와 각 provider의 읽기 전용 실연결.
 - 동일 task/model/effort로 browser baseline 대비 calls/tokens/bytes/latency/RSS를 각각 기록.
 
