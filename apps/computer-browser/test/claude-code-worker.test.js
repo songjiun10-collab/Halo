@@ -141,3 +141,18 @@ test("ignores blank lines", async () => {
   assert.equal(stdoutChunks.join(""), "");
   assert.equal(stderrChunks.join(""), "");
 });
+
+test("attaches the bridge's usage to the response line only when there is some", async () => {
+  const { stdin, stdout, stderr, stdoutChunks } = makeStreams();
+  const usage = { provider: "claude", inputTokens: 4 };
+  let pending = usage;
+  const bridge = { start: async () => ({ kind: "finish" }), takeUsage: () => { const u = pending; pending = null; return u; } };
+  createWorkerLoop({ stdin, stdout, stderr, bridge });
+  writeLine(stdin, { requestId: "r1", context: {} });
+  await flush();
+  writeLine(stdin, { requestId: "r2", context: {} });
+  await flush();
+  const lines = stdoutChunks.join("").trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(lines[0], { requestId: "r1", proposal: { kind: "finish" }, usage });
+  assert.deepEqual(lines[1], { requestId: "r2", proposal: { kind: "finish" } });
+});

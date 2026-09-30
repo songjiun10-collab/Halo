@@ -37,6 +37,7 @@ const HARNESS_METHODS = {
   "halo:taskBrowserAction": "taskBrowserAction",
   "halo:setTaskViewport": "setTaskViewport",
   "halo:getHostSettings": "getHostSettings",
+  "halo:getUsage": "getUsage",
   "halo:updateHostSettings": "updateHostSettings",
   "halo:listCredentials": "listCredentials",
   "halo:saveCredential": "saveCredential",

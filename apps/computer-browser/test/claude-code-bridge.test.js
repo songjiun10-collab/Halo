@@ -510,3 +510,18 @@ test("result: stdout is bounded -- exceeding MAX_CLI_STDOUT_BYTES kills the chil
   // harmless no-op, never a second settle/crash.
   assert.doesNotThrow(() => fakeChild.emit("close", null));
 });
+
+test("takeUsage(): returns the last successful call's normalized usage once, and nothing after a failed call", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const pending = bridge.start(makeContext());
+  await flush();
+  fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal()), { total_cost_usd: 0.5, usage: { input_tokens: 12, output_tokens: 3 } }));
+  fakeChild.emit("close", 0);
+  await pending;
+  const usage = bridge.takeUsage();
+  assert.equal(usage.provider, "claude");
+  assert.equal(usage.inputTokens, 12);
+  assert.equal(usage.costUsd, 0.5);
+  assert.equal(bridge.takeUsage(), null);
+});

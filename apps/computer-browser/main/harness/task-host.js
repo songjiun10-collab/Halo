@@ -79,6 +79,7 @@ class TaskHost {
     plannerEffort = "medium",
     memoryStore,
     settingsStore,
+    usageLedger,
     credentialVault,
     profileImporter,
     getTaskSession,
@@ -109,6 +110,7 @@ class TaskHost {
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
     this._settingsStore = settingsStore || null;
+    this._usageLedger = usageLedger || null;
     this._credentialVault = credentialVault || null;
     this._profileImporter = profileImporter || null;
     this._getTaskSession = typeof getTaskSession === "function" ? getTaskSession : null;
@@ -1229,6 +1231,12 @@ class TaskHost {
       throw new TaskHostError("browser_unavailable", "task viewport is unavailable");
     }
     return this._setViewport(taskId, { ...bounds, visible: taskId === null ? false : bounds.visible });
+  }
+
+  async getUsage(taskId) {
+    this._assertOpen();
+    if (!this._usageLedger) throw new TaskHostError("usage_unavailable", "usage ledger is unavailable");
+    return this._usageLedger.summary(typeof taskId === "string" ? { taskId } : {});
   }
 
   async getHostSettings() {
