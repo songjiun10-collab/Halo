@@ -8,6 +8,8 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { readChromeCookies, domainMatches, decryptChromeValue } = require("../main/harness/profile-import/chrome-cookie-reader");
+const { ProfileImporter, SessionConfigStore } = require("../main/harness/profile-import/profile-importer");
+const { SessionVault } = require("../main/harness/profile-import/session-vault");
 
 const PASSWORD = "test-keychain-password";
 const key = crypto.pbkdf2Sync(PASSWORD, "saltysalt", 1003, 16, "sha1");
@@ -74,6 +76,37 @@ test("reads only allowlisted cookies, decrypts them and maps Chrome fields", asy
     assert.equal(result.cookies.find((c) => c.name === "__Secure-next-auth").sameSite, "strict");
     assert.equal(result.cookies.find((c) => c.name === "__Secure-next-auth").expires, null);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("partial Chrome cookie decryption is reported through ProfileImporter without exposing values", async () => {
+  const root = await makeProfile([
+    { host: ".claude.ai", name: "session-good", enc: encrypt("good-cookie", { hostKey: ".claude.ai", hashPrefix: true }) },
+    { host: ".claude.ai", name: "session-skipped", enc: encrypt("bad-cookie", { hostKey: ".wrong-domain", hashPrefix: true }) },
+  ]);
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-partial-import-"));
+  const safeStorage = {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => Buffer.from(value.split("").reverse().join(""), "utf8"),
+    decryptString: (value) => Buffer.from(value).toString("utf8").split("").reverse().join(""),
+  };
+  try {
+    const vault = new SessionVault({ storageRoot, safeStorage });
+    const importer = new ProfileImporter({
+      vault,
+      config: new SessionConfigStore({ storageRoot }),
+      readers: { chrome: ({ domains, profile }) => readChromeCookies({ ...opts(root), domains, profile }) },
+    });
+
+    const result = await importer.import({ browser: "chrome", profile: "Default" });
+    assert.deepEqual(result, { status: "partial", imported: 1, skipped: 1, browser: "chrome" });
+    assert.equal(JSON.stringify(result).includes("good-cookie"), false);
+    const sessions = await importer.list();
+    assert.deepEqual(sessions.map(({ domain, cookieCount }) => ({ domain, cookieCount })), [{ domain: "claude.ai", cookieCount: 1 }]);
+    assert.equal((await vault.cookiesFor({ domains: ["claude.ai"], nowSeconds: 1 }))[0].value, "good-cookie");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(storageRoot, { recursive: true, force: true });
+  }
 });
 
 test("skips expired cookies and works on the legacy path and pre-v24 layout", async () => {
