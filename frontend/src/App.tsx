@@ -14,7 +14,7 @@ import { Viewport } from './components/Viewport'
 import { usePresence } from './hooks/usePresence'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useTrackpad } from './hooks/useTrackpad'
-import { syncNativeSurface } from './session/browser-surface'
+import { syncDirectSurface, syncNativeSurface } from './session/browser-surface'
 import { AGENT, canNavigate, currentUrl, NEW_TAB_URL, pendingCriteria, SessionStore } from './session/session'
 import { tabTitle } from './session/pages'
 import type { SessionState, Tab, TimelineEvent } from './session/types'
@@ -193,7 +193,7 @@ export default function App() {
   const overviewShown = usePresence(overviewOpen ? true : null)
   const helpShown = usePresence(helpOpen ? true : null)
 
-  const nativeSurfaceVisible = !!s.activeTaskId && !!s.browser && !approval && !activityOpen && !chatOpen &&
+  const nativeSurfaceVisible = ((!!s.activeTaskId && !!s.browser) || (!s.activeTaskId && s.directBrowser)) && !approval && !activityOpen && !chatOpen &&
     !overviewOpen && !helpOpen && !noticeShown.item && !toastShown.item
   useLayoutEffect(() => {
     const api = window.haloBrowser
@@ -204,7 +204,10 @@ export default function App() {
       if (frame) cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
         frame = 0
-        if (!disposed) void syncNativeSurface(api, s.activeTaskId, pageRef.current, nativeSurfaceVisible).catch(() => {})
+        if (!disposed) {
+          void syncNativeSurface(api, s.activeTaskId, pageRef.current, !!s.activeTaskId && nativeSurfaceVisible).catch(() => {})
+          void syncDirectSurface(api, pageRef.current, !s.activeTaskId && nativeSurfaceVisible).catch(() => {})
+        }
       })
     }
     const observer = pageRef.current ? new ResizeObserver(sync) : null
@@ -217,8 +220,9 @@ export default function App() {
       observer?.disconnect()
       window.removeEventListener('resize', sync)
       void syncNativeSurface(api, null, null, false).catch(() => {})
+      void syncDirectSurface(api, null, false).catch(() => {})
     }
-  }, [s.activeTaskId, s.browser, nativeSurfaceVisible])
+  }, [s.activeTaskId, s.browser, s.directBrowser, nativeSurfaceVisible])
 
   const tabsForDisplay = s.tabs.length ? s.tabs : [HOME_TAB]
 
@@ -264,7 +268,7 @@ export default function App() {
         </header>
         <div className="hx-body" inert={overviewOpen}>
           <div className="hx-page" inert={!!approval}>
-            {s.activeTaskId && s.browser ? (
+            {(s.activeTaskId && s.browser) || (!s.activeTaskId && s.directBrowser) ? (
               <main
                 id="hx-page"
                 ref={pageRef}

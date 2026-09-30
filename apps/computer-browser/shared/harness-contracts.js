@@ -501,6 +501,9 @@ function validateJournalEvent(event, label = "event") {
   if (event.type === "evidence_recorded") {
     validateEvidence(event.payload.evidence, `${label}.payload.evidence`);
   }
+  if (event.type === "note" && typeof event.payload.kind === "string" && event.payload.kind.startsWith("mcp_call_")) {
+    validateMcpCallNote(event.payload, `${label}.payload`);
+  }
   if (event.type === "approval_cancelled") {
     assertUuid(event.payload.requestId, `${label}.payload.requestId`);
     assertString(event.payload.actionType, `${label}.payload.actionType`);
@@ -625,6 +628,74 @@ function validateJournalEvent(event, label = "event") {
     throw new ContractError("event_too_large", `${label} is ${size} bytes, exceeds ${MAX_EVENT_BYTES}`);
   }
   return event;
+}
+
+// Generic MCP calls (docs/superpowers/specs/2026-09-30-generic-mcp-broker-design.md).
+// A proposal names a connector tool and its arguments only; approvals are
+// minted by the host after human review, never carried in a proposal.
+const MCP_CALL_ACTION_TYPE = "mcp_call";
+const MAX_MCP_ARGUMENT_BYTES = 16 * 1024;
+const MAX_MCP_NAME_CHARS = 256;
+const MCP_PROPOSAL_FIELDS = ["connectionId", "toolName", "arguments"];
+const MCP_CALL_STARTED_FIELDS = [
+  "kind", "requestId", "connectionId", "provider", "server", "generation",
+  "toolName", "connectorId", "schemaDigest", "argsDigest", "contextDigest",
+];
+const MCP_CALL_OUTCOME_FIELDS = ["kind", "requestId", "outcome", "resultDigest"];
+const MCP_CALL_OUTCOMES = Object.freeze(["ok", "tool_error", "not_dispatched", "uncertain_acknowledged"]);
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+
+function assertSha256Hex(value, label) {
+  if (typeof value !== "string" || !SHA256_HEX_RE.test(value)) {
+    throw new ContractError("invalid_field", `${label} must be a lowercase SHA-256 digest`);
+  }
+}
+
+function validateMcpProposal(proposal, label = "mcpProposal") {
+  assertPlainObject(proposal, label);
+  assertNoUnknownKeys(proposal, MCP_PROPOSAL_FIELDS, label);
+  assertString(proposal.connectionId, `${label}.connectionId`, { maxChars: MAX_MCP_NAME_CHARS });
+  assertString(proposal.toolName, `${label}.toolName`, { maxChars: MAX_MCP_NAME_CHARS });
+  assertPlainObject(proposal.arguments, `${label}.arguments`);
+  let json;
+  try {
+    json = JSON.stringify(proposal.arguments);
+  } catch {
+    throw new ContractError("invalid_field", `${label}.arguments must be JSON-serializable`);
+  }
+  if (Buffer.byteLength(json, "utf8") > MAX_MCP_ARGUMENT_BYTES) {
+    throw new ContractError("field_too_large", `${label}.arguments exceeds ${MAX_MCP_ARGUMENT_BYTES} bytes`);
+  }
+  return { connectionId: proposal.connectionId, toolName: proposal.toolName, arguments: JSON.parse(json) };
+}
+
+// Journal notes for MCP calls carry identities and digests only: never the
+// arguments, the connector's raw result, or any credential.
+function validateMcpCallNote(payload, label) {
+  if (payload.kind === "mcp_call_started") {
+    assertNoUnknownKeys(payload, MCP_CALL_STARTED_FIELDS, label);
+    assertUuid(payload.requestId, `${label}.requestId`);
+    assertString(payload.connectionId, `${label}.connectionId`, { maxChars: MAX_MCP_NAME_CHARS });
+    assertId(payload.provider, `${label}.provider`);
+    assertString(payload.server, `${label}.server`, { maxChars: MAX_MCP_NAME_CHARS });
+    assertNonNegativeInteger(payload.generation, `${label}.generation`);
+    assertString(payload.toolName, `${label}.toolName`, { maxChars: MAX_MCP_NAME_CHARS });
+    if (payload.connectorId !== null) assertString(payload.connectorId, `${label}.connectorId`, { maxChars: MAX_MCP_NAME_CHARS });
+    assertSha256Hex(payload.schemaDigest, `${label}.schemaDigest`);
+    assertSha256Hex(payload.argsDigest, `${label}.argsDigest`);
+    assertSha256Hex(payload.contextDigest, `${label}.contextDigest`);
+  } else if (payload.kind === "mcp_call_outcome") {
+    assertNoUnknownKeys(payload, MCP_CALL_OUTCOME_FIELDS, label);
+    assertUuid(payload.requestId, `${label}.requestId`);
+    if (!MCP_CALL_OUTCOMES.includes(payload.outcome)) {
+      throw new ContractError("unknown_enum", `${label}.outcome must be one of ${MCP_CALL_OUTCOMES.join("|")}`);
+    }
+    if (payload.outcome === "ok" || payload.outcome === "tool_error") assertSha256Hex(payload.resultDigest, `${label}.resultDigest`);
+    else if (payload.resultDigest !== null) throw new ContractError("invalid_field", `${label}.resultDigest must be null`);
+  } else {
+    throw new ContractError("unknown_enum", `${label}.kind is not a known MCP note kind`);
+  }
+  return payload;
 }
 
 const CHECKPOINT_FIELDS = ["seq", "taskId", "goalVersion", "payload", "at"];
@@ -882,4 +953,9 @@ module.exports = {
   validateMessageContent,
   validateMessageEnvelope,
   deriveOrigin,
+  MCP_CALL_ACTION_TYPE,
+  MAX_MCP_ARGUMENT_BYTES,
+  MCP_CALL_OUTCOMES,
+  validateMcpProposal,
+  validateMcpCallNote,
 };

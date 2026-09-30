@@ -2244,3 +2244,90 @@ test("syncUsage stores the Claude subscription snapshot and reports why it is mi
   const none = makeHost(await mkTempRoot(), { usageLedger: new UsageLedger({}), usageSources: { claude: path.join(cfg, "nope", "projects") }, subscriptionFetch, subscriptionPlatform: "linux" });
   assert.equal((await none.syncUsage()).results.claudeSubscription.status, "no_credentials");
 });
+
+function fakeMcpProvider() {
+  const schema = { type: "object", properties: { q: { type: "string" } }, required: ["q"] };
+  const calls = [];
+  return {
+    calls,
+    listConnections: async () => [{ id: "codex:docs", provider: "codex", server: "docs", status: "connected", generation: 1 }],
+    listTools: async () => [{ name: "search", description: "Search docs", inputSchema: schema, connectorId: null }],
+    describeTool: async (_id, name) => ({ name, description: "Search docs", inputSchema: schema, connectorId: null }),
+    call: async (...args) => { calls.push(args); return { content: [{ type: "text", text: "ok" }], isError: false }; },
+    close: async () => {},
+  };
+}
+
+function trackingMcpBrokerFactory(provider, made) {
+  const { GenericMcpBroker } = require("../main/harness/generic-mcp-broker");
+  return (taskId, hooks) => {
+    const broker = new GenericMcpBroker({ providers: [provider], validateArguments: async () => true, ...hooks });
+    const record = { taskId, closed: false, hookKeys: Object.keys(hooks).sort() };
+    const close = broker.close.bind(broker);
+    broker.close = async () => { record.closed = true; return close(); };
+    made.push(record);
+    return broker;
+  };
+}
+
+const mcpPausingPlanner = () => ({ next: async () => { throw new Error("planner offline"); } });
+
+async function waitForMcpReview(host, taskId) {
+  for (let i = 0; i < 500; i += 1) {
+    const item = (await host.getTaskDetail(taskId)).snapshot.approvalQueue.find((q) => q.action === "mcp_call");
+    if (item) return item;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error("MCP review never queued");
+}
+
+test("MCP is a separate host-enabled scope: host methods reach only that task's broker and review goes through approveTask/denyTask", async () => {
+  const storageRoot = await mkTempRoot();
+  const provider = fakeMcpProvider();
+  const made = [];
+  const host = makeHost(storageRoot, { makePlanner: mcpPausingPlanner, makeMcpBroker: trackingMcpBrokerFactory(provider, made) });
+  const { taskId } = await host.createTask({ originalRequest: "MCP 호스트 작업" });
+  assert.equal(made.length, 0, "the broker is created lazily on first MCP use");
+
+  assert.deepEqual((await host.listMcpConnections(taskId)).map((c) => c.id), ["codex:docs"]);
+  assert.deepEqual((await host.searchMcpTools(taskId, "search")).map((t) => t.name), ["search"]);
+  assert.equal((await host.describeMcpTool(taskId, "codex:docs", "search")).toolName, "search");
+  assert.deepEqual(made.map((r) => [r.taskId, r.hookKeys]), [[taskId, ["getContext", "journal", "requestApproval"]]]);
+
+  const request = { connectionId: "codex:docs", toolName: "search", arguments: { q: "x" } };
+  const denied = host.proposeMcpCall(taskId, request);
+  denied.catch(() => {});
+  const first = await waitForMcpReview(host, taskId);
+  assert.deepEqual(host.describeMcpApproval(taskId, first.id).arguments, { q: "x" });
+  await host.denyTask(taskId, first.id);
+  await assert.rejects(denied, { code: "approval_denied" });
+
+  const approved = host.proposeMcpCall(taskId, request);
+  const second = await waitForMcpReview(host, taskId);
+  await host.approveTask(taskId, second.id);
+  assert.equal((await approved).outcome, "ok");
+  assert.equal(provider.calls.length, 1);
+
+  await host.stopTask(taskId);
+  for (let i = 0; i < 500 && !made[0].closed; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(made[0].closed, true, "task cleanup closes its MCP broker");
+});
+
+test("without a host MCP factory every MCP host method fails closed as mcp_disabled", async () => {
+  const storageRoot = await mkTempRoot();
+  const host = makeHost(storageRoot, { makePlanner: mcpPausingPlanner });
+  const { taskId } = await host.createTask({ originalRequest: "MCP 비활성" });
+  await assert.rejects(host.listMcpConnections(taskId), { code: "mcp_disabled" });
+  await assert.rejects(host.proposeMcpCall(taskId, { connectionId: "codex:docs", toolName: "search", arguments: {} }), { code: "mcp_disabled" });
+  assert.throws(() => new TaskHost({ storageRoot, makeBrowser: () => ({}), makePlanner: mcpPausingPlanner, hostVerifier: () => true, approve: async () => ({}), makeMcpBroker: "yes" }), { code: "invalid_config" });
+});
+
+test("host.close() closes an attached task's MCP broker", async () => {
+  const storageRoot = await mkTempRoot();
+  const made = [];
+  const host = makeHost(storageRoot, { makePlanner: mcpPausingPlanner, makeMcpBroker: trackingMcpBrokerFactory(fakeMcpProvider(), made) });
+  const { taskId } = await host.createTask({ originalRequest: "MCP 종료" });
+  await host.listMcpConnections(taskId);
+  await host.close();
+  assert.equal(made[0].closed, true);
+});

@@ -34,7 +34,7 @@ export interface TaskSummary { taskId: string; originalRequest: string; state: T
 export interface TaskDetail { taskId: string; goal: GoalSpec; snapshot?: TaskSnapshot; active: boolean; recoveryReason?: string }
 export interface BrowserSnapshot {
   tabs: { id: string; url: string; title: string; canGoBack: boolean; canGoForward: boolean }[]
-  activeTabId: string
+  activeTabId: string | null
   documentEpoch: number
 }
 export interface TaskEvent { taskId: string; snapshot: TaskSnapshot; goal?: GoalSpec; browser?: BrowserSnapshot; childPlan?: ChildPlanSummary | null }
@@ -49,7 +49,21 @@ export interface JournalEvent {
 }
 export interface BrowserViewport { x: number; y: number; width: number; height: number; visible: boolean }
 export interface BrowserAction { type: 'navigate' | 'back' | 'forward'; url?: string }
+export interface DirectBrowserSnapshot {
+  page: { url: string; title: string; canGoBack: boolean; canGoForward: boolean; hasPage?: boolean }
+  tabs: { id: string; url: string; title: string }[]
+  activeTabId: string
+  task: { id?: string | null; state?: string }
+  approvalQueue: unknown[]
+  timeline: unknown[]
+}
 export interface HaloBrowserApi {
+  getSnapshot: () => Promise<DirectBrowserSnapshot>
+  navigate: (url: string) => Promise<DirectBrowserSnapshot>
+  goBack: () => Promise<DirectBrowserSnapshot>
+  goForward: () => Promise<DirectBrowserSnapshot>
+  setBrowserBounds: (bounds: BrowserViewport) => Promise<unknown>
+  onEvent: (callback: (event: { snapshot: DirectBrowserSnapshot }) => void) => () => void
   createTask(input: GoalInput): Promise<{ taskId: string; snapshot: TaskSnapshot; goal: GoalSpec }>
   listTasks(): Promise<TaskSummary[]>
   getTaskDetail(taskId: string): Promise<TaskDetail>

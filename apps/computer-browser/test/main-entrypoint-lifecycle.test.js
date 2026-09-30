@@ -10,7 +10,7 @@ const { EventEmitter } = require("node:events");
 
 const ENTRY = path.resolve(__dirname, "../main/index.js");
 
-function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0 } = {}) {
+function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcpEnabled = false } = {}) {
   const calls = { windows: [], hosts: [], services: [], clients: [], ipc: [], errors: [], dockHide: 0, quit: 0 };
   class FakeWindow extends EventEmitter {
     constructor(options) {
@@ -84,6 +84,17 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0 } = 
       disposeAll() { return Promise.resolve(); }
     }, makeDualSurfaceBrowser: () => ({}) },
     "./harness/planner-command": { resolvePlannerCommand: () => ({ command: null, env: {} }) },
+    "./harness/providers/codex-mcp-adapter": {
+      CodexMcpAdapter: class {
+        constructor(options) { calls.mcpOptions = options; calls.mcpClosed = 0; }
+        async close() { calls.mcpClosed++; }
+      }, parseRepositories: () => mcpEnabled ? ["owner/repo"] : [],
+    },
+    "./harness/mcp-browser-observation": { makeMcpBrowserObservation: ({ browser }) =>
+      new Proxy(browser, { get(target, key) {
+        if (key === "dispose") return async () => { calls.connectorDisposed = (calls.connectorDisposed || 0) + 1; };
+        return Reflect.get(target, key);
+      } }) },
     "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } } },
     "./harness/local-memory-store": { LocalMemoryStore: class {} },
     "./harness/usage-ledger": { UsageLedger: class { async load() { return this; } } },
@@ -162,6 +173,21 @@ test("UI attaches to a running service and closing its window detaches without c
   await flushStartup();
   assert.equal(calls.clients[0].detached, 1);
   assert.equal(calls.services.length, 0);
+});
+
+test("enabled MCP child disposal cancels its wrapper and releases the hidden host; quit closes the shared broker", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-mcp-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { app, calls } = loadEntrypoint({ serviceMode: true, userData, mcpEnabled: true });
+  await flushStartup();
+  assert.deepEqual(Array.from(calls.mcpOptions.repositories), ["owner/repo"]);
+  const browser = calls.hosts[0].options.makeChildBrowser("parent", "child", "https://example.test");
+  await browser.dispose();
+  assert.equal(calls.connectorDisposed, 1);
+  assert.deepEqual(calls.agentViewportHost.disposedChildren, ["child"]);
+  app.emit("before-quit", { preventDefault() {} });
+  await flushStartup();
+  assert.equal(calls.mcpClosed, 1);
 });
 
 test("an explicit service stop exits the headless Electron process after the service drained", async (t) => {

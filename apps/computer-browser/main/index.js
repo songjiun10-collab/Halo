@@ -15,6 +15,8 @@ const { UsageLedger } = require("./harness/usage-ledger");
 const { BrowserAdapter } = require("./harness/browser-adapter");
 const { BrowserSurfaces } = require("./harness/browser-surfaces");
 const { PlannerStdioAdapter } = require("./harness/planner-stdio");
+const { CodexMcpAdapter, parseRepositories } = require("./harness/providers/codex-mcp-adapter");
+const { makeMcpBrowserObservation } = require("./harness/mcp-browser-observation");
 const { MemoryMonitor } = require("./harness/memory-monitor");
 const { AgentViewportHost, makeDualSurfaceBrowser } = require("./harness/agent-viewport-host");
 const { resolvePlannerCommand } = require("./harness/planner-command");
@@ -89,6 +91,24 @@ const memoryMonitor = new MemoryMonitor({
   getAppMetrics: () => app.getAppMetrics(),
   getExternalMemoryBytes: getExternalMemoryBytesViaPs,
 });
+
+// Trusted launch scope only. An empty scope keeps MCP entirely dormant.
+// One app-wide transport is counted with its descendants in the RSS budget.
+const codexMcpRepositories = parseRepositories(process.env.HALO_CODEX_MCP_REPOSITORIES || "");
+const codexMcp = codexMcpRepositories.length ? new CodexMcpAdapter({
+  repositories: codexMcpRepositories,
+  cwd: REPO_ROOT,
+  canRun: () => memoryMonitor.getPressureLevel() === "normal",
+  onWorkerStart: (identity) => memoryMonitor.registerExternalProcess(identity),
+  onWorkerExit: ({ pid, creationTime }) => memoryMonitor.unregister(pid, creationTime),
+}) : null;
+
+function withConnectorObservation(browser) {
+  return codexMcp ? makeMcpBrowserObservation({
+    browser, connector: codexMcp,
+    onMetric: (metric) => console.info("[mcp-observation]", JSON.stringify(metric)),
+  }) : browser;
+}
 
 // Single app-wide registry of hidden per-task agent viewports (P0 agent
 // viewport/background isolation -- see main/harness/agent-viewport-host.js
@@ -319,23 +339,29 @@ function makeHarnessBrowser(surfaces, agentViewportHost) {
     // Same session partition as the visible view above (`halo-task-${taskId}`)
     // -- design doc's session/cookie boundary section: the agent view must
     // share the task's existing login/cookie state, not start a fresh one.
-    const agentAdapter = agentViewportHost.ensure(taskId);
+    const agentAdapter = withConnectorObservation(agentViewportHost.ensure(taskId));
     return makeDualSurfaceBrowser({
       agentAdapter,
       visibleAdapter,
-      disposeAgent: () => agentViewportHost.dispose(taskId),
+      disposeAgent: async () => {
+        try { if (codexMcp) await agentAdapter.dispose?.(); }
+        finally { await agentViewportHost.dispose(taskId); }
+      },
     });
   };
 }
 
 function makeChildHarnessBrowser(parentTaskId, childId, origin) {
-  const adapter = agentViewportHost.ensureChild(parentTaskId, childId, { assignedOrigin: origin });
+  const adapter = withConnectorObservation(agentViewportHost.ensureChild(parentTaskId, childId, { assignedOrigin: origin }));
   // ChildAgentCoordinator disposes the browser it received. A bare adapter
   // would destroy the WebContents but leave AgentViewportHost's hidden
   // BrowserWindow and childId registry alive across completed children.
   return new Proxy(adapter, {
     get(target, property) {
-      if (property === "dispose") return () => agentViewportHost.disposeChild(childId);
+      if (property === "dispose") return async () => {
+        try { if (codexMcp) await adapter.dispose?.(); }
+        finally { await agentViewportHost.disposeChild(childId); }
+      };
       const value = Reflect.get(target, property, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -578,6 +604,7 @@ app.on("before-quit", (event) => {
       if (result.status === "rejected") console.error("[harness] failed to close task resources:", result.reason);
     }
     await agentViewportHost.disposeAll();
+    await codexMcp?.close();
     removeOwnRuntimeCapability();
     runtimeContainer?.destroy();
     if (approverProcess) approverProcess.kill();

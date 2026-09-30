@@ -1,5 +1,5 @@
 import { getDomain } from 'tldts'
-import type { BrowserAction, HaloBrowserApi, JournalEvent, TaskEvent, TaskSnapshot } from './api'
+import type { BrowserAction, DirectBrowserSnapshot, HaloBrowserApi, JournalEvent, TaskEvent, TaskSnapshot } from './api'
 import type { Approval, Control, PendingCriterion, SessionState, Tab, TabActivity, TimelineEvent } from './types'
 import { summarizeChildPlan } from './child-agents.ts'
 
@@ -8,7 +8,7 @@ export const AGENT_ROLE = 'Agent'
 export const NEW_TAB_URL = 'halo://newtask'
 export const controlLabel: Record<Control, string> = { claude: 'Agent is browsing', approval: 'Agent is waiting for you', you: 'You are browsing' }
 export const currentUrl = (tab?: Tab) => tab?.history[tab.index] ?? ''
-export const canNavigate = (s: SessionState) => !!s.activeTaskId && !!s.snapshot && ['paused', 'awaiting_verification', 'completed', 'stopped'].includes(s.snapshot.state)
+export const canNavigate = (s: SessionState) => !s.activeTaskId || (!!s.snapshot && ['paused', 'awaiting_verification', 'completed', 'stopped'].includes(s.snapshot.state))
 export const host = (url: string) => { try { return new URL(url).hostname || url } catch { return url } }
 
 export function splitUrl(url: string): { before: string; domain: string; after: string } {
@@ -21,7 +21,7 @@ export function splitUrl(url: string): { before: string; domain: string; after: 
 }
 
 export function initialSession(connected = false): SessionState {
-  return { connected, activeTaskId: null, tasks: [], goal: null, snapshot: null, browser: null, recoveryReason: null, childPlan: null, task: '', control: 'you', finished: true, tabs: [], activeTabId: '', timeline: [], journal: [], messages: [], loading: false, busy: null, error: null }
+  return { connected, activeTaskId: null, tasks: [], goal: null, snapshot: null, browser: null, directBrowser: false, recoveryReason: null, childPlan: null, task: '', control: 'you', finished: true, tabs: [], activeTabId: '', timeline: [], journal: [], messages: [], loading: false, busy: null, error: null }
 }
 
 function describeEvent(e: JournalEvent): TimelineEvent {
@@ -44,8 +44,8 @@ function derive(s: SessionState): SessionState {
     task: s.goal?.originalRequest ?? s.tasks.find((t) => t.taskId === s.activeTaskId)?.originalRequest ?? '',
     control: head ? 'approval' : state === 'running' ? 'claude' : 'you',
     finished: !state || state === 'completed' || state === 'stopped',
-    tabs: s.browser?.tabs.map((t) => ({ id: t.id, history: [t.url], index: 0, titles: { [t.url]: t.title || t.url }, claude: activity, canGoBack: t.canGoBack, canGoForward: t.canGoForward })) ?? [],
-    activeTabId: s.browser?.activeTabId ?? '',
+    tabs: s.browser?.tabs.map((t) => ({ id: t.id, history: [t.url], index: 0, titles: { [t.url]: t.title || t.url }, claude: activity, canGoBack: t.canGoBack, canGoForward: t.canGoForward })) ?? (s.directBrowser ? s.tabs : []),
+    activeTabId: s.browser?.activeTabId ?? (s.directBrowser ? s.activeTabId : ''),
     approval: head && s.activeTaskId ? { taskId: s.activeTaskId, id: head.id, action: head.summary || head.action, request: head.action, createdAt: head.createdAt } : undefined,
     messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text }))] : [],
     timeline: s.journal.map(describeEvent),
@@ -88,9 +88,24 @@ export class SessionStore {
   clearError = () => this.update({ error: null })
   connect() {
     if (!this.api) return () => {}
-    const unsubscribe = this.api.onTaskEvent((event) => this.receive(event))
+    const unsubscribeTask = this.api.onTaskEvent((event) => this.receive(event))
+    const unsubscribeDirect = this.api.onEvent((event) => {
+      if (!this.state.activeTaskId) this.applyDirectSnapshot(event.snapshot, this.state.directBrowser || !!event.snapshot.page?.hasPage)
+    })
+    void this.api.getSnapshot().then((snapshot) => {
+      if (!this.state.activeTaskId) this.applyDirectSnapshot(snapshot, !!snapshot.page?.hasPage)
+    }).catch((error) => this.failure(error))
     void this.refreshTasks()
-    return unsubscribe
+    return () => { unsubscribeTask(); unsubscribeDirect() }
+  }
+  private applyDirectSnapshot(snapshot: DirectBrowserSnapshot, visible: boolean) {
+    const tabs = snapshot.tabs.map((tab) => ({
+      id: tab.id, history: [tab.url || NEW_TAB_URL], index: 0,
+      titles: { [tab.url || NEW_TAB_URL]: tab.title || tab.url },
+      canGoBack: tab.id === snapshot.activeTabId && snapshot.page.canGoBack,
+      canGoForward: tab.id === snapshot.activeTabId && snapshot.page.canGoForward,
+    }))
+    this.update({ directBrowser: visible, tabs, activeTabId: snapshot.activeTabId || tabs[0]?.id || '' })
   }
   async refreshTasks() {
     if (!this.api) return
@@ -259,6 +274,19 @@ export class SessionStore {
   }
   async navigate(action: BrowserAction) {
     if (!this.api || !canNavigate(this.state) || this.state.busy) return false
+    if (!this.state.activeTaskId) {
+      const selection = this.selection
+      const token = ++this.commandToken
+      this.update({ busy: 'navigate', error: null })
+      try {
+        const snapshot = action.type === 'navigate'
+          ? await this.api.navigate(action.url ?? '')
+          : action.type === 'back' ? await this.api.goBack() : await this.api.goForward()
+        if (selection === this.selection && !this.state.activeTaskId) this.applyDirectSnapshot(snapshot, true)
+        return true
+      } catch (error) { this.failure(error, undefined, selection); return false }
+      finally { if (selection === this.selection && token === this.commandToken) this.update({ busy: null }) }
+    }
     const taskId = this.state.activeTaskId!
     const selection = this.selection
     const token = ++this.commandToken

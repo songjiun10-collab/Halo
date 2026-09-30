@@ -19,6 +19,7 @@
 // bounded slices via context-builder.js).
 
 const { randomUUID } = require("node:crypto");
+const { AsyncLocalStorage } = require("node:async_hooks");
 const contracts = require("../../shared/harness-contracts");
 const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
 const { buildContext } = require("./context-builder");
@@ -81,6 +82,10 @@ const NAV_FRONTIER_MAX = 32;
 const NAV_URL_MAX_CHARS = 512;
 const NAV_NAME_MAX_CHARS = 80;
 
+function isMcpItem(item) {
+  return item.actionType === contracts.MCP_CALL_ACTION_TYPE && !!item.mcp;
+}
+
 class TaskController {
   constructor({
     store,
@@ -104,6 +109,7 @@ class TaskController {
     routineRun,
     batchReadOnlyActions = true,
     harnessProfile,
+    makeMcpBroker,
   } = {}) {
     if (!store) throw new TaskControllerError("invalid_config", "store is required");
     if (!planner) throw new TaskControllerError("invalid_config", "planner is required");
@@ -163,6 +169,27 @@ class TaskController {
       recoveredRejected = count;
     }
     this._rejectedFinishes = recoveredRejected;
+    // Generic MCP scope exists only when the trusted host supplies a broker
+    // factory. Open calls (durable mcp_call_started without an outcome) are
+    // recovered from the checkpoint plus the journal tail, like finish
+    // rejections above, so a crash mid-call can never be silently resumed.
+    this._makeMcpBroker = typeof makeMcpBroker === "function" ? makeMcpBroker : null;
+    this._mcpBroker = null;
+    this._mcpClosed = false;
+    this._mcpContext = new AsyncLocalStorage();
+    this._openMcpCalls = new Set();
+    const checkpointedOpenMcp = store.lastCheckpoint?.payload?.mcp?.openCalls;
+    if (checkpointedOpenMcp !== undefined) {
+      if (!Array.isArray(checkpointedOpenMcp) || !checkpointedOpenMcp.every((id) => typeof id === "string" && contracts.UUID_RE.test(id))) {
+        throw new TaskControllerError("invalid_mcp_recovery", "checkpointed open MCP calls are malformed");
+      }
+      for (const id of checkpointedOpenMcp) this._openMcpCalls.add(id);
+    }
+    for (const event of store.eventsSinceCheckpoint || []) {
+      if (event.type !== "note") continue;
+      if (event.payload?.kind === "mcp_call_started") this._openMcpCalls.add(event.payload.requestId);
+      if (event.payload?.kind === "mcp_call_outcome") this._openMcpCalls.delete(event.payload.requestId);
+    }
     this._browser = browser;
     this._approve = approve;
     this._hostVerifier = hostVerifier;
@@ -282,6 +309,9 @@ class TaskController {
       this._task = { state: "paused", pauseReason: "recovered" };
     } else {
       this._task = { state: "idle", pauseReason: null };
+    }
+    if (this._openMcpCalls.size > 0) {
+      this._task = { state: "paused", pauseReason: "execution_uncertain" };
     }
 
     // A nonterminal checkpoint still carries real progress -- restore it
@@ -483,8 +513,11 @@ class TaskController {
   // admission closed (fail-closed) and _task unchanged, exactly like every
   // other store.append()/checkpoint() call in this file.
   async _doTransition({ finalState, pauseReason, cancelQueue, cancelReason }) {
-    if (cancelQueue) {
-      const queued = [...this._approvalQueue];
+    // A pending MCP review belongs to the agent's turn; any ownership change
+    // (including a plain pause) withdraws it rather than leaving a human
+    // approval that could dispatch after control changed hands.
+    const queued = cancelQueue ? [...this._approvalQueue] : this._approvalQueue.filter(isMcpItem);
+    if (queued.length > 0) {
       for (const item of queued) {
         // durable:false: this loop is always followed by this._checkpoint()
         // below (before any other await point reachable from here), and
@@ -498,11 +531,12 @@ class TaskController {
             requestId: item.id,
             actionType: item.actionType,
             goalVersion: item.goalVersion,
-            reason: cancelReason,
+            reason: cancelReason ?? pauseReason ?? "pause",
           },
         }, { durable: false });
         const idx = this._approvalQueue.findIndex((q) => q.id === item.id);
         if (idx !== -1) this._approvalQueue.splice(idx, 1);
+        if (isMcpItem(item)) item.mcp.settle({ allowed: false });
       }
     }
     await Promise.allSettled([...this._inFlightOps]);
@@ -641,6 +675,7 @@ class TaskController {
         harnessProfile: this._harnessProfile,
         ...(this._harnessProfile === "long" ? { goalPersistence: { rejectedFinishes: this._rejectedFinishes } } : {}),
         ...(this._routineRun ? { routineRun: { ...this._routineRun } } : {}),
+        ...(this._openMcpCalls.size > 0 ? { mcp: { openCalls: [...this._openMcpCalls] } } : {}),
       });
       this._snapshotTrusted = true;
     } catch (error) {
@@ -721,7 +756,7 @@ class TaskController {
     if (this._routineRunner && (this._routineRun?.blocked || this._routineRun?.incomplete || this._store.recoveryReason === "execution_uncertain")) {
       throw new TaskControllerError("routine_recovery_incomplete", "a denied, failed, or uncertain routine step cannot be replayed; stop or inspect the task instead");
     }
-    if (this._task.pauseReason === "execution_uncertain" && !opts.confirmed) {
+    if ((this._task.pauseReason === "execution_uncertain" || this._openMcpCalls.size > 0) && !opts.confirmed) {
       throw new TaskControllerError(
         "confirmation_required",
         "resume() from execution_uncertain requires resume({confirmed: true}) -- the dangling action is never auto-replayed",
@@ -738,6 +773,13 @@ class TaskController {
         "resources_disposed",
         "this controller's browser/planner were disposed after a memory emergency -- re-attach the task fresh instead of resuming this instance",
       );
+    }
+    if (this._openMcpCalls.size > 0) {
+      // The person confirmed the uncertain MCP call(s); close them durably so
+      // a restart does not re-report them. Nothing is ever replayed.
+      const epoch = this._epoch;
+      await this._trackInFlight(this._acknowledgeOpenMcpCalls());
+      if (this._stopHappenedSince(epoch) || this._task.state !== "paused") return this.getSnapshot();
     }
     this._task = { state: "running", pauseReason: null };
     // Any interruption's cursor is meaningless now -- resume always starts
@@ -817,6 +859,7 @@ class TaskController {
     // A goal amendment invalidates any stale in-flight proposal/approval
     // tied to the old goalVersion (design doc section 7).
     this._epoch += 1;
+    await this._cancelMcpReviews("goal_amended");
     await this._checkpoint();
     return nextGoal;
   }
@@ -900,7 +943,8 @@ class TaskController {
     const index = this._approvalQueue.findIndex((item) => item.id === requestId);
     if (index === -1) return this.getSnapshot();
     const [item] = this._approvalQueue.splice(index, 1);
-    const wasAwaitingApproval = this._approvalQueue.length === 0 && this._task.state === "awaiting_approval";
+    if (isMcpItem(item)) return this._approveMcp(item);
+    const wasAwaitingApproval = !this._approvalQueue.some((q) => !isMcpItem(q)) && this._task.state === "awaiting_approval";
     if (wasAwaitingApproval) {
       this._task = { state: "running", pauseReason: null };
     }
@@ -936,14 +980,251 @@ class TaskController {
     // action_started was written for it -- see _dispatchActionsBatch), so
     // there is no action lifecycle event to close out here, only the queue
     // entry to drop.
-    this._approvalQueue.splice(index, 1);
-    if (this._approvalQueue.length === 0 && this._task.state === "awaiting_approval") {
+    const [item] = this._approvalQueue.splice(index, 1);
+    if (isMcpItem(item)) {
+      item.mcp.settle({ allowed: false });
+      this._emit();
+      return this.getSnapshot();
+    }
+    if (!this._approvalQueue.some((q) => !isMcpItem(q)) && this._task.state === "awaiting_approval") {
       this._task = { state: "running", pauseReason: null };
       this._emit();
       return this._runLoop();
     }
     this._emit();
     return this.getSnapshot();
+  }
+
+  // --- generic MCP (host-scoped; see docs/superpowers/specs/2026-09-30-generic-mcp-broker-design.md) ---
+  //
+  // Trusted-host-only surface. The model/renderer never receives the broker,
+  // an approval, or a way to call requestApproval: every call is proposed
+  // here, queued in the ordinary approval queue for a human (regardless of
+  // the browser permission mode), bound to this task's epoch/goal, and
+  // dispatched once through the drain set so transitions wait for its real
+  // outcome.
+
+  _terminal() {
+    return ["stopped", "completed"].includes(this._task.state);
+  }
+
+  _requireMcp() {
+    if (!this._makeMcpBroker || this._mcpClosed) {
+      throw new TaskControllerError("mcp_disabled", "MCP is not enabled for this task");
+    }
+    if (!this._mcpBroker) {
+      this._mcpBroker = this._makeMcpBroker({
+        getContext: () => ({ taskId: this._store.taskId, goalVersion: this._goal.goalVersion, epoch: this._epoch }),
+        requestApproval: (request) => this._requestMcpApproval(request),
+        journal: { append: (event) => this._appendMcpJournal(event) },
+      });
+      if (!this._mcpBroker || typeof this._mcpBroker.proposeCall !== "function") {
+        this._mcpBroker = null;
+        throw new TaskControllerError("mcp_disabled", "MCP broker factory returned no broker");
+      }
+    }
+    return this._mcpBroker;
+  }
+
+  async listMcpConnections() {
+    return this._requireMcp().listConnections();
+  }
+
+  async searchMcpTools(query) {
+    return this._requireMcp().searchTools(query);
+  }
+
+  async describeMcpTool(connectionId, toolName) {
+    return this._requireMcp().describeTool(connectionId, toolName);
+  }
+
+  // Trusted UI only: the full review (including arguments) a person needs to
+  // decide. The renderer-facing snapshot carries only id/action/target.
+  describeMcpApproval(requestId) {
+    const item = this._approvalQueue.find((q) => q.id === requestId && isMcpItem(q));
+    if (!item) throw new TaskControllerError("unknown_request", "no pending MCP review with that id");
+    return structuredClone(item.mcp.review);
+  }
+
+  async proposeMcpCall(request) {
+    let proposal;
+    try {
+      proposal = contracts.validateMcpProposal(request);
+    } catch (error) {
+      throw new TaskControllerError("invalid_mcp_proposal", error.message);
+    }
+    const broker = this._requireMcp();
+    this._checkAdmission();
+    if (this._terminal()) {
+      throw new TaskControllerError("invalid_state", `cannot call MCP tools in state ${this._task.state}`);
+    }
+    const token = { epoch: this._epoch, goalVersion: this._goal.goalVersion, item: null, approvalId: null, release: null };
+    try {
+      const approval = await this._mcpContext.run(token, () => broker.proposeCall(proposal));
+      // approve() admitted this under the then-current epoch; a transition or
+      // amendment since then (which drains token.release) wins.
+      if (this._stopHappenedSince(token.epoch) || this._goal.goalVersion !== token.goalVersion || this._terminal()) {
+        throw new TaskControllerError("stale_proposal", "the task changed after this MCP call was approved");
+      }
+      token.approvalId = approval.id;
+      try {
+        return await this._mcpContext.run(token, () => broker.dispatchApproved(approval.id));
+      } catch (error) {
+        if (error?.code === "execution_uncertain") {
+          if (!this._terminal() && !this._stopHappenedSince(token.epoch)) await this._pauseWith("execution_uncertain");
+        } else if (this._openMcpCalls.has(approval.id)) {
+          // The durable preclaim landed but the broker refused before calling.
+          await this._closeMcpCall(approval.id, "not_dispatched").catch(() => {});
+        }
+        throw error;
+      }
+    } finally {
+      token.release?.();
+    }
+  }
+
+  async closeMcp() {
+    this._mcpClosed = true;
+    for (const item of this._approvalQueue.filter(isMcpItem)) {
+      const idx = this._approvalQueue.indexOf(item);
+      if (idx !== -1) this._approvalQueue.splice(idx, 1);
+      item.mcp.settle({ allowed: false });
+    }
+    const broker = this._mcpBroker;
+    this._mcpBroker = null;
+    this._emit();
+    if (broker) await broker.close();
+  }
+
+  // Broker callback. Only a review requested from inside proposeMcpCall()
+  // (correlated through AsyncLocalStorage) can ever be queued; anything else
+  // is refused, so no other caller can mint a human approval.
+  _requestMcpApproval(request) {
+    const token = this._mcpContext.getStore();
+    if (!token || token.item || !contracts.isPlainObject(request) || request.signal?.aborted ||
+        this._stopHappenedSince(token.epoch) || this._goal.goalVersion !== token.goalVersion ||
+        !this._admissionOpen || this._terminal()) {
+      return { allowed: false };
+    }
+    const { signal } = request;
+    const target = `${String(request.server).slice(0, 64)}/${String(request.toolName).slice(0, 128)}`;
+    const createdAt = this._now();
+    return new Promise((resolve) => {
+      let settled = false;
+      const onAbort = () => {
+        const idx = this._approvalQueue.indexOf(item);
+        if (idx !== -1) this._approvalQueue.splice(idx, 1);
+        settle({ allowed: false });
+        this._emit();
+      };
+      const settle = (decision) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener?.("abort", onAbort);
+        resolve(decision);
+      };
+      const item = {
+        id: randomUUID(),
+        summary: `MCP ${target}`,
+        actionType: contracts.MCP_CALL_ACTION_TYPE,
+        createdAt,
+        epoch: token.epoch,
+        goalVersion: token.goalVersion,
+        expiresAt: createdAt + contracts.APPROVAL_EXPIRY_MS,
+        descriptor: { target },
+        mcp: {
+          token,
+          settle,
+          review: {
+            connectionId: request.connectionId,
+            provider: request.provider,
+            server: request.server,
+            toolName: request.toolName,
+            connectorId: request.connectorId ?? null,
+            generation: request.generation,
+            arguments: structuredClone(request.arguments),
+            risk: request.risk,
+            authority: "untrusted_connector",
+          },
+        },
+      };
+      item.mcp.review.id = item.id;
+      item.mcp.review.expiresAt = item.expiresAt;
+      token.item = item;
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      this._approvalQueue.push(item);
+      this._emit();
+    });
+  }
+
+  async _approveMcp(item) {
+    const { settle, token } = item.mcp;
+    if (this._stopHappenedSince(item.epoch) || this._now() >= item.expiresAt ||
+        item.goalVersion !== this._goal.goalVersion || this._terminal()) {
+      settle({ allowed: false });
+      this._emit();
+      return this.getSnapshot();
+    }
+    // Register the dispatch in the drain set before the proposal continues,
+    // so a transition started after this point waits for its real outcome.
+    const done = new Promise((resolve) => { token.release = resolve; });
+    const tracked = this._trackInFlight(done);
+    settle({ allowed: true, kind: "human" });
+    await tracked;
+    this._emit();
+    return this.getSnapshot();
+  }
+
+  async _cancelMcpReviews(reason) {
+    for (const item of this._approvalQueue.filter(isMcpItem)) {
+      await this._store.append({
+        type: "approval_cancelled",
+        payload: { requestId: item.id, actionType: item.actionType, goalVersion: item.goalVersion, reason },
+      }, { durable: false });
+      const idx = this._approvalQueue.indexOf(item);
+      if (idx !== -1) this._approvalQueue.splice(idx, 1);
+      item.mcp.settle({ allowed: false });
+    }
+  }
+
+  // Broker journal adapter: translate to value-free durable notes (no
+  // arguments, no raw result). A failed preclaim append makes the broker
+  // refuse the call (journal_failed) before any provider is contacted.
+  async _appendMcpJournal(event) {
+    const token = this._mcpContext.getStore();
+    if (!contracts.isPlainObject(event) || !token || token.approvalId !== event.requestId) {
+      throw new TaskControllerError("invalid_mcp_journal_event", "MCP journal event outside an approved dispatch");
+    }
+    let payload;
+    if (event.type === "mcp_call_started" && contracts.isPlainObject(event.binding)) {
+      const b = event.binding;
+      payload = {
+        kind: "mcp_call_started", requestId: event.requestId, connectionId: b.connectionId, provider: b.provider,
+        server: b.server, generation: b.generation, toolName: b.toolName, connectorId: b.connectorId ?? null,
+        schemaDigest: b.schemaDigest, argsDigest: b.argsDigest, contextDigest: b.contextDigest,
+      };
+    } else if (event.type === "mcp_call_outcome" && ["ok", "tool_error"].includes(event.outcome) && this._openMcpCalls.has(event.requestId)) {
+      payload = { kind: "mcp_call_outcome", requestId: event.requestId, outcome: event.outcome, resultDigest: event.resultDigest };
+    } else {
+      throw new TaskControllerError("invalid_mcp_journal_event", "unsupported MCP journal event");
+    }
+    try {
+      contracts.validateMcpCallNote(payload, "mcpNote");
+    } catch (error) {
+      throw new TaskControllerError("invalid_mcp_journal_event", error.message);
+    }
+    await this._store.append({ type: "note", payload });
+    if (payload.kind === "mcp_call_started") this._openMcpCalls.add(payload.requestId);
+    else this._openMcpCalls.delete(payload.requestId);
+  }
+
+  async _closeMcpCall(requestId, outcome) {
+    await this._store.append({ type: "note", payload: { kind: "mcp_call_outcome", requestId, outcome, resultDigest: null } });
+    this._openMcpCalls.delete(requestId);
+  }
+
+  async _acknowledgeOpenMcpCalls() {
+    for (const requestId of [...this._openMcpCalls]) await this._closeMcpCall(requestId, "uncertain_acknowledged");
   }
 
   // --- internal loop ---

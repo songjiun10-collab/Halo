@@ -94,12 +94,16 @@ class TaskHost {
     workGoalOrchestrator,
     routineReadOnlyBatching = true,
     scheduler: schedulerOptions = {},
+    makeMcpBroker,
   } = {}) {
     if (!storageRoot) throw new TaskHostError("invalid_config", "storageRoot is required");
     if (typeof makeBrowser !== "function") throw new TaskHostError("invalid_config", "makeBrowser is required");
     if (typeof makePlanner !== "function") throw new TaskHostError("invalid_config", "makePlanner is required");
     if (typeof hostVerifier !== "function") throw new TaskHostError("invalid_config", "hostVerifier is required");
     if (typeof approve !== "function") throw new TaskHostError("invalid_config", "approve is required");
+    if (makeMcpBroker !== undefined && makeMcpBroker !== null && typeof makeMcpBroker !== "function") {
+      throw new TaskHostError("invalid_config", "makeMcpBroker must be a function when provided");
+    }
 
     this._storageRoot = storageRoot;
     this._makeBrowser = makeBrowser;
@@ -107,6 +111,9 @@ class TaskHost {
     this._makeChildBrowser = makeChildBrowser || null;
     this._hostVerifier = hostVerifier;
     this._approve = approve;
+    // Generic MCP is a separate, explicitly host-enabled scope: absent a
+    // trusted factory every task's MCP methods fail closed (mcp_disabled).
+    this._makeMcpBroker = typeof makeMcpBroker === "function" ? makeMcpBroker : null;
     this._memoryMonitor = memoryMonitor;
     this._now = now;
     this._segmentRotationCalls = segmentRotationCalls;
@@ -305,6 +312,7 @@ class TaskHost {
       // never receive onChildPlan, which is exactly what prevents nested
       // child agents.
       onChildPlan: (proposal) => this._onChildPlan(store.taskId, store, proposal),
+      ...(this._makeMcpBroker ? { makeMcpBroker: (hooks) => this._makeMcpBroker(store.taskId, hooks) } : {}),
       sendMessage: (validated) => this._childCoordinator.handleSendMessage(store.taskId, validated),
       listPendingMessages: () => this._childCoordinator.listPendingMessages(store.taskId),
       recordMessagesConsumed: (ids, plannerCall) => this._childCoordinator.recordMessagesConsumed(store.taskId, ids, plannerCall),
@@ -950,7 +958,7 @@ class TaskHost {
         this._unsubscribe(entry);
         this._active.delete(taskId);
         this._childCoordinator.unregisterStore(taskId);
-        const cleanup = await Promise.allSettled([entry.planner.close?.(), entry.browser.dispose?.(), entry.store.close()]);
+        const cleanup = await Promise.allSettled([entry.controller.closeMcp(), entry.planner.close?.(), entry.browser.dispose?.(), entry.store.close()]);
         if (cleanup.every((result) => result.status === "fulfilled")) await this._coordinator.releaseLease(taskId);
         else this._emit(taskId, entry.snapshot, { error: "resource_teardown_failed" });
       } else {
@@ -1175,6 +1183,34 @@ class TaskHost {
   async denyTask(taskId, requestId) {
     const { controller } = this._require(taskId);
     return controller.deny(requestId);
+  }
+
+  // Trusted host/main-process surface for generic MCP. Approval is never
+  // accepted here: a proposal is queued for human review and settled only
+  // by approveTask()/denyTask() on the same task.
+  async listMcpConnections(taskId) {
+    const { controller } = this._require(taskId);
+    return controller.listMcpConnections();
+  }
+
+  async searchMcpTools(taskId, query) {
+    const { controller } = this._require(taskId);
+    return controller.searchMcpTools(query);
+  }
+
+  async describeMcpTool(taskId, connectionId, toolName) {
+    const { controller } = this._require(taskId);
+    return controller.describeMcpTool(connectionId, toolName);
+  }
+
+  async proposeMcpCall(taskId, request) {
+    const { controller } = this._require(taskId);
+    return controller.proposeMcpCall(request);
+  }
+
+  describeMcpApproval(taskId, requestId) {
+    const { controller } = this._require(taskId);
+    return controller.describeMcpApproval(requestId);
   }
 
   async pauseTask(taskId, reason) {
@@ -1405,6 +1441,7 @@ class TaskHost {
         this._unsubscribe(entry);
 
         const cleanup = await Promise.allSettled([
+          Promise.resolve().then(() => entry.controller.closeMcp()),
           Promise.resolve().then(() => entry.planner.close?.()),
           Promise.resolve().then(() => entry.browser.dispose?.()),
           Promise.resolve().then(() => entry.store.close()),

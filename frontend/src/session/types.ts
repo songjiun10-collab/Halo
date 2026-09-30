@@ -26,6 +26,7 @@ export interface SessionState {
   goal: GoalSpec | null
   snapshot: TaskSnapshot | null
   browser: BrowserSnapshot | null
+  directBrowser: boolean
   recoveryReason: string | null
   childPlan: ChildPlanSummary | null
   task: string

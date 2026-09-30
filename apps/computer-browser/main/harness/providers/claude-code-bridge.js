@@ -141,6 +141,8 @@ const PROPOSAL_JSON_SCHEMA = Object.freeze({
 // `--tools` flag as "last one wins").
 const CLI_ARGS = Object.freeze([
   "-p",
+  "--model",
+  "opus",
   "--output-format",
   "json",
   "--tools",

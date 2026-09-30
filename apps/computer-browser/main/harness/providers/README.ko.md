@@ -3,8 +3,7 @@
 로컬에 이미 로그인되어 있는 `claude` CLI(Claude Code)를 harness의 플래너로
 재사용하기 위한 provider bridge다. `main/harness/task-controller.js`,
 `main/harness/planner-stdio.js`, `main/harness/task-host.js`,
-`main/index.js` 등 기존 파일은 **전혀 수정하지 않았다** — 이 디렉터리는
-순수 추가 파일이며, `main/index.js`의 `makeHarnessPlanner()`가 이미 제공하는
+기존 planner 통신 규약을 재사용한다. `main/index.js`의 `makeHarnessPlanner()`가 제공하는
 `HALO_PLANNER_COMMAND`/`HALO_PLANNER_ARGS` 배선을 그대로 재사용한다.
 
 ## 구성
@@ -21,6 +20,10 @@
   않았다.
 
 ## 활성화 방법 (operator가 직접 환경변수로 설정)
+
+모델은 고정 인자 `--model opus`로 선택한다. CLI의 사용자 기본 모델에
+의존하지 않으며, 모델 변경으로 도구 비활성화·승인 경계가 달라지지 않는다.
+`opus`의 실제 버전과 호출 가능 여부는 설치된 Claude와 계정에 따른다.
 
 ```bash
 export HALO_PLANNER_COMMAND=node
@@ -131,3 +134,46 @@ export HALO_PLANNER_ARGS='["apps/computer-browser/main/harness/providers/claude-
 - 이 provider가 결정하는 행동(navigate/follow_link/scroll/observe)의
   정확한 필드 형식은 여전히 `browser-adapter.js` 소관이며 이 문서는 그
   파일을 수정하지 않았다.
+
+## Codex 앱의 연결된 GitHub MCP를 브라우저 관찰에 사용
+
+공식 Codex app-server의 `app/installed`, `mcpServerStatus/list`,
+`mcpServer/tool/call`을 사용하는 별도 호스트 어댑터다. Claude에는 MCP를
+직접 열어주지 않는다. 연결 서비스 인증은 Codex가 처리하며 HALO는 토큰을
+읽거나 복사하지 않는다. 모델 추론을 위한 Codex turn을 시작하지 않는다.
+
+```bash
+export HALO_CODEX_MCP_REPOSITORIES=deepseek-ai/deepseek-harness
+```
+
+허용 목록이 비어 있으면 Codex 프로세스를 시작하지 않는다. 설정은 HALO를
+실행하는 호스트 환경에서만 받는다. 현재 지원 범위는 이 목록 안의 저장소에
+속한 `https://github.com/owner/repo/blob/ref/path` 파일 페이지다. 쿼리,
+앵커, 인코딩된 경로, 여러 세그먼트로 된 ref는 일반 DOM 관찰로 처리한다.
+
+브라우저가 방문한 파일의 첫 100줄을 `github.fetch_file`로 읽고, 최대
+4KiB UTF-8 텍스트와 저장소 링크 최대 12개를 모델 관찰로 전달한다. 잘림과
+조회 범위를 함께 표시한다. 전체 관찰 byte 수가 DOM 관찰보다 작을 때만
+선택하며, 더 크면 기존 DOM 관찰을 유지한다. 파일 내용은 `untrusted_connector`이며 승인,
+실행 권한, 목표 완료 증거를 직접 부여하지 않는다. 지원되지 않는 페이지,
+사용 불가능한 앱/도구, 조회 오류, 메모리 압력, 다른 작업의 조회 진행 중에는
+DOM 관찰로 돌아간다. 모든 기존 browser action은 원래 게이트를 거친다.
+
+프로세스 하나를 런타임 전체가 공유하고 HALO의 프로세스 트리 RSS 계측에
+등록한다. 이 조회 세션에서는 불필요한 사용자 설정 로컬 MCP 서버를 thread
+설정으로 끈다. 사용자의 전역 설정이나 managed policy는 변경하지 않는다.
+로그에는 결과 본문이나 인증 정보 없이 조회 지연과 관찰 byte 수만
+남긴다. byte 감소와 모델 token 감소는 같은 측정값이 아니다.
+
+실제 연결 검증(외부 서비스에서 읽기 수행):
+
+```bash
+cd apps/computer-browser
+HALO_CODEX_MCP_REPOSITORIES=deepseek-ai/deepseek-harness \
+  node integration/codex-mcp-smoke.js \
+  https://github.com/deepseek-ai/deepseek-harness/blob/master/README.md
+```
+
+공식 인터페이스와 구현 경계:
+[Codex app-server](https://learn.chatgpt.com/docs/app-server),
+[설계](../../../../../docs/superpowers/specs/2026-09-30-codex-app-mcp-adapter.md).

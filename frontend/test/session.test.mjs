@@ -28,6 +28,11 @@ function harness(overrides = {}) {
     amendTask: async () => snapshot(),
     setTaskViewport: async () => {},
     taskBrowserAction: async () => browser(),
+    getSnapshot: async () => ({ page: { url: '', title: '', canGoBack: false, canGoForward: false }, tabs: [], activeTabId: '', task: { state: 'idle' }, approvalQueue: [], timeline: [] }),
+    navigate: async (url) => ({ page: { url, title: 'Example', canGoBack: false, canGoForward: false }, tabs: [{ id: 'direct', url, title: 'Example' }], activeTabId: 'direct', task: { state: 'idle' }, approvalQueue: [], timeline: [] }),
+    goBack: async () => ({ page: { url: 'https://example.com/', title: 'Example', canGoBack: false, canGoForward: true }, tabs: [{ id: 'direct', url: 'https://example.com/', title: 'Example' }], activeTabId: 'direct', task: { state: 'idle' }, approvalQueue: [], timeline: [] }),
+    goForward: async () => ({ page: { url: 'https://example.org/', title: 'Example', canGoBack: true, canGoForward: false }, tabs: [{ id: 'direct', url: 'https://example.org/', title: 'Example' }], activeTabId: 'direct', task: { state: 'idle' }, approvalQueue: [], timeline: [] }),
+    onEvent: () => () => {},
     onTaskEvent: (callback) => { listener = callback; return () => { listener = undefined } },
     ...overrides,
   }
@@ -161,6 +166,37 @@ test('human navigation remains enabled while a task waits for evidence confirmat
   state.activeTaskId = 'task'
   state.snapshot = snapshot('awaiting_verification')
   assert.equal(session.canNavigate(state), true)
+})
+
+test('idle address bar is available without selecting a task', () => {
+  assert.equal(session.canNavigate(session.initialSession(true)), true)
+})
+
+test('idle address-bar navigation uses the human-controlled browser and publishes the loaded page', async () => {
+  const calls = []
+  const { store } = harness({ navigate: async (url) => {
+    calls.push(url)
+    return { page: { url, title: 'Example Domain', canGoBack: false, canGoForward: false }, tabs: [{ id: 'direct', url, title: 'Example Domain' }], activeTabId: 'direct', task: { state: 'idle' }, approvalQueue: [], timeline: [] }
+  } })
+  assert.equal(await store.navigate({ type: 'navigate', url: 'https://example.com/' }), true)
+  assert.deepEqual(calls, ['https://example.com/'])
+  assert.equal(store.getState().directBrowser, true)
+  assert.equal(store.getState().tabs[0].history[0], 'https://example.com/')
+  assert.equal(store.getState().tabs[0].titles['https://example.com/'], 'Example Domain')
+})
+
+test('idle back and forward use the direct browser while selected tasks retain the harness gate', async () => {
+  const calls = []
+  const { store } = harness({
+    goBack: async () => { calls.push('back'); return { page: { url: 'https://example.com/', title: 'Example', canGoBack: false, canGoForward: true }, tabs: [{ id: 'direct', url: 'https://example.com/', title: 'Example' }], activeTabId: 'direct', task: { state: 'idle' }, approvalQueue: [], timeline: [] } },
+    goForward: async () => { calls.push('forward'); return { page: { url: 'https://example.org/', title: 'Example', canGoBack: true, canGoForward: false }, tabs: [{ id: 'direct', url: 'https://example.org/', title: 'Example' }], activeTabId: 'direct', task: { state: 'idle' }, approvalQueue: [], timeline: [] } },
+  })
+  await store.navigate({ type: 'back' })
+  await store.navigate({ type: 'forward' })
+  assert.deepEqual(calls, ['back', 'forward'])
+  await store.selectTask('task')
+  await store.navigate({ type: 'navigate', url: 'https://example.net/' })
+  assert.deepEqual(calls, ['back', 'forward'])
 })
 
 test('selected parent task loads host-proposed child count and live child updates replace that summary', async () => {
