@@ -17,6 +17,13 @@
 // must pause rather than silently ship a lossy goal to the planner.
 
 const contracts = require("../../shared/harness-contracts");
+const workGoalContracts = require("../../shared/work-goal-contracts");
+const { validateWorkGoalBinding } = require("../../shared/task-profile-contracts");
+
+const WORK_GOAL_CONTEXT_FIELDS = Object.freeze([
+  "goalId", "goalVersion", "objective", "successCriteria", "verifiedCriterionIds", "remainingBudget",
+]);
+const WORK_GOAL_BUDGET_FIELDS = Object.freeze(Object.keys(workGoalContracts.MAX_BUDGET));
 
 class ContextError extends Error {
   constructor(code, message) {
@@ -26,7 +33,58 @@ class ContextError extends Error {
   }
 }
 
-function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null }) {
+function validatedWorkGoalContext(workGoalBinding, workGoal) {
+  if (workGoalBinding === undefined && workGoal === undefined) return undefined;
+  if (workGoalBinding === undefined || workGoal === undefined) {
+    throw new ContextError("invalid_field", "bound Work Goal context requires both binding and content");
+  }
+  try {
+    validateWorkGoalBinding(workGoalBinding);
+    if (!contracts.isPlainObject(workGoal) ||
+        WORK_GOAL_CONTEXT_FIELDS.some((field) => !Object.hasOwn(workGoal, field)) ||
+        Object.keys(workGoal).some((field) => !WORK_GOAL_CONTEXT_FIELDS.includes(field))) {
+      throw new Error("Work Goal context has an invalid shape");
+    }
+    contracts.assertUuid(workGoal.goalId, "workGoal.goalId");
+    if (!Number.isSafeInteger(workGoal.goalVersion) || workGoal.goalVersion <= 0 ||
+        workGoal.goalId !== workGoalBinding.goalId || workGoal.goalVersion !== workGoalBinding.goalVersion) {
+      throw new Error("Work Goal context does not match the Task binding");
+    }
+    workGoalContracts.validateWorkGoalInput({
+      objective: workGoal.objective,
+      successCriteria: workGoal.successCriteria,
+    });
+    if (!Array.isArray(workGoal.verifiedCriterionIds)) throw new Error("verifiedCriterionIds must be an array");
+    const criterionIds = new Set(workGoal.successCriteria.map((criterion) => criterion.id));
+    const verified = new Set();
+    for (const id of workGoal.verifiedCriterionIds) {
+      if (!criterionIds.has(id) || verified.has(id)) throw new Error("verifiedCriterionIds contains an unknown or duplicate ID");
+      verified.add(id);
+    }
+    if (!contracts.isPlainObject(workGoal.remainingBudget)) throw new Error("remainingBudget must be an object");
+    for (const [field, amount] of Object.entries(workGoal.remainingBudget)) {
+      if (!WORK_GOAL_BUDGET_FIELDS.includes(field) || !Number.isSafeInteger(amount) ||
+          amount < 0 || amount > workGoalContracts.MAX_BUDGET[field]) {
+        throw new Error("remainingBudget contains an invalid amount");
+      }
+    }
+  } catch (error) {
+    throw new ContextError("invalid_field", `invalid bound Work Goal context: ${error.message}`);
+  }
+  // Take an independent snapshot: the caller can update its authoritative
+  // state after this turn, but cannot mutate a packet already handed to the
+  // planner through a shared nested object reference.
+  return {
+    goalId: workGoal.goalId,
+    goalVersion: workGoal.goalVersion,
+    objective: workGoal.objective,
+    successCriteria: workGoal.successCriteria.map((criterion) => ({ ...criterion })),
+    verifiedCriterionIds: [...workGoal.verifiedCriterionIds],
+    remainingBudget: { ...workGoal.remainingBudget },
+  };
+}
+
+function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal }) {
   contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
 
   if (!contracts.isPlainObject(state)) {
@@ -48,6 +106,7 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
 
   const { modelSummary, ...trustedProgress } = state;
   const boundedRecentEvents = recentEvents.slice(-contracts.MAX_RECENT_EVENTS_IN_CONTEXT);
+  const boundWorkGoal = validatedWorkGoalContext(workGoalBinding, workGoal);
 
   const basePacket = {
     taskId: goal.taskId,
@@ -67,6 +126,7 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     // loaded, so it is data to consider, never an instruction.
     navigationHistory: navigation === null ? null : { authority: "untrusted_page_derived", visited: navigation.visited, frontier: navigation.frontier },
     pendingMessages: [],
+    ...(boundWorkGoal === undefined ? {} : { workGoal: boundWorkGoal }),
   };
 
   const baseSize = Buffer.byteLength(JSON.stringify(basePacket), "utf8");

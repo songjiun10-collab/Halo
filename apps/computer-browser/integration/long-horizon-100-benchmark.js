@@ -189,6 +189,11 @@ async function runHarness({ fixture, win, storageRoot, socketPath, approverProce
   let controller;
   const stageTotals = {};
   const controllerStageTotals = stageTotals;
+  // TaskStore.create() durably appends goal_created before returning; count
+  // that known first event here, then count every later successful append.
+  const journalEventCounts = Object.assign(Object.create(null), { goal_created: 1 });
+  const taskStoreOperationTimings = Object.create(null);
+  let checkpointCount = 0;
   let approvalCount = 0;
   let resetCount = 0;
   const plannerPids = [];
@@ -215,9 +220,30 @@ async function runHarness({ fixture, win, storageRoot, socketPath, approverProce
     });
   }
 
-  store = await TaskStore.create(goal, { storageRoot });
+  store = await TaskStore.create(goal, {
+    storageRoot,
+    onTiming: ({ operation, elapsedMs }) => {
+      const item = taskStoreOperationTimings[operation] || { count: 0, totalMs: 0, maxMs: 0 };
+      item.count += 1;
+      item.totalMs += elapsedMs;
+      item.maxMs = Math.max(item.maxMs, elapsedMs);
+      taskStoreOperationTimings[operation] = item;
+    },
+  });
   measure(store, "append", controllerStageTotals, "durable_store");
   measure(store, "checkpoint", controllerStageTotals, "durable_store");
+  const appendMeasured = store.append.bind(store);
+  store.append = async (...args) => {
+    const result = await appendMeasured(...args);
+    const eventType = args[0]?.type;
+    if (typeof eventType === "string") journalEventCounts[eventType] = (journalEventCounts[eventType] || 0) + 1;
+    return result;
+  };
+  const checkpointMeasured = store.checkpoint.bind(store);
+  store.checkpoint = async (...args) => {
+    checkpointCount += 1;
+    return checkpointMeasured(...args);
+  };
   const basePlanner = {
     warm() {
       if (!planner) {
@@ -294,6 +320,15 @@ async function runHarness({ fixture, win, storageRoot, socketPath, approverProce
     assert.equal(actionTrace.length, STEPS, "must dispatch exactly one browser action per chain step");
     assert.equal(approvalCount, STEPS, "the scenario must pass every navigation through human approval");
     assert.equal(policyChecks, STEPS, "every navigation must receive an independent approver decision");
+    assert.equal(journalEventCounts.action_started, STEPS, "each dispatched action must have one durable start event");
+    assert.equal(journalEventCounts.action_outcome, STEPS, "each dispatched action must have one durable outcome event");
+    assert.equal(journalEventCounts.evidence_recorded, STEPS, "each verified navigation must record one evidence event");
+    assert.equal(Object.values(journalEventCounts).reduce((sum, count) => sum + count, 0), taskStoreOperationTimings.journal_append_write.count,
+      "event-type counters must cover every successful journal append, including goal_created");
+    assert.ok(checkpointCount > 0, "the run must persist at least one checkpoint");
+    for (const operation of ["journal_append_write", "journal_fsync", "checkpoint_file_write", "checkpoint_file_fsync", "checkpoint_rename", "checkpoint_directory_fsync"]) {
+      assert.ok(taskStoreOperationTimings[operation]?.count > 0, `missing TaskStore timing for ${operation}`);
+    }
     assert.equal(finalSnapshot.goalVersion, 1);
     assert.equal(controller.getGoal().originalRequest, goal.originalRequest);
     assert.equal(goalPreserved, true, "the original goal must be present at every fresh planner process/context");
@@ -307,6 +342,9 @@ async function runHarness({ fixture, win, storageRoot, socketPath, approverProce
       plannerProcessResets: resetCount,
       plannerPids,
       plannerContextsRebuilt: plannerCalls,
+      journalEventCounts,
+      checkpointCount,
+      taskStoreOperationTimings,
       goalPreserved,
       finalState: finalSnapshot.state,
       finalUrl: url,

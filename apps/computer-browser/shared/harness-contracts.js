@@ -59,6 +59,7 @@ const DEFAULT_CRITERION_C1 = Object.freeze({
 // remove/rename an existing entry, since old journals must keep replaying.
 const EVENT_TYPES = Object.freeze([
   "goal_created",
+  "task_profile_selected",
   "goal_amended",
   "action_started",
   "action_outcome",
@@ -265,7 +266,17 @@ const GOAL_SPEC_FIELDS = [
   "criteria",
   "limits",
   "createdAt",
+  "trigger",
 ];
+
+// Scheduled-occurrence key. Lives on the goal (not the routineRun checkpoint)
+// because TaskStore.create writes the goal atomically with the task.
+function validateGoalTrigger(trigger, label) {
+  assertPlainObject(trigger, label);
+  assertNoUnknownKeys(trigger, ["scheduleId", "occurrenceAt"], label);
+  assertUuid(trigger.scheduleId, `${label}.scheduleId`);
+  assertIsoTimestamp(trigger.occurrenceAt, `${label}.occurrenceAt`);
+}
 
 // Validates a fully-formed GoalSpec exactly as it will be stored on disk
 // (used both when writing a new goal-vNNNN.json and when re-reading one, so
@@ -292,6 +303,7 @@ function validateGoalSpec(goal, label = "goal") {
   goal.criteria.forEach((c, i) => validateCriterion(c, `${label}.criteria[${i}]`));
   validateLimits(goal.limits, `${label}.limits`);
   assertIsoTimestamp(goal.createdAt, `${label}.createdAt`);
+  if (goal.trigger !== undefined) validateGoalTrigger(goal.trigger, `${label}.trigger`);
   return goal;
 }
 
@@ -302,7 +314,7 @@ function validateGoalSpec(goal, label = "goal") {
 // forge its own taskId or backdate creation.
 function normalizeGoalSpec(input, host) {
   assertPlainObject(input, "goalInput");
-  assertNoUnknownKeys(input, ["originalRequest", "constraints", "criteria", "limits", "amendments"], "goalInput");
+  assertNoUnknownKeys(input, ["originalRequest", "constraints", "criteria", "limits", "amendments", "trigger"], "goalInput");
   assertPlainObject(host, "host");
   assertNoUnknownKeys(host, ["taskId", "goalVersion", "createdAt"], "host");
 
@@ -318,6 +330,7 @@ function normalizeGoalSpec(input, host) {
     limits: { ...DEFAULT_LIMITS, ...(input.limits || {}) },
     createdAt: host.createdAt,
   };
+  if (input.trigger !== undefined) goal.trigger = input.trigger;
   return validateGoalSpec(goal, "goal");
 }
 
@@ -363,6 +376,7 @@ function applyAmendment(goal, amendmentInput, host) {
     limits: goal.limits,
     createdAt: goal.createdAt,
   };
+  if (goal.trigger !== undefined) nextGoal.trigger = goal.trigger;
   return validateGoalSpec(nextGoal, "goal");
 }
 
@@ -477,6 +491,12 @@ function validateJournalEvent(event, label = "event") {
   assertPlainObject(event.payload, `${label}.payload`);
   if (event.type === "action_started" || event.type === "action_outcome") {
     assertId(event.payload.actionId, `${label}.payload.actionId`);
+  }
+  if (event.type === "goal_created") {
+    require("./task-profile-contracts").validateProfileRequiredGoalCreatedPayload(event.payload);
+  }
+  if (event.type === "task_profile_selected") {
+    require("./task-profile-contracts").validateTaskProfileSelectedPayload(event.payload);
   }
   if (event.type === "evidence_recorded") {
     validateEvidence(event.payload.evidence, `${label}.payload.evidence`);
@@ -851,6 +871,7 @@ module.exports = {
   assertId,
   normalizeGoalSpec,
   validateGoalSpec,
+  validateGoalTrigger,
   applyAmendment,
   validateJournalEvent,
   validateCheckpointEnvelope,

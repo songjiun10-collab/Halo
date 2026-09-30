@@ -1,5 +1,7 @@
 "use strict";
 
+const crypto = require("node:crypto");
+
 // TaskHost (Task 5): the multi-task coordinator behind the new IPC surface
 // (createTask/listTasks/resumeSavedTask/amendTask/confirmCriterion/
 // getTaskDetail/approveTask/denyTask). Each long-horizon task gets its own
@@ -23,17 +25,30 @@ const { TaskStore } = require("./task-store");
 const { TaskController, TaskControllerError } = require("./task-controller");
 const { TaskQueue, TaskQueueError } = require("./task-queue");
 const { ResourceAdmission } = require("./resource-admission");
+const { CoordinatorCore } = require("./coordinator-core");
 const { RoutineStore } = require("./routine-store");
 const { RoutineRunner } = require("./routine-runner");
 const { ChildAgentCoordinator } = require("./child-agent-coordinator");
-const { isPlainObject } = require("../../shared/harness-contracts");
-const { selectHarnessProfile, validateHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
+const { Scheduler } = require("./scheduler");
+const { ScheduleStore } = require("./schedule-store");
+const { WorkGoalStore } = require("./work-goal-store");
+const { WorkGoalOrchestrator } = require("./work-goal-orchestrator");
+const { isPlainObject, validateGoalTrigger, normalizeGoalSpec, DEFAULT_LIMITS } = require("../../shared/harness-contracts");
+const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
+const { resolveTaskProfile } = require("../../shared/task-profile-router");
+
+const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone"]);
+const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
+  planner_unavailable: "planner", planner_error: "planner", observation_error: "browser_observation",
+  context_error: "context_build", no_progress: "action_progress", budget_exhausted: "budget",
+  child_plan_failed: "child_plan", message_ack_failed: "message_ack",
+  send_message_failed: "message_delivery", routine_step_failed: "routine_step",
+});
 
 // Two complete Electron task surfaces (visible + fixed hidden renderer) were
 // measured at a 590,888,960-byte increment with 50ms polling; reserve the
 // rounded-up per-task half plus margin. Planner subtree reserve is added
 // dynamically from the measured live worker high-water mark below.
-const MEASURED_BROWSER_TASK_RESERVE_BYTES = 370_000_000;
 
 class TaskHostError extends Error {
   constructor(code, message) {
@@ -64,7 +79,10 @@ class TaskHost {
     memoryStore,
     settingsStore,
     credentialVault,
+    workGoalStore,
+    workGoalOrchestrator,
     routineReadOnlyBatching = true,
+    scheduler: schedulerOptions = {},
   } = {}) {
     if (!storageRoot) throw new TaskHostError("invalid_config", "storageRoot is required");
     if (typeof makeBrowser !== "function") throw new TaskHostError("invalid_config", "makeBrowser is required");
@@ -89,6 +107,18 @@ class TaskHost {
     this._memoryStore = memoryStore || null;
     this._settingsStore = settingsStore || null;
     this._credentialVault = credentialVault || null;
+    this._workGoalStore = workGoalStore || new WorkGoalStore({ storageRoot, now });
+    this._workGoalOrchestrator = workGoalOrchestrator || new WorkGoalOrchestrator({
+      storageRoot,
+      store: this._workGoalStore,
+      taskStoreClass: TaskStore,
+      getOpenTaskStore: (taskId) => this._active.get(taskId)?.store || null,
+    });
+    this._workGoalReady = null;
+    // Serialize the short cross-store transaction that reserves a Goal slot,
+    // creates/binds its Task journal, and records the continuation with Goal
+    // lifecycle changes. Do not hold this gate while a Task is running.
+    this._workGoalAdmissionChain = Promise.resolve();
     this._routineStore = new RoutineStore({ storageRoot });
     if (executionMode !== "sequential" && executionMode !== "parallel") throw new TaskHostError("invalid_config", "executionMode must be sequential or parallel");
     this._executionMode = executionMode;
@@ -97,12 +127,17 @@ class TaskHost {
     this._parallelTaskReserveBytes = parallelTaskReserveBytes;
     this._queue = new TaskQueue({ storageRoot });
     this._queueReady = null;
-    this._queueRecoveredBlocked = false;
     this._queueTransition = Promise.resolve();
     this._listeners = new Set();
     // taskId -> {store, controller, browser, planner}
     this._active = new Map();
     this._pendingAttachments = new Set();
+    this._storeGate = Promise.resolve();
+    this._triggeredRuns = new Map();
+    this._schedulerOptions = schedulerOptions;
+    this._scheduleStore = null;
+    this._scheduler = null;
+    this._schedulerStarting = null;
     this._closePromise = null;
     // All top-level reservations use the same ledger as child agents. Built
     // lazily (see
@@ -110,10 +145,19 @@ class TaskHost {
     // TaskController's own pressure check (no canAdmitTask) never trips
     // ResourceAdmission's stricter constructor requirements.
     this._resourceAdmission = null;
-    // taskId -> leaseId. A lease is required before a task builds resources.
-    this._taskLeases = new Map();
     this._runMemoryPolicies = new Map();
-    this._admissionChain = Promise.resolve();
+    // Admission (parallel cap, memory reserve, lease ledger) lives behind the
+    // coordinator seam; a lease is required before a task builds resources.
+    this._coordinator = new CoordinatorCore({
+      queue: this._queue,
+      ensureQueue: () => this._ensureQueue(),
+      getResourceAdmission: () => this._ensureResourceAdmission(),
+      getRunMemoryPolicy: (taskId) => this._getRunMemoryPolicy(taskId),
+      getExternalProcessHighWaterBytes: (kind) => this._memoryMonitor?.getExternalProcessHighWaterBytes?.(kind),
+      executionMode: this._executionMode,
+      maxParallelTasks: this._maxParallelTasks,
+      parallelTaskReserveBytes: this._parallelTaskReserveBytes,
+    });
     // Task 3: parent<->child linkage/lifecycle authority, shared across every
     // task this host manages (a child's own coordination never depends on
     // which task happens to be active in this._active).
@@ -192,16 +236,16 @@ class TaskHost {
     return this._resourceAdmission;
   }
 
-  async _releaseTaskLease(taskId) {
-    const leaseId = this._taskLeases.get(taskId);
-    if (!leaseId) return;
-    await this._resourceAdmission?.release(leaseId);
-    this._taskLeases.delete(taskId);
-  }
-
-  _attach(store, routine = null, harnessProfileOverride) {
-    if (this._ensureResourceAdmission() && !this._taskLeases.has(store.taskId)) {
+  _attach(store, routine = null) {
+    if (this._ensureResourceAdmission() && !this._coordinator.hasLease(store.taskId)) {
       throw new TaskHostError("memory_lease_required", "top-level task requires a memory lease before creating resources");
+    }
+    const taskProfile = store.taskProfile ?? null;
+    if (taskProfile?.capability.id === "routine" && !routine) {
+      throw new TaskHostError("profile_routine_pin_missing", "profile-selected Routine task has no validated pinned definition");
+    }
+    if (taskProfile && (taskProfile.capability.id === "routine") !== !!routine) {
+      throw new TaskHostError("profile_capability_mismatch", "task profile capability does not match its pinned execution source");
     }
     const runPolicy = this._runMemoryPolicies.get(store.taskId);
     if (!runPolicy) throw new TaskHostError("memory_policy_missing", "top-level task policy must be captured before attachment");
@@ -220,14 +264,9 @@ class TaskHost {
     // Profile selection is a host operation (design doc "Profile selection"):
     // TaskHost is the sole authority that decides harnessProfile, and passes
     // it in rather than letting the controller (or the task's own text)
-    // infer it independently. An explicit override (createTask()'s own
-    // caller, never the model) beats the deterministic isRoutine default;
-    // TaskController itself gives a durably checkpointed value priority
-    // over either, so a resumeSavedTask() reattach (which never passes an
-    // override here) still recovers the profile chosen at creation.
-    const harnessProfile = harnessProfileOverride !== undefined
-      ? validateHarnessProfile(harnessProfileOverride)
-      : selectHarnessProfile({ isRoutine: !!routine });
+    // infer it independently. The resolved durable task profile is canonical;
+    // legacy tasks without one retain the deterministic routine default.
+    const harnessProfile = taskProfile?.duration.id || selectHarnessProfile({ isRoutine: !!routine });
     const controller = new TaskController({
       store,
       planner,
@@ -250,13 +289,42 @@ class TaskHost {
       sendMessage: (validated) => this._childCoordinator.handleSendMessage(store.taskId, validated),
       listPendingMessages: () => this._childCoordinator.listPendingMessages(store.taskId),
       recordMessagesConsumed: (ids, plannerCall) => this._childCoordinator.recordMessagesConsumed(store.taskId, ids, plannerCall),
+      ...(taskProfile?.workGoalBinding ? {
+        readWorkGoalContext: (binding) => {
+          const persisted = taskProfile.workGoalBinding;
+          if (binding.goalId !== persisted.goalId || binding.goalVersion !== persisted.goalVersion ||
+              binding.reservationId !== persisted.reservationId || binding.taskId !== store.taskId) {
+            throw new TaskHostError("invalid_work_goal_binding", "planner context request differs from the Task's durable Work Goal binding");
+          }
+          return this._workGoalOrchestrator.getTaskContext({
+            ...persisted,
+            taskId: store.taskId,
+            workGoalBinding: persisted,
+          });
+        },
+      } : {}),
       ...(routine ? { routineRunner: routine.runner, routineRun: routine.run } : {}),
     });
-    const entry = { store, controller, browser, planner, snapshot: controller.getSnapshot() };
+    const entry = { store, controller, browser, planner, routinePinned: !!routine, snapshot: controller.getSnapshot() };
     this._active.set(store.taskId, entry);
     entry.unsubscribeController = controller.onChange((snapshot) => {
       entry.snapshot = snapshot;
       this._emit(store.taskId, snapshot, { goal: controller.getGoal(), browser: browser.getBrowserSnapshot?.() });
+      const binding = store.taskProfile?.workGoalBinding;
+      const phase = WORK_GOAL_BLOCKER_PHASE[snapshot.pauseReason];
+      if (binding && snapshot.state === "paused") {
+        // Controller pause transitions checkpoint before notifying listeners.
+        // Blocker accounting is durable but best-effort: it never interferes
+        // with pausing the actual Task.
+        const operation = phase
+          ? () => this._workGoalOrchestrator.observeBlocker(binding.goalId, binding.goalVersion, {
+            taskId: store.taskId, reasonCode: snapshot.pauseReason, phase, taskStore: store,
+          })
+          : () => this._workGoalOrchestrator.resolveContinuation(binding.goalId, binding.goalVersion, {
+            taskId: store.taskId, taskStore: store, taskState: "paused",
+          });
+        this._withWorkGoalAdmission(operation).catch(() => {});
+      }
       if (snapshot.state === "completed" || snapshot.state === "stopped") this._recordTerminal(store.taskId, snapshot.state);
     });
     entry.unsubscribeBrowser = browser.onChange?.((snapshot) => {
@@ -297,15 +365,118 @@ class TaskHost {
     return entry;
   }
 
-  // Harness v2 Phase 3: harnessProfile is an optional, explicit host/UI
-  // choice (design doc "Profile selection": "Explicit user/host selection
-  // is allowed"). goalInput itself never carries it -- it goes through
-  // TaskStore.create() unchanged and stays validated by GoalSpec's own
-  // closed schema, so this can never smuggle a new field into the goal
-  // file. Omitted, it falls back to today's deterministic default exactly
-  // as before this phase.
-  createTask(goalInput, { harnessProfile } = {}) {
-    return this._createNewTask(goalInput, null, null, harnessProfile);
+  createTask(goalInput, selectors = {}) {
+    return this._createTaskWithProfile(goalInput, selectors);
+  }
+
+  async _ensureWorkGoalReady() {
+    if (this._workGoalReady) return this._workGoalReady;
+    this._workGoalReady = (async () => {
+      await this._workGoalStore.load();
+      await this._workGoalOrchestrator.reconcileAll?.();
+    })();
+    try { await this._workGoalReady; }
+    catch (error) { this._workGoalReady = null; throw error; }
+  }
+
+  _withWorkGoalAdmission(operation) {
+    const result = this._workGoalAdmissionChain.then(operation);
+    this._workGoalAdmissionChain = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async startWorkGoal(input) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.startWorkGoal(input));
+  }
+
+  async getActiveWorkGoal() {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._workGoalOrchestrator.getActiveWorkGoal();
+  }
+
+  async listWorkGoalHistory(options) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._workGoalOrchestrator.listWorkGoalHistory(options);
+  }
+
+  async amendWorkGoal(expectedVersion, nextSpec) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.amendWorkGoal(expectedVersion, nextSpec));
+  }
+
+  async pauseWorkGoal(goalId, expectedVersion) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.pauseWorkGoal(goalId, expectedVersion));
+  }
+
+  async resumeWorkGoal(goalId, expectedVersion) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.resumeWorkGoal(goalId, expectedVersion));
+  }
+
+  async completeWorkGoal(goalId, expectedVersion) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.completeWorkGoal(goalId, expectedVersion));
+  }
+
+  async archiveWorkGoal(goalId, expectedVersion) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.archiveWorkGoal(goalId, expectedVersion));
+  }
+
+  async recordWorkGoalProgress(goalId, expectedVersion, evidenceRefs) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._workGoalOrchestrator.recordWorkGoalProgress(goalId, expectedVersion, evidenceRefs);
+  }
+
+  async verifyWorkGoalCriterion(goalId, expectedVersion, criterionId) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._workGoalOrchestrator.verifyWorkGoalCriterion(goalId, expectedVersion, criterionId);
+  }
+
+  async getWorkGoalRecoveryStatus(goalId, expectedVersion) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.getWorkGoalRecoveryStatus(goalId, expectedVersion));
+  }
+
+  async repairWorkGoalReservation(goalId, expectedVersion, reservationId) {
+    this._assertOpen();
+    await this._ensureWorkGoalReady();
+    return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.repairMissingTaskReservation(goalId, expectedVersion, reservationId));
+  }
+
+  _createTaskWithProfile(goalInput, selectors = {}) {
+    this._assertOpen();
+    if (!isPlainObject(selectors) || Object.keys(selectors).some((key) => !TASK_PROFILE_SELECTOR_FIELDS.includes(key)) ||
+        (Object.hasOwn(selectors, "standalone") && typeof selectors.standalone !== "boolean")) {
+      return Promise.reject(new TaskHostError("invalid_selector", "task profile selectors contain unknown fields"));
+    }
+    let stableGoalInput;
+    try { stableGoalInput = structuredClone(goalInput); }
+    catch (error) { return Promise.reject(new TaskHostError("invalid_goal", `goalInput cannot be snapshotted: ${error.message}`)); }
+    let resolvedProfile;
+    try {
+      resolvedProfile = resolveTaskProfile({
+        goalInput: stableGoalInput,
+        requestedDurationProfile: Object.hasOwn(selectors, "requestedDurationProfile") ? selectors.requestedDurationProfile : "auto",
+        requestedCapabilityProfile: Object.hasOwn(selectors, "requestedCapabilityProfile") ? selectors.requestedCapabilityProfile : null,
+      });
+    } catch (error) {
+      return Promise.reject(new TaskHostError(error.code || "profile_resolution_failed", error.message));
+    }
+    return this._createNewTask(stableGoalInput, null, null, resolvedProfile, selectors.standalone === true);
   }
 
   async listRoutines() {
@@ -325,14 +496,64 @@ class TaskHost {
 
   async deleteRoutine(routineId) {
     this._assertOpen();
-    return this._routineStore.delete(routineId);
+    const result = await this._routineStore.delete(routineId);
+    await this.getScheduleStore().disableForRoutine(routineId, "routine_deleted");
+    return result;
   }
 
-  async runRoutine(routineId, revision) {
+  getScheduleStore() {
+    if (!this._scheduleStore) {
+      this._scheduleStore = new ScheduleStore({ storageRoot: this._storageRoot, now: this._schedulerOptions.now });
+    }
+    return this._scheduleStore;
+  }
+
+  // Starts the routine scheduler over this host's storage root. The scheduler
+  // only calls runRoutine/listTasks/stopTask, so scheduled runs go through the
+  // same queue, admission and approval path as manual ones.
+  async startScheduler() {
     this._assertOpen();
+    if (!this._schedulerStarting) {
+      this._schedulerStarting = (async () => {
+        await this._ensureQueue();
+        const scheduler = new Scheduler({ ...this._schedulerOptions, host: this, store: this.getScheduleStore() });
+        this._scheduler = scheduler;
+        await scheduler.start();
+        return scheduler;
+      })();
+      this._schedulerStarting.catch(() => { this._schedulerStarting = null; this._scheduler = null; });
+    }
+    return this._schedulerStarting;
+  }
+
+  async runRoutine(routineId, revision, options = {}) {
+    this._assertOpen();
+    if (!isPlainObject(options) || Object.keys(options).some((key) => !["trigger", "requestedDurationProfile"].includes(key))) {
+      throw new TaskHostError("invalid_selector", "routine options contain unknown fields");
+    }
+    const { trigger, requestedDurationProfile = "auto" } = options;
     if (!Number.isInteger(revision) || revision < 1) {
       throw new TaskHostError("invalid_revision", "runRoutine requires an exact positive revision");
     }
+    if (trigger === undefined) return this._runRoutineNow(routineId, revision, undefined, requestedDurationProfile);
+    validateGoalTrigger(trigger, "trigger");
+    // Idempotent per occurrence: a repeat of the same scheduled occurrence
+    // returns the task it already produced instead of creating a second one.
+    const key = `${trigger.scheduleId}@${trigger.occurrenceAt}`;
+    const inflight = this._triggeredRuns.get(key);
+    if (inflight) return inflight;
+    const run = (async () => {
+      await this._ensureQueue();
+      const existing = (await this._listTaskSummaries()).find((task) => task.routinePinned && task.trigger
+        && task.trigger.scheduleId === trigger.scheduleId && task.trigger.occurrenceAt === trigger.occurrenceAt);
+      if (existing) return { taskId: existing.taskId, snapshot: { state: existing.state, pauseReason: existing.pauseReason }, existing: true };
+      return this._runRoutineNow(routineId, revision, trigger, requestedDurationProfile);
+    })().finally(() => this._triggeredRuns.delete(key));
+    this._triggeredRuns.set(key, run);
+    return run;
+  }
+
+  async _runRoutineNow(routineId, revision, trigger, requestedDurationProfile = "auto") {
     // The current-index read enforces the tombstone: an explicit get of an
     // old revision is allowed for recovery, but deletion forbids new runs.
     await this._routineStore.get(routineId);
@@ -340,6 +561,7 @@ class TaskHost {
     const goal = {
       originalRequest: `Run saved routine: ${definition.name}`,
       criteria: [{ id: "routine-complete", text: "Confirm the saved routine completed", required: true, verification: "user" }],
+      ...(trigger ? { trigger } : {}),
     };
     const run = {
       routineId: definition.routineId,
@@ -347,7 +569,22 @@ class TaskHost {
       digest: definition.digest,
       cursor: 0,
     };
-    return this._createNewTask(goal, run, definition);
+    let resolvedProfile;
+    try {
+      resolvedProfile = resolveTaskProfile({
+        goalInput: goal,
+        requestedDurationProfile,
+        routineMetadata: {
+          routineId: definition.routineId,
+          revision: definition.revision,
+          digest: definition.digest,
+          stepCount: definition.steps.length,
+        },
+      });
+    } catch (error) {
+      throw new TaskHostError(error.code || "profile_resolution_failed", error.message);
+    }
+    return this._createNewTask(goal, run, definition, resolvedProfile);
   }
 
   async _resolveRoutineForStore(store) {
@@ -375,65 +612,110 @@ class TaskHost {
     const cursor = recovery ? recovery.cursor : pin.cursor;
     let runner;
     try {
-      runner = this._makeRoutineRunner({ definition, cursor });
+      runner = this._makeRoutineRunner({
+        definition,
+        cursor,
+        durationProfile: store.taskProfile?.duration?.id || "short",
+      });
     } catch {
       throw new TaskHostError("routine_cursor_mismatch", "routine cursor is out of range");
     }
     return { runner, run: { ...pin, cursor } };
   }
 
-  // A routine task is always harnessProfile "short" (selectHarnessProfile's
-  // one routing rule), so this is the runner's single construction site --
-  // both callers below just supply the definition/cursor that differ.
-  _makeRoutineRunner({ definition, cursor }) {
+  // The runner's proposal cap follows the independently selected duration
+  // profile, both for a new routine and for recovery from its pinned store.
+  _makeRoutineRunner({ definition, cursor, durationProfile = "short" }) {
     return new RoutineRunner({
       definition,
       cursor,
       batchReadOnlySteps: this._routineBatchReadOnlySteps,
-      maxBatchActions: maxActionsPerProposal("short"),
+      maxBatchActions: maxActionsPerProposal(durationProfile),
     });
   }
 
-  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, harnessProfileOverride) {
+  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null, standalone = false) {
     this._assertOpen();
+    if (!resolvedProfile) throw new TaskHostError("profile_required", "new tasks must have a host-resolved profile before storage or admission");
     return this._trackAttachment(async () => {
       await this._ensureQueue();
+      await this._ensureWorkGoalReady();
       const selected = this._settingsStore
         ? await this._settingsStore.getMemoryPolicySelection()
         : { mode: "budgeted", auditEventId: null, actor: null, at: null };
-      const store = await TaskStore.create(goalInput, { storageRoot: this._storageRoot });
-      try {
-        // An explicit profile override must survive every future restart
-        // (TaskController's constructor gives a checkpointed harnessProfile
-        // priority over _attach()'s stateless isRoutine-based default), so
-        // it needs an upfront checkpoint exactly like a routine's pinned
-        // revision already gets -- otherwise a crash before the task's own
-        // first natural checkpoint would silently lose the explicit choice.
-        // The common (no override, no routine) case is unchanged: no extra
-        // checkpoint, same as before this phase.
-        if (routineRun || harnessProfileOverride !== undefined) {
-          await store.checkpoint({
-            task: { state: "idle", pauseReason: null },
-            ...(harnessProfileOverride !== undefined ? { harnessProfile: validateHarnessProfile(harnessProfileOverride) } : {}),
-            ...(routineRun ? { routineRun } : {}),
-          });
+      let taskId;
+      try { taskId = crypto.randomUUID(); }
+      catch (error) { throw new TaskHostError("task_id_unavailable", error.message); }
+      const { store, workGoalBinding } = await this._withWorkGoalAdmission(async () => {
+        let binding = null;
+        let taskGoalInput = structuredClone(goalInput);
+        const activeGoal = standalone ? null : await this._workGoalOrchestrator.getActiveWorkGoal();
+        let reservation = null;
+        if (activeGoal) {
+          if (activeGoal.status !== "active") {
+            throw new TaskHostError("work_goal_not_active", "resume or archive the current Work Goal, or explicitly create a standalone Task");
+          }
+          const currentContext = await this._workGoalOrchestrator.getContext(activeGoal.goalId, activeGoal.spec.version);
+          let normalized;
+          try { normalized = normalizeGoalSpec(taskGoalInput, { taskId, goalVersion: 1, createdAt: new Date().toISOString() }); }
+          catch (error) { throw new TaskHostError(error.code || "invalid_goal", error.message); }
+          const effectiveLimits = {};
+          for (const axis of Object.keys(DEFAULT_LIMITS)) {
+            const aggregate = currentContext.remainingBudget[axis];
+            effectiveLimits[axis] = Math.min(normalized.limits[axis], aggregate === undefined ? normalized.limits[axis] : aggregate);
+            if (!Number.isSafeInteger(effectiveLimits[axis]) || effectiveLimits[axis] <= 0) {
+              throw new TaskHostError("goal_budget_exhausted", `Work Goal has no remaining ${axis} allowance`);
+            }
+          }
+          taskGoalInput.limits = effectiveLimits;
+          reservation = {
+            taskId,
+            limits: { maxTasks: 1, ...effectiveLimits },
+            reservationId: crypto.randomUUID(),
+          };
+          binding = {
+            goalId: activeGoal.goalId,
+            goalVersion: activeGoal.spec.version,
+            reservationId: reservation.reservationId,
+          };
         }
-        await store.append({ type: "note", payload: {
-          kind: "memory_policy_selected",
-          mode: selected.mode,
-          auditEventId: selected.auditEventId,
-          actor: selected.actor,
-          selectedAt: selected.at,
-        } });
-      } catch (error) {
-        await store.close();
-        throw error;
-      }
+        const taskStore = await TaskStore.create(taskGoalInput, {
+          storageRoot: this._storageRoot,
+          taskId,
+          resolvedProfile,
+          ...(binding ? { workGoalBinding: binding } : {}),
+        });
+        try {
+          if (reservation && binding) {
+            // Create the immutable Task profile before consuming project
+            // budget. If TaskStore.create fails before it can produce a
+            // recoverable journal, no reservation is left stranded.
+            await this._workGoalOrchestrator.reserveTask(binding.goalId, binding.goalVersion, reservation);
+            await this._workGoalOrchestrator.linkTask(binding.goalId, binding.goalVersion, {
+              reservationId: reservation.reservationId, taskId,
+            });
+          }
+          if (routineRun) await taskStore.checkpoint({ task: { state: "idle", pauseReason: null }, routineRun });
+          await taskStore.append({ type: "note", payload: {
+            kind: "memory_policy_selected",
+            mode: selected.mode,
+            auditEventId: selected.auditEventId,
+            actor: selected.actor,
+            selectedAt: selected.at,
+          } });
+          if (this._closePromise) throw new TaskHostError("host_closed", "task host is closing or closed");
+          if (binding) {
+            await this._workGoalOrchestrator.recordContinuation(binding.goalId, binding.goalVersion, {
+              taskId, origin: goalInput?.trigger ? "scheduler" : routineRun ? "routine" : "user",
+            });
+          }
+        } catch (error) {
+          await taskStore.close();
+          throw error;
+        }
+        return { store: taskStore, workGoalBinding: binding };
+      });
       this._runMemoryPolicies.set(store.taskId, { mode: selected.mode, auditEventId: selected.auditEventId });
-      if (this._closePromise) {
-        await store.close();
-        throw new TaskHostError("host_closed", "task host is closing or closed");
-      }
       // Validate the exact pinned revision while the task is still not
       // enqueued/admitted. A malformed or missing routine must never reserve
       // a browser lease and then strand an active queue entry.
@@ -445,7 +727,11 @@ class TaskHost {
             throw new TaskHostError("routine_cursor_mismatch", "new routine task lost its validated immutable revision");
           }
           routine = {
-            runner: this._makeRoutineRunner({ definition: pinnedRoutineDefinition, cursor: routineRun.cursor }),
+            runner: this._makeRoutineRunner({
+              definition: pinnedRoutineDefinition,
+              cursor: routineRun.cursor,
+              durationProfile: resolvedProfile.duration.id,
+            }),
             run: { ...routineRun },
           };
         }
@@ -461,7 +747,7 @@ class TaskHost {
         await store.close();
         return { taskId: store.taskId, snapshot: { state: "queued", queuePosition: this._queue.pendingIds().indexOf(store.taskId) + 1 }, goal };
       }
-      const { controller } = this._attach(store, routine, harnessProfileOverride);
+      const { controller } = this._attach(store, routine);
       const started = controller.start();
       return { store, controller, started };
     }).then(async (result) => {
@@ -474,62 +760,17 @@ class TaskHost {
   async _ensureQueue() {
     if (this._queueReady) return this._queueReady;
     this._queueReady = (async () => {
+      await this._ensureWorkGoalReady();
       await this._queue.load();
       const summaries = await this._listTaskSummaries();
       await this._queue.reconcile(summaries);
-      this._queueRecoveredBlocked = this._queue.pendingIds().length > 0;
+      this._coordinator.recoveredBlocked = this._queue.pendingIds().length > 0;
     })();
     try { await this._queueReady; } catch (error) { this._queueReady = null; throw error; }
   }
 
-  async _admitNext(options = {}) {
-    const operation = this._admissionChain.then(() => this._admitNextLocked(options));
-    this._admissionChain = operation.then(() => {}, () => {});
-    return operation;
-  }
-
-  async _admitNextLocked({ recoveredHead = false } = {}) {
-    await this._ensureQueue();
-    if (this._queueRecoveredBlocked && !recoveredHead) return null;
-    const candidateId = this._queue.pendingIds()[0];
-    if (!candidateId) return null;
-    const activeCount = this._queue.activeIds().length;
-    const maxActive = this._executionMode === "parallel" ? this._maxParallelTasks : 1;
-    if (activeCount >= maxActive) return null;
-    const selected = await this._getRunMemoryPolicy(candidateId);
-    const resourceAdmission = this._ensureResourceAdmission();
-    // Monitor-less injected hosts retain sequential behavior. Production
-    // supplies MemoryMonitor and always takes this shared lease path.
-    if (!resourceAdmission) return this._queue.admitNext({ maxActive: 1 });
-    let reserveBytes = this._parallelTaskReserveBytes;
-    if (reserveBytes === undefined) {
-      const plannerHighWater = this._memoryMonitor.getExternalProcessHighWaterBytes?.("planner");
-      // The first task bootstraps the planner measurement in a single slot.
-      // Any additional budgeted task needs the measured planner increment.
-      if (activeCount > 0 && selected.mode === "budgeted" && (!Number.isFinite(plannerHighWater) || plannerHighWater <= 0)) return null;
-      reserveBytes = MEASURED_BROWSER_TASK_RESERVE_BYTES +
-        (Number.isFinite(plannerHighWater) && plannerHighWater > 0 ? Math.ceil(plannerHighWater * 1.25) : 0);
-    }
-    if (!Number.isFinite(reserveBytes) || reserveBytes <= 0) return null;
-    const admission = await resourceAdmission.acquire({
-      ownerId: candidateId,
-      reserveBytes,
-      maxAgeMs: 7500,
-      parentPolicy: { mode: selected.mode, parentTaskId: candidateId, requestedAgentCount: 1 },
-    });
-    if (!admission.admitted) return null;
-    try {
-      const admittedId = await this._queue.admitNext({ maxActive });
-      if (admittedId === candidateId) {
-        this._taskLeases.set(candidateId, admission.leaseId);
-        return admittedId;
-      }
-      await resourceAdmission.release(admission.leaseId);
-      return null;
-    } catch (error) {
-      await resourceAdmission.release(admission.leaseId);
-      throw error;
-    }
+  _admitNext(options = {}) {
+    return this._coordinator.admitNext(options);
   }
 
   onMemorySample() {
@@ -553,14 +794,25 @@ class TaskHost {
       await this._queue.complete(taskId, state);
       const entry = this._active.get(taskId);
       if (entry) {
+        const binding = entry.store.taskProfile?.workGoalBinding;
+        if (binding) {
+          await this._withWorkGoalAdmission(() => this._workGoalOrchestrator.resolveContinuation(
+            binding.goalId, binding.goalVersion, { taskId, taskStore: entry.store, taskState: state },
+          )).catch((error) => {
+            this._emit(taskId, entry.snapshot, { error: error.code || "work_goal_continuation_resolution_failed" });
+          });
+          await this._workGoalOrchestrator.reconcileTask(taskId, { taskStore: entry.store }).catch((error) => {
+            this._emit(taskId, entry.snapshot, { error: error.code || "work_goal_reconciliation_failed" });
+          });
+        }
         this._unsubscribe(entry);
         this._active.delete(taskId);
         this._childCoordinator.unregisterStore(taskId);
         const cleanup = await Promise.allSettled([entry.planner.close?.(), entry.browser.dispose?.(), entry.store.close()]);
-        if (cleanup.every((result) => result.status === "fulfilled")) await this._releaseTaskLease(taskId);
+        if (cleanup.every((result) => result.status === "fulfilled")) await this._coordinator.releaseLease(taskId);
         else this._emit(taskId, entry.snapshot, { error: "resource_teardown_failed" });
       } else {
-        await this._releaseTaskLease(taskId);
+        await this._coordinator.releaseLease(taskId);
       }
       this._runMemoryPolicies.delete(taskId);
       if (this._closePromise) return;
@@ -570,9 +822,18 @@ class TaskHost {
     this._queueTransition = transition.catch(() => {});
   }
 
+  // listTasks() peeks stores under their writer lock. In-process peeks and the
+  // load that attaches a queued task go through one gate so they can never
+  // collide on that lock (a collision left an admitted task queued forever).
+  _withStoreGate(fn) {
+    const run = this._storeGate.then(fn);
+    this._storeGate = run.then(() => {}, () => {});
+    return run;
+  }
+
   async _startQueued(taskId) {
     return this._trackAttachment(async () => {
-      const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
+      const store = await this._withStoreGate(() => TaskStore.load(taskId, { storageRoot: this._storageRoot }));
       if (this._closePromise) { await store.close(); return; }
       try {
         const routine = await this._resolveRoutineForStore(store);
@@ -608,6 +869,8 @@ class TaskHost {
           state: active.controller.getSnapshot().state,
           pauseReason: active.controller.getSnapshot().pauseReason,
           active: true,
+          trigger: active.controller.getGoal().trigger ?? null,
+          routinePinned: active.routinePinned === true,
         });
         continue;
       }
@@ -615,13 +878,49 @@ class TaskHost {
       // controller/browser/planner for every saved task on every listTasks()
       // call (that would spawn a WebContentsView/worker per saved task just
       // to list them).
-      let store;
-      try {
-        store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
-      } catch (error) {
-        // An in-flight attachment (a queued task being started) holds the
-        // store's writer lock; wait for it, then report the attached task.
-        if (error?.code !== "writer_conflict" || this._pendingAttachments.size === 0) throw error;
+      const peeked = await this._withStoreGate(async () => {
+        let store;
+        try {
+          store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
+        } catch (error) {
+          return { error };
+        }
+        try {
+          // Same fix as task-controller.js's constructor (2026-09-27 follow-up):
+          // a task that already reached completed/stopped was checkpointed
+          // synchronously the instant it got there, so that checkpoint is
+          // authoritative over recoveryReason -- otherwise a finished task is
+          // peeked as plain "paused"/"recovered", indistinguishable from one
+          // merely interrupted mid-flight.
+          const checkpointedTask = store.lastCheckpoint && store.lastCheckpoint.payload && store.lastCheckpoint.payload.task;
+          const isTerminal = checkpointedTask && (checkpointedTask.state === "completed" || checkpointedTask.state === "stopped");
+          return {
+            summary: {
+              taskId,
+              originalRequest: store.getGoal().originalRequest,
+              createdAt: store.getGoal().createdAt,
+              state: isTerminal ? checkpointedTask.state : store.recoveryReason === "execution_uncertain" ? "paused" : store.recoveryReason === "recovered" ? "paused" : "idle",
+              pauseReason: isTerminal ? (checkpointedTask.pauseReason ?? null) : store.recoveryReason === "created" ? null : store.recoveryReason,
+              active: false,
+              trigger: store.getGoal().trigger ?? null,
+              routinePinned: !!store.lastCheckpoint?.payload?.routineRun,
+            },
+          };
+        } finally {
+          await store.close();
+        }
+      });
+      if (peeked.error) {
+        const error = peeked.error;
+        // A profile-required store can be left with only goal_created if the
+        // second durable append failed during creation. It is intentionally
+        // non-runnable, but it must not make unrelated valid tasks invisible
+        // or prevent TaskHost queue recovery after restart.
+        if (error?.code === "profile_incomplete") continue;
+        // An in-flight or just-finished attachment (a queued task being
+        // started) holds the store's writer lock; wait for it, then report the
+        // attached task.
+        if (error?.code !== "writer_conflict") throw error;
         await Promise.allSettled([...this._pendingAttachments]);
         const attached = this._active.get(taskId);
         if (!attached) throw error;
@@ -632,26 +931,12 @@ class TaskHost {
           state: attached.controller.getSnapshot().state,
           pauseReason: attached.controller.getSnapshot().pauseReason,
           active: true,
+          trigger: attached.controller.getGoal().trigger ?? null,
+          routinePinned: attached.routinePinned === true,
         });
         continue;
       }
-      // Same fix as task-controller.js's constructor (2026-09-27 follow-up):
-      // a task that already reached completed/stopped was checkpointed
-      // synchronously the instant it got there, so that checkpoint is
-      // authoritative over recoveryReason -- otherwise a finished task is
-      // peeked as plain "paused"/"recovered", indistinguishable from one
-      // merely interrupted mid-flight.
-      const checkpointedTask = store.lastCheckpoint && store.lastCheckpoint.payload && store.lastCheckpoint.payload.task;
-      const isTerminal = checkpointedTask && (checkpointedTask.state === "completed" || checkpointedTask.state === "stopped");
-      summaries.push({
-        taskId,
-        originalRequest: store.getGoal().originalRequest,
-        createdAt: store.getGoal().createdAt,
-        state: isTerminal ? checkpointedTask.state : store.recoveryReason === "execution_uncertain" ? "paused" : store.recoveryReason === "recovered" ? "paused" : "idle",
-        pauseReason: isTerminal ? (checkpointedTask.pauseReason ?? null) : store.recoveryReason === "created" ? null : store.recoveryReason,
-        active: false,
-      });
-      await store.close();
+      summaries.push(peeked.summary);
     }
     if (this._queue.isLoaded()) {
       const pending = this._queue.pendingIds();
@@ -674,11 +959,11 @@ class TaskHost {
       try { await this._resolveRoutineForStore(preflight); }
       finally { await preflight.close(); }
     }
-    if (this._queueRecoveredBlocked) {
+    if (this._coordinator.recoveredBlocked) {
       if (this._queue.pendingIds()[0] !== taskId) throw new TaskHostError("queued_behind_other_task", "resume the oldest queued task first");
       const admitted = await this._admitNext({ recoveredHead: true });
       if (admitted !== taskId) throw new TaskHostError("memory_admission_denied", "the queued task is waiting for a measured memory lease");
-      this._queueRecoveredBlocked = false;
+      this._coordinator.recoveredBlocked = false;
     }
     if (this._queue.pendingIds().includes(taskId)) {
       throw new TaskHostError("queued_behind_other_task", "a queued task must wait for its FIFO admission");
@@ -775,18 +1060,12 @@ class TaskHost {
         snapshot: active.controller.getSnapshot(),
         active: true,
         harnessProfile: active.controller.getHarnessProfile(),
+        taskProfile: active.store.taskProfile ?? null,
       };
     }
     const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
-    // Same priority as TaskController's own constructor: a durably
-    // checkpointed harnessProfile (present whenever the task ever ran a
-    // turn, paused, or was created with an explicit override) always wins
-    // over recomputing the stateless isRoutine-based default.
-    const checkpointedHarnessProfile = store.lastCheckpoint?.payload?.harnessProfile;
-    const harnessProfile = checkpointedHarnessProfile !== undefined
-      ? checkpointedHarnessProfile
-      : selectHarnessProfile({ isRoutine: !!store.lastCheckpoint?.payload?.routineRun });
-    const detail = { taskId, goal: store.getGoal(), recoveryReason: store.recoveryReason, active: false, harnessProfile };
+    const harnessProfile = store.taskProfile?.duration.id || store.lastCheckpoint?.payload?.harnessProfile || selectHarnessProfile({ isRoutine: !!store.lastCheckpoint?.payload?.routineRun });
+    const detail = { taskId, goal: store.getGoal(), recoveryReason: store.recoveryReason, active: false, harnessProfile, taskProfile: store.taskProfile ?? null };
     await store.close();
     return detail;
   }
@@ -909,6 +1188,9 @@ class TaskHost {
   close() {
     if (this._closePromise) return this._closePromise;
     this._closePromise = (async () => {
+      // Stop scheduling first so no new occurrence is launched during shutdown.
+      // This never stops or cancels tasks; they are paused below like any other.
+      await this._scheduler?.stop();
       // A create/load that started before close() must either attach before
       // this snapshot (so it gets cleaned up below) or observe the closed
       // state after its await, close its store, and reject. Never let a late
@@ -938,11 +1220,12 @@ class TaskHost {
           if (result.status === "rejected") errors.push(result.reason);
         }
         if (cleanup.every((result) => result.status === "fulfilled")) {
-          try { await this._releaseTaskLease(entry.store.taskId); } catch (error) { errors.push(error); }
+          try { await this._coordinator.releaseLease(entry.store.taskId); } catch (error) { errors.push(error); }
         }
       }));
       this._active.clear();
       this._listeners.clear();
+      await Promise.resolve(this._workGoalStore.close?.()).catch((error) => errors.push(error));
       if (errors.length > 0) {
         throw new AggregateError(errors, "one or more task resources failed to close");
       }

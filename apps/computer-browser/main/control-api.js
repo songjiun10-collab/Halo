@@ -1,6 +1,7 @@
 "use strict";
 
 const { randomUUID } = require("crypto");
+const { performance } = require("node:perf_hooks");
 const { WebContentsView } = require("electron");
 const { clampBrowserBounds } = require("../shared/clamp-bounds");
 const { looksLikeCaptcha } = require("../shared/captcha-heuristics");
@@ -61,7 +62,7 @@ class ControlApi {
     this._WebContentsView = webContentsViewClass;
     this._socketPath = socketPath;
     // Injectable seams for tests only (defaults are the real Unix-socket
-    // client / the real pacing floor / the real clock). Production callers
+    // client / the real pacing floor / metrics clock). Production callers
     // never pass these.
     this._requestDecision = requestDecisionOverride || requestDecision;
     this._minAgentActionIntervalMs =
@@ -75,6 +76,7 @@ class ControlApi {
       typeof maxDomLinksScanned === "number" ? maxDomLinksScanned : MAX_DOM_LINKS_SCANNED;
     this._now = typeof now === "function" ? now : Date.now;
     this._lastAgentActionAt = -Infinity;
+    this._agentActionStartChain = Promise.resolve();
     // Structured latency samples ({kind, ms, outcome, at, ...}) for
     // getMetricsSummary() -- see shared/metrics.js. Never exposed via
     // getSnapshot(); read only through the dedicated method/IPC channel.
@@ -266,23 +268,30 @@ class ControlApi {
   // Pacing floor for agent-initiated (gated) actions -- see
   // MIN_AGENT_ACTION_INTERVAL_MS. The very first agent action is never
   // delayed (_lastAgentActionAt starts at -Infinity); only a second action
-  // arriving too soon after the last one waits out the remainder.
+  // arriving too soon after the last one waits out the remainder. Callers
+  // hold the dispatch-start chain while waiting so requests cannot share a
+  // pacing slot.
   async _paceAgentAction() {
-    const wait = this._minAgentActionIntervalMs - (Date.now() - this._lastAgentActionAt);
-    if (wait > 0) {
-      await new Promise((resolve) => {
+    while (this._lastAgentActionAt !== -Infinity) {
+      const wait = this._minAgentActionIntervalMs - (performance.now() - this._lastAgentActionAt);
+      if (wait <= 0) break;
+      const timerElapsed = await new Promise((resolve) => {
         const timer = setTimeout(() => {
           this._pendingPaceWaiters.delete(wakeEarly);
-          resolve();
+          resolve(true);
         }, wait);
         const wakeEarly = () => {
           clearTimeout(timer);
-          resolve();
+          resolve(false);
         };
         this._pendingPaceWaiters.add(wakeEarly);
       });
+      // setTimeout may run a fraction early. Recheck against the monotonic
+      // deadline so the configured floor is not shortened; an explicit stop
+      // still wakes the wait immediately and is handled by the caller's epoch
+      // check after this method returns.
+      if (!timerElapsed) break;
     }
-    this._lastAgentActionAt = Date.now();
   }
 
   // --- Free actions: direct human intent via UI controls. No approval gate. ---
@@ -480,18 +489,35 @@ class ControlApi {
     return epoch !== this._stopEpoch;
   }
 
-  async _executeAgentAction(execute, epoch) {
+  async _executeAgentAction(execute, epoch, beforeDispatch = () => true) {
     if (this._stopHappenedSince(epoch)) return false;
-    // Invoke synchronously before yielding, then register its promise in the
-    // same turn. That avoids a gap where takeover could finish before a
-    // scheduled-but-not-yet-started action begins running.
+
+    const previousStart = this._agentActionStartChain;
+    let releaseStart;
+    this._agentActionStartChain = new Promise((resolve) => { releaseStart = resolve; });
+    await previousStart;
+
     let execution;
     try {
-      execution = Promise.resolve(execute());
-    } catch (error) {
-      execution = Promise.reject(error);
+      if (this._stopHappenedSince(epoch)) return false;
+      await this._paceAgentAction();
+      if (this._stopHappenedSince(epoch) || !beforeDispatch()) return false;
+
+      // Invoke synchronously before yielding, then register its promise in
+      // the same turn. Record the timestamp after invocation so a subsequent
+      // action's deadline is anchored at the actual dispatch start, not at
+      // pre-dispatch work performed by the caller.
+      try {
+        execution = Promise.resolve(execute());
+      } catch (error) {
+        execution = Promise.reject(error);
+      }
+      this._lastAgentActionAt = performance.now();
+      this._inFlightAgentActions.add(execution);
+    } finally {
+      releaseStart();
     }
-    this._inFlightAgentActions.add(execution);
+
     try {
       await execution;
       return true;
@@ -564,27 +590,34 @@ class ControlApi {
 
   async _applyDecision(descriptor, execute, decision, epoch) {
     if (decision.decision === "allow") {
-      await this._paceAgentAction();
-      // stopTask() can land while this call was asleep in the pacing wait
-      // above -- that's a real await point like any other in this pipeline,
-      // and without this check the action would still dispatch once the
-      // wait elapsed even though stop already ran (see _pendingPaceWaiters).
-      if (this._stopHappenedSince(epoch)) {
-        this._pushTimeline(descriptor.action, `${descriptor.summary} (task stopped while waiting to pace; not dispatched)`, "info");
-        return "cancelled";
+      let skippedOutcome = "cancelled";
+      let executeStart = null;
+      const didExecute = await this._executeAgentAction(execute, epoch, () => {
+        if (this._task.state === "paused") {
+          this._deferredDecision = { descriptor, execute, decision };
+          this._pushTimeline(descriptor.action, `${descriptor.summary} (decision held: task is paused)`, "info");
+          this._emit();
+          skippedOutcome = "paused";
+          return false;
+        }
+        // A review round-trip or pacing wait is a real await point; verify
+        // the approved target is still selected immediately before dispatch.
+        if (descriptor.originTabId != null && descriptor.originTabId !== this._activeTabId) {
+          this._pushTimeline(descriptor.action, `${descriptor.summary} (cancelled: the target tab changed before this action ran)`, "info");
+          skippedOutcome = "tab_changed";
+          return false;
+        }
+        this._pushTimeline(descriptor.action, descriptor.summary, "allow");
+        executeStart = this._now();
+        return true;
+      });
+      if (!didExecute) {
+        if (this._stopHappenedSince(epoch)) {
+          this._pushTimeline(descriptor.action, `${descriptor.summary} (task stopped while waiting to pace; not dispatched)`, "info");
+        }
+        return skippedOutcome;
       }
-      // A REVIEW round-trip or the pacing wait above is a real await point a
-      // human can act during -- if they switched the active tab since this
-      // action was proposed, it must not silently execute() against whatever
-      // tab is active now (see the originTabId comment in startTask()).
-      if (descriptor.originTabId != null && descriptor.originTabId !== this._activeTabId) {
-        this._pushTimeline(descriptor.action, `${descriptor.summary} (cancelled: the target tab changed before this action ran)`, "info");
-        return "tab_changed";
-      }
-      this._pushTimeline(descriptor.action, descriptor.summary, "allow");
-      const executeStart = this._now();
-      const didExecute = await this._executeAgentAction(execute, epoch);
-      if (!didExecute) return "cancelled";
+      if (executeStart === null) return "cancelled";
       this._recordMetric("execute", this._now() - executeStart, { action: descriptor.action });
       // stopTask() can run while execute() itself is in flight (e.g. a real
       // navigate() awaiting loadURL()) -- the decision was legitimately
@@ -952,13 +985,19 @@ class ControlApi {
     this._recordMetric("queue_wait", this._now() - item._createdAtMs, { action: item.action, outcome: "approved" });
     this._pushTimeline(item.action, `${item.summary} (approved by reviewer)`, "allow");
     const epoch = this._stopEpoch;
-    await this._paceAgentAction();
-    if (this._stopHappenedSince(epoch) || this._task.state === "paused") return this.getSnapshot();
-    if (item._originTabId != null && item._originTabId !== this._activeTabId) {
-      this._pushTimeline(item.action, `${item.summary} (cancelled: the target tab changed before this action ran)`, "info");
-    } else {
-      await this._executeAgentAction(item._execute, epoch);
-    }
+    let pausedBeforeDispatch = false;
+    await this._executeAgentAction(item._execute, epoch, () => {
+      if (this._task.state === "paused") {
+        pausedBeforeDispatch = true;
+        return false;
+      }
+      if (item._originTabId != null && item._originTabId !== this._activeTabId) {
+        this._pushTimeline(item.action, `${item.summary} (cancelled: the target tab changed before this action ran)`, "info");
+        return false;
+      }
+      return true;
+    });
+    if (this._stopHappenedSince(epoch) || pausedBeforeDispatch) return this.getSnapshot();
     // Same class of race as startTask()/resumeTask(): stopTask() can run
     // while this execute() is in flight, and this execute() can itself
     // trigger a CAPTCHA-detection auto-pause. stopTask() already cleared

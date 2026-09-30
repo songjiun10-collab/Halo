@@ -25,14 +25,15 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
+const { createElectronTestProfile } = require("./electron-test-profile");
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const ELECTRON_BIN = path.join(APP_ROOT, "node_modules", ".bin", "electron");
 const SCRIPT = path.join(APP_ROOT, "integration", "long-horizon-electron.js");
 
-function runElectronIntegration({ storageRoot, timeoutMs }) {
+function runElectronIntegration({ storageRoot, timeoutMs, profile }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(ELECTRON_BIN, [SCRIPT], {
+    const child = spawn(ELECTRON_BIN, profile.argsFor(SCRIPT), {
       cwd: APP_ROOT,
       env: {
         ...process.env,
@@ -79,6 +80,8 @@ test(
   "real Electron + real Python approver + real JSONL scripted planner: long-horizon goal preservation, no replay, and <1GB memory",
   { timeout: 150000 },
   async (t) => {
+    const profile = await createElectronTestProfile();
+    t.after(() => profile.cleanup());
     let storageRoot;
     try {
       storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-lh-integration-"));
@@ -89,7 +92,7 @@ test(
 
     let result;
     try {
-      result = await runElectronIntegration({ storageRoot, timeoutMs: 140000 });
+      result = await runElectronIntegration({ storageRoot, timeoutMs: 140000, profile });
     } catch (err) {
       // Electron genuinely failing to launch at all (missing binary, no
       // usable session) is an environment limitation, not a harness defect

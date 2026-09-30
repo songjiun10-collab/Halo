@@ -90,6 +90,18 @@ function makeFakeTaskHost() {
     saveRoutine: record("saveRoutine"),
     deleteRoutine: record("deleteRoutine"),
     runRoutine: record("runRoutine"),
+    startWorkGoal: record("startWorkGoal"),
+    getActiveWorkGoal: record("getActiveWorkGoal"),
+    listWorkGoalHistory: record("listWorkGoalHistory"),
+    amendWorkGoal: record("amendWorkGoal"),
+    pauseWorkGoal: record("pauseWorkGoal"),
+    resumeWorkGoal: record("resumeWorkGoal"),
+    completeWorkGoal: record("completeWorkGoal"),
+    archiveWorkGoal: record("archiveWorkGoal"),
+    recordWorkGoalProgress: record("recordWorkGoalProgress"),
+    verifyWorkGoalCriterion: record("verifyWorkGoalCriterion"),
+    getWorkGoalRecoveryStatus: record("getWorkGoalRecoveryStatus"),
+    repairWorkGoalReservation: record("repairWorkGoalReservation"),
     onEvent: (callback) => { listener = callback; return () => { listener = null; }; },
     _emit: (...args) => listener?.(...args),
   };
@@ -161,6 +173,42 @@ test("harness channels dispatch to taskHost for a trusted sender", async () => {
   );
 });
 
+test("trusted createTask IPC forwards the optional host profile selectors unchanged", async () => {
+  const ipcMain = makeFakeIpcMain();
+  const win = makeFakeWin();
+  const taskHost = makeFakeTaskHost();
+  registerIpc(win, makeFakeControlApi(), { ipcMain, taskHost });
+
+  const goal = { originalRequest: "quickly inspect this page" };
+  const selectors = { requestedDurationProfile: "long", requestedCapabilityProfile: "browser" };
+  const result = await ipcMain._invoke("halo:createTask", trustedEvent(win), goal, selectors);
+  assert.deepEqual(result, { ok: "createTask", args: [goal, selectors] });
+});
+
+test("Work Goal lifecycle IPC maps only to trusted host methods", async () => {
+  const ipcMain = makeFakeIpcMain();
+  const win = makeFakeWin();
+  const taskHost = makeFakeTaskHost();
+  registerIpc(win, makeFakeControlApi(), { ipcMain, taskHost });
+  const calls = [
+    ["halo:startWorkGoal", [{ objective: "x" }], "startWorkGoal"],
+    ["halo:getActiveWorkGoal", [], "getActiveWorkGoal"],
+    ["halo:listWorkGoalHistory", [{ limit: 25, cursor: "00000000-0000-4000-8000-000000000001" }], "listWorkGoalHistory"],
+    ["halo:amendWorkGoal", [1, { objective: "y" }], "amendWorkGoal"],
+    ["halo:pauseWorkGoal", ["goal-id", 1], "pauseWorkGoal"],
+    ["halo:resumeWorkGoal", ["goal-id", 1], "resumeWorkGoal"],
+    ["halo:completeWorkGoal", ["goal-id", 1], "completeWorkGoal"],
+    ["halo:archiveWorkGoal", ["goal-id", 1], "archiveWorkGoal"],
+    ["halo:recordWorkGoalProgress", ["goal-id", 1, []], "recordWorkGoalProgress"],
+    ["halo:verifyWorkGoalCriterion", ["goal-id", 1, "criterion"], "verifyWorkGoalCriterion"],
+    ["halo:getWorkGoalRecoveryStatus", ["goal-id", 1], "getWorkGoalRecoveryStatus"],
+    ["halo:repairWorkGoalReservation", ["goal-id", 1, "reservation-id"], "repairWorkGoalReservation"],
+  ];
+  for (const [channel, methodArgs, method] of calls) {
+    assert.deepEqual(await ipcMain._invoke(channel, trustedEvent(win), ...methodArgs), { ok: method, args: methodArgs });
+  }
+});
+
 test("routine channels dispatch exactly five trusted host operations and reject untrusted senders", async () => {
   const ipcMain = makeFakeIpcMain();
   const win = makeFakeWin();
@@ -220,6 +268,18 @@ test("every harness channel rejects a request from an untrusted (non-main-frame)
     ["halo:getTaskBrowser", ["task-1"]],
     ["halo:taskBrowserAction", ["task-1", { type: "back" }]],
     ["halo:setTaskViewport", ["task-1", { x: 1, y: 94, width: 10, height: 10, visible: true }]],
+    ["halo:startWorkGoal", [{ objective: "hi" }]],
+    ["halo:getActiveWorkGoal", []],
+    ["halo:listWorkGoalHistory", [{ limit: 7, cursor: null }]],
+    ["halo:amendWorkGoal", [1, { objective: "new" }]],
+    ["halo:pauseWorkGoal", ["goal-1", 1]],
+    ["halo:resumeWorkGoal", ["goal-1", 1]],
+    ["halo:completeWorkGoal", ["goal-1", 1]],
+    ["halo:archiveWorkGoal", ["goal-1", 1]],
+    ["halo:recordWorkGoalProgress", ["goal-1", 1, []]],
+    ["halo:verifyWorkGoalCriterion", ["goal-1", 1, "c1"]],
+    ["halo:getWorkGoalRecoveryStatus", ["goal-1", 1]],
+    ["halo:repairWorkGoalReservation", ["goal-1", 1, "reservation-1"]],
   ];
 
   for (const [channel, args] of channels) {

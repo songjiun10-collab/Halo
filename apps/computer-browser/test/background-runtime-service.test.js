@@ -131,9 +131,65 @@ test("a TaskHost-surface method is rejected until the calling client has attache
     assert.equal(error.code, "not_attached");
     return true;
   });
+  await assert.rejects(() => client.call("getWorkGoalRecoveryStatus", ["g1", 1]), (error) => {
+    assert.equal(error.code, "not_attached");
+    return true;
+  });
   await client.call("attachClient", "ui-1");
   const tasks = await client.call("listTasks");
   assert.deepEqual(tasks, [{ taskId: "t1", state: "running" }]);
+  await client.close();
+  await service.stopService("test done");
+});
+
+test("routine and work-goal TaskHost methods reach the TaskHost over the background runtime, not just the renderer's direct IPC path", async () => {
+  // main/ipc.js's HARNESS_METHODS exposes listRoutines/getRoutine/saveRoutine/
+  // deleteRoutine/runRoutine and the Work Goal lifecycle/recovery
+  // methods to the renderer. BackgroundRuntimeService's TASK_HOST_METHODS
+  // allowlist is a separate, hand-maintained list guarding the same TaskHost
+  // surface for the out-of-process/background path -- it must not silently
+  // fall behind main/ipc.js's list.
+  const taskHost = makeFakeTaskHost({
+    async listRoutines() { return [{ routineId: "r1" }]; },
+    async getRoutine(routineId, revision) { return { routineId, revision }; },
+    async saveRoutine(input) { return { routineId: "new-routine", ...input }; },
+    async deleteRoutine(routineId) { return { routineId, deleted: true }; },
+    async runRoutine(routineId, revision, options) { return { taskId: "routine-task", routineId, revision, options }; },
+    async startWorkGoal(input) { return { goalId: "g1", ...input }; },
+    async getActiveWorkGoal() { return null; },
+    async listWorkGoalHistory(options) { return { options }; },
+    async amendWorkGoal(expectedVersion, nextSpec) { return { expectedVersion, nextSpec }; },
+    async pauseWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "paused" }; },
+    async resumeWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "active" }; },
+    async completeWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "completed" }; },
+    async archiveWorkGoal(goalId, expectedVersion) { return { goalId, expectedVersion, status: "archived" }; },
+    async recordWorkGoalProgress(goalId, expectedVersion, evidenceRefs) { return { goalId, expectedVersion, evidenceRefs }; },
+    async verifyWorkGoalCriterion(goalId, expectedVersion, criterionId) { return { goalId, expectedVersion, criterionId, verified: true }; },
+    async getWorkGoalRecoveryStatus(goalId, expectedVersion) { return [{ goalId, expectedVersion, status: "held" }]; },
+    async repairWorkGoalReservation(goalId, expectedVersion, reservationId) { return { goalId, expectedVersion, reservationId, status: "cancelled" }; },
+  });
+  const { service, socketPath, capability } = await startService(taskHost);
+  const client = await connectedClient(socketPath, capability, "ui-1");
+  await client.call("attachClient", "ui-1");
+  assert.deepEqual(await client.call("listRoutines"), [{ routineId: "r1" }]);
+  assert.deepEqual(await client.call("getRoutine", ["r1", 2]), { routineId: "r1", revision: 2 });
+  assert.deepEqual(await client.call("saveRoutine", { name: "x" }), { routineId: "new-routine", name: "x" });
+  assert.deepEqual(await client.call("deleteRoutine", "r1"), { routineId: "r1", deleted: true });
+  assert.deepEqual(await client.call("runRoutine", ["r1", 2, { standalone: true }]), { taskId: "routine-task", routineId: "r1", revision: 2, options: { standalone: true } });
+  assert.deepEqual(await client.call("startWorkGoal", { objective: "o" }), { goalId: "g1", objective: "o" });
+  assert.equal(await client.call("getActiveWorkGoal"), null);
+  assert.deepEqual(await client.call("listWorkGoalHistory", { limit: 9, cursor: "00000000-0000-4000-8000-000000000001" }), {
+    options: { limit: 9, cursor: "00000000-0000-4000-8000-000000000001" },
+  });
+  assert.deepEqual(await client.call("amendWorkGoal", [1, { objective: "o2" }]), { expectedVersion: 1, nextSpec: { objective: "o2" } });
+  assert.deepEqual(await client.call("pauseWorkGoal", ["g1", 1]), { goalId: "g1", expectedVersion: 1, status: "paused" });
+  assert.deepEqual(await client.call("resumeWorkGoal", ["g1", 2]), { goalId: "g1", expectedVersion: 2, status: "active" });
+  assert.deepEqual(await client.call("completeWorkGoal", ["g1", 3]), { goalId: "g1", expectedVersion: 3, status: "completed" });
+  assert.deepEqual(await client.call("archiveWorkGoal", ["g1", 4]), { goalId: "g1", expectedVersion: 4, status: "archived" });
+  assert.deepEqual(await client.call("recordWorkGoalProgress", ["g1", 1, ["e1"]]), { goalId: "g1", expectedVersion: 1, evidenceRefs: ["e1"] });
+  assert.deepEqual(await client.call("verifyWorkGoalCriterion", ["g1", 1, "c1"]), { goalId: "g1", expectedVersion: 1, criterionId: "c1", verified: true });
+  assert.deepEqual(await client.call("getWorkGoalRecoveryStatus", ["g1", 1]), [{ goalId: "g1", expectedVersion: 1, status: "held" }]);
+  assert.deepEqual(await client.call("repairWorkGoalReservation", ["g1", 1, "r1"]), { goalId: "g1", expectedVersion: 1, reservationId: "r1", status: "cancelled" });
   await client.close();
   await service.stopService("test done");
 });
@@ -261,7 +317,10 @@ test("getSnapshot() reflects currently attached clients and the TaskHost's own t
 // `taskHost[method](...args)` calls work unchanged. ----
 
 test("BackgroundRuntimeClient.connect() attaches in one step, and its proxied TaskHost methods reach the real TaskHost", async () => {
-  const taskHost = makeFakeTaskHost();
+  const taskHost = makeFakeTaskHost({
+    async getWorkGoalRecoveryStatus(goalId, expectedVersion) { return [{ goalId, expectedVersion, status: "held" }]; },
+    async repairWorkGoalReservation(goalId, expectedVersion, reservationId) { return { goalId, expectedVersion, reservationId, status: "cancelled" }; },
+  });
   const { service, socketPath, capability } = await startService(taskHost);
   const client = new BackgroundRuntimeClient({ socketPath, capability, clientId: "ui-1" });
   await client.connect();
@@ -269,6 +328,8 @@ test("BackgroundRuntimeClient.connect() attaches in one step, and its proxied Ta
   assert.deepEqual(tasks, [{ taskId: "t1", state: "running" }]);
   const created = await client.createTask({ originalRequest: "goal" });
   assert.deepEqual(created, { taskId: "new-task" });
+  assert.deepEqual(await client.getWorkGoalRecoveryStatus("g1", 2), [{ goalId: "g1", expectedVersion: 2, status: "held" }]);
+  assert.deepEqual(await client.repairWorkGoalReservation("g1", 2, "r1"), { goalId: "g1", expectedVersion: 2, reservationId: "r1", status: "cancelled" });
   assert.deepEqual(taskHost.calls.filter((c) => c[0] === "createTask"), [["createTask", { originalRequest: "goal" }]]);
   await client.detach();
   await service.stopService("test done");

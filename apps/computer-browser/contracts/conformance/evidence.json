@@ -1,0 +1,143 @@
+{
+  "kind": "evidence",
+  "cases": [
+    {
+      "name": "verified host check",
+      "valid": true,
+      "value": {
+        "id": "E1",
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "criterionId": "C1",
+        "kind": "host_check",
+        "at": "2026-09-29T00:00:00.000Z",
+        "verification": "verified",
+        "verifierId": "host"
+      }
+    },
+    {
+      "name": "pending without verifier",
+      "valid": true,
+      "value": {
+        "id": "E1",
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "criterionId": "C1",
+        "kind": "host_check",
+        "at": "2026-09-29T00:00:00.000Z",
+        "verification": "pending"
+      }
+    },
+    {
+      "name": "artifact with hash and url",
+      "valid": true,
+      "value": {
+        "id": "E1",
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "criterionId": "C1",
+        "kind": "artifact",
+        "at": "2026-09-29T00:00:00.000Z",
+        "verification": "verified",
+        "verifierId": "host",
+        "artifactHash": "sha256:abc",
+        "sourceUrl": "https://example.com/a",
+        "observationId": "obs-1",
+        "details": {
+          "size": 12
+        }
+      }
+    },
+    {
+      "name": "unknown kind",
+      "valid": false,
+      "code": "unknown_enum",
+      "value": {
+        "id": "E1",
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "criterionId": "C1",
+        "kind": "vibes",
+        "at": "2026-09-29T00:00:00.000Z",
+        "verification": "verified",
+        "verifierId": "host"
+      }
+    },
+    {
+      "name": "unknown verification",
+      "valid": false,
+      "code": "unknown_enum",
+      "value": {
+        "id": "E1",
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "criterionId": "C1",
+        "kind": "host_check",
+        "at": "2026-09-29T00:00:00.000Z",
+        "verification": "maybe",
+        "verifierId": "host"
+      }
+    },
+    {
+      "name": "verified without verifier",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "id": "E1",
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "criterionId": "C1",
+        "kind": "host_check",
+        "at": "2026-09-29T00:00:00.000Z",
+        "verification": "verified"
+      }
+    },
+    {
+      "name": "pending with verifier",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "id": "E1",
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "criterionId": "C1",
+        "kind": "host_check",
+        "at": "2026-09-29T00:00:00.000Z",
+        "verification": "pending",
+        "verifierId": "host"
+      }
+    },
+    {
+      "name": "extra field",
+      "valid": false,
+      "code": "unknown_field",
+      "value": {
+        "id": "E1",
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "criterionId": "C1",
+        "kind": "host_check",
+        "at": "2026-09-29T00:00:00.000Z",
+        "verification": "verified",
+        "verifierId": "host",
+        "note": "x"
+      }
+    },
+    {
+      "name": "details not object",
+      "valid": false,
+      "code": "invalid_shape",
+      "value": {
+        "id": "E1",
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "criterionId": "C1",
+        "kind": "host_check",
+        "at": "2026-09-29T00:00:00.000Z",
+        "verification": "verified",
+        "verifierId": "host",
+        "details": "x"
+      }
+    }
+  ]
+}
