@@ -147,9 +147,22 @@ class TaskController {
     // stopping. The rejection count is checkpointed so a restart cannot reset
     // the cap.
     const checkpointedRejected = store.lastCheckpoint?.payload?.goalPersistence?.rejectedFinishes;
-    this._rejectedFinishes = Number.isInteger(checkpointedRejected) && checkpointedRejected >= 0 && checkpointedRejected <= GOAL_MAX_REJECTED_FINISHES
+    let recoveredRejected = Number.isInteger(checkpointedRejected) && checkpointedRejected >= 0 && checkpointedRejected <= GOAL_MAX_REJECTED_FINISHES
       ? checkpointedRejected
       : 0;
+    // A process can die after the durable finish_rejected note append but
+    // before the next checkpoint. TaskStore.load() exposes that validated
+    // journal tail as eventsSinceCheckpoint; include it so recovery cannot
+    // reset the bounded rejection loop through a crash/restart cycle.
+    for (const event of store.eventsSinceCheckpoint || []) {
+      if (event.type !== "note" || event.payload?.kind !== "finish_rejected") continue;
+      const count = event.payload.rejectedFinishes;
+      if (!Number.isInteger(count) || count !== recoveredRejected + 1 || count > GOAL_MAX_REJECTED_FINISHES) {
+        throw new TaskControllerError("invalid_goal_persistence", "durable finish rejection history is inconsistent");
+      }
+      recoveredRejected = count;
+    }
+    this._rejectedFinishes = recoveredRejected;
     this._browser = browser;
     this._approve = approve;
     this._hostVerifier = hostVerifier;
@@ -922,6 +935,10 @@ class TaskController {
     if (this._loopRunning) return this.getSnapshot();
     this._loopRunning = true;
     try {
+      if (this._harnessProfile === "long" && this._rejectedFinishes >= GOAL_MAX_REJECTED_FINISHES) {
+        await this._pauseWith("goal_not_reached");
+        return this.getSnapshot();
+      }
       // Planner process startup is independent of the first page observation.
       // Start it now so its cold launch can overlap with that browser work;
       // no request is sent until the normal observe -> plan boundary below.

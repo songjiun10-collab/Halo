@@ -1929,6 +1929,44 @@ test("long: the rejection count survives a restart, so the cap cannot be reset b
   await reloaded.close();
 });
 
+test("long: uncheckpointed finish rejections survive a crash and the cap pauses before another planner call", async () => {
+  const { store, storageRoot } = await makeStore({ originalRequest: "tail notes survive recovery", criteria: HOST_CRITERIA });
+  const initial = goalRun({ profile: "long", store, script: [finish] });
+  await initial.controller._checkpoint();
+  for (let rejectedFinishes = 1; rejectedFinishes <= 3; rejectedFinishes += 1) {
+    await store.append({ type: "note", payload: {
+      kind: "finish_rejected", missingCriterionIds: ["reached"], rejectedFinishes,
+    } });
+  }
+  const taskId = store.taskId;
+  await store.close();
+
+  const recovered = await TaskStore.load(taskId, { storageRoot });
+  const resumed = goalRun({ profile: "long", store: recovered, script: [finish] });
+  await resumed.controller.resume({ confirmed: true });
+  assert.equal(resumed.turns(), 2, "three durable tail rejections plus two new attempts must reach the cap");
+  assert.equal(recovered.lastCheckpoint.payload.goalPersistence.rejectedFinishes, 5);
+  await recovered.close();
+
+  const { store: cappedStore, storageRoot: cappedRoot } = await makeStore({ originalRequest: "tail already reached cap", criteria: HOST_CRITERIA });
+  const capped = goalRun({ profile: "long", store: cappedStore, script: [finish] });
+  await capped.controller._checkpoint();
+  for (let rejectedFinishes = 1; rejectedFinishes <= 5; rejectedFinishes += 1) {
+    await cappedStore.append({ type: "note", payload: {
+      kind: "finish_rejected", missingCriterionIds: ["reached"], rejectedFinishes,
+    } });
+  }
+  const cappedTaskId = cappedStore.taskId;
+  await cappedStore.close();
+
+  const cappedRecovery = await TaskStore.load(cappedTaskId, { storageRoot: cappedRoot });
+  const noMorePlannerCalls = goalRun({ profile: "long", store: cappedRecovery, script: [finish] });
+  await noMorePlannerCalls.controller.resume({ confirmed: true });
+  assert.equal(noMorePlannerCalls.turns(), 0);
+  assert.equal(noMorePlannerCalls.controller.getSnapshot().pauseReason, "goal_not_reached");
+  await cappedRecovery.close();
+});
+
 test("long: a criterion that needs a human keeps the awaiting_verification handoff (no rejection loop)", async () => {
   const { store } = await makeStore({ originalRequest: "human verifies", criteria: [{ id: "human", text: "a person confirms", required: true, verification: "user" }] });
   const { controller, turns } = goalRun({ profile: "long", store, script: [finish] });
