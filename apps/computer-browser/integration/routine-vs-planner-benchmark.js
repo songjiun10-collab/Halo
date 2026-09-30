@@ -805,11 +805,17 @@ module.exports = {
 // avoiding the earlier bug where `process.versions.electron ||` made this
 // file's own main() self-execute and app.exit() as a side effect of that
 // require, racing and sometimes killing the requiring script before it
-// could finish.
+// could finish. Use path.resolve(process.cwd(), ...), not require.resolve:
+// require.resolve treats a bare relative path like "integration/foo.js"
+// (no leading "./") as a node_modules package specifier and throws
+// MODULE_NOT_FOUND, which the try/catch below silently turned into `false` --
+// exactly the invocation form this file's own usage comment documents
+// (`electron integration/routine-vs-planner-benchmark.js`), so main() was
+// never called and the process sat idle forever.
 const isDirectInvocation = (() => {
   if (!process.argv[1]) return false;
   try {
-    return require.resolve(process.argv[1]) === __filename;
+    return path.resolve(process.cwd(), process.argv[1]) === __filename;
   } catch {
     return false;
   }

@@ -587,6 +587,23 @@ test("paces a second agent-initiated allow, but never the first", async () => {
   }
 });
 
+test("serializes concurrently approved agent actions by their actual dispatch start", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 40 });
+  const timestamps = [];
+  const execute = async () => { timestamps.push(performance.now()); };
+
+  await Promise.all([
+    api.performGatedAction({ requestId: "parallel-1", action: "navigate", summary: "first" }, execute),
+    api.performGatedAction({ requestId: "parallel-2", action: "navigate", summary: "second" }, execute),
+  ]);
+
+  assert.equal(timestamps.length, 2);
+  assert.ok(
+    timestamps[1] - timestamps[0] >= 40,
+    `concurrent approvals must still be separated by the 40ms dispatch floor; got ${(timestamps[1] - timestamps[0]).toFixed(3)}ms`,
+  );
+});
+
 test("a wall-clock jump cannot bypass the monotonic agent-action pacing floor", async () => {
   const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 40 });
   const timestamps = [];

@@ -4,14 +4,17 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { createElectronTestProfile } = require("./electron-test-profile");
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const ELECTRON_BIN = path.join(APP_ROOT, "node_modules", ".bin", "electron");
 const SCRIPT = path.join(APP_ROOT, "integration", "backend-controls-electron.js");
 
 test("real Electron verifies backend controls plus resource-gated parallel planner and approver execution", { timeout: 90000 }, async (t) => {
+  const profile = await createElectronTestProfile();
+  t.after(() => profile.cleanup());
   const result = await new Promise((resolve, reject) => {
-    const child = spawn(ELECTRON_BIN, [SCRIPT], { cwd: APP_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(ELECTRON_BIN, profile.argsFor(SCRIPT), { cwd: APP_ROOT, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`backend control integration timed out\n${stderr.slice(-4000)}`)); }, 80000);
