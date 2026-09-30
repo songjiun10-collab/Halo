@@ -376,7 +376,23 @@ class TaskHost {
         : clearSessionCookies(entry.importedSession, domains)
     )));
     const failed = results.reduce((count, result) => count + (result.status === "rejected" ? 1 : result.value.failed), 0);
-    if (failed > 0) throw new TaskHostError("session_revoke_failed", "one or more active task sessions could not be cleared");
+    if (failed > 0) {
+      const affected = results.flatMap((result, index) => (
+        result.status === "rejected" || result.value.failed > 0 ? [entries[index]] : []
+      ));
+      // A failed revocation is not just a settings error: the task may still
+      // hold a usable login. Remove its automation and page runtime even when
+      // Electron cannot confirm that every cookie left the partition.
+      await Promise.allSettled(affected.map(async (entry) => {
+        try {
+          const state = entry.controller?.getSnapshot?.().state;
+          if (!state || !["stopped", "completed"].includes(state)) await entry.controller?.stop?.();
+        } finally {
+          await entry.browser?.dispose?.();
+        }
+      }));
+      throw new TaskHostError("session_revoke_failed", "one or more active task sessions could not be cleared; affected tasks were stopped");
+    }
   }
 
   _requireSessions() {
