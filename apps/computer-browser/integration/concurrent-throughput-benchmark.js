@@ -342,11 +342,17 @@ module.exports = { LIMITATIONS, concurrencySchedule, runConcurrentIteration, bui
 // see the matching comment in routine-vs-planner-benchmark.js. Under Electron's
 // main process, require.main is Electron's own bootstrap module, never this
 // script, so require.main === module alone would make this file's own direct
-// invocation never call main() either.
+// invocation never call main() either. path.resolve(process.cwd(), ...), not
+// require.resolve: require.resolve treats a bare relative path like
+// "integration/foo.js" (no leading "./") as a node_modules package specifier
+// and throws MODULE_NOT_FOUND -- which the try/catch below silently turned
+// into `false`, so main() was never called for exactly the invocation form
+// this file's own usage documents (`electron integration/concurrent-
+// throughput-benchmark.js`).
 const isDirectInvocation = (() => {
   if (!process.argv[1]) return false;
   try {
-    return require.resolve(process.argv[1]) === __filename;
+    return path.resolve(process.cwd(), process.argv[1]) === __filename;
   } catch {
     return false;
   }
