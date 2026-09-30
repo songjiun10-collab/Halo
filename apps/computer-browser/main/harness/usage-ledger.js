@@ -32,6 +32,7 @@ class UsageLedger {
     this._file = storageRoot ? path.join(storageRoot, "usage-ledger.json") : null;
     this._byProvider = Object.fromEntries(PROVIDERS.map((p) => [p, emptyTotals()]));
     this._byTask = new Map();
+    this._subscription = {}; // provider -> last real plan-quota snapshot (percentages only)
     this._imported = {}; // provider -> last full import of the CLI's own records
     this._limits = Object.fromEntries(PROVIDERS.map((p) => [p, { tokens: null, costUsd: null }]));
     this._writing = Promise.resolve();
@@ -42,6 +43,10 @@ class UsageLedger {
     try {
       const data = JSON.parse(await fs.readFile(this._file, "utf8"));
       for (const p of PROVIDERS) if (data.byProvider?.[p]) Object.assign(this._byProvider[p], emptyTotals(), data.byProvider[p]);
+      for (const p of PROVIDERS) {
+        const sub = data.subscription?.[p];
+        if (sub && typeof sub === "object" && sub.provider === p) this._subscription[p] = sub;
+      }
       for (const p of PROVIDERS) {
         const imp = data.imported?.[p];
         if (imp && typeof imp === "object" && imp.provider === p) this._imported[p] = imp;
@@ -103,6 +108,13 @@ class UsageLedger {
     return this._imported[provider];
   }
 
+  setSubscription(provider, snapshot) {
+    if (!PROVIDERS.includes(provider) || !snapshot || snapshot.provider !== provider) throw new UsageLimitError("invalid_provider", "provider is not recognized");
+    this._subscription[provider] = snapshot;
+    this._persist();
+    return snapshot;
+  }
+
   limitStatus() {
     const out = {};
     for (const p of PROVIDERS) {
@@ -130,6 +142,7 @@ class UsageLedger {
     return {
       byProvider: clone(this._byProvider),
       imported: JSON.parse(JSON.stringify(this._imported)),
+      subscription: JSON.parse(JSON.stringify(this._subscription)),
       limits: this.limitStatus(),
       ...(taskId ? { task: clone(this._byTask.get(taskId) ?? Object.fromEntries(PROVIDERS.map((p) => [p, emptyTotals()]))) } : {}),
     };
@@ -137,7 +150,7 @@ class UsageLedger {
 
   _persist() {
     if (!this._file) return;
-    const body = JSON.stringify({ byProvider: this._byProvider, limits: this._limits, imported: this._imported, byTask: Object.fromEntries(this._byTask) });
+    const body = JSON.stringify({ byProvider: this._byProvider, limits: this._limits, imported: this._imported, subscription: this._subscription, byTask: Object.fromEntries(this._byTask) });
     const tmp = `${this._file}.tmp`;
     this._writing = this._writing
       .then(async () => {

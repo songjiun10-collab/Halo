@@ -21,7 +21,9 @@ const crypto = require("node:crypto");
 // explicit human action that re-attaches it and calls controller.resume().
 // createTask() is the only path that auto-starts a BRAND NEW task.
 
+const path = require("node:path");
 const { importClaudeUsage, importCodexUsage } = require("./usage-import");
+const { fetchClaudeSubscription } = require("./subscription-usage");
 const { TaskStore } = require("./task-store");
 const { TaskController, TaskControllerError } = require("./task-controller");
 const { TaskQueue, TaskQueueError } = require("./task-queue");
@@ -82,6 +84,7 @@ class TaskHost {
     settingsStore,
     usageLedger,
     usageSources,
+    subscriptionFetch,
     credentialVault,
     profileImporter,
     getTaskSession,
@@ -114,6 +117,7 @@ class TaskHost {
     this._settingsStore = settingsStore || null;
     this._usageLedger = usageLedger || null;
     this._usageSources = usageSources || {};
+    this._subscriptionFetch = subscriptionFetch; // undefined -> global fetch
     this._credentialVault = credentialVault || null;
     this._profileImporter = profileImporter || null;
     this._getTaskSession = typeof getTaskSession === "function" ? getTaskSession : null;
@@ -1255,12 +1259,19 @@ class TaskHost {
       try {
         const imported = await importers[provider]({ root });
         if (imported.sessions === 0) { results[provider] = { status: "no_records" }; continue; }
-        this._usageLedger.setImported(provider, imported);
+        const { subscription, ...totals } = imported;
+        this._usageLedger.setImported(provider, totals);
+        if (subscription) this._usageLedger.setSubscription(provider, subscription);
         results[provider] = { status: "synced", sessions: imported.sessions };
       } catch {
         results[provider] = { status: "failed" };
       }
     }
+    // Claude's plan quota comes from the account, not from local files.
+    const claudeConfigDir = this._usageSources.claude ? path.dirname(this._usageSources.claude) : null;
+    const subscription = await fetchClaudeSubscription({ configDir: claudeConfigDir, fetchFn: this._subscriptionFetch });
+    if (subscription.snapshot) this._usageLedger.setSubscription("claude", subscription.snapshot);
+    results.claudeSubscription = { status: subscription.status };
     return { results, usage: this._usageLedger.summary() };
   }
 

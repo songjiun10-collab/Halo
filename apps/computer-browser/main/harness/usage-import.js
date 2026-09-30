@@ -91,18 +91,37 @@ async function importClaudeUsage({ root }) {
   return totals;
 }
 
+function codexWindow(raw) {
+  if (!raw || typeof raw !== "object" || !Number.isFinite(raw.used_percent) || raw.used_percent < 0) return null;
+  const minutes = Number.isFinite(raw.window_minutes) && raw.window_minutes > 0 ? raw.window_minutes : null;
+  const resetsAt = Number.isFinite(raw.resets_at) ? (raw.resets_at < 1e12 ? raw.resets_at * 1000 : raw.resets_at) : null;
+  return { usedPercent: Math.min(raw.used_percent, 1000), windowMinutes: minutes, resetsAt };
+}
+
+function codexWindows(rateLimits) {
+  if (!rateLimits || typeof rateLimits !== "object") return null;
+  const windows = { primary: codexWindow(rateLimits.primary), secondary: codexWindow(rateLimits.secondary) };
+  return windows.primary || windows.secondary ? windows : null;
+}
+
 // Codex rollouts log a cumulative total_token_usage in token_count events;
 // the last one per file is that session's total. Codex reports no dollar cost.
 async function importCodexUsage({ root }) {
   const totals = emptyImported("codex");
   let files = 0;
+  let latestLimits = null; // newest rate_limits Codex itself recorded (percent of plan window used)
   for (const file of await listJsonl(root)) {
     let last = null;
     const ok = await forEachLine(file, (o) => {
       const p = o.payload;
-      if (p && p.type === "token_count" && p.info && p.info.total_token_usage) {
-        last = p.info.total_token_usage;
-        widen(totals, o.timestamp);
+      if (p && p.type === "token_count") {
+        const at = typeof o.timestamp === "string" ? Date.parse(o.timestamp) : NaN;
+        if (p.info && p.info.total_token_usage) {
+          last = p.info.total_token_usage;
+          widen(totals, o.timestamp);
+        }
+        const windows = codexWindows(p.rate_limits);
+        if (windows && Number.isFinite(at) && (!latestLimits || at > latestLimits.asOf)) latestLimits = { provider: "codex", windows, asOf: at };
       }
     }).catch(() => false);
     if (ok && last) {
@@ -115,6 +134,7 @@ async function importCodexUsage({ root }) {
     }
   }
   totals.files = files;
+  if (latestLimits) totals.subscription = latestLimits;
   return totals;
 }
 

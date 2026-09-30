@@ -2204,3 +2204,19 @@ test("syncUsage imports configured CLI records, reports unconfigured/empty sourc
   const bare = makeHost(await mkTempRoot(), { usageLedger });
   assert.equal((await bare.syncUsage()).results.claude.status, "not_configured");
 });
+
+test("syncUsage stores the Claude subscription snapshot and reports why it is missing otherwise", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const { UsageLedger } = require("../main/harness/usage-ledger");
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "halo-cfg-"));
+  fs.mkdirSync(path.join(cfg, "projects"));
+  fs.writeFileSync(path.join(cfg, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "t", expiresAt: Date.now() + 60000 } }));
+  const subscriptionFetch = async () => ({ ok: true, status: 200, json: async () => ({ five_hour: { utilization: 61, resets_at: "2026-09-30T09:00:00Z" } }) });
+  const host = makeHost(await mkTempRoot(), { usageLedger: new UsageLedger({}), usageSources: { claude: path.join(cfg, "projects") }, subscriptionFetch });
+  const r = await host.syncUsage();
+  assert.equal(r.results.claudeSubscription.status, "synced");
+  assert.equal(r.usage.subscription.claude.windows.session.usedPercent, 61);
+  const none = makeHost(await mkTempRoot(), { usageLedger: new UsageLedger({}), usageSources: { claude: path.join(cfg, "nope", "projects") }, subscriptionFetch });
+  assert.equal((await none.syncUsage()).results.claudeSubscription.status, "no_credentials");
+});
