@@ -20,7 +20,7 @@
 //   TARGET-FOUND), the run does NOT stop when the marker is first seen, and it
 //   ends when the controller itself ends (completed / awaiting_verification /
 //   paused) or the timeout stops it.
-// Env: HALO_LLM_PROFILES (comma list, default "short,middle"), HALO_LLM_DEPTH
+// Env: HALO_LLM_EFFORT (low|medium|high|xhigh|max, default medium), HALO_LLM_PROFILES (comma list, default "short,middle"), HALO_LLM_DEPTH
 //   (1..5, default 2), HALO_LLM_BRANCH (2..4, default 3), HALO_LLM_TIMEOUT_S
 //   (30..3600, default 300). Emits RESULT_JSON:<json>.
 
@@ -109,6 +109,7 @@ async function runOne({ profile, site, createBrowser, storageRoot, timeoutMs, ve
     approve: async () => { counts.approvals += 1; return { decision: "allow", reasons: [] }; },
     hostVerifier: () => (verified ? onTargetPage : true),
     harnessProfile: profile,
+    ...(process.env.HALO_LLM_EFFORT ? { plannerEffort: process.env.HALO_LLM_EFFORT } : {}),
   });
 
   let endState = null;
