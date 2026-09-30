@@ -32,6 +32,7 @@ class UsageLedger {
     this._file = storageRoot ? path.join(storageRoot, "usage-ledger.json") : null;
     this._byProvider = Object.fromEntries(PROVIDERS.map((p) => [p, emptyTotals()]));
     this._byTask = new Map();
+    this._imported = {}; // provider -> last full import of the CLI's own records
     this._limits = Object.fromEntries(PROVIDERS.map((p) => [p, { tokens: null, costUsd: null }]));
     this._writing = Promise.resolve();
   }
@@ -41,6 +42,10 @@ class UsageLedger {
     try {
       const data = JSON.parse(await fs.readFile(this._file, "utf8"));
       for (const p of PROVIDERS) if (data.byProvider?.[p]) Object.assign(this._byProvider[p], emptyTotals(), data.byProvider[p]);
+      for (const p of PROVIDERS) {
+        const imp = data.imported?.[p];
+        if (imp && typeof imp === "object" && imp.provider === p) this._imported[p] = imp;
+      }
       for (const p of PROVIDERS) {
         try {
           const l = data.limits?.[p] ?? {};
@@ -88,13 +93,23 @@ class UsageLedger {
     return { ...next };
   }
 
+  // Replaces (never adds to) the provider's imported totals. The CLI's own
+  // records already include planner calls the harness made, so limits use them
+  // instead of the harness ledger whenever they exist.
+  setImported(provider, imported) {
+    if (!PROVIDERS.includes(provider) || !imported || imported.provider !== provider) throw new UsageLimitError("invalid_provider", "provider is not recognized");
+    this._imported[provider] = { ...imported, syncedAt: Date.now() };
+    this._persist();
+    return this._imported[provider];
+  }
+
   limitStatus() {
     const out = {};
     for (const p of PROVIDERS) {
-      const used = this._byProvider[p];
+      const used = this._imported[p] ?? this._byProvider[p];
       const limit = this._limits[p];
       const usedTokens = used.inputTokens + used.outputTokens;
-      const status = { limit: { ...limit }, exceeded: false };
+      const status = { limit: { ...limit }, exceeded: false, basis: this._imported[p] ? "imported" : "harness" };
       if (limit.tokens !== null) {
         status.remainingTokens = Math.max(0, limit.tokens - usedTokens);
         status.tokensUsedRatio = usedTokens / limit.tokens;
@@ -114,6 +129,7 @@ class UsageLedger {
     const clone = (o) => JSON.parse(JSON.stringify(o));
     return {
       byProvider: clone(this._byProvider),
+      imported: JSON.parse(JSON.stringify(this._imported)),
       limits: this.limitStatus(),
       ...(taskId ? { task: clone(this._byTask.get(taskId) ?? Object.fromEntries(PROVIDERS.map((p) => [p, emptyTotals()]))) } : {}),
     };
@@ -121,7 +137,7 @@ class UsageLedger {
 
   _persist() {
     if (!this._file) return;
-    const body = JSON.stringify({ byProvider: this._byProvider, limits: this._limits, byTask: Object.fromEntries(this._byTask) });
+    const body = JSON.stringify({ byProvider: this._byProvider, limits: this._limits, imported: this._imported, byTask: Object.fromEntries(this._byTask) });
     const tmp = `${this._file}.tmp`;
     this._writing = this._writing
       .then(async () => {

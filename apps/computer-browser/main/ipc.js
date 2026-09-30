@@ -39,6 +39,7 @@ const HARNESS_METHODS = {
   "halo:getHostSettings": "getHostSettings",
   "halo:getUsage": "getUsage",
   "halo:setUsageLimit": "setUsageLimit",
+  "halo:syncUsage": "syncUsage",
   "halo:updateHostSettings": "updateHostSettings",
   "halo:listCredentials": "listCredentials",
   "halo:saveCredential": "saveCredential",

@@ -414,6 +414,10 @@ async function createHarnessHost(socketPath, hostWindow) {
     setViewport: (taskId, bounds) => surfaces.setViewport(taskId, bounds),
     makePlanner: makeHarnessPlanner(usageLedger),
     usageLedger,
+    usageSources: {
+      claude: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "projects"),
+      codex: path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "sessions"),
+    },
     hostVerifier: defaultHostVerifier,
     approve: makeHarnessApprove(socketPath),
     memoryMonitor,

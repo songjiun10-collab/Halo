@@ -35,7 +35,7 @@ const METHODS = [
 const HARNESS_METHODS = [
   "createTask", "listTasks", "resumeSavedTask", "amendTask", "confirmCriterion", "getTaskDetail",
   "taskApprove", "taskDeny", "taskPause", "taskStop", "taskTakeOver", "getTaskEvents",
-  "getTaskBrowser", "taskBrowserAction", "setTaskViewport", "getHostSettings", "updateHostSettings", "getUsage", "setUsageLimit",
+  "getTaskBrowser", "taskBrowserAction", "setTaskViewport", "getHostSettings", "updateHostSettings", "getUsage", "setUsageLimit", "syncUsage",
   "listCredentials", "saveCredential", "removeCredential",
   "listMemories", "saveMemory", "removeMemory",
   "fillCredential",

@@ -21,6 +21,7 @@ const crypto = require("node:crypto");
 // explicit human action that re-attaches it and calls controller.resume().
 // createTask() is the only path that auto-starts a BRAND NEW task.
 
+const { importClaudeUsage, importCodexUsage } = require("./usage-import");
 const { TaskStore } = require("./task-store");
 const { TaskController, TaskControllerError } = require("./task-controller");
 const { TaskQueue, TaskQueueError } = require("./task-queue");
@@ -80,6 +81,7 @@ class TaskHost {
     memoryStore,
     settingsStore,
     usageLedger,
+    usageSources,
     credentialVault,
     profileImporter,
     getTaskSession,
@@ -111,6 +113,7 @@ class TaskHost {
     this._memoryStore = memoryStore || null;
     this._settingsStore = settingsStore || null;
     this._usageLedger = usageLedger || null;
+    this._usageSources = usageSources || {};
     this._credentialVault = credentialVault || null;
     this._profileImporter = profileImporter || null;
     this._getTaskSession = typeof getTaskSession === "function" ? getTaskSession : null;
@@ -1237,6 +1240,28 @@ class TaskHost {
     this._assertOpen();
     if (!this._usageLedger) throw new TaskHostError("usage_unavailable", "usage ledger is unavailable");
     return this._usageLedger.summary(typeof taskId === "string" ? { taskId } : {});
+  }
+
+  // Pulls the totals the local Claude/Codex CLIs recorded themselves. A source
+  // that is not configured or holds no records is reported, not faked.
+  async syncUsage() {
+    this._assertOpen();
+    if (!this._usageLedger) throw new TaskHostError("usage_unavailable", "usage ledger is unavailable");
+    const importers = { claude: importClaudeUsage, codex: importCodexUsage };
+    const results = {};
+    for (const provider of Object.keys(importers)) {
+      const root = this._usageSources[provider];
+      if (!root) { results[provider] = { status: "not_configured" }; continue; }
+      try {
+        const imported = await importers[provider]({ root });
+        if (imported.sessions === 0) { results[provider] = { status: "no_records" }; continue; }
+        this._usageLedger.setImported(provider, imported);
+        results[provider] = { status: "synced", sessions: imported.sessions };
+      } catch {
+        results[provider] = { status: "failed" };
+      }
+    }
+    return { results, usage: this._usageLedger.summary() };
   }
 
   async setUsageLimit(provider, patch) {

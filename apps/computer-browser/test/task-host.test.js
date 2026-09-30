@@ -2183,3 +2183,24 @@ test("host exposes usage and display-only limits, and maps ledger errors to Task
   const bare = makeHost(await mkTempRoot());
   await assert.rejects(() => bare.getUsage(), (e) => e.code === "usage_unavailable");
 });
+
+test("syncUsage imports configured CLI records, reports unconfigured/empty sources honestly, and never throws for one bad source", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const { UsageLedger } = require("../main/harness/usage-ledger");
+  const claudeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "halo-sync-claude-"));
+  fs.writeFileSync(path.join(claudeRoot, "s.jsonl"), [
+    JSON.stringify({ type: "assistant", sessionId: "s", timestamp: "2026-09-29T01:00:00Z", message: { id: "m", usage: { input_tokens: 4, output_tokens: 6 } } }),
+    JSON.stringify({ type: "cost-state", sessionId: "s", totalCostUSD: 3 }),
+  ].join("\n"));
+  const usageLedger = new UsageLedger({});
+  const host = makeHost(await mkTempRoot(), { usageLedger, usageSources: { claude: claudeRoot, codex: path.join(claudeRoot, "missing") } });
+  const first = await host.syncUsage();
+  assert.equal(first.results.claude.status, "synced");
+  assert.equal(first.results.codex.status, "no_records");
+  assert.equal(first.usage.imported.claude.costUsd, 3);
+  const second = await host.syncUsage();
+  assert.equal(second.usage.imported.claude.outputTokens, 6, "re-sync does not double count");
+  const bare = makeHost(await mkTempRoot(), { usageLedger });
+  assert.equal((await bare.syncUsage()).results.claude.status, "not_configured");
+});
