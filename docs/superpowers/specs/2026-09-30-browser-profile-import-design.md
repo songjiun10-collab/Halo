@@ -40,6 +40,18 @@ A task uses imported sessions only when its creator sets `useImportedSessions: t
 | IndexedDB | Chrome LevelDB blobs | Not planned for the first release; reported as unsupported rather than half-imported. |
 | Extensions | Not imported | Out of scope per the user. |
 
+### Review-driven hardening (2026-09-30)
+
+Findings from an automated review of the first implementation, each verified against the code and fixed with a regression test that fails when the fix is reverted:
+
+- **Allowlist entries must be registrable domains.** Validation was syntax-only, so `co.uk` or `github.io` selected every site beneath the suffix. Entries are now checked against the public suffix list (`tldts`, ICANN and private sections): `co.uk` and `github.io` are rejected, `user.github.io` and `claude.ai` are accepted. The reader, vault and injector apply the same check, and an allowlist saved by an older build has invalid entries dropped on read. This adds a runtime dependency (`tldts`, plus its zero-dependency `tldts-core`).
+- **Partitioned (CHIPS) cookies are not imported.** They are valid only under their original top-level site, and the vault and Electron injection carry no partition field, so importing them would widen their scope and let partitions overwrite each other. The reader detects the `top_frame_site_key` column, excludes those rows and reports a `partitioned` count.
+- **Removing a domain purges running tasks.** `removeImportedSession` now also deletes the matching cookies from the sessions of tasks that were injected and are still running. If any live session cannot be purged, the call fails with `purge_incomplete` (the vault record is removed regardless) instead of reporting success. A task's session is released from tracking when the task ends.
+- **A partial decrypt no longer erases stored logins.** Rows that fail to decrypt are reported by identity (`domain`, `name`, `path`, never a value); the import keeps their previously stored copies, replaces the rest, and returns `status: "partial"` with a `skipped` count.
+- **Settings are not overwritten by an unreadable source.** A missing file is empty; an unreadable or malformed one is a failed section. A failed section keeps its previously imported value and the import returns `status: "partial"` with the failed section names; if every section failed the result is `read_failed` and nothing is written.
+- **The opt-in is durable before the task exists.** The task ID is host-generated first, and the opt-in is written before any task storage or Work Goal reservation. A failed write rejects `createTask` with nothing left behind, a failed creation rolls the opt-in back, and a crash can no longer leave a recoverable task that silently lost it.
+- **Injection failures are audited.** If the vault cannot be read or decrypted, the task still starts signed out (non-blocking), but the journal now records `imported_sessions_injection_failed` with a short error code only, so a failure is distinguishable from a task that never opted in.
+
 ### Failure behavior
 
 Each reader returns a structured result (`ok`, `permission_required`, `not_found`, `decrypt_failed`, `locked`). Partial success is reported per kind. Nothing is retried in a loop, no permission prompt is bypassed, and a failed import never deletes the existing vault.

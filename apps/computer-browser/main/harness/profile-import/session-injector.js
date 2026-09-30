@@ -1,6 +1,6 @@
 "use strict";
 
-const { matchingAllowedDomain, normalizeDomain } = require("./domain-utils");
+const { matchingAllowedDomain, normalizeDomain, normalizeAllowlistEntry } = require("./domain-utils");
 
 const SAME_SITE = { lax: "lax", strict: "strict", none: "no_restriction", unspecified: "unspecified" };
 
@@ -16,7 +16,7 @@ function cookieToElectron(cookie) {
 }
 
 async function injectSessions({ vault, session, domains, nowSeconds = Date.now() / 1000 }) {
-  const allowlist = (Array.isArray(domains) ? domains : []).map(normalizeDomain).filter(Boolean);
+  const allowlist = (Array.isArray(domains) ? domains : []).map(normalizeAllowlistEntry).filter(Boolean);
   if (!allowlist.length) return { injected: 0, failed: 0, domains: [] };
   const cookies = await vault.cookiesFor({ domains: allowlist, nowSeconds });
   let injected = 0;

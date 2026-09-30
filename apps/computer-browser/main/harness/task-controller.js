@@ -386,7 +386,10 @@ class TaskController {
       Object.keys(payload).length === 4 && Number.isInteger(payload.injected) && payload.injected >= 0 &&
       Number.isInteger(payload.failed) && payload.failed >= 0 && Array.isArray(payload.domains) &&
       payload.domains.length <= 20 && payload.domains.every((domain) => typeof domain === "string" && domain.length <= 253);
-    if (!autofill && !sessions) {
+    // Value-free by construction: exactly a fixed kind plus a short identifier-like code.
+    const sessionFailure = contracts.isPlainObject(payload) && payload.kind === "imported_sessions_injection_failed" &&
+      Object.keys(payload).length === 2 && typeof payload.errorCode === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(payload.errorCode);
+    if (!autofill && !sessions && !sessionFailure) {
       throw new TaskControllerError("invalid_host_note", "unsupported host audit note");
     }
     await this._store.append({ type: "note", payload });
