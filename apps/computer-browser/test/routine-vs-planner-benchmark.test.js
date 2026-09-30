@@ -112,6 +112,7 @@ for (const approvalMode of ["review", "allow"]) {
       assert.equal(record.approvals, approvalMode === "review" ? STEPS : 0);
       assert.ok(record.runMs > 0);
       assert.ok(record.cleanupMs >= 0);
+      assert.equal(record.stages.profile_resolution.count, 1);
       assert.ok(record.stages.journal_append_write.count > 0);
       assert.ok(record.stages.journal_fsync.count > 0);
       assert.ok(record.stages.checkpoint_file_write.count > 0);
@@ -124,6 +125,8 @@ for (const approvalMode of ["review", "allow"]) {
     assert.deepEqual(Object.keys(routine).sort(), Object.keys(planner).sort(), "report rows must have identical fields in both modes");
     assert.equal(routine.plannerStartupMs, null, "a routine has no planner worker to start");
     assert.equal(typeof planner.plannerStartupMs, "number");
+    assert.deepEqual(routine.resolvedProfile, { duration: "short", capability: "routine" });
+    assert.deepEqual(planner.resolvedProfile, { duration: "middle", capability: "browser" });
     assert.ok(planner.plannerPids.length >= 1);
     assert.deepEqual(routine.plannerPids, []);
   });
@@ -204,6 +207,45 @@ test("runBenchmark fails closed when a mode diverges from the shared scenario", 
     bench.runBenchmark({ scenario, pairs: 1, seed: 1, approvalMode: "allow", storageRoot: await mkTempRoot(), createBrowser: async () => brokenBrowser() }),
     /iteration failed/,
   );
+});
+
+test("runDurationProfileBenchmark pairs the same Browser planner workload across Middle and Long", async () => {
+  const report = await bench.runDurationProfileBenchmark({
+    scenario: bench.buildScenario({ origin: ORIGIN, steps: 3 }),
+    pairs: 1,
+    seed: 9,
+    approvalMode: "allow",
+    storageRoot: await mkTempRoot(),
+    createBrowser: async () => makeChainBrowser(3),
+  });
+  assert.deepEqual(report.profiles, ["middle", "long"]);
+  assert.equal(report.iterations.length, 2);
+  assert.deepEqual(report.iterations.map((row) => row.resolvedProfile.duration).sort(), ["long", "middle"]);
+  assert.ok(report.iterations.every((row) => row.success && row.resolvedProfile.capability === "browser"));
+  assert.ok(report.iterations.every((row) => row.stages.profile_resolution.count === 1));
+  assert.ok(report.iterations.every((row) => row.actions === 3 && row.visitedUrls.length === 3));
+  assert.equal(report.summaryByTemperature.middle.cold.iterations, 1);
+  assert.equal(report.summaryByTemperature.long.cold.iterations, 1);
+  assert.equal(report.summaryByTemperature.middle.warm.iterations, 0);
+  assert.equal(report.summaryByTemperature.long.warm.iterations, 0);
+  assert.equal(report.comparison.pairedRunMsDelta.count, 1);
+});
+
+test("runRecoveryProbe reloads the same profile and preserves execution_uncertain on an open action", async () => {
+  const result = await bench.runRecoveryProbe({
+    storageRoot: await mkTempRoot(),
+    durationProfile: "long",
+    completedActions: 4,
+    checkpointEvery: 2,
+  });
+  assert.equal(result.durationProfile, "long");
+  assert.equal(result.reloadedDurationProfile, "long");
+  assert.equal(result.recoveredReason, "recovered");
+  assert.equal(result.uncertainReason, "execution_uncertain");
+  assert.equal(result.completedActions, 4);
+  assert.ok(result.journalReplayMs >= 0);
+  assert.ok(result.timing.checkpoint_file_fsync.count > 0);
+  assert.ok(result.timing.checkpoint_directory_fsync.count > 0);
 });
 
 test("buildScenario with scrollsPerPage adds distinct-amount scroll steps after every non-final page", () => {

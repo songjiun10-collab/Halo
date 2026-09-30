@@ -11,8 +11,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const { TaskHost, TaskHostError } = require("../main/harness/task-host");
 const { TaskStore } = require("../main/harness/task-store");
@@ -65,6 +67,26 @@ test("constructor requires storageRoot/makeBrowser/makePlanner/hostVerifier/appr
   assert.throws(() => new TaskHost({ storageRoot: "/tmp/x" }), TaskHostError);
 });
 
+test("Work Goal recovery status and repair are exposed through the serialized host boundary", async () => {
+  const storageRoot = await mkTempRoot();
+  const calls = [];
+  const host = makeHost(storageRoot, {
+    workGoalStore: { load: async () => {} },
+    workGoalOrchestrator: {
+      reconcileAll: async () => {},
+      getWorkGoalRecoveryStatus: async (...args) => { calls.push(["status", ...args]); return [{ reason: "not_found" }]; },
+      repairMissingTaskReservation: async (...args) => { calls.push(["repair", ...args]); return { status: "cancelled" }; },
+    },
+  });
+
+  assert.deepEqual(await host.getWorkGoalRecoveryStatus("goal-id", 2), [{ reason: "not_found" }]);
+  assert.deepEqual(await host.repairWorkGoalReservation("goal-id", 2, "reservation-id"), { status: "cancelled" });
+  assert.deepEqual(calls, [
+    ["status", "goal-id", 2],
+    ["repair", "goal-id", 2, "reservation-id"],
+  ]);
+});
+
 test("runRoutine pins the saved revision and uses it without creating a planner worker", async () => {
   const storageRoot = await mkTempRoot();
   const saved = await new RoutineStore({ storageRoot }).save({
@@ -86,7 +108,16 @@ test("runRoutine pins the saved revision and uses it without creating a planner 
   assert.equal(entry.store.lastCheckpoint.payload.routineRun.routineId, saved.routineId);
   assert.equal(entry.store.lastCheckpoint.payload.routineRun.revision, saved.revision);
   assert.equal(entry.store.lastCheckpoint.payload.routineRun.digest, saved.digest);
-  assert.equal((await host.getTaskDetail(taskId)).harnessProfile, "short");
+  const detail = await host.getTaskDetail(taskId);
+  assert.equal(detail.harnessProfile, "short");
+  assert.equal(detail.taskProfile.capability.id, "routine");
+  assert.equal(detail.taskProfile.selection.capability.source, "routine_entrypoint");
+
+  const longRun = await host.runRoutine(saved.routineId, saved.revision, { requestedDurationProfile: "long" });
+  const longDetail = await host.getTaskDetail(longRun.taskId);
+  assert.equal(longDetail.taskProfile.capability.id, "routine");
+  assert.equal(longDetail.taskProfile.duration.id, "long");
+  assert.equal(longDetail.taskProfile.selection.duration.source, "explicit_user_choice");
 });
 
 test("runRoutine rejects invalid revisions before creating task or browser resources", async () => {
@@ -100,6 +131,30 @@ test("runRoutine rejects invalid revisions before creating task or browser resou
   await assert.rejects(() => host.runRoutine(saved.routineId, 999));
   assert.equal(browsers, 0);
   assert.deepEqual(await host.listTasks(), []);
+});
+
+test("an incomplete profile store is isolated from TaskHost queue recovery", async () => {
+  const storageRoot = await mkTempRoot();
+  const originalOpen = TaskStore.prototype._openJournalFh;
+  TaskStore.prototype._openJournalFh = async function openWithProfileFailure() {
+    const fh = await originalOpen.call(this);
+    if (this._nextSeq === 2) fh.appendFile = async () => { throw new Error("simulated profile append failure"); };
+    return fh;
+  };
+  try {
+    await assert.rejects(() => TaskStore.create({ originalRequest: "partial profile" }, {
+      storageRoot,
+      resolvedProfile: require("../shared/task-profile-router").resolveTaskProfile({ goalInput: { originalRequest: "partial profile" } }),
+    }), { code: "journal_write_failed" });
+  } finally {
+    TaskStore.prototype._openJournalFh = originalOpen;
+  }
+
+  const host = makeHost(storageRoot);
+  assert.deepEqual(await host.listTasks(), []);
+  const fresh = await host.createTask({ originalRequest: "valid new task" });
+  assert.equal(fresh.snapshot.state, "awaiting_verification");
+  assert.deepEqual((await host.listTasks()).map((task) => task.taskId), [fresh.taskId]);
 });
 
 test("routine recovery rejects a wrong step digest before browser or planner creation", async () => {
@@ -173,6 +228,549 @@ test("createTask() creates and auto-starts a brand-new task", async () => {
   // this lands on awaiting_verification, not completed -- proves start()
   // actually ran the loop rather than leaving the task idle.
   assert.equal(snapshot.state, "awaiting_verification");
+});
+
+test("active Work Goal binds a new Task, clamps budgets, and supplies separate planner context", async () => {
+  const storageRoot = await mkTempRoot();
+  let plannerContext = null;
+  const host = makeHost(storageRoot, {
+    makePlanner: () => ({
+      next: async (context) => {
+        plannerContext = context;
+        return {
+          taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs",
+          criterionIds: [], kind: "finish", evidenceIds: [],
+        };
+      },
+    }),
+  });
+  const workGoal = await host.startWorkGoal({
+    objective: "Complete the verified import workflow",
+    successCriteria: [{ id: "review", text: "The user reviews the result", required: true, verification: "user" }],
+    budget: { maxTasks: 2, maxActions: 15, maxPlannerCalls: 10, maxActiveMs: 120000 },
+  });
+  const { taskId } = await host.createTask({
+    originalRequest: "Inspect the import page",
+    limits: { maxActions: 10, maxPlannerCalls: 5, maxActiveMs: 60000 },
+  });
+  const entry = host._active.get(taskId);
+  const binding = entry.store.taskProfile.workGoalBinding;
+  assert.deepEqual(entry.store.taskProfile.workGoalBinding, {
+    goalId: workGoal.goalId, goalVersion: 1, reservationId: binding.reservationId,
+  });
+  assert.equal(host._workGoalStore.get(workGoal.goalId).reservations[binding.reservationId].taskId, taskId);
+  assert.equal(entry.store.getGoal().limits.maxActions, 10);
+  assert.ok(plannerContext?.workGoal);
+  assert.equal(plannerContext.workGoal.goalId, workGoal.goalId);
+  assert.equal(plannerContext.workGoal.goalVersion, 1);
+  assert.equal(plannerContext.workGoal.objective, workGoal.spec.objective);
+  assert.deepEqual(plannerContext.workGoal.remainingBudget, {
+    maxTasks: 1, maxActions: 5, maxPlannerCalls: 5, maxActiveMs: 60000,
+  });
+  assert.equal(plannerContext.goal.originalRequest, "Inspect the import page");
+  assert.equal(plannerContext.goal.criteria.some((criterion) => criterion.id === "review"), false);
+});
+
+test("explicit standalone Task does not reserve or inherit the active Work Goal", async () => {
+  const storageRoot = await mkTempRoot();
+  const host = makeHost(storageRoot);
+  await host.startWorkGoal({
+    objective: "A separate project objective",
+    successCriteria: [{ id: "review", text: "Review the result", required: true, verification: "user" }],
+    budget: { maxTasks: 1 },
+  });
+  const { taskId } = await host.createTask({ originalRequest: "Standalone request" }, { standalone: true });
+  assert.equal(host._active.get(taskId).store.taskProfile.workGoalBinding, undefined);
+  const active = await host.getActiveWorkGoal();
+  assert.deepEqual(active.tasks, []);
+});
+
+test("a paused Work Goal blocks implicit Task creation instead of leaving an unbound partial TaskStore", async () => {
+  const storageRoot = await mkTempRoot();
+  const host = makeHost(storageRoot);
+  const goal = await host.startWorkGoal({
+    objective: "Keep follow-up work attached to the paused project Goal",
+    successCriteria: [{ id: "review", text: "Review the result", required: true, verification: "user" }],
+    budget: { maxTasks: 2 },
+  });
+  await host.pauseWorkGoal(goal.goalId, 1);
+
+  await assert.rejects(
+    host.createTask({ originalRequest: "Implicit continuation while paused" }),
+    { code: "work_goal_not_active" },
+  );
+  assert.deepEqual(await TaskStore.listTaskIds({ storageRoot }), []);
+
+  const standalone = await host.createTask({ originalRequest: "Explicit standalone while paused" }, { standalone: true });
+  assert.equal(host._active.get(standalone.taskId).store.taskProfile.workGoalBinding, undefined);
+});
+
+test("routine Tasks inherit the active Work Goal through the same durable reservation path", async () => {
+  const storageRoot = await mkTempRoot();
+  const saved = await new RoutineStore({ storageRoot }).save({
+    name: "Check release", origins: ["https://example.com"],
+    steps: [{ kind: "navigate", url: "https://example.com/release" }],
+  });
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => ({ observe: async () => ({ id: "obs", url: "about:blank", elements: [] }), execute: async () => ({ status: "ok" }) }),
+  });
+  const goal = await host.startWorkGoal({
+    objective: "Verify release checklist",
+    successCriteria: [{ id: "review", text: "The user reviews the result", required: true, verification: "user" }],
+    budget: { maxTasks: 2, maxActions: 2000, maxPlannerCalls: 1000, maxActiveMs: 28_800_000 },
+  });
+  const result = await host.runRoutine(saved.routineId, saved.revision);
+  const profile = host._active.get(result.taskId).store.taskProfile;
+  assert.equal(profile.capability.id, "routine");
+  assert.equal(profile.workGoalBinding.goalId, goal.goalId);
+  assert.equal(host._workGoalStore.get(goal.goalId).tasks.includes(result.taskId), true);
+  const scheduled = await host.runRoutine(saved.routineId, saved.revision, {
+    trigger: {
+      scheduleId: "55555555-5555-4555-8555-555555555555",
+      occurrenceAt: "2026-09-29T00:00:00.000Z",
+    },
+  });
+  assert.equal((await host.getTaskDetail(scheduled.taskId)).taskProfile.workGoalBinding.goalId, goal.goalId);
+});
+
+test("concurrent top-level Task requests cannot overbook the Work Goal task cap", async () => {
+  const storageRoot = await mkTempRoot();
+  const host = makeHost(storageRoot);
+  await host.startWorkGoal({
+    objective: "One bounded task",
+    successCriteria: [{ id: "review", text: "The user reviews the result", required: true, verification: "user" }],
+    budget: { maxTasks: 1, maxActions: 100, maxPlannerCalls: 50, maxActiveMs: 120000 },
+  });
+  const results = await Promise.allSettled([
+    host.createTask({ originalRequest: "Task one" }),
+    host.createTask({ originalRequest: "Task two" }),
+  ]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected" && ["budget_exhausted", "goal_budget_exhausted"].includes(result.reason.code)).length, 1);
+  assert.equal(host._workGoalStore.getActive().taskSlotsUsed, 1);
+});
+
+test("Work Goal pause waits for the durable Task binding transaction and cannot leak its writer lock", async () => {
+  const storageRoot = await mkTempRoot();
+  const host = makeHost(storageRoot);
+  const goal = await host.startWorkGoal({
+    objective: "Serialize Goal pause with Task creation",
+    successCriteria: [{ id: "review", text: "Review the result", required: true, verification: "user" }],
+    budget: { maxTasks: 2, maxActions: 100, maxPlannerCalls: 50, maxActiveMs: 120000 },
+  });
+  const original = host._workGoalOrchestrator.recordContinuation.bind(host._workGoalOrchestrator);
+  let entered;
+  const atContinuation = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const barrier = new Promise((resolve) => { release = resolve; });
+  host._workGoalOrchestrator.recordContinuation = async (...args) => {
+    entered();
+    await barrier;
+    return original(...args);
+  };
+  const creating = host.createTask({ originalRequest: "Task crossing Goal transition" });
+  await atContinuation;
+  let pauseFinished = false;
+  const pausing = host.pauseWorkGoal(goal.goalId, 1).then((value) => { pauseFinished = true; return value; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pauseFinished, false, "pause must wait until the cross-store Task binding is durable");
+  release();
+  const created = await creating;
+  const paused = await pausing;
+  assert.equal(paused.status, "paused");
+  assert.equal(host._active.has(created.taskId), true);
+  assert.equal(host._workGoalStore.get(goal.goalId).tasks.includes(created.taskId), true);
+});
+
+test("a failed continuation write closes the just-created TaskStore writer lock", async () => {
+  const storageRoot = await mkTempRoot();
+  const host = makeHost(storageRoot);
+  await host.startWorkGoal({
+    objective: "Do not leak an unattached Task lock",
+    successCriteria: [{ id: "review", text: "Review the result", required: true, verification: "user" }],
+    budget: { maxTasks: 1, maxActions: 100, maxPlannerCalls: 50, maxActiveMs: 120000 },
+  });
+  const original = host._workGoalOrchestrator.recordContinuation.bind(host._workGoalOrchestrator);
+  host._workGoalOrchestrator.recordContinuation = async (...args) => {
+    await original(...args);
+    throw Object.assign(new Error("injected continuation failure"), { code: "injected_failure" });
+  };
+  await assert.rejects(host.createTask({ originalRequest: "fail before queue admission" }), { code: "injected_failure" });
+  const taskId = Object.values(host._workGoalStore.getActive().reservations).find((item) => item.status === "linked").taskId;
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  await reopened.close();
+  assert.equal(host._active.has(taskId), false);
+});
+
+test("restart preserves budget and never auto-runs Tasks at every durable Work Goal admission boundary", async () => {
+  const storageRoot = await mkTempRoot();
+  const originalHost = makeHost(storageRoot);
+  const goal = await originalHost.startWorkGoal({
+    objective: "Recover each durable admission boundary",
+    successCriteria: [{ id: "review", text: "Review recovery", required: true, verification: "user" }],
+    budget: { maxTasks: 5, maxActions: 100, maxPlannerCalls: 100, maxActiveMs: 10000 },
+  });
+  const stages = [
+    { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-000000000001", at: "task_profile" },
+    { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000002", reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-000000000002", at: "reserved" },
+    { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000003", reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-000000000003", at: "linked" },
+    { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000004", reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-000000000004", at: "continuation" },
+    { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000005", reservationId: "bbbbbbbb-bbbb-4bbb-8bbb-000000000005", at: "queue_admitted" },
+  ];
+  const goalInput = {
+    originalRequest: "A Task interrupted during durable admission",
+    limits: { maxActions: 6, maxPlannerCalls: 3, maxActiveMs: 600 },
+  };
+  const { resolveTaskProfile } = require("../shared/task-profile-router");
+  await originalHost._ensureQueue();
+
+  for (const stage of stages) {
+    const binding = { goalId: goal.goalId, goalVersion: 1, reservationId: stage.reservationId };
+    const store = await TaskStore.create(goalInput, {
+      storageRoot,
+      taskId: stage.taskId,
+      resolvedProfile: resolveTaskProfile({ goalInput }),
+      workGoalBinding: binding,
+    });
+    if (stage.at !== "task_profile") {
+      await originalHost._workGoalOrchestrator.reserveTask(goal.goalId, 1, {
+        taskId: stage.taskId,
+        reservationId: stage.reservationId,
+        limits: { maxTasks: 1, maxActions: 6, maxPlannerCalls: 3, maxActiveMs: 600 },
+      });
+    }
+    if (["linked", "continuation", "queue_admitted"].includes(stage.at)) {
+      await originalHost._workGoalOrchestrator.linkTask(goal.goalId, 1, {
+        taskId: stage.taskId, reservationId: stage.reservationId,
+      });
+    }
+    if (["continuation", "queue_admitted"].includes(stage.at)) {
+      await originalHost._workGoalOrchestrator.recordContinuation(goal.goalId, 1, {
+        taskId: stage.taskId, origin: "user",
+      });
+    }
+    await store.close();
+    if (stage.at === "queue_admitted") {
+      await originalHost._ensureQueue();
+      await originalHost._queue.enqueue(stage.taskId);
+      assert.equal(await originalHost._queue.admitNext(), stage.taskId);
+    }
+  }
+
+  hostsToClose.delete(originalHost);
+  await originalHost.close();
+
+  let browserCreations = 0;
+  let plannerCreations = 0;
+  const recoveredHost = makeHost(storageRoot, {
+    makeBrowser: () => { browserCreations += 1; return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) }; },
+    makePlanner: () => { plannerCreations += 1; return finishingPlanner(); },
+  });
+  const listed = await recoveredHost.listTasks();
+  assert.deepEqual(listed.map((item) => item.taskId).sort(), stages.map((item) => item.taskId).sort());
+  assert.ok(listed.every((item) => ["queued", "paused"].includes(item.state) && item.active === false && item.queuePosition >= 1));
+  assert.equal(browserCreations, 0, "restart/listing must not attach a browser to interrupted admission work");
+  assert.equal(plannerCreations, 0, "restart/listing must not start a planner before explicit resume");
+
+  const recovery = await recoveredHost.getWorkGoalRecoveryStatus(goal.goalId, 1);
+  assert.deepEqual(recovery.map((item) => item.taskId).sort(), stages.slice(1).map((item) => item.taskId).sort());
+  assert.ok(recovery.every((item) => item.status === "held" && item.reason === "checkpoint_missing"));
+  assert.deepEqual(Object.values(recoveredHost._workGoalStore.get(goal.goalId).reservations).map((item) => item.status), ["linked", "linked", "linked", "linked"]);
+  assert.throws(() => recoveredHost._workGoalOrchestrator.getTaskContext({
+    goalId: goal.goalId,
+    goalVersion: 1,
+    taskId: stages[0].taskId,
+    reservationId: stages[0].reservationId,
+    workGoalBinding: { goalId: goal.goalId, goalVersion: 1, reservationId: stages[0].reservationId },
+  }), { code: "invalid_binding" });
+});
+
+test("process death after every durable Work Goal admission append recovers held and never auto-runs", async () => {
+  const boundaries = ["task_profile", "reserved", "linked", "continuation", "queue_admitted"];
+  for (const boundary of boundaries) {
+    const storageRoot = await mkTempRoot();
+    const childScript = `
+      const { TaskHost } = require(${JSON.stringify(require.resolve("../main/harness/task-host"))});
+      const { TaskStore } = require(${JSON.stringify(require.resolve("../main/harness/task-store"))});
+      const { WorkGoalOrchestrator } = require(${JSON.stringify(require.resolve("../main/harness/work-goal-orchestrator"))});
+      const boundary = process.argv[1];
+      const stop = () => process.exit(73);
+      const afterDurable = (target, name) => {
+        const original = target[name];
+        target[name] = async function (...args) {
+          const result = await original.apply(this, args);
+          stop();
+        };
+      };
+      if (boundary === "task_profile") afterDurable(TaskStore, "create");
+      if (boundary === "reserved") afterDurable(WorkGoalOrchestrator.prototype, "reserveTask");
+      if (boundary === "linked") afterDurable(WorkGoalOrchestrator.prototype, "linkTask");
+      if (boundary === "continuation") afterDurable(WorkGoalOrchestrator.prototype, "recordContinuation");
+      const host = new TaskHost({
+        storageRoot: process.argv[2],
+        makeBrowser: () => { throw new Error("browser must not be created before the crash point"); },
+        makePlanner: () => { throw new Error("planner must not be created before the crash point"); },
+        hostVerifier: () => true,
+        approve: async () => ({ decision: "allow", reasons: [] }),
+      });
+      if (boundary === "queue_admitted") {
+        const admit = host._admitNext.bind(host);
+        host._admitNext = async (...args) => {
+          const taskId = await admit(...args);
+          if (taskId) stop();
+          return taskId;
+        };
+      }
+      (async () => {
+        await host.startWorkGoal({
+          objective: "Crash at a durable Task admission boundary",
+          successCriteria: [{ id: "review", text: "Review recovery", required: true, verification: "user" }],
+          budget: { maxTasks: 1, maxActions: 8, maxPlannerCalls: 4, maxActiveMs: 800 },
+        });
+        await host.createTask({ originalRequest: "Crash-injected admission", limits: { maxActions: 8, maxPlannerCalls: 4, maxActiveMs: 800 } });
+        process.exit(74);
+      })().catch(() => process.exit(75));
+    `;
+    const crashed = spawnSync(process.execPath, ["-e", childScript, boundary, storageRoot], {
+      encoding: "utf8",
+      timeout: 15000,
+    });
+    assert.equal(crashed.status, 73, `${boundary}: child did not die at the injected durable boundary; stderr=${crashed.stderr}`);
+    assert.equal(crashed.error, undefined, `${boundary}: child process failed: ${crashed.error?.message}`);
+
+    let browserCreations = 0;
+    let browserExecutions = 0;
+    let plannerCreations = 0;
+    let plannerTurns = 0;
+    const recovered = makeHost(storageRoot, {
+      makeBrowser: () => {
+        browserCreations += 1;
+        return {
+          observe: async () => ({ id: "orphan-observation", url: "https://example.com/", elements: [] }),
+          execute: async () => { browserExecutions += 1; return { status: "ok" }; },
+        };
+      },
+      makePlanner: () => {
+        plannerCreations += 1;
+        return { next: async () => { plannerTurns += 1; throw new Error("unbound orphan must never reach planner"); } };
+      },
+    });
+    const tasks = await recovered.listTasks();
+    assert.equal(tasks.length, 1, `${boundary}: durable Task should remain visible after process death`);
+    assert.equal(tasks[0].active, false, `${boundary}: recovered Task must remain detached`);
+    assert.equal(await recovered.onMemorySample(), null, `${boundary}: memory admission must not resume recovered work`);
+    assert.equal(browserCreations, 0, `${boundary}: restart/listing must not create a browser`);
+    assert.equal(plannerCreations, 0, `${boundary}: restart/listing must not create a planner`);
+
+    const goal = await recovered.getActiveWorkGoal();
+    assert.equal(goal.remainingBudget.maxTasks, boundary === "task_profile" ? 1 : 0,
+      `${boundary}: reservation accounting must survive or safely remain unconsumed`);
+    const recovery = await recovered.getWorkGoalRecoveryStatus(goal.goalId, goal.spec.version);
+    if (boundary === "task_profile") assert.deepEqual(recovery, []);
+    else assert.deepEqual(recovery.map((item) => [item.status, item.reason]), [["held", "checkpoint_missing"]]);
+    if (boundary === "task_profile") {
+      const resumed = await recovered.resumeSavedTask(tasks[0].taskId);
+      assert.equal(resumed.state, "paused", "an unreserved Task profile must fail closed on explicit recovery");
+      assert.equal(resumed.pauseReason, "context_error");
+      assert.equal(plannerTurns, 0, "the planner must never receive context for an unreserved Task");
+      assert.equal(browserExecutions, 0, "no browser action may execute for an unreserved Task");
+    }
+  }
+});
+
+test("Work Goal survives pause/restart, continues with bound evidence, completes, archives, and releases the project slot", async () => {
+  const storageRoot = await mkTempRoot();
+  let nextTaskCall = 0;
+  let approvals = 0;
+  const makeRuntime = () => ({
+    makeBrowser: () => ({
+      observe: async () => ({ id: "obs", url: "https://example.com/", elements: [] }),
+      execute: async () => ({ status: "ok", evidenceCandidate: { kind: "host_check", sourceUrl: "https://example.com/" } }),
+    }),
+    makePlanner: () => ({
+      next: async (context) => {
+        const call = nextTaskCall++;
+        return call % 2 === 0
+          ? { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: ["proof"], kind: "actions", actions: [{ type: "observe" }] }
+          : { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: ["proof"], kind: "finish", evidenceIds: [] };
+      },
+    }),
+    hostVerifier: () => true,
+    approve: async () => { approvals += 1; return { decision: "allow", reasons: [] }; },
+  });
+
+  let host = makeHost(storageRoot, makeRuntime());
+  const goal = await host.startWorkGoal({
+    objective: "Verify a project across durable Tasks",
+    successCriteria: [
+      { id: "proof", text: "A Task contains host-verified evidence", required: true, verification: "host_evidence" },
+      { id: "userReview", text: "The user reviewed the completed work", required: true, verification: "user" },
+    ],
+    budget: { maxTasks: 3, maxActions: 30, maxPlannerCalls: 20, maxActiveMs: 120000 },
+  });
+  const first = await host.createTask({
+    originalRequest: "Collect the first proof",
+    criteria: [{ id: "proof", text: "Collect host-verified evidence", required: true, verification: "host" }],
+    limits: { maxActions: 5, maxPlannerCalls: 4, maxActiveMs: 10000 },
+  });
+  assert.equal(first.snapshot.state, "completed");
+  assert.equal(approvals, 1, "the Work Goal must not bypass the existing action approval boundary");
+  const firstBinding = host._active.get(first.taskId).store.taskProfile.workGoalBinding;
+  for (let i = 0; i < 100 && (host._queue.activeIds().includes(first.taskId) ||
+      host._workGoalStore.get(goal.goalId).reservations[firstBinding.reservationId].status !== "released"); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(host._queue.activeIds().includes(first.taskId), false, "terminal Task usage must reconcile before restart");
+  assert.equal(host._workGoalStore.get(goal.goalId).reservations[firstBinding.reservationId].status, "released");
+
+  await host.pauseWorkGoal(goal.goalId, 1);
+  hostsToClose.delete(host);
+  await host.close();
+  host = makeHost(storageRoot, makeRuntime());
+  assert.equal((await host.getActiveWorkGoal()).status, "paused");
+  assert.deepEqual(await host.listTasks().then((items) => items.filter((item) => item.active)), [],
+    "reopening the project must not auto-attach completed or queued Tasks");
+  await assert.rejects(host.createTask({ originalRequest: "must wait for Goal resume" }), { code: "work_goal_not_active" });
+  await host.resumeWorkGoal(goal.goalId, 1);
+
+  const continuation = await host.createTask({
+    originalRequest: "Collect continuation proof",
+    criteria: [{ id: "proof", text: "Collect host-verified evidence", required: true, verification: "host" }],
+    limits: { maxActions: 5, maxPlannerCalls: 4, maxActiveMs: 10000 },
+  });
+  assert.equal(continuation.snapshot.state, "completed");
+  const continuationStore = host._active.get(continuation.taskId).store;
+  const evidenceEvent = (await continuationStore.getEvents()).find((event) =>
+    event.type === "evidence_recorded" && event.payload.evidence.criterionId === "proof" && event.payload.evidence.verification === "verified");
+  assert.ok(evidenceEvent, "continuation must durably checkpoint independently verified evidence");
+  await host.recordWorkGoalProgress(goal.goalId, 1, [{
+    criterionId: "proof", taskId: continuation.taskId, eventId: evidenceEvent.eventId,
+    evidenceId: evidenceEvent.payload.evidence.id,
+  }]);
+  await host.verifyWorkGoalCriterion(goal.goalId, 1, "userReview");
+  const completed = await host.completeWorkGoal(goal.goalId, 1);
+  assert.equal(completed.status, "complete");
+  await host.archiveWorkGoal(goal.goalId, 1);
+  const nextGoal = await host.startWorkGoal({
+    objective: "Begin the next project objective",
+    successCriteria: [{ id: "next", text: "Review the next result", required: true, verification: "user" }],
+  });
+  assert.equal(nextGoal.status, "active");
+  assert.notEqual(nextGoal.goalId, goal.goalId);
+});
+
+test("three matching durable paused continuations block the active Work Goal", async () => {
+  const storageRoot = await mkTempRoot();
+  const host = makeHost(storageRoot, { makePlanner: () => ({ next: async () => { throw new Error("simulated planner outage"); } }) });
+  const goal = await host.startWorkGoal({
+    objective: "Detect a repeated planner blocker",
+    successCriteria: [{ id: "review", text: "Review the result", required: true, verification: "user" }],
+    budget: { maxTasks: 3, maxActions: 100, maxPlannerCalls: 50, maxActiveMs: 120000 },
+  });
+  for (let index = 0; index < 3; index += 1) {
+    const { taskId, snapshot } = await host.createTask({ originalRequest: `attempt ${index + 1}` });
+    assert.equal(snapshot.state, "paused");
+    assert.equal(snapshot.pauseReason, "planner_error");
+    await host._withWorkGoalAdmission(() => undefined);
+    await host.stopTask(taskId);
+    await host._queueTransition;
+    assert.equal(host._workGoalStore.get(goal.goalId).blockerStreak.count, index + 1);
+  }
+  const active = await host.getActiveWorkGoal();
+  assert.equal(active.status, "blocked");
+  assert.equal(active.blockerStreak.count, 3);
+});
+
+test("prequeued continuations preserve their blocker attempts in admission order", async () => {
+  const storageRoot = await mkTempRoot();
+  let releaseFirstPlanner;
+  let signalFirstPlanner;
+  const firstPlannerEntered = new Promise((resolve) => { signalFirstPlanner = resolve; });
+  const firstPlannerGate = new Promise((resolve) => { releaseFirstPlanner = resolve; });
+  let plannerCalls = 0;
+  const host = makeHost(storageRoot, {
+    makePlanner: () => ({ next: async () => {
+      plannerCalls += 1;
+      if (plannerCalls === 1) {
+        signalFirstPlanner();
+        await firstPlannerGate;
+      }
+      throw new Error("simulated planner outage");
+    } }),
+  });
+  const goal = await host.startWorkGoal({
+    objective: "Count consecutive failures even when continuations queue first",
+    successCriteria: [{ id: "review", text: "Review the result", required: true, verification: "user" }],
+    budget: { maxTasks: 3, maxActions: 100000, maxPlannerCalls: 50000, maxActiveMs: 100000000 },
+  });
+
+  const firstCreating = host.createTask({ originalRequest: "attempt 1" });
+  await firstPlannerEntered;
+  const second = await host.createTask({ originalRequest: "attempt 2" });
+  const third = await host.createTask({ originalRequest: "attempt 3" });
+  assert.equal(second.snapshot.state, "queued");
+  assert.equal(third.snapshot.state, "queued");
+
+  releaseFirstPlanner();
+  const first = await firstCreating;
+  assert.equal(first.snapshot.pauseReason, "planner_error");
+
+  for (const taskId of [first.taskId, second.taskId, third.taskId]) {
+    if (taskId !== first.taskId) {
+      const detail = await waitForState(host, taskId, ["paused"]);
+      assert.equal(detail.pauseReason, "planner_error");
+    }
+    await host._withWorkGoalAdmission(() => undefined);
+    await host.stopTask(taskId);
+    await host._queueTransition;
+  }
+
+  const active = await host.getActiveWorkGoal();
+  assert.equal(active.status, "blocked");
+  assert.equal(active.blockerStreak.count, 3);
+});
+
+test("createTask resolves and durably records the profile before browser or planner construction", async () => {
+  const storageRoot = await mkTempRoot();
+  const observedAtConstruction = [];
+  const host = makeHost(storageRoot, {
+    makeBrowser: (taskId) => {
+      const events = fsSync.readFileSync(path.join(storageRoot, "tasks", taskId, "events.jsonl"), "utf8")
+        .trimEnd().split("\n").map((line) => JSON.parse(line));
+      observedAtConstruction.push(events.map((event) => event.type));
+      assert.deepEqual(events.slice(0, 2).map((event) => event.type), ["goal_created", "task_profile_selected"]);
+      assert.equal(events[1].payload.duration.id, "short");
+      return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) };
+    },
+  });
+  const { taskId } = await host.createTask(
+    { originalRequest: "quick inspect this page" },
+    { requestedCapabilityProfile: "browser" },
+  );
+  const detail = await host.getTaskDetail(taskId);
+  assert.equal(detail.harnessProfile, "short");
+  assert.equal(detail.taskProfile.capability.id, "browser");
+  assert.equal(detail.taskProfile.selection.capability.source, "explicit_user_choice");
+  assert.equal(observedAtConstruction.length, 1);
+});
+
+test("unavailable or invalid routing creates no task store and constructs no resources", async () => {
+  const storageRoot = await mkTempRoot();
+  let resources = 0;
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => { resources += 1; throw new Error("unexpected browser construction"); },
+    makePlanner: () => { resources += 1; throw new Error("unexpected planner construction"); },
+  });
+  await assert.rejects(() => host.createTask(
+    { originalRequest: "inspect the page" },
+    { requestedCapabilityProfile: "research" },
+  ), { code: "capability_unavailable" });
+  await assert.rejects(() => host.createTask(
+    { originalRequest: "inspect the page" },
+    { requestedDurationProfile: "Long" },
+  ), { code: "invalid_selector" });
+  assert.deepEqual(await TaskStore.listTaskIds({ storageRoot }), []);
+  assert.equal(resources, 0);
 });
 
 test("listTasks() lists both attached and never-attached (saved-only) tasks", async () => {
@@ -523,11 +1121,13 @@ test("getTaskDetail() works for both an active task and a saved-only one", async
   assert.equal(activeDetail.active, true);
   assert.equal(activeDetail.goal.originalRequest, "active task");
   assert.equal(activeDetail.harnessProfile, "middle");
+  assert.equal(activeDetail.taskProfile.duration.id, "middle");
 
   const savedDetail = await host.getTaskDetail(savedOnly.taskId);
   assert.equal(savedDetail.active, false);
   assert.equal(savedDetail.goal.originalRequest, "saved only");
   assert.equal(savedDetail.harnessProfile, "middle");
+  assert.equal(savedDetail.taskProfile, null);
 });
 
 test("queued task does not create browser resources until the preceding task stops", async () => {
@@ -571,6 +1171,28 @@ test("a queued plain task actually runs to completion after the preceding task s
   await host.stopTask(first.taskId);
   const finished = await waitForState(host, second.taskId, ["awaiting_verification", "completed"]);
   assert.notEqual(finished.pauseReason, "queue_start_failed");
+});
+
+test("a queued task still starts while listTasks() is polled without pause (peek/attach lock race)", async () => {
+  for (let round = 0; round < 8; round += 1) {
+    const storageRoot = await mkTempRoot();
+    const host = makeHost(storageRoot);
+    const first = await host.createTask({ originalRequest: "a" });
+    const second = await host.createTask({ originalRequest: "b" });
+    assert.equal(second.snapshot.state, "queued");
+    let polling = true;
+    const pollers = Array.from({ length: 4 }, async () => {
+      while (polling) await host.listTasks();
+    });
+    await host.stopTask(first.taskId);
+    try {
+      const finished = await waitForState(host, second.taskId, ["awaiting_verification", "completed"], 10000);
+      assert.notEqual(finished.pauseReason, "queue_start_failed");
+    } finally {
+      polling = false;
+      await Promise.all(pollers);
+    }
+  }
 });
 
 test("a queued routine task actually runs to awaiting_verification after the preceding task stops", async () => {
@@ -629,20 +1251,20 @@ function pausingPlanner() {
   };
 }
 
-test("createTask() rejects an invalid explicit harnessProfile", async () => {
+test("createTask() rejects an invalid duration profile selector", async () => {
   const storageRoot = await mkTempRoot();
   const host = makeHost(storageRoot);
   await assert.rejects(
-    () => host.createTask({ originalRequest: "bad profile" }, { harnessProfile: "fast" }),
-    (error) => error.code === "invalid_harness_profile",
+    () => host.createTask({ originalRequest: "bad profile" }, { requestedDurationProfile: "fast" }),
+    (error) => error.code === "invalid_selector",
   );
 });
 
-test("an explicit harnessProfile:\"long\" survives a full host restart; the default (no override) stays \"middle\"", async () => {
+test("an explicit long duration profile survives a full host restart; the default stays middle", async () => {
   const storageRoot = await mkTempRoot();
   const originalHost = makeHost(storageRoot, { makePlanner: () => pausingPlanner() });
 
-  const longTask = await originalHost.createTask({ originalRequest: "long task" }, { harnessProfile: "long" });
+  const longTask = await originalHost.createTask({ originalRequest: "long task" }, { requestedDurationProfile: "long" });
   await waitForState(originalHost, longTask.taskId, ["paused"]);
   const beforeRestart = await originalHost.getTaskDetail(longTask.taskId);
   assert.equal(beforeRestart.harnessProfile, "long");
@@ -877,7 +1499,7 @@ test("the trusted host audits a memory override and freezes it for the existing 
   await host.updateHostSettings({ memoryPolicy: "user_override" });
   const audit = (await settingsStore.listMemoryPolicyAudit())[0];
   assert.equal(audit.actor, "user");
-  const parent = await host.createTask({ originalRequest: "keep my selected policy" });
+  const parent = await host.createTask({ originalRequest: "keep my selected policy" }, { requestedCapabilityProfile: "multi_agent" });
   assert.equal(parent.snapshot.state, "awaiting_verification", "the override also bypasses the HALO pressure pause for this run");
   assert.equal(host._resourceAdmission.getSnapshot().leases[0].mode, "user_override");
 
@@ -1031,7 +1653,7 @@ test("resumeSavedTask() re-attaches fresh browser/planner instances after a memo
 test("listChildren() returns [] for a task with no child plan, and reflects an accepted plan via the coordinator", async () => {
   const storageRoot = await mkTempRoot();
   const host = makeHost(storageRoot);
-  const { taskId } = await host.createTask({ originalRequest: "parent goal" });
+  const { taskId } = await host.createTask({ originalRequest: "parent goal" }, { requestedCapabilityProfile: "multi_agent" });
 
   assert.deepEqual(await host.listChildren(taskId), []);
 
@@ -1059,7 +1681,7 @@ test("listChildren() returns [] for a task with no child plan, and reflects an a
 test("a child's taskId is absent from listTasks() and rejected by resumeSavedTask()", async () => {
   const storageRoot = await mkTempRoot();
   const host = makeHost(storageRoot);
-  const { taskId: parentTaskId } = await host.createTask({ originalRequest: "parent goal" });
+  const { taskId: parentTaskId } = await host.createTask({ originalRequest: "parent goal" }, { requestedCapabilityProfile: "multi_agent" });
   const { store } = host._require(parentTaskId);
 
   const { childIds } = await host._childCoordinator.acceptParentPlan(

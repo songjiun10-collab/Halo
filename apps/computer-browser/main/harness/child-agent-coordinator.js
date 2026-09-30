@@ -19,6 +19,8 @@ const crypto = require("node:crypto");
 const contracts = require("../../shared/harness-contracts");
 const { TaskStore } = require("./task-store");
 const { TaskController } = require("./task-controller");
+const { resolveTaskProfile } = require("../../shared/task-profile-router");
+const { validateTaskProfileSelectedPayload } = require("../../shared/task-profile-contracts");
 const { MessageMailbox, MessageMailboxError } = require("./message-mailbox");
 
 class ChildAgentCoordinatorError extends Error {
@@ -155,6 +157,9 @@ class ChildAgentCoordinator {
     if (!parentStore || typeof parentStore.getGoal !== "function" || typeof parentStore.append !== "function") {
       throw new ChildAgentCoordinatorError("invalid_config", "parentStore with getGoal/append is required");
     }
+    if (parentStore.taskProfile?.capability?.id !== "multi_agent") {
+      throw new ChildAgentCoordinatorError("capability_not_authorized", "parent task must have a persisted Multi-agent capability profile");
+    }
     if (!contracts.MEMORY_POLICIES.includes(memoryPolicy)) {
       throw new ChildAgentCoordinatorError("invalid_field", `memoryPolicy must be one of ${contracts.MEMORY_POLICIES.join("|")}`);
     }
@@ -201,9 +206,14 @@ class ChildAgentCoordinator {
       for (const a of validated.assignments) {
         const childId = crypto.randomUUID();
         const origin = contracts.deriveOrigin(a.entryUrl);
+        const childProfile = resolveTaskProfile({
+          goalInput: { originalRequest: a.subgoal },
+          parentProfile: parentStore.taskProfile,
+          parentBinding: { parentTaskId, planId, parentGoalVersion: validated.parentGoalVersion },
+        });
         const childStore = await TaskStore.createChild(
           { originalRequest: a.subgoal },
-          { storageRoot: this._storageRoot, parentTaskId, childId },
+          { storageRoot: this._storageRoot, parentTaskId, childId, resolvedProfile: childProfile },
         );
         await childStore.close();
         createdChildIds.push(childId);
@@ -239,6 +249,7 @@ class ChildAgentCoordinator {
       parentGoalVersion: validated.parentGoalVersion,
       memoryPolicy,
       memoryPolicyAuditEventId,
+      parentTaskProfile: parentStore.taskProfile,
       state: "queued",
     };
     this._plans.set(parentTaskId, plan);
@@ -339,12 +350,15 @@ class ChildAgentCoordinator {
     let since = 0;
     let latestAccepted = null;
     const cancelledPlanIds = new Set();
+    let parentTaskProfile = null;
     for (;;) {
       const page = await TaskStore.readEvents(parentTaskId, { storageRoot: this._storageRoot }, { since });
       if (page.length === 0) break;
       for (const event of page) {
         if (event.type === "child_plan_accepted") {
           latestAccepted = event;
+        } else if (event.type === "task_profile_selected") {
+          parentTaskProfile = event.payload;
         } else if (event.type === "child_plan_cancelled") {
           cancelledPlanIds.add(event.payload.planId);
         }
@@ -364,6 +378,7 @@ class ChildAgentCoordinator {
         parentGoalVersion,
         memoryPolicy,
         memoryPolicyAuditEventId,
+        parentTaskProfile,
         state: "cancelled",
       };
     }
@@ -391,6 +406,7 @@ class ChildAgentCoordinator {
       parentGoalVersion,
       memoryPolicy,
       memoryPolicyAuditEventId,
+      parentTaskProfile,
       state: "queued",
     };
   }
@@ -459,7 +475,7 @@ class ChildAgentCoordinator {
     if (!lease.admitted) return { started: false, reason: lease.reason };
 
     try {
-      await this._attachChild(parentTaskId, assignment, lease.leaseId);
+      await this._attachChild(parentTaskId, assignment, lease.leaseId, plan);
     } catch (error) {
       if (error.cleanupComplete === false) {
         this._failedStartLeases.set(childId, lease.leaseId);
@@ -501,7 +517,7 @@ class ChildAgentCoordinator {
   // userNavigate() -- the pre-existing trusted path that bypasses the
   // observe-only action-policy gate entirely -- before the child's planner
   // is ever consulted.
-  async _attachChild(parentTaskId, assignment, leaseId) {
+  async _attachChild(parentTaskId, assignment, leaseId, plan) {
     const { childId, entryUrl, origin } = assignment;
     let childStore = null;
     let browser = null;
@@ -510,6 +526,22 @@ class ChildAgentCoordinator {
     let live = null;
     try {
       childStore = await TaskStore.loadChild(childId, { storageRoot: this._storageRoot, parentTaskId });
+      const parentProfile = plan.parentTaskProfile || null;
+      const childProfile = childStore.taskProfile;
+      const isLegacyPair = !parentProfile && !childProfile;
+      if (!isLegacyPair) {
+        if (!parentProfile || !childProfile || childProfile.capability.id !== "browser") {
+          throw new ChildAgentCoordinatorError("profile_binding_invalid", "profiled child plan requires a persisted Browser child profile");
+        }
+        validateTaskProfileSelectedPayload(parentProfile);
+        const binding = childProfile.parentBinding;
+        if (!binding || binding.parentTaskId !== parentTaskId || binding.planId !== plan.planId
+            || binding.parentGoalVersion !== plan.parentGoalVersion
+            || childProfile.duration.id !== parentProfile.duration.id
+              && ["short", "middle", "long"].indexOf(childProfile.duration.id) > ["short", "middle", "long"].indexOf(parentProfile.duration.id)) {
+          throw new ChildAgentCoordinatorError("profile_binding_invalid", "child profile is not bound to the accepted parent plan or exceeds its horizon");
+        }
+      }
       browser = this._makeChildBrowser(parentTaskId, childId, origin);
       await browser.userNavigate({ type: "navigate", url: entryUrl });
       planner = this._makePlanner(childId);
@@ -525,6 +557,7 @@ class ChildAgentCoordinator {
         memoryMonitor: this._memoryMonitor,
         memoryStore: this._memoryStore,
         permissionMode: "observe",
+        harnessProfile: childStore.taskProfile?.duration?.id || "middle",
         plannerEffort: this._plannerEffort,
         now: this._now,
         segmentRotationCalls: this._segmentRotationCalls,

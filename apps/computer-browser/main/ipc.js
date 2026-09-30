@@ -50,6 +50,18 @@ const HARNESS_METHODS = {
   "halo:saveRoutine": "saveRoutine",
   "halo:deleteRoutine": "deleteRoutine",
   "halo:runRoutine": "runRoutine",
+  "halo:startWorkGoal": "startWorkGoal",
+  "halo:getActiveWorkGoal": "getActiveWorkGoal",
+  "halo:listWorkGoalHistory": "listWorkGoalHistory",
+  "halo:amendWorkGoal": "amendWorkGoal",
+  "halo:pauseWorkGoal": "pauseWorkGoal",
+  "halo:resumeWorkGoal": "resumeWorkGoal",
+  "halo:completeWorkGoal": "completeWorkGoal",
+  "halo:archiveWorkGoal": "archiveWorkGoal",
+  "halo:recordWorkGoalProgress": "recordWorkGoalProgress",
+  "halo:verifyWorkGoalCriterion": "verifyWorkGoalCriterion",
+  "halo:getWorkGoalRecoveryStatus": "getWorkGoalRecoveryStatus",
+  "halo:repairWorkGoalReservation": "repairWorkGoalReservation",
 };
 
 // win, controlApi: unchanged from before. Options:

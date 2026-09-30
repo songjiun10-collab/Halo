@@ -570,17 +570,38 @@ test("paces a second agent-initiated allow, but never the first", async () => {
   const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 40 });
   const timestamps = [];
   const execute = async () => {
-    timestamps.push(Date.now());
+    timestamps.push(performance.now());
   };
 
-  const start = Date.now();
+  const start = performance.now();
   await api.performGatedAction({ requestId: "r1", action: "navigate", summary: "go" }, execute);
   assert.ok(timestamps[0] - start < 20, "the very first agent action must not wait for the pacing floor");
 
   await api.performGatedAction({ requestId: "r2", action: "navigate", summary: "go" }, execute);
+  for (let index = 2; index < 30; index += 1) {
+    await api.performGatedAction({ requestId: `r${index + 1}`, action: "navigate", summary: "go" }, execute);
+  }
+  for (let index = 1; index < timestamps.length; index += 1) {
+    const gap = timestamps[index] - timestamps[index - 1];
+    assert.ok(gap >= 40, `expected a 40ms gap before action ${index + 1}, got ${gap.toFixed(3)}ms`);
+  }
+});
+
+test("a wall-clock jump cannot bypass the monotonic agent-action pacing floor", async () => {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 40 });
+  const timestamps = [];
+  const execute = async () => { timestamps.push(performance.now()); };
+  const realDateNow = Date.now;
+  try {
+    await api.performGatedAction({ requestId: "clock-r1", action: "navigate", summary: "go" }, execute);
+    Date.now = () => realDateNow() + 10_000;
+    await api.performGatedAction({ requestId: "clock-r2", action: "navigate", summary: "go" }, execute);
+  } finally {
+    Date.now = realDateNow;
+  }
   assert.ok(
     timestamps[1] - timestamps[0] >= 40,
-    `expected at least a 40ms gap between consecutive agent actions, got ${timestamps[1] - timestamps[0]}ms`,
+    `expected wall-clock adjustment not to shorten pacing; got ${(timestamps[1] - timestamps[0]).toFixed(3)}ms`,
   );
 });
 
@@ -588,7 +609,7 @@ test("approve() shares the same pacing clock as agent-initiated allows", async (
   const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 40 });
   const firstAt = [];
   await api.performGatedAction({ requestId: "seed", action: "navigate", summary: "seed" }, async () => {
-    firstAt.push(Date.now());
+    firstAt.push(performance.now());
   });
 
   let approvedAt = null;
@@ -600,7 +621,7 @@ test("approve() shares the same pacing clock as agent-initiated allows", async (
     reason: "test",
     createdAt: new Date().toISOString(),
     _execute: async () => {
-      approvedAt = Date.now();
+      approvedAt = performance.now();
     },
   });
   await api.approve("r2");
@@ -1029,7 +1050,7 @@ test("navigate() still reports ok on a genuine successful load (no regression fr
 
 test("stopTask during the pacing wait prevents the action from ever being dispatched", async () => {
   const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 200 });
-  api._lastAgentActionAt = Date.now(); // force the next action to actually wait out the pacing floor
+  api._lastAgentActionAt = performance.now(); // force the next action to actually wait out the pacing floor
   let executed = false;
 
   const pending = api.performGatedAction(
@@ -1051,7 +1072,7 @@ test("stopTask during the pacing wait prevents the action from ever being dispat
 
 test("stopTask during the pacing wait wakes the wait immediately instead of idling out the full interval", async () => {
   const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { minAgentActionIntervalMs: 5000 });
-  api._lastAgentActionAt = Date.now();
+  api._lastAgentActionAt = performance.now();
 
   const pending = api.performGatedAction({ requestId: "r1", action: "navigate", summary: "go" }, async () => {});
   await new Promise((r) => setImmediate(r));

@@ -1,6 +1,7 @@
 "use strict";
 
 const { randomUUID } = require("crypto");
+const { performance } = require("node:perf_hooks");
 const { WebContentsView } = require("electron");
 const { clampBrowserBounds } = require("../shared/clamp-bounds");
 const { looksLikeCaptcha } = require("../shared/captcha-heuristics");
@@ -61,7 +62,7 @@ class ControlApi {
     this._WebContentsView = webContentsViewClass;
     this._socketPath = socketPath;
     // Injectable seams for tests only (defaults are the real Unix-socket
-    // client / the real pacing floor / the real clock). Production callers
+    // client / the real pacing floor / metrics clock). Production callers
     // never pass these.
     this._requestDecision = requestDecisionOverride || requestDecision;
     this._minAgentActionIntervalMs =
@@ -268,21 +269,27 @@ class ControlApi {
   // delayed (_lastAgentActionAt starts at -Infinity); only a second action
   // arriving too soon after the last one waits out the remainder.
   async _paceAgentAction() {
-    const wait = this._minAgentActionIntervalMs - (Date.now() - this._lastAgentActionAt);
-    if (wait > 0) {
-      await new Promise((resolve) => {
+    while (this._lastAgentActionAt !== -Infinity) {
+      const wait = this._minAgentActionIntervalMs - (performance.now() - this._lastAgentActionAt);
+      if (wait <= 0) break;
+      const timerElapsed = await new Promise((resolve) => {
         const timer = setTimeout(() => {
           this._pendingPaceWaiters.delete(wakeEarly);
-          resolve();
+          resolve(true);
         }, wait);
         const wakeEarly = () => {
           clearTimeout(timer);
-          resolve();
+          resolve(false);
         };
         this._pendingPaceWaiters.add(wakeEarly);
       });
+      // setTimeout may run a fraction early. Recheck against the monotonic
+      // deadline so the configured floor is not shortened; an explicit stop
+      // still wakes the wait immediately and is handled by the caller's epoch
+      // check after this method returns.
+      if (!timerElapsed) break;
     }
-    this._lastAgentActionAt = Date.now();
+    this._lastAgentActionAt = performance.now();
   }
 
   // --- Free actions: direct human intent via UI controls. No approval gate. ---

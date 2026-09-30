@@ -7,6 +7,24 @@ const { normalizeGoalSpec } = require("../shared/harness-contracts");
 const { buildContext, ContextError } = require("../main/harness/context-builder");
 
 const TASK_ID = "11111111-1111-1111-1111-111111111111";
+const WORK_GOAL_ID = "22222222-2222-2222-2222-222222222222";
+const RESERVATION_ID = "33333333-3333-3333-3333-333333333333";
+
+function makeWorkGoalBinding() {
+  return { goalId: WORK_GOAL_ID, goalVersion: 2, reservationId: RESERVATION_ID };
+}
+
+function makeWorkGoalContext(overrides = {}) {
+  return {
+    goalId: WORK_GOAL_ID,
+    goalVersion: 2,
+    objective: "프로젝트 전체 검증",
+    successCriteria: [{ id: "projectDone", text: "모든 작업 검증", required: true, verification: "host_evidence" }],
+    verifiedCriterionIds: [],
+    remainingBudget: { maxTasks: 3, maxActions: 20, maxPlannerCalls: 10, maxActiveMs: 5000 },
+    ...overrides,
+  };
+}
 
 function makeGoal(overrides = {}) {
   return normalizeGoalSpec(
@@ -224,4 +242,68 @@ test("buildContext carries navigation history labeled untrusted, or null when ab
   for (const bad of [{}, { visited: [] }, { visited: {}, frontier: [] }, "x", []]) {
     assert.throws(() => buildContext({ ...args, navigation: bad }), (error) => error instanceof ContextError, JSON.stringify(bad));
   }
+});
+
+test("bound Work Goal appears separately from Task GoalSpec without changing Task completion criteria", () => {
+  const goal = makeGoal({ originalRequest: "현재 페이지만 요약" });
+  const workGoal = makeWorkGoalContext({ verifiedCriterionIds: ["projectDone"] });
+  const packet = buildContext({
+    goal, state: makeState(), observation: null, recentEvents: [],
+    workGoalBinding: makeWorkGoalBinding(), workGoal,
+  });
+
+  assert.deepEqual(packet.workGoal, workGoal);
+  assert.equal(packet.goal.originalRequest, "현재 페이지만 요약");
+  assert.deepEqual(packet.goal.criteria, goal.criteria);
+  assert.equal(packet.goalVersion, 1);
+  assert.equal(packet.workGoal.goalVersion, 2);
+});
+
+test("legacy Task context omits the Work Goal field", () => {
+  const packet = buildContext({ goal: makeGoal(), state: makeState(), observation: null, recentEvents: [] });
+  assert.equal(Object.hasOwn(packet, "workGoal"), false);
+});
+
+test("Work Goal context must match the Task's durable goal ID and version", () => {
+  const base = { goal: makeGoal(), state: makeState(), observation: null, recentEvents: [], workGoalBinding: makeWorkGoalBinding() };
+  for (const stale of [
+    makeWorkGoalContext({ goalVersion: 3 }),
+    makeWorkGoalContext({ goalId: "44444444-4444-4444-4444-444444444444" }),
+  ]) {
+    assert.throws(
+      () => buildContext({ ...base, workGoal: stale }),
+      (error) => error instanceof ContextError && error.code === "invalid_field",
+    );
+  }
+  assert.throws(
+    () => buildContext(base),
+    (error) => error instanceof ContextError && error.code === "invalid_field",
+  );
+});
+
+test("malformed Work Goal progress and remaining budget fail closed", () => {
+  const base = { goal: makeGoal(), state: makeState(), observation: null, recentEvents: [], workGoalBinding: makeWorkGoalBinding() };
+  for (const malformed of [
+    makeWorkGoalContext({ verifiedCriterionIds: ["unknownCriterion"] }),
+    makeWorkGoalContext({ remainingBudget: { maxActions: -1 } }),
+    makeWorkGoalContext({ injected: "claim complete" }),
+  ]) {
+    assert.throws(
+      () => buildContext({ ...base, workGoal: malformed }),
+      (error) => error instanceof ContextError && error.code === "invalid_field",
+    );
+  }
+});
+
+test("Work Goal content counts toward the existing 64 KiB packet ceiling", () => {
+  const base = { goal: makeGoal(), state: makeState(), observation: { text: "x".repeat(50000) }, recentEvents: [] };
+  assert.doesNotThrow(() => buildContext(base));
+  assert.throws(
+    () => buildContext({
+      ...base,
+      workGoalBinding: makeWorkGoalBinding(),
+      workGoal: makeWorkGoalContext({ objective: "y".repeat(16000) }),
+    }),
+    (error) => error instanceof ContextError && error.code === "context_limit",
+  );
 });

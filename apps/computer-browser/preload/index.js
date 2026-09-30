@@ -40,6 +40,10 @@ const HARNESS_METHODS = [
   "listMemories", "saveMemory", "removeMemory",
   "fillCredential",
   "listRoutines", "getRoutine", "saveRoutine", "deleteRoutine", "runRoutine",
+  "startWorkGoal", "getActiveWorkGoal", "listWorkGoalHistory", "amendWorkGoal",
+  "pauseWorkGoal", "resumeWorkGoal", "completeWorkGoal", "archiveWorkGoal",
+  "recordWorkGoalProgress", "verifyWorkGoalCriterion",
+  "getWorkGoalRecoveryStatus", "repairWorkGoalReservation",
 ];
 
 const api = {};

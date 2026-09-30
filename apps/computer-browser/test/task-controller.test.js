@@ -10,6 +10,7 @@ const { TaskStore } = require("../main/harness/task-store");
 const { TaskController, TaskControllerError } = require("../main/harness/task-controller");
 const { BrowserAdapter } = require("../main/harness/browser-adapter");
 const { RoutineRunner } = require("../main/harness/routine-runner");
+const { resolveTaskProfile } = require("../shared/task-profile-router");
 
 async function mkTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "halo-task-controller-"));
@@ -21,8 +22,33 @@ async function makeStore(goalInput) {
   return { store, storageRoot };
 }
 
+async function makeProfiledStore(goalInput, capability = "multi_agent", workGoalBinding = null) {
+  const storageRoot = await mkTempRoot();
+  const resolvedProfile = resolveTaskProfile({ goalInput, requestedCapabilityProfile: capability });
+  const store = await TaskStore.create(goalInput, { storageRoot, resolvedProfile, workGoalBinding });
+  return { store, storageRoot };
+}
+
 function allowApprove() {
   return async () => ({ decision: "allow", reasons: [] });
+}
+
+const WORK_GOAL_BINDING = Object.freeze({
+  goalId: "22222222-2222-2222-2222-222222222222",
+  goalVersion: 2,
+  reservationId: "33333333-3333-3333-3333-333333333333",
+});
+
+function boundWorkGoalContext(overrides = {}) {
+  return {
+    goalId: WORK_GOAL_BINDING.goalId,
+    goalVersion: WORK_GOAL_BINDING.goalVersion,
+    objective: "프로젝트 전체 검증",
+    successCriteria: [{ id: "projectDone", text: "모든 작업 검증", required: true, verification: "host_evidence" }],
+    verifiedCriterionIds: [],
+    remainingBudget: { maxTasks: 2, maxActions: 20 },
+    ...overrides,
+  };
 }
 
 test("drives 100 actions across at least 10 injected context-reset segments while preserving the goal", async () => {
@@ -361,6 +387,43 @@ test("a task recovered as execution_uncertain requires an explicit confirmed res
   assert.equal(executeCalls, 0);
   assert.ok(plannerCalls >= 1);
   await reloaded.close();
+});
+
+test("an execute error after dispatch remains execution_uncertain instead of recording a definitive failure", async () => {
+  const storageRoot = await mkTempRoot();
+  const store = await TaskStore.create({ originalRequest: "submit once" }, { storageRoot });
+  let externalEffects = 0;
+  const controller = new TaskController({
+    store,
+    permissionMode: "full",
+    planner: { next: async (context) => ({
+      taskId: context.taskId,
+      goalVersion: context.goalVersion,
+      basedOnObservationId: context.observation.id,
+      criterionIds: [],
+      kind: "actions",
+      actions: [{ type: "click", elementId: "submit" }],
+    }) },
+    browser: {
+      observe: async () => ({ id: "dispatch-observation" }),
+      execute: async () => { externalEffects += 1; throw Object.assign(new Error("reply lost"), { code: "timeout" }); },
+    },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+
+  const snapshot = await controller.start();
+  assert.equal(externalEffects, 1);
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "execution_uncertain");
+  const events = await TaskStore.readEvents(store.taskId, { storageRoot });
+  assert.equal(events.filter((event) => event.type === "action_started").length, 1);
+  assert.equal(events.filter((event) => event.type === "action_outcome").length, 0);
+  await store.close();
+
+  const recovered = await TaskStore.load(store.taskId, { storageRoot });
+  assert.equal(recovered.recoveryReason, "execution_uncertain");
+  await recovered.close();
 });
 
 test("a criterion verified before an amend() does not silently satisfy the amended goal", async () => {
@@ -1384,6 +1447,80 @@ test("memory context overflow pauses fail-closed before contacting the planner",
   await store.close();
 });
 
+test("each planner turn rebuilds Work Goal context from the Task's durable binding", async () => {
+  const { store } = await makeProfiledStore({ originalRequest: "현재 페이지만 요약" }, "browser", WORK_GOAL_BINDING);
+  const reads = [];
+  const contexts = [];
+  const controller = new TaskController({
+    store,
+    readWorkGoalContext: async (binding) => {
+      reads.push(binding);
+      return boundWorkGoalContext(reads.length === 1
+        ? { remainingBudget: { maxTasks: 2, maxActions: 20 } }
+        : { verifiedCriterionIds: ["projectDone"], remainingBudget: { maxTasks: 1, maxActions: 19 } });
+    },
+    planner: {
+      next: async (context) => {
+        contexts.push(context);
+        return contexts.length === 1
+          ? { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "observe" }] }
+          : { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "finish", evidenceIds: [] };
+      },
+    },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(), hostVerifier: () => true,
+  });
+  await controller.start();
+
+  assert.equal(contexts.length, 2);
+  assert.deepEqual(reads, [
+    { ...WORK_GOAL_BINDING, taskId: store.taskId },
+    { ...WORK_GOAL_BINDING, taskId: store.taskId },
+  ]);
+  assert.deepEqual(contexts.map((context) => context.workGoal.verifiedCriterionIds), [[], ["projectDone"]]);
+  assert.deepEqual(contexts.map((context) => context.workGoal.remainingBudget.maxActions), [20, 19]);
+  assert.equal(contexts[1].goal.originalRequest, "현재 페이지만 요약");
+  assert.equal(contexts[1].goalVersion, 1);
+  assert.equal(contexts[1].workGoal.goalVersion, 2);
+  await store.close();
+});
+
+test("bound Task pauses before planner when Work Goal context is unavailable or stale", async () => {
+  for (const readWorkGoalContext of [undefined, async () => boundWorkGoalContext({ goalVersion: 3 })]) {
+    const { store } = await makeProfiledStore({ originalRequest: "goal" }, "browser", WORK_GOAL_BINDING);
+    let plannerCalls = 0;
+    const controller = new TaskController({
+      store, readWorkGoalContext,
+      planner: { next: async () => { plannerCalls += 1; throw new Error("planner must not be contacted"); } },
+      browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+      approve: allowApprove(), hostVerifier: () => true,
+    });
+    const snapshot = await controller.start();
+    assert.equal(snapshot.state, "paused");
+    assert.equal(snapshot.pauseReason, "context_error");
+    assert.equal(plannerCalls, 0);
+    await store.close();
+  }
+});
+
+test("a legacy Task does not query or receive Work Goal context", async () => {
+  const { store } = await makeStore({ originalRequest: "standalone" });
+  let readerCalled = false;
+  const controller = new TaskController({
+    store,
+    readWorkGoalContext: async () => { readerCalled = true; throw new Error("not bound"); },
+    planner: { next: async (context) => {
+      assert.equal(Object.hasOwn(context, "workGoal"), false);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "finish", evidenceIds: [] };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(), hostVerifier: () => true,
+  });
+  await controller.start();
+  assert.equal(readerCalled, false);
+  await store.close();
+});
+
 function makeChildPlanProposal(context) {
   return {
     taskId: context.taskId,
@@ -1398,7 +1535,7 @@ function makeChildPlanProposal(context) {
 }
 
 test("onChildPlan hook: a child_plan proposal is delegated to the host, and the host rejecting it pauses the parent with child_plan_failed", async () => {
-  const { store } = await makeStore({ originalRequest: "부모 작업" });
+  const { store } = await makeProfiledStore({ originalRequest: "부모 작업" });
   let onChildPlanCalls = 0;
   let dispatched = 0;
   const controller = new TaskController({
@@ -1427,7 +1564,25 @@ test("onChildPlan hook: a child_plan proposal is delegated to the host, and the 
   await store.close();
 });
 
-test("onChildPlan hook: without one configured, a child_plan proposal is skipped and the parent keeps looping on a fresh observation instead of silently spawning anything", async () => {
+test("onChildPlan hook is not invoked for a non-Multi-agent task profile", async () => {
+  const { store } = await makeProfiledStore({ originalRequest: "normal browser task" }, "browser");
+  let onChildPlanCalls = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => makeChildPlanProposal(context) },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+    onChildPlan: async () => { onChildPlanCalls += 1; },
+  });
+  const snapshot = await controller.start();
+  assert.equal(onChildPlanCalls, 0);
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "child_plan_not_authorized");
+  await store.close();
+});
+
+test("unprofiled parent cannot accept child_plan even when no host hook is configured", async () => {
   const { store } = await makeStore({ originalRequest: "부모 작업" });
   let plannerCalls = 0;
   const controller = new TaskController({
@@ -1450,8 +1605,9 @@ test("onChildPlan hook: without one configured, a child_plan proposal is skipped
     // children, not merely be told not to.
   });
   const snapshot = await controller.start();
-  assert.equal(plannerCalls, 2, "the first child_plan proposal must be skipped, giving the planner a second turn");
-  assert.equal(snapshot.state, "awaiting_verification");
+  assert.equal(plannerCalls, 1);
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "child_plan_not_authorized");
   await store.close();
 });
 
@@ -1944,6 +2100,7 @@ test("long: uncheckpointed finish rejections survive a crash and the cap pauses 
   const recovered = await TaskStore.load(taskId, { storageRoot });
   const resumed = goalRun({ profile: "long", store: recovered, script: [finish] });
   await resumed.controller.resume({ confirmed: true });
+  assert.equal(resumed.contexts[0].progress.goalPersistence.rejectedFinishes, 3);
   assert.equal(resumed.turns(), 2, "three durable tail rejections plus two new attempts must reach the cap");
   assert.equal(recovered.lastCheckpoint.payload.goalPersistence.rejectedFinishes, 5);
   await recovered.close();

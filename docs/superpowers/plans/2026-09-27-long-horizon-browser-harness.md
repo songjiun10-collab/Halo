@@ -2,6 +2,8 @@
 
 > For agentic workers: use superpowers:executing-plans and implement task by task. 사용자 지정 실행자는 기존 Claude 런타임 세션이다. 사용자 요청은 설계 후 Claude 구현이며 추가 단계 승인을 반복 요청하지 않는다.
 
+**Status note (2026-09-30):** 아래 체크박스 20개는 미체크로 남아 있지만, 재감사 결과 서술된 동작은 이미 구현·테스트되어 있음을 확인했다 (`main/harness/task-store.js`의 goalVersion/amendment 직렬화와 UUID 기반 경로 검증, torn-line/uncertain 복구, `main/harness/task-controller.js`의 `_noProgressThreshold`/replan 게이트, `main/harness/planner-stdio.js`의 `shell:false`+argv/env allowlist — 개별 테스트는 `task-store.test.js`/`task-controller.test.js`에 있고 전체 스위트 933/933 통과). 체크박스 자체를 개별 항목별로 다시 검증·표기하지는 않았다; 문서 하단의 "정직한 한계" 절이 이 계획의 실제 마감 기록이다.
+
 **Goal:** 컨텍스트 교체와 재시작 뒤에도 최초 목표·제약·검증된 진척을 유지하는 브라우저 하네스.
 **Architecture:** Host-owned GoalSpec와 durable event journal에서 매 planner context를 재구성한다. 모델은 제안하고 host verifier/approver/executor가 진척·완료·실행을 통제한다.
 **Tech Stack:** Existing Electron/CommonJS, Node built-ins, Python approver, node:test/pytest.

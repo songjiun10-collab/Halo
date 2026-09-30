@@ -13,8 +13,11 @@
 //   HALO_BENCH_SEED (default 1), HALO_BENCH_APPROVAL (review|allow, default
 //   review), HALO_BENCH_SCROLLS_PER_PAGE (0..5, default 0) and
 //   HALO_BENCH_BATCHING (on|off, default on; only matters with scrolls) and
-//   HALO_BENCH_BATCH_CAP (1..8, default 3 = the middle-profile proposal cap;
-//   8 = the short-profile cap). Emits RESULT_JSON:<json>; exits nonzero on any failed iteration.
+//   HALO_BENCH_BATCH_CAP (1..8, default 3 = middle-profile proposal cap;
+//   8 = short-profile cap).
+// HALO_BENCH_KIND=duration-profile compares the same Browser planner workload
+// under Middle and Long; default kind remains routine-vs-planner. Emits
+// RESULT_JSON:<json>; exits nonzero on any failed iteration.
 
 const fs = require("node:fs/promises");
 const os = require("node:os");
@@ -27,13 +30,14 @@ const { TaskController } = require("../main/harness/task-controller");
 const { PlannerStdioAdapter } = require("../main/harness/planner-stdio");
 const { RoutineStore } = require("../main/harness/routine-store");
 const { RoutineRunner } = require("../main/harness/routine-runner");
+const { resolveTaskProfile } = require("../shared/task-profile-router");
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const PLANNER_SCRIPT = path.join(APP_ROOT, "fixtures", "scripted-planner-100.js");
 const MAX_ROUTINE_STEPS = 64;
 const MODES = ["routine", "planner"];
 const STAGE_LABELS = [
-  "action_policy_decision", "approver_decision", "approve_call_inclusive", "proposal",
+  "profile_resolution", "action_policy_decision", "approver_decision", "approve_call_inclusive", "proposal",
   "browser_observe", "browser_execute", "journal_prepare", "journal_append_write",
   "journal_fsync", "checkpoint_file_write", "checkpoint_file_fsync", "checkpoint_rename",
   "checkpoint_directory_fsync",
@@ -180,6 +184,7 @@ function recordDuration(stages, label, elapsedMs) {
 
 async function runIteration({
   mode,
+  durationProfile = null,
   scenario,
   createBrowser,
   storageRoot,
@@ -200,6 +205,7 @@ async function runIteration({
   const plannerPids = [];
   const record = {
     mode,
+    durationProfile,
     pairIndex: label.pairIndex ?? null,
     temperature: label.temperature ?? null,
     sequence: label.sequence ?? null,
@@ -221,6 +227,7 @@ async function runIteration({
     proposalRoundtripMs: summarize([]),
     cleanupMs: 0,
     plannerPids,
+    resolvedProfile: null,
     stages,
   };
 
@@ -228,6 +235,7 @@ async function runIteration({
   let store = null;
   let planner = null;
   let routineRoot = null;
+  let savedRoutine = null;
   sampler?.enter?.({ mode, ...label });
   try {
     browser = await createBrowser();
@@ -240,8 +248,30 @@ async function runIteration({
     });
     browser.execute = timedCall(stages, "browser_execute", browser.execute.bind(browser));
 
-    store = await TaskStore.create(JSON.parse(JSON.stringify(scenario.goal)), {
+    const goalInput = JSON.parse(JSON.stringify(scenario.goal));
+    let routineMetadata = null;
+    if (mode === "routine") {
+      routineRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-bench-routine-"));
+      savedRoutine = await new RoutineStore({ storageRoot: routineRoot }).save(scenario.routine);
+      routineMetadata = {
+        routineId: savedRoutine.routineId,
+        revision: savedRoutine.revision,
+        digest: savedRoutine.digest,
+        stepCount: savedRoutine.steps.length,
+      };
+    }
+    const profileStarted = performance.now();
+    const resolvedProfile = resolveTaskProfile({
+      goalInput,
+      routineMetadata,
+      ...(durationProfile ? { requestedDurationProfile: durationProfile } : {}),
+    });
+    recordDuration(stages, "profile_resolution", performance.now() - profileStarted);
+    record.resolvedProfile = { duration: resolvedProfile.duration.id, capability: resolvedProfile.capability.id };
+
+    store = await TaskStore.create(goalInput, {
       storageRoot,
+      resolvedProfile,
       onTiming: ({ operation, elapsedMs }) => {
         // TaskStore exposes a closed timing vocabulary. Ignore anything else
         // rather than turning arbitrary callback metadata into metric labels.
@@ -252,12 +282,10 @@ async function runIteration({
     let proposer;
     const routineOptions = {};
     if (mode === "routine") {
-      routineRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-bench-routine-"));
-      const saved = await new RoutineStore({ storageRoot: routineRoot }).save(scenario.routine);
-      const runner = new RoutineRunner({ definition: saved, cursor: 0, batchReadOnlySteps: true, maxBatchActions: batchCap });
+      const runner = new RoutineRunner({ definition: savedRoutine, cursor: 0, batchReadOnlySteps: true, maxBatchActions: batchCap });
       proposer = runner;
       routineOptions.routineRunner = runner;
-      routineOptions.routineRun = { routineId: saved.routineId, revision: saved.revision, digest: saved.digest, cursor: 0 };
+      routineOptions.routineRun = { routineId: savedRoutine.routineId, revision: savedRoutine.revision, digest: savedRoutine.digest, cursor: 0 };
       await store.checkpoint({ task: { state: "idle", pauseReason: null }, routineRun: routineOptions.routineRun });
     } else {
       planner = makePlanner({
@@ -292,6 +320,7 @@ async function runIteration({
       approve,
       hostVerifier: () => undefined,
       batchReadOnlyActions: batching !== false,
+      harnessProfile: resolvedProfile.duration.id,
       ...routineOptions,
     });
     const evaluatePolicy = controller._evaluateActionPolicy.bind(controller);
@@ -455,6 +484,172 @@ async function runBenchmark({
   return buildReport({ scenario, schedule, iterations, approvalMode, batching, seed, memory: sampler?.summarize?.() ?? null, extra: { batchCap } });
 }
 
+async function runRecoveryProbe({ storageRoot, durationProfile, completedActions = 100, checkpointEvery = 10 } = {}) {
+  if (!storageRoot) throw new TypeError("storageRoot is required");
+  if (!["middle", "long"].includes(durationProfile)) throw new TypeError("durationProfile must be middle|long");
+  if (!Number.isSafeInteger(completedActions) || completedActions < 1 || completedActions > 1000) {
+    throw new TypeError("completedActions must be an integer from 1 to 1000");
+  }
+  if (!Number.isSafeInteger(checkpointEvery) || checkpointEvery < 1 || checkpointEvery > completedActions) {
+    throw new TypeError("checkpointEvery must be an integer between 1 and completedActions");
+  }
+
+  const timing = emptyStages();
+  const goalInput = {
+    originalRequest: `Recover ${completedActions} completed benchmark actions for ${durationProfile}.`,
+    limits: { maxActions: Math.min(1000, completedActions + 1), maxPlannerCalls: 500, maxActiveMs: 4 * 60 * 60 * 1000 },
+  };
+  const resolveProfile = () => {
+    const started = performance.now();
+    const profile = resolveTaskProfile({ goalInput, requestedDurationProfile: durationProfile });
+    recordDuration(timing, "profile_resolution", performance.now() - started);
+    return profile;
+  };
+  const resolvedProfile = resolveProfile();
+  const store = await TaskStore.create(goalInput, {
+    storageRoot,
+    resolvedProfile,
+    onTiming: ({ operation, elapsedMs }) => {
+      if (Object.hasOwn(timing, operation)) recordDuration(timing, operation, elapsedMs);
+    },
+  });
+  for (let index = 0; index < completedActions; index += 1) {
+    const actionId = `recovery-action-${index}`;
+    await store.append({ type: "action_started", payload: { actionId } });
+    await store.append({ type: "action_outcome", payload: { actionId, status: "ok" } }, { durable: false });
+    if ((index + 1) % checkpointEvery === 0 || index + 1 === completedActions) {
+      await store.checkpoint({ task: { state: "paused", pauseReason: "benchmark_boundary" }, completedActions: index + 1 });
+    }
+  }
+  const cleanTaskId = store.taskId;
+  await store.close();
+  const replayStarted = performance.now();
+  const recovered = await TaskStore.load(cleanTaskId, { storageRoot });
+  const journalReplayMs = performance.now() - replayStarted;
+  const recoveredReason = recovered.recoveryReason;
+  const reloadedDurationProfile = recovered.taskProfile?.duration?.id || null;
+  const recoveredCheckpointSeq = recovered.lastCheckpoint?.seq ?? null;
+  const recoveredTailEventCount = recovered.eventsSinceCheckpoint.length;
+  await recovered.close();
+
+  const uncertainProfile = resolveProfile();
+  const uncertainStore = await TaskStore.create(goalInput, { storageRoot, resolvedProfile: uncertainProfile });
+  await uncertainStore.append({ type: "action_started", payload: { actionId: "recovery-open-action" } });
+  const uncertainTaskId = uncertainStore.taskId;
+  await uncertainStore.close();
+  const uncertain = await TaskStore.load(uncertainTaskId, { storageRoot });
+  const uncertainReason = uncertain.recoveryReason;
+  await uncertain.close();
+
+  return {
+    durationProfile,
+    reloadedDurationProfile,
+    completedActions,
+    recoveredReason,
+    uncertainReason,
+    journalReplayMs,
+    recoveredCheckpointSeq,
+    recoveredTailEventCount,
+    timing,
+  };
+}
+
+async function runDurationProfileBenchmark({
+  scenario,
+  pairs,
+  seed = 1,
+  approvalMode = "review",
+  batching = true,
+  createBrowser,
+  storageRoot,
+  makePlanner,
+  sampler,
+  timeoutMs,
+  recoveryActions = 300,
+  checkpointEvery = 25,
+} = {}) {
+  if (!storageRoot) throw new TypeError("storageRoot is required");
+  if (!Number.isInteger(pairs) || pairs < 1) throw new TypeError("pairs must be a positive integer");
+  if (!Number.isInteger(recoveryActions) || recoveryActions < 1 || recoveryActions > 1000) {
+    throw new TypeError("recoveryActions must be an integer from 1 to 1000");
+  }
+  if (!Number.isInteger(checkpointEvery) || checkpointEvery < 1 || checkpointEvery > recoveryActions) {
+    throw new TypeError("checkpointEvery must be an integer between 1 and recoveryActions");
+  }
+  const profiles = ["middle", "long"];
+  const modeSchedule = pairedSchedule({ pairs, seed });
+  const schedule = modeSchedule.map((pair) => ({
+    pairIndex: pair.pairIndex,
+    temperature: pair.temperature,
+    order: pair.order.map((mode) => mode === "routine" ? profiles[0] : profiles[1]),
+  }));
+  const iterations = [];
+  for (const pair of schedule) {
+    for (const durationProfile of pair.order) {
+      const row = await runIteration({
+        mode: "planner",
+        durationProfile,
+        scenario,
+        createBrowser,
+        storageRoot,
+        approvalMode,
+        batching,
+        makePlanner,
+        sampler,
+        timeoutMs,
+        label: { pairIndex: pair.pairIndex, temperature: pair.temperature, sequence: iterations.length, durationProfile },
+      });
+      iterations.push(row);
+      if (!row.success) throw new Error(`iteration failed (${durationProfile}, pair ${pair.pairIndex}): ${row.error}`);
+    }
+  }
+  const recovery = {};
+  for (const durationProfile of profiles) {
+    recovery[durationProfile] = await runRecoveryProbe({
+      storageRoot: path.join(storageRoot, `recovery-${durationProfile}`),
+      durationProfile,
+      completedActions: recoveryActions,
+      checkpointEvery,
+    });
+  }
+  const deltas = schedule.map((pair) => {
+    const middle = iterations.find((row) => row.pairIndex === pair.pairIndex && row.durationProfile === "middle");
+    const long = iterations.find((row) => row.pairIndex === pair.pairIndex && row.durationProfile === "long");
+    return long.runMs - middle.runMs;
+  });
+  return {
+    kind: "duration-profile-benchmark",
+    schemaVersion: 1,
+    profiles,
+    scenario: { steps: scenario.steps, totalActions: scenario.totalActions ?? scenario.steps, origin: scenario.origin },
+    design: { pairs, seed, approvalMode, batching: batching !== false, schedule },
+    iterations,
+    summary: Object.fromEntries(profiles.map((profile) => [
+      profile,
+      summarizeGroup(iterations.filter((row) => row.durationProfile === profile)),
+    ])),
+    summaryByTemperature: Object.fromEntries(profiles.map((profile) => [
+      profile,
+      Object.fromEntries(["cold", "warm"].map((temperature) => [
+        temperature,
+        summarizeGroup(iterations.filter((row) => row.durationProfile === profile && row.temperature === temperature)),
+      ])),
+    ])),
+    comparison: {
+      pairedRunMsDelta: summarize(deltas),
+      deltaDefinition: "long runMs minus middle runMs within the same pair",
+    },
+    recovery,
+    limitations: [
+      "Both profiles use the same Browser planner, TaskController, policy, approval, journal and checkpoint code; only the selected duration profile differs.",
+      "Recovery probe uses a synthetic TaskStore action journal and measures TaskStore replay, not full TaskHost/browser/planner reattachment or long-horizon task success.",
+      "The local scripted planner and fixture do not measure model quality; OS fsync and browser timing are machine/load dependent.",
+      "The fixed completed-action trace is not a calibrated profile budget or production workload corpus.",
+    ],
+    memory: sampler?.summarize?.() ?? null,
+  };
+}
+
 function getExternalMemoryBytes(pid) {
   return new Promise((resolve) => {
     execFile("ps", ["-o", "rss=", "-p", String(pid)], (error, stdout) => {
@@ -502,7 +697,12 @@ async function main() {
   const sampleLoop = (async () => {
     while (running) {
       const sample = await monitor.sample();
-      if (currentLabel) samples.push({ mode: currentLabel.mode, totalBytes: sample.totalBytes, unmeasurable: sample.unmeasurable });
+      if (currentLabel) samples.push({
+        mode: currentLabel.mode,
+        durationProfile: currentLabel.durationProfile ?? null,
+        totalBytes: sample.totalBytes,
+        unmeasurable: sample.unmeasurable,
+      });
       await delay(SAMPLE_MS);
     }
   })();
@@ -524,28 +724,39 @@ async function main() {
           unmeasurable: [...new Set(selected.flatMap((sample) => sample.unmeasurable))],
         }];
       })),
+      byDurationProfile: Object.fromEntries(["middle", "long"].map((profile) => {
+        const selected = samples.filter((sample) => sample.durationProfile === profile);
+        const values = selected.map((sample) => sample.totalBytes);
+        return [profile, {
+          sampleCount: selected.length,
+          peakBytes: values.length ? Math.max(...values) : null,
+          p50Bytes: values.length ? [...values].sort((a, b) => a - b)[Math.floor((values.length - 1) / 2)] : null,
+          unmeasurable: [...new Set(selected.flatMap((sample) => sample.unmeasurable))],
+        }];
+      })),
     }),
   };
 
   let exitCode = 0;
   try {
-    const report = await runBenchmark({
-      scenario,
-      pairs,
-      seed,
-      approvalMode,
-      batching,
-      batchCap,
-      storageRoot,
-      sampler,
-      createBrowser: async () => {
+    const createBrowser = async () => {
         const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: "halo-routine-bench" } });
         win.contentView.addChildView(view);
         view.setBounds({ x: 0, y: 0, width: 1440, height: 900 });
         view.setVisible(false);
         return new BrowserAdapter({ view });
-      },
-    });
+      };
+    const kind = process.env.HALO_BENCH_KIND || "routine-vs-planner";
+    if (!["routine-vs-planner", "duration-profile"].includes(kind)) {
+      throw new RangeError("HALO_BENCH_KIND must be routine-vs-planner|duration-profile");
+    }
+    const report = kind === "duration-profile"
+      ? await runDurationProfileBenchmark({
+        scenario, pairs, seed, approvalMode, batching, storageRoot, sampler, createBrowser,
+        recoveryActions: envInt("HALO_BENCH_RECOVERY_ACTIONS", 300, { min: 1, max: 1000 }),
+        checkpointEvery: envInt("HALO_BENCH_CHECKPOINT_EVERY", 25, { min: 1, max: 1000 }),
+      })
+      : await runBenchmark({ scenario, pairs, seed, approvalMode, batching, batchCap, storageRoot, sampler, createBrowser });
     const pageCounts = fixture.requestLog
       .filter((item) => /^\/step\/\d+$/.test(item.path))
       .reduce((map, item) => ({ ...map, [item.path]: (map[item.path] || 0) + 1 }), {});
@@ -577,9 +788,33 @@ module.exports = {
   runIteration,
   buildReport,
   runBenchmark,
+  runRecoveryProbe,
+  runDurationProfileBenchmark,
 };
 
-if (process.versions.electron || require.main === module) {
+// Compare process.argv[1] to __filename, not require.main === module: under
+// Electron's main process, require.main is Electron's own internal bootstrap
+// module (require.main.filename === "electron"), so require.main === module
+// is always false there, even for the script actually passed to the electron
+// binary -- that check alone would silently make this file's main() never
+// run when invoked directly. process.argv[1] still holds the real entry
+// script path in both plain Node and Electron, so resolving it against
+// __filename works uniformly and correctly stays false when this file is
+// merely required by another benchmark (e.g. concurrent-throughput-
+// benchmark.js, which imports mulberry32/buildScenario from here) --
+// avoiding the earlier bug where `process.versions.electron ||` made this
+// file's own main() self-execute and app.exit() as a side effect of that
+// require, racing and sometimes killing the requiring script before it
+// could finish.
+const isDirectInvocation = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return require.resolve(process.argv[1]) === __filename;
+  } catch {
+    return false;
+  }
+})();
+if (isDirectInvocation) {
   main().catch((error) => {
     process.stdout.write(`RESULT_JSON:${JSON.stringify({ kind: "routine-vs-planner-benchmark", error: String(error?.stack || error) })}\n`);
     (process.versions.electron ? require("electron").app.exit(1) : process.exit(1));

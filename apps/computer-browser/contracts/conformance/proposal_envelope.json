@@ -1,0 +1,401 @@
+{
+  "kind": "proposal_envelope",
+  "cases": [
+    {
+      "name": "actions",
+      "valid": true,
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "actions",
+        "actions": [
+          {
+            "type": "observe"
+          }
+        ]
+      }
+    },
+    {
+      "name": "replan",
+      "valid": true,
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "replan",
+        "reason": "page changed"
+      }
+    },
+    {
+      "name": "need_user",
+      "valid": true,
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "need_user",
+        "reason": "captcha"
+      }
+    },
+    {
+      "name": "finish",
+      "valid": true,
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "finish",
+        "evidenceIds": [
+          "E1"
+        ]
+      }
+    },
+    {
+      "name": "child_plan",
+      "valid": true,
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "child_plan",
+        "parentGoalVersion": 1,
+        "requestedAgentCount": 1,
+        "assignments": [
+          {
+            "subgoal": "read page",
+            "entryUrl": "https://example.com/"
+          }
+        ]
+      }
+    },
+    {
+      "name": "send_message text",
+      "valid": true,
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "send_message",
+        "recipientTaskId": "22222222-2222-4222-8222-222222222222",
+        "messageKind": "progress",
+        "idempotencyKey": "k1",
+        "text": "50% done"
+      }
+    },
+    {
+      "name": "send_message handoff",
+      "valid": true,
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "send_message",
+        "recipientTaskId": "22222222-2222-4222-8222-222222222222",
+        "messageKind": "handoff",
+        "idempotencyKey": "k2",
+        "handoff": {
+          "objective": "find price",
+          "currentState": "on page",
+          "verifiedResults": [
+            {
+              "text": "price is 5",
+              "evidenceId": "E1"
+            }
+          ],
+          "unresolved": [],
+          "risks": [],
+          "suggestedNextAction": "report"
+        }
+      }
+    },
+    {
+      "name": "unknown kind",
+      "valid": false,
+      "code": "unknown_enum",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "dance"
+      }
+    },
+    {
+      "name": "actions empty",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "actions",
+        "actions": []
+      }
+    },
+    {
+      "name": "actions too many",
+      "valid": false,
+      "code": "field_too_large",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "actions",
+        "actions": [
+          {
+            "type": "observe"
+          },
+          {
+            "type": "observe"
+          },
+          {
+            "type": "observe"
+          },
+          {
+            "type": "observe"
+          },
+          {
+            "type": "observe"
+          },
+          {
+            "type": "observe"
+          },
+          {
+            "type": "observe"
+          },
+          {
+            "type": "observe"
+          },
+          {
+            "type": "observe"
+          }
+        ]
+      }
+    },
+    {
+      "name": "actions with reason",
+      "valid": false,
+      "code": "invalid_shape",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "actions",
+        "actions": [
+          {
+            "type": "observe"
+          }
+        ],
+        "reason": "x"
+      }
+    },
+    {
+      "name": "finish with actions",
+      "valid": false,
+      "code": "invalid_shape",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "finish",
+        "evidenceIds": [],
+        "actions": [
+          {}
+        ]
+      }
+    },
+    {
+      "name": "replan without reason",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "replan"
+      }
+    },
+    {
+      "name": "child_plan count mismatch",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "child_plan",
+        "parentGoalVersion": 1,
+        "requestedAgentCount": 2,
+        "assignments": [
+          {
+            "subgoal": "a",
+            "entryUrl": "https://example.com/"
+          }
+        ]
+      }
+    },
+    {
+      "name": "child_plan non-http entry",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "child_plan",
+        "parentGoalVersion": 1,
+        "requestedAgentCount": 1,
+        "assignments": [
+          {
+            "subgoal": "a",
+            "entryUrl": "file:///etc/passwd"
+          }
+        ]
+      }
+    },
+    {
+      "name": "child_plan credentials in url",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "child_plan",
+        "parentGoalVersion": 1,
+        "requestedAgentCount": 1,
+        "assignments": [
+          {
+            "subgoal": "a",
+            "entryUrl": "https://u:p@example.com/"
+          }
+        ]
+      }
+    },
+    {
+      "name": "send_message handoff with text",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "send_message",
+        "recipientTaskId": "22222222-2222-4222-8222-222222222222",
+        "messageKind": "handoff",
+        "idempotencyKey": "k",
+        "handoff": {
+          "objective": "find price",
+          "currentState": "on page",
+          "verifiedResults": [
+            {
+              "text": "price is 5",
+              "evidenceId": "E1"
+            }
+          ],
+          "unresolved": [],
+          "risks": [],
+          "suggestedNextAction": "report"
+        },
+        "text": "x"
+      }
+    },
+    {
+      "name": "send_message unknown messageKind",
+      "valid": false,
+      "code": "unknown_enum",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "send_message",
+        "recipientTaskId": "22222222-2222-4222-8222-222222222222",
+        "messageKind": "gossip",
+        "idempotencyKey": "k",
+        "text": "x"
+      }
+    },
+    {
+      "name": "unknown field",
+      "valid": false,
+      "code": "unknown_field",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "basedOnObservationId": "obs-1",
+        "criterionIds": [
+          "C1"
+        ],
+        "kind": "replan",
+        "reason": "x",
+        "secret": 1
+      }
+    },
+    {
+      "name": "missing observation id",
+      "valid": false,
+      "code": "invalid_field",
+      "value": {
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "goalVersion": 1,
+        "criterionIds": [],
+        "kind": "replan",
+        "reason": "x"
+      }
+    }
+  ]
+}

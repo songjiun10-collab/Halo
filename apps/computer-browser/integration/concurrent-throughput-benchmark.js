@@ -138,6 +138,12 @@ async function runConcurrentIteration({
     if (sampler) await sampler.begin();
     t0 = performance.now();
     const submitted = Array.from({ length: concurrency }, () => host.runRoutine(saved.routineId, saved.revision));
+    // The iteration timeout may win before the aggregate Promise.race below
+    // observes every submitted Task. Keep a rejection handler attached from
+    // submission time so a host shutdown racing a slow admission path cannot
+    // surface as an unrelated unhandledRejection after the benchmark row is
+    // already classified as timed out.
+    for (const pending of submitted) pending.catch(() => {});
     const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`iteration timed out after ${timeoutMs} ms`)), timeoutMs); });
     await Promise.race([allFinished, timeout]);
     const results = await Promise.race([Promise.all(submitted), timeout]);
@@ -332,7 +338,20 @@ async function main() {
 
 module.exports = { LIMITATIONS, concurrencySchedule, runConcurrentIteration, buildReport, runBenchmark, stat };
 
-if (process.versions.electron) {
+// process.argv[1] resolved against __filename, not require.main === module --
+// see the matching comment in routine-vs-planner-benchmark.js. Under Electron's
+// main process, require.main is Electron's own bootstrap module, never this
+// script, so require.main === module alone would make this file's own direct
+// invocation never call main() either.
+const isDirectInvocation = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return require.resolve(process.argv[1]) === __filename;
+  } catch {
+    return false;
+  }
+})();
+if (isDirectInvocation) {
   main().catch((error) => {
     process.stdout.write(`RESULT_JSON:${JSON.stringify({ kind: "concurrent-throughput-benchmark", error: String(error?.stack || error) })}\n`);
     require("electron").app.exit(1);
