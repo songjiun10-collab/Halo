@@ -19,8 +19,13 @@ function defaultChromeRoot() {
 const isWebUrl = (value) => typeof value === "string" && Buffer.byteLength(value, "utf8") <= MAX_URL_BYTES && /^https?:\/\//i.test(value);
 const clip = (value) => (typeof value === "string" ? value.slice(0, MAX_TITLE_BYTES) : "");
 
+// A missing file is legitimately empty; an unreadable or malformed one is a
+// failure the importer must not mistake for "the user has no bookmarks".
 async function readJson(file) {
-  try { return JSON.parse(await fs.readFile(file, "utf8")); } catch { return null; }
+  let text;
+  try { text = await fs.readFile(file, "utf8"); }
+  catch (error) { return error.code === "ENOENT" ? { state: "missing" } : { state: "failed" }; }
+  try { return { state: "ok", value: JSON.parse(text) }; } catch { return { state: "failed" }; }
 }
 
 function flattenBookmarks(roots) {
@@ -38,6 +43,7 @@ function flattenBookmarks(roots) {
   return out;
 }
 
+// Returns null when the database exists but could not be read.
 async function readSearchEngines(webDataFile) {
   try { await fs.access(webDataFile); } catch { return []; }
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "halo-chrome-webdata-"));
@@ -53,7 +59,7 @@ async function readSearchEngines(webDataFile) {
         .slice(0, MAX_ENGINES)
         .map((row) => ({ name: clip(row.short_name), keyword: clip(row.keyword), url: row.url }));
     } finally { db.close(); }
-  } catch { return []; }
+  } catch { return null; }
   finally { await fs.rm(directory, { recursive: true, force: true }).catch(() => {}); }
 }
 
@@ -65,8 +71,15 @@ async function readChromeSettings({ chromeRoot = defaultChromeRoot(), profile = 
     if (!stat.isDirectory() || stat.isSymbolicLink()) return { status: "not_found" };
   } catch { return { status: "not_found" }; }
 
-  const bookmarksJson = await readJson(path.join(dir, "Bookmarks"));
-  const preferences = await readJson(path.join(dir, "Preferences"));
+  const bookmarksFile = await readJson(path.join(dir, "Bookmarks"));
+  const preferencesFile = await readJson(path.join(dir, "Preferences"));
+  const searchEngines = await readSearchEngines(path.join(dir, "Web Data"));
+  const failed = [];
+  if (bookmarksFile.state === "failed") failed.push("bookmarks");
+  if (preferencesFile.state === "failed") failed.push("preferences");
+  if (searchEngines === null) failed.push("searchEngines");
+  const bookmarksJson = bookmarksFile.state === "ok" ? bookmarksFile.value : null;
+  const preferences = preferencesFile.state === "ok" ? preferencesFile.value : null;
   let homepage = null;
   let startupUrls = [];
   if (preferences && typeof preferences === "object") {
@@ -79,9 +92,10 @@ async function readChromeSettings({ chromeRoot = defaultChromeRoot(), profile = 
   return {
     status: "ok",
     bookmarks: flattenBookmarks(bookmarksJson?.roots),
-    searchEngines: await readSearchEngines(path.join(dir, "Web Data")),
+    searchEngines: searchEngines ?? [],
     homepage,
     startupUrls,
+    ...(failed.length ? { failed } : {}),
   };
 }
 

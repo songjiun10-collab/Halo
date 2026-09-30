@@ -1939,6 +1939,30 @@ test("isRoutine() reflects whether the controller was constructed with a routine
   await routineStore.close();
 });
 
+test("recordHostNote accepts only value-free imported-session audit notes", async () => {
+  const { store } = await makeStore({ originalRequest: "host notes" });
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "n/a" }) },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+  await controller.recordHostNote({ kind: "imported_sessions_injection_failed", errorCode: "vault_corrupt" });
+  for (const bad of [
+    { kind: "imported_sessions_injection_failed" },
+    { kind: "imported_sessions_injection_failed", errorCode: "has spaces" },
+    { kind: "imported_sessions_injection_failed", errorCode: "x".repeat(65) },
+    { kind: "imported_sessions_injection_failed", errorCode: "ok", message: "cookie sk-secret" },
+    { kind: "something_else", errorCode: "ok" },
+  ]) {
+    await assert.rejects(controller.recordHostNote(bad), { code: "invalid_host_note" }, JSON.stringify(bad));
+  }
+  const events = await store.getEvents();
+  assert.deepEqual(events.filter((event) => event.type === "note").map((event) => event.payload), [{ kind: "imported_sessions_injection_failed", errorCode: "vault_corrupt" }]);
+  await store.close();
+});
+
 test("the planner context carries visited pages and not-yet-visited links so a dead end can backtrack", async () => {
   const { store } = await makeStore({ originalRequest: "navigation memory" });
   const pages = {

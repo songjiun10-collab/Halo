@@ -331,7 +331,11 @@ class TaskHost {
           });
         this._withWorkGoalAdmission(operation).catch(() => {});
       }
-      if (snapshot.state === "completed" || snapshot.state === "stopped") this._recordTerminal(store.taskId, snapshot.state);
+      if (snapshot.state === "completed" || snapshot.state === "stopped") {
+        // The task's session is discarded with it; stop tracking it for purges.
+        this._profileImporter?.releaseTask?.(store.taskId);
+        this._recordTerminal(store.taskId, snapshot.state);
+      }
     });
     entry.unsubscribeBrowser = browser.onChange?.((snapshot) => {
       this._emit(store.taskId, entry.snapshot, { browser: snapshot });
@@ -356,11 +360,20 @@ class TaskHost {
 
     return this._withSessionAccess(async () => {
       let summary = null;
+      let injectionErrorCode = null;
       const session = this._getTaskSession(store.taskId);
       try { summary = await this._profileImporter.prepareTask(store.taskId, session); }
-      catch { summary = null; }
+      catch (error) {
+        // Still non-blocking, but recorded: a value-free code distinguishes a
+        // failed injection from a task that never opted in.
+        summary = null;
+        injectionErrorCode = /^[A-Za-z0-9_.-]{1,64}$/.test(String(error?.code)) ? String(error.code) : "unknown";
+      }
       const entry = this._attach(store, routine);
       entry.importedSession = session;
+      if (injectionErrorCode) {
+        entry.controller.recordHostNote({ kind: "imported_sessions_injection_failed", errorCode: injectionErrorCode }).catch(() => {});
+      }
       if (summary) {
         entry.controller.recordHostNote({ kind: "imported_sessions_injected", injected: summary.injected, failed: summary.failed, domains: summary.domains }).catch(() => {});
       }
@@ -743,7 +756,14 @@ class TaskHost {
       let taskId;
       try { taskId = crypto.randomUUID(); }
       catch (error) { throw new TaskHostError("task_id_unavailable", error.message); }
-      const { store, workGoalBinding } = await this._withWorkGoalAdmission(async () => {
+      // The task ID is host-generated before any storage exists, so the opt-in
+      // is made durable FIRST. A failed write rejects createTask with no task
+      // or Work Goal reservation left behind, and a crash after this point can
+      // never leave a recoverable task that silently lost its opt-in.
+      if (useImportedSessions) await this._profileImporter.markTaskOptIn(taskId);
+      let created;
+      try {
+        created = await this._withWorkGoalAdmission(async () => {
         let binding = null;
         let taskGoalInput = structuredClone(goalInput);
         const activeGoal = standalone ? null : await this._workGoalOrchestrator.getActiveWorkGoal();
@@ -811,16 +831,13 @@ class TaskHost {
           throw error;
         }
         return { store: taskStore, workGoalBinding: binding };
-      });
-      this._runMemoryPolicies.set(store.taskId, { mode: selected.mode, auditEventId: selected.auditEventId });
-      if (useImportedSessions) {
-        try { await this._profileImporter.markTaskOptIn(store.taskId); }
-        catch (error) {
-          this._runMemoryPolicies.delete(store.taskId);
-          await store.close();
-          throw error;
-        }
+        });
+      } catch (error) {
+        if (useImportedSessions) await this._profileImporter.unmarkTaskOptIn(taskId).catch(() => {});
+        throw error;
       }
+      const { store, workGoalBinding } = created;
+      this._runMemoryPolicies.set(store.taskId, { mode: selected.mode, auditEventId: selected.auditEventId });
       // Validate the exact pinned revision while the task is still not
       // enqueued/admitted. A malformed or missing routine must never reserve
       // a browser lease and then strand an active queue entry.
