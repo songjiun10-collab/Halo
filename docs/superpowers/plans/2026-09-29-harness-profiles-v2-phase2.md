@@ -1,0 +1,196 @@
+# Harness v2 Phase 2: Short Harness Implementation Plan
+
+**Goal:** Give the `short` harness profile real execution behavior — safe batching, reduced planner cadence, incremental observation, and semantic durability — per the design's Short Harness section, with each optimization independently benchmarked against the current (Middle-equivalent) baseline. `middle` and `long` behavior must not change in this phase.
+
+**Architecture:** `TaskController` now receives and stores an explicit `harnessProfile` (Phase 2 Task 1, done), selected by `TaskHost` as the sole profile-selection authority. Later tasks read `this._harnessProfile` at specific, narrow decision points (batch sizing, planner-call gating, observation depth, checkpoint cadence) rather than branching broadly through the controller. Every behavior change stays inside the existing authority boundary: policy, approval, and ResourceAdmission are unaffected by profile (Global Constraints, unchanged from Phase 1).
+
+**Tech Stack:** Electron main-process JavaScript, `node:test`.
+
+**Spec:** `docs/superpowers/specs/2026-09-29-harness-profiles-v2-design.md` (Short Harness section; Rollout Phase 2).
+
+## Global Constraints
+
+- No profile can bypass review, ResourceAdmission, or change policy outcomes for an identical proposed action (Verification section of the spec).
+- `middle` and `long` must be bit-for-bit behaviorally identical to current `develop` after every task in this plan; only `short` may diverge.
+- A batch still ends at every authority boundary listed in the spec (approval boundary, externally-visible side effect, navigation/document-epoch change, unexpected state, policy change, uncertainty, evidence boundary) — profile only changes how aggressively *safe* batching is pursued, never which boundaries exist.
+- `execution_uncertain` is never auto-retried, regardless of profile.
+- Each optimization (batching / planner cadence / observation / durability) must land as its own task with its own before/after benchmark number, per the spec's Ablation section — no "Short is faster" claim without a `git diff`-attributable cause.
+- Do not commit or push without a green `node --test` run across `apps/computer-browser` (aside from the two pre-existing, unrelated failures already present on `develop`: `test/agent-viewport-host.test.js`, `test/control-api.test.js`).
+
+## Review Focus
+
+- Any profile-gated branch must default to today's behavior when `harnessProfile` is `middle` or `long`; a missing/omitted profile must never silently become `short`.
+- Batching changes must preserve every existing authority-boundary test in `test/task-controller.test.js`'s read-only-batch suite unmodified for `middle`.
+- Planner-cadence changes must not weaken no-progress detection (`_noProgressThreshold`) or segment rotation (`_segmentRotationCalls`) for `middle`/`long`.
+- Durability changes must preserve exact recovery correctness (`execution_uncertain` classification, checkpoint/journal replay) for `middle`/`long`; `short`'s "semantic segment boundary" durability must still be provably recoverable, not merely faster.
+
+---
+
+### Task 1: Thread `harnessProfile` into TaskController as a real, host-selected input
+
+**Files:**
+- Modified: `apps/computer-browser/main/harness/task-controller.js`
+- Modified: `apps/computer-browser/main/harness/task-host.js`
+- Modified: `apps/computer-browser/test/task-controller.test.js`
+
+**Interfaces:**
+- `TaskController` constructor accepts optional `harnessProfile`; validates it via `validateHarnessProfile` and defaults via `selectHarnessProfile({isRoutine})` when omitted (e.g. a directly-constructed test/child controller). Adds `getHarnessProfile()`.
+- `TaskHost._attach()` computes `harnessProfile` via `selectHarnessProfile({isRoutine: !!routine})` and passes it explicitly, making TaskHost the sole selection authority per the spec's "Profile selection" section.
+- `TaskHost.getTaskDetail()`'s active branch now reads `active.controller.getHarnessProfile()` instead of recomputing it.
+
+- [x] Add tests: explicit invalid profile rejected; explicit valid profile (`"long"`) accepted and returned; routine/non-routine defaulting still `short`/`middle`.
+- [x] Implement the constructor/host wiring.
+- [x] Run `node --test test/task-controller.test.js test/task-host.test.js test/harness-profile.test.js test/child-agent-coordinator.test.js`. (160/160 green)
+- [x] Run the full `apps/computer-browser` suite. (633/640 pass; the same 2 pre-existing, unrelated failures as Phase 1.)
+
+### Task 2: Safe batching for `short`
+
+**Design note (how the cap became profile-aware without weakening it elsewhere):** `validateProposalEnvelope()` (the shared security boundary in `shared/harness-contracts.js` used by routines, child agents, and message handling alike) now takes an optional `{maxActions}` override. It is restricted to a fixed, pre-reviewed allowlist (`ALLOWED_PROPOSAL_MAX_ACTIONS = [MAX_ACTIONS_PER_PROPOSAL, MAX_ACTIONS_PER_PROPOSAL_SHORT]`) — an unrecognized override throws `invalid_field` rather than silently widening the boundary to whatever a caller passes. `shared/harness-profile.js` owns the single mapping from profile to bound (`maxActionsPerProposal(profile)`); every other existing caller of `validateProposalEnvelope` (child-agent-coordinator's `child_plan` validation, and any future non-`actions`-kind proposal) omits the option entirely and keeps exactly today's `MAX_ACTIONS_PER_PROPOSAL` behavior.
+
+**Files:**
+- Modified: `apps/computer-browser/shared/harness-contracts.js` (`MAX_ACTIONS_PER_PROPOSAL_SHORT` constant, `{maxActions}` option + allowlist check on `validateProposalEnvelope`).
+- Modified: `apps/computer-browser/shared/harness-profile.js` (`maxActionsPerProposal(profile)`).
+- Modified: `apps/computer-browser/main/harness/progress.js` (threads `context.maxActions` through).
+- Modified: `apps/computer-browser/main/harness/task-controller.js` (passes `maxActionsPerProposal(this._harnessProfile)` at its one `validateProposal` call site).
+- Modified: `apps/computer-browser/main/harness/routine-runner.js` (`maxBatchActions` constructor option, defaulting to `MAX_ACTIONS_PER_PROPOSAL`, used in place of the hardcoded constant when batching consecutive scroll steps).
+- Modified: `apps/computer-browser/main/harness/task-host.js` (both `RoutineRunner` construction sites now pass `maxBatchActions: maxActionsPerProposal("short")`, since a routine task is always `short`).
+- Modified: `apps/computer-browser/test/harness-profile.test.js`, `test/task-controller.test.js`, `test/routine-runner.test.js`.
+
+**Interfaces:** batching aggressiveness for `short` increases only for actions already provably safe to batch (read-only, no cross-boundary effect — the existing `isReadOnlyAction`/`_dispatchReadOnlyBatch` gate is unchanged); `middle`/`long` keep exactly today's `MAX_ACTIONS_PER_PROPOSAL`-bounded (3) behavior.
+
+- [x] Design note above.
+- [x] Add tests proving `short` accepts and batches more read-only actions per turn than `middle` rejects under an otherwise identical 4-action proposal (`task-controller.test.js`), that `RoutineRunner`'s `maxBatchActions` batches past the old 3-cap (`routine-runner.test.js`), that `maxBatchActions` fails closed on a non-positive-integer, and that `maxActionsPerProposal` maps correctly per profile and rejects an invalid one (`harness-profile.test.js`).
+- [x] Implement.
+- [x] Benchmark (in-process, `TaskController` + fake store/browser, not the full Electron integration harness): completing the *same* 6 read-only scroll actions —
+  | | planner calls | approval calls | journal appends |
+  |---|---:|---:|---:|
+  | middle (2 turns, its own 3-cap) | 3 | 2 | 12 |
+  | short (1 turn, 6 ≤ its 8-cap) | 2 | 1 | 12 |
+
+  Batching more read-only actions per turn measurably reduces planner and approval round-trips (33% fewer planner calls, 50% fewer approvals for this fixed workload); journal append count is unaffected by batch width (each action still produces its own `action_started`/`action_outcome` pair — only the `durable`/fsync flag on the non-final entries changes, which Task 5 addresses, not Task 2).
+- [x] Run focused (`harness-profile.test.js`, `task-controller.test.js` 88/88, `routine-runner.test.js`, `routine-store.test.js`, `routine-task-e2e.test.js`: 166/166 combined) + full regression (638/645; the same 2 pre-existing, unrelated failures).
+
+### Task 3: Reduced planner cadence for `short`
+
+**Files (expected):** `main/harness/task-controller.js`, `main/harness/context-builder.js`, new/modified tests.
+
+**Interfaces (expected):** for `short`, the planner is not invoked merely because one browser action completed when the current segment's expected next step is still structurally determinable (e.g. mid-batch); `middle`/`long` planner-call triggers are unchanged.
+
+- [ ] Write failing tests establishing the exact current planner-call triggers for `middle` as a locked baseline (regression net before touching anything).
+- [x] Write failing tests for the new `short` no-unnecessary-replan behavior. *(Superseded — see below.)*
+- [x] Implement. *(Delivered by Task 2, not a separate mechanism — see below.)*
+- [x] Benchmark planner-call count and latency, `short` vs `middle`, on the same fixed scripted task as Task 2.
+- [x] Run focused + full regression.
+
+**Outcome: delivered by Task 2, not a separate change.** The spec's own wording is "The planner should not be invoked merely because another browser action occurred" — that is exactly what read-only batching already does (a batch's actions dispatch without returning to the planner between them), and Task 2's wider `short` cap directly scales it: completing the same 6 read-only actions took 3 planner calls for `middle` (two 3-action batches) versus 2 for `short` (one 6-action batch) — the same benchmark table as Task 2. Inventing a second, independent planner-cadence mechanism on top of batch width would not be a different optimization; it would be re-deriving the same lever. No separate code change was made for this task.
+
+### Task 4: Incremental observation for `short`
+
+**Revised scope (2026-09-29):** the original design note below correctly identified that a *general* delta/DOM-diff observation system is too wide a change for this plan. But re-reading it turned up that the specific blocker it named — no staleness proof and no way to get an already-taken observation back out of `execute()` — mostly already exists: `BrowserAdapter.getDocumentEpoch()` is the exact same authority `execute()`'s own `stale_document` guard already trusts, and adding the observation payload to `execute()`'s "observe"-action return is a strictly additive field (verified against `test/browser-adapter.test.js`'s existing assertions, which check individual fields, never a `deepEqual` on the whole result). That is enough to implement tier 1 of the spec's own ordered observation-preference list — "existing valid stable references" — safely and narrowly, without touching DOM-scanning, `observationKey()`, or `_noProgressThreshold` at all. Tiers 2-5 (real delta/DOM-diff, progressive expansion, visual fallback) remain out of scope and would still need their own dedicated plan.
+
+**Files:**
+- Modified: `apps/computer-browser/main/harness/browser-adapter.js` (`execute()`'s `"observe"` case now also returns `observation`).
+- Modified: `apps/computer-browser/main/harness/task-controller.js` (`_reusableObservation` cache; consulted only for `harnessProfile === "short"`, gated by `browser.getDocumentEpoch()` matching; cleared on any non-observe dispatch and on `resume()`).
+- Modified: `apps/computer-browser/test/task-controller.test.js`.
+
+**Interfaces:** `TaskController` tracks the most recently dispatched action's own observation, but only trusts it as reusable when (a) that action was itself a successful `"observe"`, (b) profile is `short`, and (c) `browser.getDocumentEpoch()` (when the browser implements it) still equals that observation's `documentEpoch`. Any other outcome falls back to today's unconditional `browser.observe()` call — the same behavior `middle`/`long` always keep, and the same behavior a test-fake browser without `getDocumentEpoch()` gets by default.
+
+- [x] Design note (below) plus the revised-scope note above.
+- [x] Failing-then-passing tests: reuse across a clean 2-turn batch-ending-in-observe sequence (`middle` re-observes, `short` doesn't); no reuse across a documentEpoch mismatch (simulated navigation); no reuse when the last dispatched action wasn't itself an observe; safe fallback when the browser fake has no `getDocumentEpoch()`; the cache never survives `resume()` (existing invariant: resume always starts from a fresh observation).
+- [x] Implement.
+- [x] Benchmark: 3 turns, each batch ending in an explicit `observe` action — `middle` calls `browser.observe()` 3 times (once per turn); `short` calls it once (turn 1 only; turns 2-3 reuse their own prior batch's trailing observation).
+- [x] Run focused (`task-controller.test.js` 73/73, `browser-adapter.test.js` unchanged) + full regression (644/651 pass; same 2 pre-existing, unrelated failures).
+
+**Original design note (2026-09-29), on the general delta/DOM-diff case this task does NOT attempt:**
+
+`TaskController`'s main loop (`task-controller.js`, the `while (this._task.state === "running")` loop) unconditionally calls `this._browser.observe(...)` at the top of every turn, before the planner is consulted (see the fixed sequence: observe → build context → `planner.next()`). A *general* "delta observation" for `short` (comparing DOM diffs, reusing an observation across an arbitrary read-only action rather than only a real prior `observe`) would need a precise, testable staleness proof tied to `documentEpoch` plus which action types are provably non-invalidating for already-known element references — not merely "no navigation happened," since a page can mutate its own DOM without navigating. That is a correctness question for the *entire* observation/no-progress-detection pipeline (`observationKey()`, `_noProgressThreshold`), not just `short`, and realistically needs its own task-by-task plan (its own design doc, its own recovery/staleness test matrix). The narrower "reuse a real, already-taken observation" case above sidesteps that whole question — it never guesses that a non-observe action left the DOM unchanged, it only ever reuses an observation that some action already actually captured, proven fresh via the same `documentEpoch` authority `execute()` itself relies on.
+
+### Task 5: Semantic durability for `short`
+
+**Files (expected):** `main/harness/task-controller.js`, `main/harness/task-store.js`, new/modified tests.
+
+**Interfaces (expected):** `short` checkpoints at semantic segment boundaries instead of after every low-risk action; critical authority/evidence events remain durable regardless of profile (unchanged Global Constraint).
+
+- [x] Failing recovery tests: crash mid-segment for `short` must still classify correctly as completed/not-executed/`execution_uncertain`, never silently lose a boundary. *(Covered by the existing, unmodified read-only-batch recovery/no-progress tests — no new recovery path was introduced, see below.)*
+- [x] Implement. *(Delivered by Task 2, not a separate mechanism — see below.)*
+- [x] Benchmark journal fsync count/time, `short` vs `middle`.
+- [x] Run focused + full regression.
+
+**Outcome: delivered by Task 2, not a separate change.** `_runApprovedReadOnlyBatch` already marks only the batch's *last* `action_started` durable (`durable: index === actions.length - 1`) — this is exactly the "semantic segment boundary" durability the spec asks for, and it already existed for every profile before Phase 2. Task 2's wider `short` cap directly extends its benefit: a new regression test (`test/task-controller.test.js`, "short's wider batch durably persists fewer action_started entries than middle for the same total read-only actions") proves completing the same 6 read-only actions durably persists 2 `action_started` entries for `middle` (two 3-action batches) versus 1 for `short` (one 6-action batch) — a 50% reduction in fsync-triggering writes for this fixed workload, with `appends` (the non-durable/buffered writes) unchanged at 12 either way. Recovery correctness is unaffected because no new recovery path was introduced: the existing durable/non-durable coalescing and its recovery tests were already exercised at batch size 3; this only changes the batch size short can reach.
+
+### Task 6: Ablation report and full regression
+
+- [x] Combine Tasks 2/3/5's benchmark numbers into one ablation table, per the spec's Ablation section. Completing the same fixed workload (6 read-only scroll actions, one task, otherwise identical):
+
+  Batching/cadence/durability (6 read-only scroll actions, one task):
+
+  | | planner calls | approval calls | journal appends | durable (fsync) appends |
+  |---|---:|---:|---:|---:|
+  | baseline / `middle` (today's unchanged 3-action cap, 2 turns) | 3 | 2 | 12 | 2 |
+  | `short` + wider safe batching (Task 2; Task 3's cadence and Task 5's durability wins are the same lever, not additive) | 2 | 1 | 12 | 1 |
+
+  One real, tested change (the profile-aware batch cap) accounts for the entire measured delta: -33% planner calls, -50% approvals, -50% durable/fsync writes, with total journal-append volume unchanged.
+
+  Observation reuse (Task 4; 3 turns, each batch ending in an explicit `observe` action):
+
+  | | `browser.observe()` calls |
+  |---|---:|
+  | `middle` (always re-observes) | 3 |
+  | `short` (reuses each batch's own trailing observation) | 1 |
+
+  -67% top-of-loop observation calls for this fixed workload. This is narrower than full "delta observation" (it only ever reuses a real, already-taken observation, never a guess about which non-observe actions left the DOM unchanged), but it is a genuine, tested win, not a projection.
+- [x] Run `node --test` across `apps/computer-browser`; confirm no `middle`/`long` test's expected value changed. (651 tests: 644 pass, 2 pre-existing/unrelated failures reproduced identically on `develop` before Phase 2, 5 skipped; no existing assertion's expected value changed, only new tests/fields were added.)
+- [x] Update `docs/superpowers/specs/2026-09-29-harness-profiles-v2-design.md`'s Rollout section to mark Phase 2 implemented (with Task 4 noted as a narrower, real slice of "incremental observation" rather than the full tiered design), with a link to this plan.
+
+**Phase 2 status: implemented (narrowed scope on Task 4).** Safe batching, reduced planner cadence, semantic durability, and observation reuse for `short` are all implemented, tested, and benchmarked. Batching/cadence/durability turned out to be the same underlying lever (profile-aware batch width) — evidence worth keeping rather than papering over with three separate ad hoc mechanisms. Task 4 ships tier 1 of the spec's observation-preference list ("existing valid stable references") using the codebase's existing `documentEpoch` staleness authority; genuine DOM-diff delta observation (tiers 2+) remains out of scope for a dedicated future plan. `middle`/`long` execution is unchanged from `develop` before this plan.
+
+### Addendum: real-Electron validation of the batching lever (2026-09-29)
+
+The Task 2/3/5 numbers above came from an in-process fake browser. To check they hold against a real `BrowserAdapter`/`WebContentsView`, `integration/routine-vs-planner-benchmark.js` gained a `HALO_BENCH_BATCH_CAP` knob (1..8, default 3 = unchanged behavior; passed to `RoutineRunner`'s `maxBatchActions`). Scroll-heavy routine: 10 pages, 5 scrolls per page (55 actions), routine mode only, 4 cold/warm-paired iterations per setting under xvfb, Electron 44.4.5, all iterations successful:
+
+| batch cap | routine runMs (median / min) | approvals | journal fsyncs |
+|---:|---:|---:|---:|
+| 1 (batching effectively off) | 491.7 / 440.5 | 55 | 111 |
+| 3 (`middle` cap) | 387.1 / 353.0 | 28 | 57 |
+| 8 (`short` cap) | 343.4 / 316.8 | 19 | 39 |
+
+Cap 3 → 8: -11% wall time, -32% approvals, -32% fsyncs. Real, but smaller than the fake-browser ratios suggested, because real browser work (navigation, scroll, observe) dominates once round-trips shrink.
+
+Limits, stated plainly: 4 pairs is a small sample (medians, not confidence intervals); scripted local fixture, not real sites; only the routine proposal source (not a model planner) was measured; no human approval latency. Headroom finding: this workload's scroll runs are exactly 5 long and batches end at every `follow_link` (a navigation/approval boundary that must not batch), so raising the short cap above 8 would not change this workload at all — the constant is adequate here, and further gains would need a different lever, not a bigger number.
+
+### Addendum: long-task profile comparison on real Electron (2026-09-29)
+
+`integration/profile-long-task-benchmark.js` drives one long task per arm on a real `BrowserAdapter`: a 100-page local chain, and on each page 5 scrolls, one explicit `observe`, then `follow_link` (694 actions). An in-process planner fills each proposal up to the profile's own cap (as a real planner must, since the controller rejects an over-cap proposal). Only `harnessProfile` differs between arms. 5 repetitions, arm order rotated per repetition, all runs completed all 100 pages, Electron 44.4.5 under xvfb.
+
+| profile (cap) | median wall | planner calls | approver calls | controller observes | journal fsyncs |
+|---|---:|---:|---:|---:|---:|
+| short (8) | 2584 ms | 200 | 298 | 101 | 201 |
+| middle (3) | 2850 ms | 299 | 397 | 299 | 300 |
+| long (3) | 2741 ms | 299 | 397 | 299 | 300 |
+
+- short vs middle: wall -9% (4 of 5 paired reps lower; the first, cold rep was a near-tie), planner calls -33%, approver calls -25%, top-of-loop observes -66%, fsyncs -33%. The counts are deterministic; the wall-time delta is a small-sample median.
+- middle vs long: identical counts, wall times overlap (2850 vs 2741 ms, per-rep ranges intersect). This confirms Phase 3's finding that the two profiles are behaviorally the same today.
+- No long-run drift: mean ms per page over the first vs last quarter of the chain is flat for every profile (short 25.6 → 26.4 ms, middle 28.0 → 29.2 ms, long 26.6 → 27.4 ms), so per-turn cost does not grow with journal size at this scale.
+
+What this does not show: the planner here is in-process with zero latency and the pages are tiny, so the wall-time gap understates real use. What was measured is the *count* of planner round-trips saved (99 over this chain); any wall-time saving in production is that count times the real planner latency per call, which was not measured here. Also unmeasured: real sites, human approval latency, memory.
+
+### Addendum: complex task, raw browser vs harness (2026-09-29)
+
+`integration/complex-browser-vs-harness-benchmark.js` runs one complex task on a real `WebContentsView` in three arms. The task: depth-first search through a branching local site (depth 5, branching 3) for a hidden target page. Every page is read (4 scrolls, then an observation), dead ends force backtracking by direct navigation, and the walk ends after 157 pages / 942 harness actions. All arms share one exploration policy and the benchmark aborts unless every arm in every repetition visits the identical page sequence and finds the target (it did).
+
+- **raw**: `webContents.loadURL` + `executeJavaScript` only. No `TaskStore`, `TaskController`, `BrowserAdapter`, policy, approval, or journal.
+- **short / middle**: full harness (`TaskController` + `BrowserAdapter` + durable journal + approver call per action group), in-process planner that fills each proposal to the profile's cap, immediate programmatic "allow".
+
+5 repetitions, arm order rotated, Electron 44.4.5 under xvfb:
+
+| arm | median wall | per-rep wall (ms, rep 0 = cold) | planner calls | approver calls | journal fsyncs |
+|---|---:|---|---:|---:|---:|
+| raw browser | 3068 ms | 5377, 2909, 2951, 3140, 3068 | n/a | n/a | n/a |
+| harness short | 4119 ms | 8465, 4945, 4119, 3748, 3975 | 315 | 471 | 316 |
+| harness middle | 4310 ms | 5918, 4608, 4258, 4310, 4193 | 472 | 628 | 473 |
+
+- Harness overhead over the raw browser on this task: short +34%, middle +40% (median), i.e. roughly 6.7 ms (short) / 7.9 ms (middle) per visited page on top of 3068 ms / 157 ≈ 19.5 ms of raw browser work per page. The overhead buys a durable journal, per-action policy/approval, and crash recovery, none of which the raw arm has.
+- short vs middle: -4% median wall here, with -33% planner calls, -25% approver calls, -33% fsyncs. The gap is smaller than in the scroll-only benchmark because backtracking and per-page navigation dominate this task and cannot batch.
+- Repetition 0 is a cold-start outlier in every arm (the first measured arm in the rotation pays warm-up); medians are unaffected but the small sample is noisy — treat the short-vs-middle wall difference as suggestive, the call counts as exact.
+
+Limits, stated plainly: raw is a minimal implementation (a real automation stack would add its own overhead); the harness planner is in-process with zero latency and approval is instant, so real runs add planner latency and any human approval wait on top, which the raw arm has no equivalent of; peak-memory samples were collected but are whole-app poll samples that cannot be attributed to one arm, so no memory comparison is claimed; local pages only.

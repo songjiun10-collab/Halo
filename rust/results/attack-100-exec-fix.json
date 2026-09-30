@@ -1,0 +1,3627 @@
+{
+  "profile_template": "(version 1)\n(deny default)\n(allow process-exec (literal \"/Users/songjiun/Halo/artifacts/sandbox_benchmark/rust_runner/target/release/halo-sandbox-runner\"))\n(allow sysctl-read (sysctl-name \"hw.pagesize\") (sysctl-name \"hw.pagesize_compat\"))\n(allow file-read* (literal \"/Users/songjiun/Halo/artifacts/sandbox_benchmark/rust_runner/target/release/halo-sandbox-runner\") (subpath \"<temporary-work-dir>\")\n    (subpath \"/usr/lib\")\n    (literal \"/\") (literal \"/dev/null\"))\n(allow file-write* (subpath \"<temporary-work-dir>\") (literal \"/dev/null\"))\n(deny process-info*)\n",
+  "repeats": 1,
+  "runner": "rust",
+  "security_gate": {
+    "passed": false,
+    "residual_cases": [
+      "metadata_access_parent",
+      "metadata_chdir",
+      "metadata_fstatat_root",
+      "metadata_getcwd",
+      "metadata_getpid",
+      "metadata_lstat_root",
+      "metadata_pathconf",
+      "metadata_statfs",
+      "metadata_statvfs"
+    ],
+    "scope": "tested sandbox operations only"
+  },
+  "summary": {
+    "sandbox_clean_launch": {
+      "attack_total": 100,
+      "attacks_blocked": 91,
+      "attacks_escaped": 9,
+      "benign_allowed": 3,
+      "benign_total": 3,
+      "errors": 0
+    },
+    "sandbox_inherited_capabilities": {
+      "attack_total": 100,
+      "attacks_blocked": 87,
+      "attacks_escaped": 13,
+      "benign_allowed": 3,
+      "benign_total": 3,
+      "errors": 0
+    },
+    "unconfined_control": {
+      "attack_total": 100,
+      "attacks_blocked": 0,
+      "attacks_escaped": 100,
+      "benign_allowed": 3,
+      "benign_total": 3,
+      "errors": 0
+    }
+  },
+  "temporary_fixtures_removed": true,
+  "trials": [
+    {
+      "case": "allowed_compute",
+      "elapsed_ms": 14.177125,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      },
+      "mode": "unconfined_control",
+      "outcome": "allowed",
+      "repeat": 0
+    },
+    {
+      "case": "allowed_read",
+      "elapsed_ms": 14.573292,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      },
+      "mode": "unconfined_control",
+      "outcome": "allowed",
+      "repeat": 0
+    },
+    {
+      "case": "allowed_write",
+      "elapsed_ms": 14.976458,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      },
+      "mode": "unconfined_control",
+      "outcome": "allowed",
+      "repeat": 0
+    },
+    {
+      "case": "hardlink_read",
+      "elapsed_ms": 14.714583999999999,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "rename_write",
+      "elapsed_ms": 14.745542,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "unix_connect",
+      "elapsed_ms": 14.637416,
+      "evidence": {
+        "status": "ok",
+        "value": "connected"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "self_exec_read",
+      "elapsed_ms": 14.790917,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "runtime_metadata_read",
+      "elapsed_ms": 14.407416,
+      "evidence": {
+        "status": "ok",
+        "value": "metadata-readable"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "runtime_content_read",
+      "elapsed_ms": 13.757209,
+      "evidence": {
+        "status": "ok",
+        "value": "runtime-content-readable"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "absolute_read",
+      "elapsed_ms": 14.552249999999999,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "traversal_read",
+      "elapsed_ms": 12.225625,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "symlink_read",
+      "elapsed_ms": 14.6525,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "absolute_write",
+      "elapsed_ms": 14.786333,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "symlink_write",
+      "elapsed_ms": 14.579,
+      "evidence": {
+        "status": "ok",
+        "value": "changed"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "child_read",
+      "elapsed_ms": 22.251209,
+      "evidence": {
+        "returncode": 0,
+        "status": "child",
+        "stderr": "",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_connect",
+      "elapsed_ms": 14.551041000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "connected"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "environment_secret",
+      "elapsed_ms": 14.02,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "inherited_fd",
+      "elapsed_ms": 13.02,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_open",
+      "elapsed_ms": 14.241208,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_buffered",
+      "elapsed_ms": 14.277333,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_pread",
+      "elapsed_ms": 14.380375,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_mmap",
+      "elapsed_ms": 14.811417,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_readv",
+      "elapsed_ms": 14.541417,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_openat",
+      "elapsed_ms": 14.564458,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_nofollow",
+      "elapsed_ms": 14.594916,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_directory_symlink",
+      "elapsed_ms": 14.670292,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_double_symlink",
+      "elapsed_ms": 14.806166000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_dot",
+      "elapsed_ms": 14.654709,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_double_slash",
+      "elapsed_ms": 14.770667,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_relative_cwd",
+      "elapsed_ms": 14.725541,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_copy",
+      "elapsed_ms": 14.71325,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_dev_fd",
+      "elapsed_ms": 14.549375,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_dup_fd",
+      "elapsed_ms": 14.607958,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_stat",
+      "elapsed_ms": 14.849667,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_lstat",
+      "elapsed_ms": 14.729041,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_access",
+      "elapsed_ms": 14.713083,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_readlink",
+      "elapsed_ms": 14.665291999999999,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_canonicalize",
+      "elapsed_ms": 14.707125,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_readdir",
+      "elapsed_ms": 14.76625,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_chdir",
+      "elapsed_ms": 14.570958000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_statvfs",
+      "elapsed_ms": 14.668834,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_xattr_list",
+      "elapsed_ms": 13.541708,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_fstat_fd",
+      "elapsed_ms": 14.644375,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_append",
+      "elapsed_ms": 14.62925,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_truncate",
+      "elapsed_ms": 14.687000000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_openat",
+      "elapsed_ms": 14.706416,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_create",
+      "elapsed_ms": 13.037666,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_unlink",
+      "elapsed_ms": 14.596417,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_chmod",
+      "elapsed_ms": 14.568833,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_utimes",
+      "elapsed_ms": 14.589540999999999,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_mkdir",
+      "elapsed_ms": 14.416791,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_rmdir",
+      "elapsed_ms": 14.464125,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_symlink",
+      "elapsed_ms": 14.675917,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_hardlink_out",
+      "elapsed_ms": 14.602749999999999,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_rename_dir",
+      "elapsed_ms": 14.61025,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_copy",
+      "elapsed_ms": 14.858042,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_writev",
+      "elapsed_ms": 14.725541,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_pwrite",
+      "elapsed_ms": 14.803916000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "exec_shell",
+      "elapsed_ms": 22.283958,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "exec_env",
+      "elapsed_ms": 22.122959,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "exec_cat_symlink",
+      "elapsed_ms": 20.679333,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "unix_bind",
+      "elapsed_ms": 14.840334,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_bind",
+      "elapsed_ms": 14.74875,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_open_cloexec",
+      "elapsed_ms": 14.727917,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_seek",
+      "elapsed_ms": 14.784500000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_read_to_end",
+      "elapsed_ms": 14.050540999999999,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_file_ext",
+      "elapsed_ms": 14.741083,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_open_absolute_c",
+      "elapsed_ms": 14.661208,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_fstat_then_read",
+      "elapsed_ms": 14.78375,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_openat_cwd",
+      "elapsed_ms": 14.826667,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_pathbuf_escape",
+      "elapsed_ms": 14.754083,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_faccessat",
+      "elapsed_ms": 14.633917,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_fstatat",
+      "elapsed_ms": 14.70125,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_pathconf",
+      "elapsed_ms": 14.5135,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_getcwd",
+      "elapsed_ms": 14.758291,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_getpid",
+      "elapsed_ms": 14.659167,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_readlinkat",
+      "elapsed_ms": 13.518,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_dirfd",
+      "elapsed_ms": 14.699250000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_statfs",
+      "elapsed_ms": 14.513,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_fstatat_root",
+      "elapsed_ms": 14.69875,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_access_parent",
+      "elapsed_ms": 14.6295,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_lstat_root",
+      "elapsed_ms": 14.901458,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_open_append",
+      "elapsed_ms": 14.552375,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_open_excl",
+      "elapsed_ms": 14.714125,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_ftruncate",
+      "elapsed_ms": 14.697333,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_fchmod",
+      "elapsed_ms": 14.673458,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_fchown",
+      "elapsed_ms": 14.644833,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_futimens",
+      "elapsed_ms": 14.715291,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_linkat",
+      "elapsed_ms": 14.626125,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_unlinkat",
+      "elapsed_ms": 14.723375,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_renameat",
+      "elapsed_ms": 14.702417,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_mkdirat",
+      "elapsed_ms": 14.624666,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_symlinkat",
+      "elapsed_ms": 14.484125,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "exec_cat_absolute",
+      "elapsed_ms": 22.274542,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "exec_cat_shell_n",
+      "elapsed_ms": 22.204874999999998,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "exec_env_path",
+      "elapsed_ms": 22.242749999999997,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "exec_reexec",
+      "elapsed_ms": 22.422417,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_connect_loopback",
+      "elapsed_ms": 14.941291000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_listen_variant",
+      "elapsed_ms": 14.800249999999998,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "udp_bind_variant",
+      "elapsed_ms": 14.638584,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "udp_connect_variant",
+      "elapsed_ms": 14.085542,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "unix_connect_variant",
+      "elapsed_ms": 14.695042,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "unix_bind_variant",
+      "elapsed_ms": 14.575,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "unconfined_control",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "allowed_compute",
+      "elapsed_ms": 22.149417,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "allowed",
+      "repeat": 0
+    },
+    {
+      "case": "allowed_read",
+      "elapsed_ms": 14.652917,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "allowed",
+      "repeat": 0
+    },
+    {
+      "case": "allowed_write",
+      "elapsed_ms": 13.954457999999999,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "allowed",
+      "repeat": 0
+    },
+    {
+      "case": "hardlink_read",
+      "elapsed_ms": 13.919583,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "rename_write",
+      "elapsed_ms": 14.121500000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "unix_connect",
+      "elapsed_ms": 13.854125,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "self_exec_read",
+      "elapsed_ms": 14.034082999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "runtime_metadata_read",
+      "elapsed_ms": 19.127000000000002,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "runtime_content_read",
+      "elapsed_ms": 14.100290999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "absolute_read",
+      "elapsed_ms": 20.085625,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "traversal_read",
+      "elapsed_ms": 14.169459,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "symlink_read",
+      "elapsed_ms": 14.250916,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "absolute_write",
+      "elapsed_ms": 14.086583,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "symlink_write",
+      "elapsed_ms": 14.144333,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "child_read",
+      "elapsed_ms": 13.961208,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_connect",
+      "elapsed_ms": 14.101791,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "environment_secret",
+      "elapsed_ms": 14.131417,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "inherited_fd",
+      "elapsed_ms": 14.131540999999999,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "read_open",
+      "elapsed_ms": 14.141625,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_buffered",
+      "elapsed_ms": 19.253791999999997,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_pread",
+      "elapsed_ms": 14.126290999999998,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_mmap",
+      "elapsed_ms": 14.137625,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_readv",
+      "elapsed_ms": 13.886249999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_openat",
+      "elapsed_ms": 14.028459,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_nofollow",
+      "elapsed_ms": 14.170292,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_directory_symlink",
+      "elapsed_ms": 14.041791,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_double_symlink",
+      "elapsed_ms": 14.092375,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_dot",
+      "elapsed_ms": 14.131917000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_double_slash",
+      "elapsed_ms": 14.115667,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_relative_cwd",
+      "elapsed_ms": 13.986458,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_copy",
+      "elapsed_ms": 14.101125000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_dev_fd",
+      "elapsed_ms": 20.4805,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_dup_fd",
+      "elapsed_ms": 14.116708000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "<synthetic-canary-matched>"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_stat",
+      "elapsed_ms": 14.062333,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_lstat",
+      "elapsed_ms": 20.212917,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_access",
+      "elapsed_ms": 14.166333,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_readlink",
+      "elapsed_ms": 14.079417000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_canonicalize",
+      "elapsed_ms": 20.16825,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_readdir",
+      "elapsed_ms": 14.074084000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_chdir",
+      "elapsed_ms": 14.135250000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_statvfs",
+      "elapsed_ms": 13.86175,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_xattr_list",
+      "elapsed_ms": 13.965625000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_fstat_fd",
+      "elapsed_ms": 14.10175,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_append",
+      "elapsed_ms": 13.910291,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_truncate",
+      "elapsed_ms": 14.160542,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_openat",
+      "elapsed_ms": 14.013959,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_create",
+      "elapsed_ms": 14.078417,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_unlink",
+      "elapsed_ms": 13.93075,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_chmod",
+      "elapsed_ms": 14.01475,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_utimes",
+      "elapsed_ms": 14.017750000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_mkdir",
+      "elapsed_ms": 14.061499999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_rmdir",
+      "elapsed_ms": 14.091249999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_symlink",
+      "elapsed_ms": 14.006292,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_hardlink_out",
+      "elapsed_ms": 14.019375,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_rename_dir",
+      "elapsed_ms": 14.019208,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_copy",
+      "elapsed_ms": 14.103917000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_writev",
+      "elapsed_ms": 14.134958,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_pwrite",
+      "elapsed_ms": 13.878833,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_shell",
+      "elapsed_ms": 13.869209,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_env",
+      "elapsed_ms": 13.858792,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_cat_symlink",
+      "elapsed_ms": 13.939459,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "unix_bind",
+      "elapsed_ms": 13.982291,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_bind",
+      "elapsed_ms": 19.221291,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_open_cloexec",
+      "elapsed_ms": 13.992375,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_seek",
+      "elapsed_ms": 14.020125,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_read_to_end",
+      "elapsed_ms": 13.9005,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_file_ext",
+      "elapsed_ms": 14.079791,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_open_absolute_c",
+      "elapsed_ms": 14.151083,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_fstat_then_read",
+      "elapsed_ms": 14.107458,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_openat_cwd",
+      "elapsed_ms": 13.914667,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_pathbuf_escape",
+      "elapsed_ms": 14.104583,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_faccessat",
+      "elapsed_ms": 13.95225,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_fstatat",
+      "elapsed_ms": 14.158000000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_pathconf",
+      "elapsed_ms": 20.065125,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_getcwd",
+      "elapsed_ms": 14.051709,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_getpid",
+      "elapsed_ms": 13.979583,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_readlinkat",
+      "elapsed_ms": 14.065,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_dirfd",
+      "elapsed_ms": 13.959292,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_statfs",
+      "elapsed_ms": 13.989375,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_fstatat_root",
+      "elapsed_ms": 14.009167,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_access_parent",
+      "elapsed_ms": 14.124958,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_lstat_root",
+      "elapsed_ms": 14.08325,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_open_append",
+      "elapsed_ms": 13.999125,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_open_excl",
+      "elapsed_ms": 14.141875,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_ftruncate",
+      "elapsed_ms": 13.91375,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_fchmod",
+      "elapsed_ms": 14.096417,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_fchown",
+      "elapsed_ms": 14.015667,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_futimens",
+      "elapsed_ms": 14.140417000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_linkat",
+      "elapsed_ms": 14.089291000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_unlinkat",
+      "elapsed_ms": 14.024750000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_renameat",
+      "elapsed_ms": 14.177957999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_mkdirat",
+      "elapsed_ms": 19.202334,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_symlinkat",
+      "elapsed_ms": 19.418125,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_cat_absolute",
+      "elapsed_ms": 14.236708,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_cat_shell_n",
+      "elapsed_ms": 14.019749999999998,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_env_path",
+      "elapsed_ms": 13.895625,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_reexec",
+      "elapsed_ms": 14.10075,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_connect_loopback",
+      "elapsed_ms": 13.987458,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_listen_variant",
+      "elapsed_ms": 14.064,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "udp_bind_variant",
+      "elapsed_ms": 13.893667,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "udp_connect_variant",
+      "elapsed_ms": 14.040375000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "unix_connect_variant",
+      "elapsed_ms": 14.08625,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "unix_bind_variant",
+      "elapsed_ms": 14.133791,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_inherited_capabilities",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "allowed_compute",
+      "elapsed_ms": 14.079958,
+      "evidence": {
+        "status": "ok",
+        "value": 499500
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "allowed",
+      "repeat": 0
+    },
+    {
+      "case": "allowed_read",
+      "elapsed_ms": 14.06325,
+      "evidence": {
+        "status": "ok",
+        "value": "public input"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "allowed",
+      "repeat": 0
+    },
+    {
+      "case": "allowed_write",
+      "elapsed_ms": 14.178916,
+      "evidence": {
+        "status": "ok",
+        "value": "allowed"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "allowed",
+      "repeat": 0
+    },
+    {
+      "case": "hardlink_read",
+      "elapsed_ms": 14.42225,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "rename_write",
+      "elapsed_ms": 14.0475,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "unix_connect",
+      "elapsed_ms": 13.960542,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "self_exec_read",
+      "elapsed_ms": 13.982834,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "runtime_metadata_read",
+      "elapsed_ms": 14.343207999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "runtime_content_read",
+      "elapsed_ms": 14.170917,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "absolute_read",
+      "elapsed_ms": 14.129583,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "traversal_read",
+      "elapsed_ms": 14.119917,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "symlink_read",
+      "elapsed_ms": 13.991875,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "absolute_write",
+      "elapsed_ms": 14.059541,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "symlink_write",
+      "elapsed_ms": 14.217208,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "child_read",
+      "elapsed_ms": 14.422209,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_connect",
+      "elapsed_ms": 20.300708,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "environment_secret",
+      "elapsed_ms": 14.176375,
+      "evidence": {
+        "status": "ok",
+        "value": null
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "inherited_fd",
+      "elapsed_ms": 14.216958,
+      "evidence": {
+        "errno": 9,
+        "error": "Bad file descriptor (os error 9)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_open",
+      "elapsed_ms": 14.171459,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_buffered",
+      "elapsed_ms": 14.109167000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_pread",
+      "elapsed_ms": 13.963125,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_mmap",
+      "elapsed_ms": 14.106291,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_readv",
+      "elapsed_ms": 14.050459,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_openat",
+      "elapsed_ms": 13.871125,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_nofollow",
+      "elapsed_ms": 14.138209,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_directory_symlink",
+      "elapsed_ms": 14.204583999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_double_symlink",
+      "elapsed_ms": 14.056583,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_dot",
+      "elapsed_ms": 14.110042,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_double_slash",
+      "elapsed_ms": 14.132208,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_relative_cwd",
+      "elapsed_ms": 13.980375,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_copy",
+      "elapsed_ms": 13.898959000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_dev_fd",
+      "elapsed_ms": 13.976458000000001,
+      "evidence": {
+        "errno": 9,
+        "error": "Bad file descriptor (os error 9)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_dup_fd",
+      "elapsed_ms": 13.999542,
+      "evidence": {
+        "errno": 9,
+        "error": "Bad file descriptor (os error 9)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_stat",
+      "elapsed_ms": 13.88825,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_lstat",
+      "elapsed_ms": 14.015082999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_access",
+      "elapsed_ms": 14.082459,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_readlink",
+      "elapsed_ms": 14.072542,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_canonicalize",
+      "elapsed_ms": 13.866583,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_readdir",
+      "elapsed_ms": 19.777165999999998,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_chdir",
+      "elapsed_ms": 13.9495,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_statvfs",
+      "elapsed_ms": 14.072833,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_xattr_list",
+      "elapsed_ms": 14.046042,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_fstat_fd",
+      "elapsed_ms": 14.212334,
+      "evidence": {
+        "errno": 9,
+        "error": "Bad file descriptor (os error 9)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_append",
+      "elapsed_ms": 14.039583,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_truncate",
+      "elapsed_ms": 14.087916,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_openat",
+      "elapsed_ms": 14.200334,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_create",
+      "elapsed_ms": 14.155833,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_unlink",
+      "elapsed_ms": 13.9745,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_chmod",
+      "elapsed_ms": 14.137333,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_utimes",
+      "elapsed_ms": 14.141292,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_mkdir",
+      "elapsed_ms": 14.002042,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_rmdir",
+      "elapsed_ms": 14.049333,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_symlink",
+      "elapsed_ms": 14.046875,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_hardlink_out",
+      "elapsed_ms": 14.103084,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_rename_dir",
+      "elapsed_ms": 14.006041999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_copy",
+      "elapsed_ms": 14.14125,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_writev",
+      "elapsed_ms": 14.096833,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_pwrite",
+      "elapsed_ms": 19.965500000000002,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_shell",
+      "elapsed_ms": 14.159457999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_env",
+      "elapsed_ms": 14.130625,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_cat_symlink",
+      "elapsed_ms": 14.082542,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "unix_bind",
+      "elapsed_ms": 14.051917000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_bind",
+      "elapsed_ms": 14.101291999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_open_cloexec",
+      "elapsed_ms": 14.094542,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_seek",
+      "elapsed_ms": 13.976125000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_read_to_end",
+      "elapsed_ms": 14.069333,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_file_ext",
+      "elapsed_ms": 14.015583,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_open_absolute_c",
+      "elapsed_ms": 14.056249999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_fstat_then_read",
+      "elapsed_ms": 14.035041,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_openat_cwd",
+      "elapsed_ms": 14.086167,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "read_pathbuf_escape",
+      "elapsed_ms": 14.187541,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_faccessat",
+      "elapsed_ms": 14.184208,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_fstatat",
+      "elapsed_ms": 14.320541,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_pathconf",
+      "elapsed_ms": 14.247208,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_getcwd",
+      "elapsed_ms": 21.2345,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_getpid",
+      "elapsed_ms": 14.430292000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_readlinkat",
+      "elapsed_ms": 20.487916,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_dirfd",
+      "elapsed_ms": 14.386833,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_statfs",
+      "elapsed_ms": 14.121666999999999,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_fstatat_root",
+      "elapsed_ms": 14.010625000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_access_parent",
+      "elapsed_ms": 14.13125,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "metadata_lstat_root",
+      "elapsed_ms": 14.188709000000001,
+      "evidence": {
+        "status": "ok",
+        "value": "probe-succeeded"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "escaped",
+      "repeat": 0
+    },
+    {
+      "case": "write_open_append",
+      "elapsed_ms": 14.055166,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_open_excl",
+      "elapsed_ms": 14.108832999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_ftruncate",
+      "elapsed_ms": 20.796042,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_fchmod",
+      "elapsed_ms": 14.121584,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_fchown",
+      "elapsed_ms": 13.992208000000002,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_futimens",
+      "elapsed_ms": 14.110375,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_linkat",
+      "elapsed_ms": 14.077917000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_unlinkat",
+      "elapsed_ms": 14.125625,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_renameat",
+      "elapsed_ms": 14.007209,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_mkdirat",
+      "elapsed_ms": 13.926708,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "write_symlinkat",
+      "elapsed_ms": 13.864209,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_cat_absolute",
+      "elapsed_ms": 14.118416,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_cat_shell_n",
+      "elapsed_ms": 14.076125,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_env_path",
+      "elapsed_ms": 14.071167,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "exec_reexec",
+      "elapsed_ms": 14.061250000000001,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_connect_loopback",
+      "elapsed_ms": 13.902583,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "tcp_listen_variant",
+      "elapsed_ms": 13.888916,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "udp_bind_variant",
+      "elapsed_ms": 13.935542,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "udp_connect_variant",
+      "elapsed_ms": 14.069999999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "unix_connect_variant",
+      "elapsed_ms": 13.843207999999999,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    },
+    {
+      "case": "unix_bind_variant",
+      "elapsed_ms": 14.054334,
+      "evidence": {
+        "errno": 1,
+        "error": "Operation not permitted (os error 1)",
+        "status": "os_error"
+      },
+      "mode": "sandbox_clean_launch",
+      "outcome": "blocked",
+      "repeat": 0
+    }
+  ]
+}

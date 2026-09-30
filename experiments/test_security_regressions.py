@@ -65,6 +65,16 @@ def test_victim_death_overrides_payload_error():
     assert breakout.classify('signal_victim', 'delivered', False) == 'error'
 
 
+def test_hardened_profile_scopes_python_org_runtime_to_one_framework_version(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        exploits.sys, 'executable',
+        '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12',
+    )
+    profile = exploits.hardened_profile(tmp_path)
+    assert '(subpath "/Library/Frameworks/Python.framework/Versions/3.12")' in profile
+    assert '(subpath "/Library/Frameworks/Python.framework")' not in profile
+
+
 @pytest.mark.skipif(sys.platform != 'darwin', reason='macOS sandbox required')
 def test_hardened_runtime_works_without_broad_hardware_access(tmp_path):
     payload = '''import ctypes, errno

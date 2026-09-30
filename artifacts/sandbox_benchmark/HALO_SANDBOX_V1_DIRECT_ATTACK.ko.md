@@ -1,5 +1,7 @@
 # HARDENED 샌드박스 직접 공격 실측 보고서 (Live Direct Attack)
 
+> 2026-09-21 후속 상태: **미완료 / B1**. [보고서별 조치 원장](../../docs/reviews/REPORT_REMEDIATION.ko.md)에서 수정·재현과 잔여 범위를 구분한다. 아래 과거 수치는 현재의 전체 해결 판정이 아니다.
+
 > 2026-09-14의 호스트 직접 공격 기록이다. 아래의 호스트 식별자·경로 예시는 비식별화했다. 현재 샌드박스 기준 수치와 게이트는 [REPORT_INDEX.ko.md](../../REPORT_INDEX.ko.md)와 [최신 JSON](../../rust/results/attack-100-validated-20.json)을 우선한다.
 
 2026-09-14, macOS 27.0 (Apple Silicon, arm64) / Python 3.12 환경에서 수행.

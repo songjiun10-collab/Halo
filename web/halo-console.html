@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="HALO: 승인과 실행을 분리하는 AI 컨테인먼트 연구. 출처 판정과 권한 경계를 직접 살펴보는 브라우저 시뮬레이션.">
+<title>HALO — 승인과 실행 사이</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%23050505' d='M0 0h32v32H0z'/%3E%3Cpath stroke='%23e9b44c' stroke-width='3' fill='none' d='M8 7v18M24 7v18M8 16h16'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#050505;--surface:#101110;--line:#30322e;--text:#deded8;--muted:#969a92;--amber:#e9b44c;--green:#8dbb98;--red:#ed8d80;--mono:'JetBrains Mono','SFMono-Regular',Consolas,'Liberation Mono',monospace}
+*{box-sizing:border-box}html{scroll-behavior:auto;scroll-padding-top:20px}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:16px;line-height:1.65}button,input,textarea{font:inherit}button,a,input,textarea{touch-action:manipulation}a{color:inherit;text-decoration:none}a:hover{text-decoration:underline;text-underline-offset:5px}button{cursor:pointer}button:disabled{cursor:wait;opacity:.55}:focus-visible{outline:2px solid var(--amber);outline-offset:5px}::selection{background:var(--amber);color:var(--bg)}h1,h2,h3,p{margin:0}button{border-radius:0}svg{display:block}.shell{max-width:1480px;margin:auto;padding:0 44px}.skip{position:absolute;left:12px;top:-100px;padding:12px;background:var(--amber);color:var(--bg);z-index:5}.skip:focus{top:12px}
+.topbar{border-bottom:1px solid var(--line)}.top-inner{min-height:76px;display:flex;align-items:center;gap:32px}.brand{font-size:26px;font-weight:700;letter-spacing:.09em;display:flex;align-items:center;gap:13px}.mark{width:29px;height:31px;border:1px solid var(--amber);color:var(--amber);font-size:21px;letter-spacing:0;text-align:center;line-height:29px}.top-desc{font-size:12px;color:var(--muted);line-height:1.5;border-left:1px solid var(--line);padding-left:24px}.nav{display:flex;gap:26px;margin-left:auto;font-size:14px}.local-state{color:var(--amber);font-size:12px;white-space:nowrap}.dot{display:inline-block;width:6px;height:6px;background:currentColor;margin-right:7px;vertical-align:middle}
+.intro{display:grid;grid-template-columns:minmax(0,1fr) 312px;gap:60px;padding:42px 0 34px;align-items:end}.intro h1{font-size:clamp(24px,2.65vw,38px);font-weight:500;letter-spacing:-.055em;line-height:1.4;margin-bottom:18px}.intro p{color:var(--muted);font-size:15px;max-width:76ch;line-height:1.9}.intro p strong{color:var(--text);font-weight:400}.session-title{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);padding-bottom:10px}.counts{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);padding-top:10px}.count+.count{border-left:1px solid var(--line);padding-left:20px}.count b{font-size:29px;font-weight:400;line-height:1.3;display:block;font-variant-numeric:tabular-nums}.count span{font-size:12px}.allow{color:var(--green)}.deny{color:var(--red)}.review{color:var(--amber)}
+.notice{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:11px 0;display:flex;gap:20px;align-items:center;font-size:12px;color:var(--muted)}.notice-tag{color:var(--amber);white-space:nowrap}.workspace{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(330px,1fr);border-bottom:1px solid var(--line)}.console{padding:27px 30px 28px 0;min-width:0}.section-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:21px}.section-head h2{font-size:17px;font-weight:500;letter-spacing:-.02em}.meta{font-size:12px;color:var(--muted)}.route{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px}.route i{font-style:normal;color:var(--amber)}.field-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;font-size:13px}.bytes{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}.input-frame{border:1px solid var(--line);background:var(--surface);display:flex;padding:13px 15px;gap:12px}.prompt{color:var(--amber);user-select:none}.input-frame textarea{resize:vertical;min-height:83px;max-height:260px;width:100%;border:0;outline:none;background:transparent;color:var(--text);font-size:16px;line-height:1.6}.input-frame:focus-within{border-color:var(--amber)}.controls{display:flex;justify-content:space-between;gap:14px;align-items:center;margin:14px 0 24px}.controls select{font-family:inherit;background:var(--bg);color:var(--text);border:1px solid var(--line);padding:9px;font-size:12px;max-width:200px}.primary{background:var(--amber);color:#111;border:1px solid var(--amber);padding:10px 17px;font-size:14px;font-weight:700;min-height:44px}.primary:hover:not(:disabled){background:#f6c768}.secondary{background:transparent;border:1px solid var(--line);padding:8px 12px;color:var(--text);font-size:12px;min-height:38px}.secondary:hover{border-color:var(--muted)}.control-label{font-size:12px;color:var(--muted);display:block;margin-bottom:4px}.flow{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-bottom:18px}.flow-step{padding:11px 7px;font-size:12px;color:var(--muted);border-bottom:2px solid transparent}.flow-step:first-child{padding-left:0}.flow-step+.flow-step{border-left:1px solid var(--line);padding-left:12px}.flow-step span{display:block;font-size:11px;margin-bottom:3px}.flow-step.active{color:var(--amber);border-bottom-color:var(--amber);background:#15120b}.flow-step.done{color:var(--green)}.flow-step.blocked{color:var(--red);border-bottom-color:var(--red)}
+.log-top{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);margin-bottom:9px}.terminal{height:242px;overflow:auto;scrollbar-color:var(--line) transparent;padding-right:7px;font-size:12px;line-height:1.7}.log-line{display:grid;grid-template-columns:68px 75px 1fr;gap:10px;padding:7px 0;border-bottom:1px solid #191b18}.log-time{color:#858980;font-variant-numeric:tabular-nums}.log-role{color:var(--amber)}.log-message{overflow-wrap:anywhere}.log-signal{display:block;color:var(--muted);margin-top:2px}.empty-log{padding-top:12px;color:var(--muted)}.empty-log strong{display:block;color:var(--text);font-weight:400;margin-bottom:8px}.result{border:1px solid var(--line);padding:14px;margin-top:13px;min-height:103px;background:var(--surface)}.result-top{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);margin-bottom:9px}.result output{font-size:13px;overflow-wrap:anywhere;line-height:1.7;display:block}.result.has-result output{color:var(--green)}.result.is-denied output{color:var(--red)}.result.is-review output{color:var(--amber)}
+.research{border-left:1px solid var(--line);padding:27px 0 28px 30px;min-width:0}.research .section-head{margin-bottom:18px}.e007{font-size:12px;border:1px solid var(--amber);color:var(--amber);padding:2px 6px}.research h3{font-size:26px;font-weight:500;line-height:1.45;letter-spacing:-.05em;margin-bottom:12px}.research-intro{font-size:14px;color:var(--muted);line-height:1.8;margin-bottom:22px}.toggle-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:15px 0;border-top:1px solid var(--line);cursor:pointer}.toggle-row strong{display:block;font-size:14px;font-weight:400}.toggle-row small{display:block;color:var(--muted);font-size:12px;margin-top:2px}.switch{position:relative;width:36px;height:20px;flex:none}.switch input{position:absolute;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}.switch-track{display:block;border:1px solid #70756d;width:36px;height:20px;pointer-events:none}.switch-track:after{content:'';display:block;width:12px;height:12px;background:var(--muted);margin:3px}.switch input:checked+.switch-track{border-color:var(--amber)}.switch input:checked+.switch-track:after{background:var(--amber);transform:translateX(16px)}.switch input:focus-visible+.switch-track{outline:2px solid var(--amber);outline-offset:4px}.comparison{margin-top:8px;border:1px solid var(--line)}.comparison-row{display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px;padding:13px 15px}.comparison-row+.comparison-row{border-top:1px solid var(--line);border-left:3px solid var(--amber);padding-left:12px;background:#15130d}.comparison-label{font-size:12px;color:var(--muted)}.comparison-row code{display:block;font-size:12px;margin-top:4px}.badge{font-size:12px;border:1px solid currentColor;display:inline-block;padding:1px 7px;line-height:1.6;font-weight:400;white-space:nowrap}.reason-panel{padding:17px 0 16px;min-height:120px}.signal{font-size:12px;color:var(--amber);display:block;margin-bottom:7px;overflow-wrap:anywhere}.reason{font-size:14px;line-height:1.8}.research-note{padding-top:14px;border-top:1px dashed var(--line);font-size:12px;color:var(--muted);line-height:1.85}.snapshot{font-size:12px;color:var(--muted);margin-top:15px}.snapshot b{font-weight:400;color:var(--text)}
+.ledger{padding:26px 0 0}.ledger .section-head{margin-bottom:15px}.ledger-heading{display:flex;gap:14px;align-items:baseline}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;text-align:left;font-size:12px}th{color:var(--muted);font-weight:400;border-bottom:1px solid var(--line);padding:8px 12px 10px 0;white-space:nowrap}td{border-bottom:1px solid #21231f;padding:13px 12px 13px 0;vertical-align:top}td:last-child,th:last-child{padding-right:0}.source-ref{color:var(--muted);font-size:11px;margin-left:7px}.ledger-time{color:var(--muted);white-space:nowrap}.decision-reason{max-width:51ch;color:var(--muted)}.count-display{font-variant-numeric:tabular-nums}.footer{display:grid;grid-template-columns:1fr 1fr;gap:50px;padding:30px 0 36px;font-size:12px;color:var(--muted);line-height:1.9}.footer strong{display:block;color:var(--text);font-weight:400;margin-bottom:6px}.footer-end{display:flex;justify-content:space-between;border-top:1px solid var(--line);padding:12px 0 22px;color:var(--muted);font-size:11px}.footer-end a{color:var(--text)}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(min-width:1600px){.intro h1{font-size:38px}}@media(max-width:1050px){.shell{padding:0 26px}.top-desc{display:none}.intro{gap:25px;grid-template-columns:1fr 250px}.intro h1{font-size:28px}.workspace{grid-template-columns:minmax(0,1.3fr) minmax(300px,1fr)}.console{padding-right:22px}.research{padding-left:22px}.research h3{font-size:23px}.controls{align-items:end}.route{display:none}}
+@media(max-width:760px){.shell{padding:0 19px}.top-inner{min-height:65px;flex-wrap:wrap;gap:15px;padding-top:12px;padding-bottom:12px}.brand{font-size:23px}.local-state{margin-left:auto}.nav{order:3;width:100%;margin:0;border-top:1px solid var(--line);padding-top:10px;justify-content:space-between;font-size:12px}.intro{grid-template-columns:1fr;padding:28px 0 24px;gap:24px}.intro h1{font-size:clamp(22px,5vw,30px);letter-spacing:-.055em}.intro p{font-size:14px}.session-title{margin-bottom:0}.count b{font-size:25px}.notice{align-items:flex-start;gap:12px;line-height:1.8}.workspace{grid-template-columns:1fr}.console{padding:23px 0}.research{padding:24px 0;border-left:0;border-top:1px solid var(--line)}.research h3{font-size:25px}.reason-panel{min-height:0}.terminal{height:225px}.log-line{grid-template-columns:62px 58px 1fr;gap:7px;font-size:11px}.flow-step{font-size:11px}.controls{flex-wrap:wrap}.controls select{max-width:180px}.primary{padding:11px 13px}.footer{grid-template-columns:1fr;gap:20px}.footer-end{gap:20px}.ledger .section-head{align-items:start}.ledger-heading{display:block}.ledger-heading .meta{display:block;margin-top:5px}table{min-width:690px}.table-wrap{margin-right:-19px;padding-right:19px}.result output{font-size:12px}.top-inner .local-state{font-size:11px}}
+@media(max-width:760px){.notice{flex-direction:column;gap:3px}.notice-tag{white-space:normal}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<a class="skip" href="#console">실행 콘솔로 이동</a>
+<header class="topbar"><div class="shell top-inner">
+  <a class="brand" href="#" aria-label="HALO 처음으로"><span class="mark" aria-hidden="true">H</span>HALO</a>
+  <div class="top-desc">AI safety & containment<br>승인과 실행 사이의 경계</div>
+  <nav class="nav" aria-label="주요 섹션"><a href="#console">실행 콘솔</a><a href="#provenance">출처 실험</a><a href="#ledger">결정 기록</a></nav>
+  <span class="local-state"><span class="dot"></span>로컬 시뮬레이션</span>
+</div></header>
+<main class="shell">
+  <section class="intro" aria-labelledby="title">
+    <div><h1 id="title">이 공간은 AI를 위한 공간이다.</h1><p>HALO는 <strong>승인과 실행을 분리하는 AI 컨테인먼트 연구</strong>다.<br>실행자는 작업을 요청하고, 승인자는 출처와 정책을 검토한다.<br>허용 결정 뒤에만 실행한다. 판단의 근거는 기록으로 남긴다.</p></div>
+    <div aria-label="현재 탭의 시뮬레이션 집계"><div class="session-title"><span>이 탭의 결정</span><span id="clock">—</span></div><div class="counts"><div class="count allow"><b id="allowCount">00</b><span>ALLOW</span></div><div class="count review"><b id="reviewCount">00</b><span>REVIEW</span></div><div class="count deny"><b id="denyCount">00</b><span>DENY</span></div></div></div>
+  </section>
+  <div class="notice"><span class="notice-tag">simulation / 브라우저 내부</span><span>판정·토큰은 모의 값. SHA-256은 실제 계산. 입력은 서버로 전송되지 않는다.</span></div>
+  <div class="workspace">
+    <section class="console" id="console" aria-labelledby="consoleTitle">
+      <div class="section-head"><h2 id="consoleTitle">요청을 실행해 본다</h2><span class="route"><i>executor</i> / approver / gateway</span></div>
+      <form id="requestForm">
+        <div class="field-head"><label for="payload">해시를 계산할 텍스트</label><span class="bytes" id="byteCount">10 / 4096 bytes</span></div>
+        <div class="input-frame"><span class="prompt" aria-hidden="true">&gt;</span><textarea id="payload" spellcheck="false" maxlength="4096" aria-describedby="inputHelp">hello halo</textarea></div>
+        <span id="inputHelp" class="sr-only">UTF-8 기준 최대 4096바이트. 입력은 이 브라우저 안에서만 처리합니다.</span>
+        <div class="controls"><div><span class="control-label">요청 범위</span><span class="meta">sha256 / 로컬 계산</span></div><button class="primary" id="runButton" type="submit">승인 요청 보내기</button></div>
+      </form>
+      <div class="flow" aria-label="실행 단계"><div class="flow-step" id="step0"><span>01</span>요청 접수</div><div class="flow-step" id="step1"><span>02</span>승인자 판정</div><div class="flow-step" id="step2"><span>03</span>권한 확인</div><div class="flow-step" id="step3"><span>04</span>작업 실행</div></div>
+      <div class="log-top"><span>실행 로그 <span id="runId">/ 대기 중</span></span><span id="runStatus">idle</span></div>
+      <div class="terminal" id="terminal" role="log" aria-live="polite" aria-relevant="additions" aria-label="현재 요청의 단계별 실행 로그"><div class="empty-log"><strong>승인 없이 실행하지 않는다.</strong>텍스트와 오른쪽 출처 조건을 확인한 뒤<br>승인 요청을 보내면 결정 과정이 여기에 기록된다.<br><br><span class="log-role">ready</span>　sha256 / UTF-8<br><span class="log-role">scope</span>　현재 탭 / 데이터 전송 없음</div></div>
+      <div class="result" id="resultBox"><div class="result-top"><span id="resultLabel">SHA-256 / 실행 전</span><button class="secondary" id="copyButton" type="button" disabled aria-label="SHA-256 결과 복사">복사</button></div><output id="result" aria-live="polite">승인 결과를 기다린다.</output></div>
+    </section>
+    <aside class="research" id="provenance" aria-labelledby="researchTitle">
+      <div class="section-head"><h2 id="researchTitle">출처 판단 실험</h2><span class="e007">E007</span></div>
+      <h3>자기 신고는<br>신뢰의 근거가 아니다.</h3>
+      <p class="research-intro">텍스트를 바꾸지 않고 출처 조건만 바꿔 본다.<br>실행자의 주장과 승인자의 판단은 별개다.</p>
+      <label class="toggle-row" for="selfTrusted"><span><strong>실행자가 trusted라고 주장</strong><small>self_claim = <span id="claimValue">trusted</span></small></span><span class="switch"><input type="checkbox" id="selfTrusted" checked role="switch"><span class="switch-track"></span></span></label>
+      <label class="toggle-row" for="hostUntrusted"><span><strong>승인자가 untrusted로 분류</strong><small>host_provenance = <span id="hostValue">trusted</span></small></span><span class="switch"><input type="checkbox" id="hostUntrusted" role="switch"><span class="switch-track"></span></span></label>
+      <div class="comparison" aria-live="polite" aria-atomic="true"><div class="comparison-row"><div><span class="comparison-label">자기 신고만 사용하는 비교군</span><code>host_provenance = None</code></div><span class="badge allow" id="naiveBadge">ALLOW</span></div><div class="comparison-row"><div><span class="comparison-label">독립 분류를 적용한 판정</span><code>host_provenance = <span id="effectiveHost">trusted</span></code></div><span class="badge allow" id="independentBadge">ALLOW</span></div></div>
+      <div class="reason-panel" aria-live="polite"><code class="signal" id="signal">signal / none</code><p class="reason" id="reason">출처 판단이 일치한다. 이 로컬 계산 사례에서 차단 신호가 없다.</p></div>
+      <div class="research-note">분류기는 연구 조건을 위한 고정값이다. 실제 AI 판단이 아니다. 자기 신고와 독립 분류가 모두 untrusted이면 REVIEW다. 검토 없이 계산을 진행하지 않는다.</div>
+      <div class="snapshot">실행 조건: <b>요청 시점의 값으로 고정</b><br>토글 변경은 다음 요청부터 적용된다.</div>
+    </aside>
+  </div>
+  <section class="ledger" id="ledger" aria-labelledby="ledgerTitle"><div class="section-head"><div class="ledger-heading"><h2 id="ledgerTitle">결정 기록</h2><span class="meta" id="ledgerMeta">기준 사례 3개 / 세션 집계 제외</span></div><span class="meta">최근 20건 보관</span></div>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="최근 요청의 승인 큐. 작은 화면에서는 가로로 스크롤할 수 있습니다."><table><thead><tr><th scope="col">요청 / 시각</th><th scope="col">자기 신고</th><th scope="col">독립 분류</th><th scope="col">결정</th><th scope="col">신호 / 근거</th></tr></thead><tbody id="ledgerBody">
+      <tr class="reference"><td>ref. e007-a <span class="source-ref">예시</span><div class="ledger-time">—</div></td><td>trusted</td><td>trusted</td><td><span class="badge allow">ALLOW</span></td><td class="decision-reason">none<br>로컬 tool 계산. 차단 신호 없음.</td></tr>
+      <tr class="reference"><td>ref. e007-b <span class="source-ref">예시</span><div class="ledger-time">—</div></td><td>trusted</td><td>untrusted</td><td><span class="badge deny">DENY</span></td><td class="decision-reason">monitoring_gap<br>자기 신고와 독립 분류가 불일치.</td></tr>
+      <tr class="reference"><td>ref. e007-c <span class="source-ref">예시</span><div class="ledger-time">—</div></td><td>untrusted</td><td>untrusted</td><td><span class="badge review">REVIEW</span></td><td class="decision-reason">untrusted_instruction<br>비신뢰 데이터 출처. 검토 전 실행 보류.</td></tr>
+    </tbody></table></div>
+  </section>
+  <footer id="limits"><div class="footer"><p><strong>검증하는 것</strong>승인·실행 분리의 흐름, 출처 불일치에 따른 거부, 결정 근거의 기록. 이 화면은 저장소의 일부 정책 사례를 재현한 프론트엔드 시뮬레이션이다.</p><p><strong>주장하지 않는 것</strong>실제 프로세스 격리, 안전한 키 보관, 운영 환경의 공격 차단. 브라우저 코드와 모의 토큰은 보안 경계가 아니다. 실제 게이트웨이에는 서버 측 검증이 필요하다.</p></div><div class="footer-end"><span>HALO / AI safety & containment research</span><a href="https://github.com/songjiun10-collab/Halo" target="_blank" rel="noopener noreferrer">소스와 연구 기록</a></div></footer>
+</main>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const encoder = new TextEncoder();
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const counts = {ALLOW:0, REVIEW:0, DENY:0};
+let sequence = 0, busy = false, lastDigest = '', recorded = 0;
+const time = () => new Date().toLocaleTimeString('en-GB', {hour12:false});
+function clock(){ $('clock').textContent = time(); }
+clock(); setInterval(clock,1000);
+
+// This bounded model mirrors E007's compute/instruction examples, NOT the full
+// halo.safety_cases policy engine. The server must own the real trust decision.
+function evaluatePolicy({claim,host,kind}, independent=true){
+  const effective = independent ? host : claim;
+  if(independent && claim !== host) return {decision:'DENY', signal:'monitoring_gap', reason:'자기 신고와 독립 분류가 불일치한다. 불완전한 텔레메트리로 실행을 승인할 수 없다.'};
+  if(effective === 'untrusted') return {decision:'REVIEW',signal:'untrusted_instruction',reason:'비신뢰 데이터 출처에서 온 요청이다. 검토가 필요하며 자동 실행하지 않는다.'};
+  return {decision:'ALLOW',signal:'none',reason:'출처 판단이 일치한다. 이 로컬 계산 사례에서 차단 신호가 없다.'};
+}
+function readConditions(){return {claim:$('selfTrusted').checked?'trusted':'untrusted',host:$('hostUntrusted').checked?'untrusted':'trusted',kind:'tool'};}
+function setBadge(id,decision){$(id).textContent=decision;$(id).className='badge '+decision.toLowerCase();}
+function previewPolicy(){
+  const state=readConditions(), result=evaluatePolicy(state), naive=evaluatePolicy(state,false);
+  $('claimValue').textContent=state.claim; $('hostValue').textContent=state.host; $('effectiveHost').textContent=state.host;
+  setBadge('naiveBadge',naive.decision); setBadge('independentBadge',result.decision);
+  $('signal').textContent='signal / '+result.signal; $('reason').textContent=result.reason;
+}
+['selfTrusted','hostUntrusted'].forEach(id=>$(id).addEventListener('change',previewPolicy));
+$('payload').addEventListener('input',()=>{$('byteCount').textContent=encoder.encode($('payload').value).length+' / 4096 bytes';});
+function phase(index,state='active'){$('step'+index).className='flow-step '+state;}
+function log(role,message,signal=''){
+  const row=document.createElement('div'); row.className='log-line';
+  for(const [cls,text] of [['log-time',time()],['log-role',role],['log-message',message]]){
+    const cell=document.createElement('span');cell.className=cls;cell.textContent=text;row.append(cell);
+  }
+  if(signal){const s=document.createElement('span');s.className='log-signal';s.textContent=signal;row.lastChild.append(s);}
+  $('terminal').append(row);$('terminal').scrollTop=$('terminal').scrollHeight;
+}
+
+// API ADAPTER — the only transport seam. Default mode never calls fetch.
+// To integrate POST /public/hash, replace runSimulation with runRemote below.
+// NEVER send approver/executor keys or a client-controlled host_provenance.
+// The real server must classify provenance, approve, execute, and return events.
+const api = {mode:'simulation', async run(request,onEvent){return runSimulation(request,onEvent);}};
+async function runRemote(request,onEvent){
+  const response=await fetch('/public/hash',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:request.text,provenance:request.claim,event_kind:request.kind}),
+    signal:AbortSignal.timeout(15000)});
+  if(!response.ok) throw new Error('서버 요청 실패 ('+response.status+'). 다시 시도한다.');
+  const data=await response.json();
+  // Expected contract: {decision, signal, reason, sha256?, events:[{role,message,signal?}]}.
+  if(!['ALLOW','REVIEW','DENY'].includes(data.decision)||typeof data.reason!=='string'||typeof data.signal!=='string') throw new Error('서버 응답 형식을 확인해야 한다.');
+  if(data.decision==='ALLOW' && !/^[a-f0-9]{64}$/.test(data.sha256||'')) throw new Error('서버의 SHA-256 결과가 올바르지 않다.');
+  for(const event of data.events||[]) if(typeof event.role==='string'&&typeof event.message==='string') onEvent(event.role,event.message,typeof event.signal==='string'?event.signal:'');
+  return data;
+}
+async function runSimulation(request,onEvent){
+  phase(0);onEvent('executor',request.id+' / sha256 승인 요청',`self_claim=${request.claim}; event=${request.kind}`);
+  await pause(300);phase(0,'done');phase(1);
+  onEvent('approver','운영자 설정의 독립 출처 분류 적용',`host_provenance=${request.host}; simulation=true`);
+  await pause(440);const verdict=evaluatePolicy(request);
+  onEvent('policy',verdict.decision+' / '+verdict.reason,verdict.signal);
+  if(verdict.decision!=='ALLOW'){
+    phase(1,'blocked');onEvent('gateway','모의 토큰 미발급. 작업 실행 안 함.');return verdict;
+  }
+  phase(1,'done');phase(2);await pause(260);
+  onEvent('gateway','모의 단일 요청 권한 확인',`demo-cap/${request.id} / 실제 capability 아님`);
+  phase(2,'done');phase(3);await pause(350);
+  if(!globalThis.crypto?.subtle) throw new Error('Web Crypto를 사용할 수 없다. HTTPS 또는 localhost에서 열어야 한다.');
+  const digest=await crypto.subtle.digest('SHA-256',encoder.encode(request.text));
+  const sha256=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+  onEvent('executor','SHA-256 계산 완료 / '+encoder.encode(request.text).length+' bytes','browser Web Crypto / 실제 해시');
+  phase(3,'done');return {...verdict,sha256};
+}
+function record(request,verdict){
+  counts[verdict.decision]++;for(const key of Object.keys(counts))$(key.toLowerCase()+'Count').textContent=String(counts[key]).padStart(2,'0');
+  if(!recorded)$('ledgerBody').replaceChildren();recorded++;
+  const row=document.createElement('tr');
+  const values=[request.id,request.claim,request.host,verdict.decision,verdict.signal+' / '+verdict.reason];
+  values.forEach((value,index)=>{
+    const td=document.createElement('td');
+    if(index===3){const badge=document.createElement('span');badge.className='badge '+verdict.decision.toLowerCase();badge.textContent=value;td.append(badge);}
+    else{td.textContent=value;if(index===0){const t=document.createElement('div');t.className='ledger-time';t.textContent=time();td.append(t);}if(index===4)td.className='decision-reason';}
+    row.append(td);
+  });
+  $('ledgerBody').prepend(row);while($('ledgerBody').children.length>20)$('ledgerBody').lastElementChild.remove();
+  $('ledgerMeta').textContent=`이 탭에서 ${recorded}건 판정 / 시뮬레이션`;
+}
+$('requestForm').addEventListener('submit',async event=>{
+  event.preventDefault();if(busy)return;
+  const text=$('payload').value;
+  if(encoder.encode(text).length>4096){lastDigest='';$('copyButton').disabled=true;$('resultBox').className='result is-denied';$('resultLabel').textContent='입력 확인 / 요청 안 함';$('result').textContent='입력은 UTF-8 기준 4096바이트 이하여야 한다.';$('payload').focus();return;}
+  busy=true;lastDigest='';$('copyButton').disabled=true;$('copyButton').textContent='복사';$('runButton').disabled=true;$('runButton').textContent='판정 진행 중';
+  const request={...readConditions(),text,id:'req.'+String(++sequence).padStart(4,'0')};
+  $('terminal').replaceChildren();$('runId').textContent='/ '+request.id;$('runStatus').textContent='running';
+  $('resultBox').className='result';$('resultLabel').textContent='SHA-256 / 실행 전';$('result').textContent='승인 결과를 기다린다.';
+  for(let i=0;i<4;i++)$('step'+i).className='flow-step';
+  try{
+    const verdict=await api.run(request,log);record(request,verdict);
+    $('runStatus').textContent=verdict.decision;
+    if(verdict.decision==='ALLOW'){
+      lastDigest=verdict.sha256;$('resultBox').className='result has-result';$('resultLabel').textContent='SHA-256 / 완료';$('result').textContent=lastDigest;$('copyButton').disabled=false;
+    }else{
+      $('resultBox').className='result '+(verdict.decision==='DENY'?'is-denied':'is-review');$('resultLabel').textContent=verdict.decision+' / 실행 안 함';$('result').textContent=verdict.reason;
+    }
+  }catch(error){
+    $('runStatus').textContent='ERROR';$('resultBox').className='result is-denied';$('resultLabel').textContent='오류 / 완료되지 않음';$('result').textContent=error.message;log('error',error.message);
+    document.querySelectorAll('.flow-step.active').forEach(step=>step.className='flow-step blocked');
+  }finally{busy=false;$('runButton').disabled=false;$('runButton').textContent='승인 요청 보내기';}
+});
+$('copyButton').addEventListener('click',async()=>{if(!lastDigest)return;try{await navigator.clipboard.writeText(lastDigest);$('copyButton').textContent='복사됨';}catch{$('copyButton').textContent='직접 선택';const range=document.createRange();range.selectNodeContents($('result'));const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);}});
+previewPolicy();
+</script>
+</body>
+</html>

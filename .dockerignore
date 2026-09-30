@@ -1,0 +1,7 @@
+# Only runtime source enters the build context; never keys, state or reports.
+**
+!Dockerfile
+!halo/
+!halo/*.py
+!tools/
+!tools/docker_smoke.py

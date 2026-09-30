@@ -64,11 +64,11 @@ rust/target/release/parameter_stress --experiment all --n 1000 --output rust/res
 
 모든 실험은 합성 입력에 대한 연구용 코드다. Rust 전환과 테스트 통과가 모델 안전성이나 완전 격리를 의미하지 않는다.
 
-## 최종 검증 — 2026-09-14
+## 역사적 검증 기록 — 2026-09-14
 
 추가 고부하 실행의 규모, 독립 수치 검증, 방어 성능의 한계와 과거 샌드박스 720회 결과는 [고부하 벤치마크 보고서](HARD_BENCH.ko.md)에 기록했다. 현재 6,180회 실행 기준은 `rust/results/attack-100-validated-20.json`과 [REPORT_INDEX.ko.md](../REPORT_INDEX.ko.md)에 있다. `hard_bench`로 과거 설정을 재현할 수 있다.
 
-- 통계 워크스페이스 자동 테스트 57개 통과. OS 샌드박스 실행기 테스트 13개 통과.
+- 당시 통계 워크스페이스 자동 테스트 57개와 OS 샌드박스 실행기 테스트 13개가 통과했다. 현재 재검증은 [2026-09-21 전체 검수 보고서](../docs/reviews/2026-09-21-review.ko.md)를 우선한다.
 - 100개 공격 사례 검사는 `rust/results/attack-100-validated-20.json`을 기준으로 하며 clean-launch의 메타데이터 잔여 접근 9개 때문에 보안 게이트는 실패한다.
 - release 빌드 성공. 모든 실험의 sweep을 seed 2개, 표본 1,000개로 실행했다. E005는 population 500, rounds 5로 실행했다. 원본 전체 표본 규모의 sweep을 모두 실행한 것은 아니다.
 - 파라미터 스트레스 140개를 표본 1,000개로 실행해 정상 종료했다.

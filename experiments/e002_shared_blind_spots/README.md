@@ -22,6 +22,12 @@ Protocols:
 
 Every protocol is independently calibrated to a 10% false-positive rate on benign data.
 
+The legacy `conservative_max` entry is a scaled-score control: multiplying both
+scores and their independently calibrated threshold by 0.95 adds no safety
+margin. Do not count it as an independent defense. A more restrictive FPR budget
+can reduce TPR, including worst-family TPR; these trade-offs are measured results,
+not software defects to hide by changing the budget or the ground truth.
+
 We then sweep the fraction of attacks belonging to held-out family `H` from 0% to 100%.
 
 ## Interpretation

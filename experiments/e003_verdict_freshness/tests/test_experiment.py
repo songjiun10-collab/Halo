@@ -56,6 +56,44 @@ def test_verdict_is_reused_while_within_bound():
     assert out["fixed_window_revalidation"] == out["cached_verdict"]
 
 
+def test_progressive_refresh_does_not_alias_at_full_volatility():
+    """Regression for the parity/aliasing bug: a floor of 1 on the adaptive
+    window used to force one step of reuse even when volatility=1.0 made the
+    state flip every step. Because the periodic refresh schedule then landed
+    on the same phase as the state's own 2-step oscillation, every odd
+    delay_steps used a verdict that was deterministically the *opposite* of
+    truth (worst observed ~54% containment failure). The window must be
+    allowed to reach 0 (revalidate every step) so this cannot alias."""
+    out, meta = run(seed=5, delay_steps=3, volatility=1.0, n=50_000, freshness_window=2)
+    assert meta["adaptive_window_size"] == 0
+    assert out["progressive_refresh"]["containment_failure_rate"] == 0
+    assert out["progressive_refresh"] == out["use_time_revalidation"]
+
+
+def test_zero_freshness_window_also_bounds_progressive_refresh():
+    """An explicit freshness_window=0 must disable progressive reuse too,
+    not just the fixed-window comparison group. The old floor of 1 silently
+    overrode this and always cached for one step regardless of the setting."""
+    out, meta = run(
+        seed=6,
+        delay_steps=8,
+        volatility=0.05,
+        n=20_000,
+        freshness_window=0,
+    )
+    assert meta["progressive_revalidation_count"] == 8
+    assert out["progressive_refresh"] == out["use_time_revalidation"]
+
+
+def test_progressive_refresh_reuse_tradeoff_is_preserved():
+    """The fix must not zero out the *intended* reuse window: when volatility
+    genuinely warrants window=1 (not floor-forced), progressive_refresh still
+    trades some staleness risk for fewer checks, same as before the fix."""
+    out, meta = run(seed=7, delay_steps=3, volatility=0.5, n=100_000, freshness_window=2)
+    assert meta["adaptive_window_size"] == 1
+    assert out["progressive_refresh"]["containment_failure_rate"] > 0
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [

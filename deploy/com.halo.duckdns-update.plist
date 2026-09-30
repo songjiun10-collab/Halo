@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template only -- fill in every REPLACE-WITH-* placeholder before installing.
+  See docs/DEPLOY.ko.md for the install commands (sudo launchctl bootstrap
+  system ...). This runs tools/duckdns_update.py every 5 minutes so the
+  DuckDNS hostname keeps pointing at this Mac's current public IP.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.halo.duckdns-update</string>
+
+    <key>UserName</key>
+    <string>REPLACE-WITH-YOUR-MACOS-USERNAME</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>REPLACE-WITH-OUTPUT-OF-which-python3</string>
+        <string>/Users/REPLACE-WITH-YOUR-MACOS-USERNAME/Halo/tools/duckdns_update.py</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/REPLACE-WITH-YOUR-MACOS-USERNAME/Library/Logs/halo-duckdns.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/REPLACE-WITH-YOUR-MACOS-USERNAME/Library/Logs/halo-duckdns.log</string>
+</dict>
+</plist>

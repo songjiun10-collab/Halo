@@ -1,5 +1,8 @@
 import io
 import json
+from pathlib import Path
+import subprocess
+import sys
 import threading
 import sqlite3
 
@@ -123,3 +126,160 @@ def test_real_database_audit_failure_at_commit_boundary(tmp_path, phase, expecte
     # Keep the injected failure active; neither restart path duplicates effects.
     post(Gateway(path, A, E, tools), "/execute", E, request)
     assert len(effects) == expected_effects
+
+
+def test_factory_can_initialize_fresh_state_directory(tmp_path, monkeypatch):
+    from halo.gateway_app import create_app
+    monkeypatch.setenv("HALO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HALO_APPROVER_KEY", A)
+    monkeypatch.setenv("HALO_EXECUTOR_KEY", E)
+    app = create_app()
+    assert Path(app.path).exists()
+    assert app.realm
+    body = {"tool": "sha256", "args": {"text": "restart"}, "intent_id": "fresh"}
+    token = app.handle("/approve", A, body)["token"]
+    request = {"tool": body["tool"], "args": body["args"], "token": token}
+    restarted = create_app()
+    assert post(restarted, "/execute", E, request)[0] == "200 OK"
+    assert post(app, "/execute", E, request)[0] == "403 Forbidden"
+
+
+def test_failed_dispatch_and_failed_audit_remain_uncertain(tmp_path):
+    now, effects = [1000.0], []
+    def execute(args):
+        effects.append(args)
+        now[0] -= 1
+        raise RuntimeError("after effect")
+    app = Gateway(tmp_path / "g.db", A, E,
+                  {"tool": Tool("1", lambda args: True, execute)},
+                  clock=lambda: now[0])
+    token = app.handle("/approve", A, {
+        "tool": "tool", "args": {}, "intent_id": "failure"})["token"]
+    request = {"tool": "tool", "args": {}, "token": token}
+    assert post(app, "/execute", E, request)[0] == "503 Service Unavailable"
+    now[0] = 1001
+    assert post(app, "/execute", E, request)[0] == "403 Forbidden"
+    assert effects == [{}]
+
+
+@pytest.mark.parametrize("tolerance", [float("nan"), float("inf"), -1])
+def test_invalid_clock_tolerance_creates_no_state(tmp_path, tolerance):
+    with pytest.raises(ValueError):
+        Gateway(tmp_path / "g.db", A, E, {}, rollback_tolerance=tolerance)
+    assert list(tmp_path.iterdir()) == []
+
+
+class _ToggleClock:
+    """Starts healthy so Gateway construction succeeds, then can be made to
+    raise like a monotonic clock becoming unavailable mid-run."""
+
+    def __init__(self, value=1000.0):
+        self.value = value
+        self.enabled = True
+
+    def __call__(self):
+        if not self.enabled:
+            raise ValueError("clock unavailable at the OS level")
+        return self.value
+
+
+@pytest.mark.parametrize("clock_kwarg", ["clock", "mono_clock"])
+def test_raising_clock_callable_is_rejected_not_uncaught(tmp_path, clock_kwarg):
+    """Regression (e006 fault-injection finding 1): a clock callable that
+    itself raises (e.g. a monotonic clock becoming unavailable) used to
+    propagate that raw exception straight out of handle() — neither Rejected
+    nor ExecutionUncertain, an error-handling contract inconsistency for any
+    caller that uses .handle() directly rather than through the WSGI
+    __call__ wrapper. _wall()/_mono_now() only guarded against a clock
+    returning a bad *value*, not the call itself raising."""
+    failing = _ToggleClock()
+    kwargs = {"clock": lambda: 1000.0, "mono_clock": lambda: 1000.0, clock_kwarg: failing}
+    tools = {"echo": Tool("1", lambda args: True, lambda args: {"ok": True})}
+    app = Gateway(tmp_path / "g.db", A, E, tools, **kwargs)
+    failing.enabled = False
+    with pytest.raises(Rejected) as excinfo:
+        app.handle("/approve", A, {"tool": "echo", "args": {}, "intent_id": "x"})
+    assert type(excinfo.value) is Rejected
+    assert "clock unavailable" in str(excinfo.value)
+
+
+def test_database_is_private_before_sqlite_connect(tmp_path, monkeypatch):
+    connect = sqlite3.connect
+    def checked_connect(path, *args, **kwargs):
+        import os
+        assert os.stat(path).st_mode & 0o077 == 0
+        return connect(path, *args, **kwargs)
+    monkeypatch.setattr(sqlite3, "connect", checked_connect)
+    Gateway(tmp_path / "g.db", A, E, {})
+
+
+def test_factory_rejects_dangling_database_symlink(tmp_path, monkeypatch):
+    from halo.gateway_app import create_app
+    target = tmp_path / "must-not-create"
+    (tmp_path / "gateway.sqlite3").symlink_to(target)
+    monkeypatch.setenv("HALO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HALO_APPROVER_KEY", A)
+    monkeypatch.setenv("HALO_EXECUTOR_KEY", E)
+    with pytest.raises((ValueError, OSError)):
+        create_app()
+    assert not target.exists()
+
+
+def test_nested_code_fingerprint_is_stable_across_processes():
+    source = ("from halo.gateway import Gateway\n"
+              "def adapter(args):\n    return [x + 2 for x in args]\n"
+              "print(Gateway._code_fingerprint(adapter))\n")
+    fingerprints = [subprocess.check_output([sys.executable, "-c", source], text=True)
+                    for _ in range(2)]
+    assert fingerprints[0] == fingerprints[1]
+
+
+def test_code_fingerprint_stable_across_pyc_cache_and_fresh_compile(tmp_path):
+    """Regression (e006 fault-injection finding 2): marshal.dumps(code)
+    directly produced DIFFERENT bytes for byte-identical source depending on
+    whether the code object was freshly compiled or reconstructed from a
+    .pyc cache in a *different* process (marshal deduplicates repeated
+    constants via object-identity backreferences, and interning state for
+    those constants differs across processes). The two `-c` invocations in
+    test_nested_code_fingerprint_is_stable_across_processes above never
+    actually exercise this: both always freshly compile from a string with
+    no .pyc cache involved. This test instead imports a real file twice —
+    the second run loads from the .pyc the first run just wrote — which is
+    exactly the axis that caused a real worker restart to reject a valid
+    capability. _canonical_code() must make this stable.
+
+    The function body matters: an earlier version of this test used a
+    nested closure with a list comprehension, which on Python 3.12+ (PEP
+    709 inlines comprehensions) never actually hit the unstable
+    constant-backreference path and passed even against the old, buggy
+    marshal.dumps(code)-direct implementation. A flat function with a
+    plain loop (mirroring the exact shape that reproduced the instability
+    via ad hoc repro scripts) is what actually exercises the bug."""
+    module_path = tmp_path / "advmod.py"
+    module_path.write_text(
+        "def adapter(args):\n"
+        "    tag = 'adapter'\n"
+        "    total = 0\n"
+        "    for x in args:\n"
+        "        total += x + 2\n"
+        "    return total\n"
+    )
+    script = (f"import sys; sys.path.insert(0, {str(tmp_path)!r})\n"
+              "import advmod\n"
+              "from halo.gateway import Gateway\n"
+              "print(Gateway._code_fingerprint(advmod.adapter))\n")
+    fresh = subprocess.check_output([sys.executable, "-c", script], text=True)
+    assert (tmp_path / "__pycache__").is_dir()  # confirms the second run loads from cache
+    cached = subprocess.check_output([sys.executable, "-c", script], text=True)
+    assert fresh == cached
+
+
+def test_fingerprint_distinguishes_constants_and_defaults():
+    def adapter(args, offset=1):
+        return offset + 1
+    import types
+    changed = types.FunctionType(adapter.__code__.replace(co_consts=(None, 2)),
+                                 globals(), argdefs=(1,))
+    assert Gateway._code_fingerprint(adapter) != Gateway._code_fingerprint(changed)
+    changed = types.FunctionType(adapter.__code__, globals(), argdefs=(2,))
+    assert Gateway._code_fingerprint(adapter) != Gateway._code_fingerprint(changed)

@@ -6,6 +6,9 @@ The project is intentionally empirical. Claims are limited to explicit threat mo
 
 ## Research workflow
 
+Local gateway development with Docker Compose is described in
+[the Docker guide](docs/DOCKER.ko.md), including key setup and an HTTP smoke check.
+
 1. Check the closest prior work first.
 2. State the trusted assumptions and threat model.
 3. Build the smallest experiment that can falsify the claim.
@@ -114,7 +117,9 @@ factory directly to the internet. Run it behind a separately configured TLS
 proxy and private service account, with `HALO_STATE_DIR` set to an existing
 0700 directory and independent `HALO_APPROVER_KEY` and `HALO_EXECUTOR_KEY`
 secrets. See [the Korean operations guide](halo/GATEWAY.ko.md) and the direct
-[adversarial review](halo/HALO_GATEWAY_V1_ATTACK_REVIEW.ko.md).
+[adversarial review](halo/HALO_GATEWAY_V1_ATTACK_REVIEW.ko.md). A reference
+deployment that puts gunicorn behind a TLS proxy (still never the raw
+factory) is documented in Korean at [docs/DEPLOY.ko.md](docs/DEPLOY.ko.md).
 
 ```sh
 .venv/bin/python -m pytest tests/test_gateway.py tests/test_gateway_adversarial.py tests/test_authority.py -q

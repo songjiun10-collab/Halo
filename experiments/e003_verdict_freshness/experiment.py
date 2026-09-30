@@ -44,20 +44,23 @@ def run(
     fixed_window_last_check_step = 0
     fixed_window_revalidations = 0
 
-    # Adaptive window based on volatility - smaller window for higher volatility
-    # Use conservative calculation to ensure safety
-    adaptive_window = max(1, freshness_window - int(volatility * 2))
-
-# Progressive refresh with an adaptive window that monotonically shrinks
+    # Progressive refresh with an adaptive window that monotonically shrinks
     # as volatility rises: more state churn means verdicts go stale faster, so
-    # the reuse bound must tighten. Floor at 1 so a volatile stream revalidates
-    # every step rather than ever widening the bound.
+    # the reuse bound must tighten. age > window triggers refresh on the
+    # following step. The window is allowed to reach 0 (revalidate every
+    # step) rather than floored at 1: a floor of 1 previously forced one step
+    # of reuse even when volatility made that step's state deterministic or
+    # near-deterministic (e.g. volatility=1.0 flips every step), which
+    # aliased the periodic refresh schedule onto the state's own oscillation
+    # period and made every odd delay_steps use a guaranteed-stale verdict.
+    # A floor of 1 also silently overrode an explicit freshness_window=0.
     progressive_allow = allow_at_check.copy()
     progressive_last_check = 0
     progressive_revalidations = 0
 
     def adaptive_window(vol: float) -> int:
-        return max(1, int(round(freshness_window * (1.0 - vol))))
+        # Keep the Python reference's ties-to-even rule in both languages.
+        return max(0, round(freshness_window * (1.0 - vol)))
 
     for step in range(1, delay_steps + 1):
         s = np.logical_xor(s, rng.random(n) < volatility)

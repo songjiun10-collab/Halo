@@ -77,8 +77,9 @@ def protocol_scores(x):
     # Adaptive: use evidence_diverse as primary, with fallback to max_pool
     adaptive_evidence = np.maximum(evidence_diverse, max_pool * 0.8)
 
-    # Conservative max: always take maximum but with safety margin
-    conservative_max = np.maximum.reduce([m1, m2, m3, m4]) * 0.95  # Slight safety margin
+    # Historical scaled-score control, not an extra safety margin: separately
+    # calibrated quantiles scale too, so decisions coincide with max_pool.
+    conservative_max = max_pool * 0.95
 
     return {
         "single_m1": m1,
@@ -88,7 +89,7 @@ def protocol_scores(x):
         "weighted_max": weighted_max,  # FPR-robust version
         "hybrid_evidence": hybrid_evidence,  # Balanced approach
         "adaptive_evidence": adaptive_evidence,  # Adaptive combination
-        "conservative_max": conservative_max,  # Conservative approach
+        "conservative_max": conservative_max,  # Legacy scaled-score control
     }
 
 def calibrate_thresholds(benign_scores, target_fpr=0.10):

@@ -1,0 +1,1010 @@
+# 보고서 전수 조치 원장 — 2026-09-21
+
+2026-09-23 후속: [doctor/verify CLI 구현 및 현재 검증](2026-09-23-doctor-cli.ko.md).
+Python 383개 통과. 과거 증거 2개가 stale이므로 통합 verify는 exit 1이다.
+
+2026-09-25 후속: [E003 progressive_refresh adaptive window 수정](2026-09-25-e003-progressive-refresh-fix.ko.md).
+아래 R3의 "미해결 취약점 #1"(EVALUATION.md 표) 중 floor 로직 결함이던 부분을
+수정했다 — 통계적 trade-off 부분은 그대로 유지. Python 395개 통과.
+증거 레지스트리 상태는 변경 없음(valid 1 / stale 2 / unsupported 1).
+
+2026-09-25 후속 2: [halo doctor/verify 버그 2건 수정](2026-09-25-doctor-verify-fixes.ko.md).
+`verify --scope rust/sandbox/all`이 env 누락으로 항상 실패하던 문제와
+`verify --json`이 순수 JSON을 내지 않던 문제. 2026-09-23-doctor-cli.ko.md의
+"CLI 회귀 포함 전체 pytest 383 통과"는 `--scope python`만 검증된 것이었다 —
+rust/sandbox 스코프는 이번에 처음 실제로 통과 확인. Python 399개 통과.
+
+2026-09-25 후속 3: [halo/gateway.py clock 호출 예외 처리 수정](2026-09-25-e006-mono-clock-fix.ko.md).
+E006 fault-injection의 "발견 1"(mono clock 실패 시 raw ValueError가
+handle()을 뚫고 나감, report-only로 기록되고 gateway.py는 안 고쳐진 상태였음)을
+실제로 수정 — wall/mono 양쪽 다 clock 호출 자체가 raise하는 경우를
+`Rejected("clock unavailable")`로 정규화. 발견 2(marshal 지문 불안정)는
+별도 범위로 남김. Python 401개 통과.
+
+2026-09-25 후속 4: [halo/gateway.py 어댑터 지문의 로드 모드 불안정성 수정](2026-09-25-e006-fingerprint-fix.ko.md).
+E006 fault-injection의 "발견 2"(marshal 기반 어댑터 지문이 fresh-compile과
+`.pyc` 캐시 로드 사이에서 달라져 유효한 capability가 거짓 거부될 수 있음,
+높음 심각도, report-only로 기록되고 gateway 수정은 별도 범위로 남겨져
+있었음)를 실제로 수정 — `_code_fingerprint`가 코드 객체를 통째로
+marshal하는 대신 반복 상수의 백레퍼런스 문제가 생길 수 없는 평탄한 필드
+튜플(`_canonical_code`)로 분해한 뒤 marshal한다. 서브프로세스 기반 재현으로
+구버전의 불안정성을 재확인했고, 동일 스크립트로 되돌린 코드에서 신규 회귀
+테스트가 실패함을 확인한 뒤 수정판에서 통과함을 확인했다. Python 402개 통과.
+
+2026-09-25 후속 5: [tools/check_evidence_registry.py fingerprint 경로 탈출 수정](2026-09-25-evidence-registry-path-confinement-fix.ko.md).
+`recorded_fingerprints`의 경로 키가 검증 없이 `repo_root / rel_path`로
+결합되어, 절대경로(pathlib join이 repo_root를 버림)나 `..` 상위 탈출로
+`repo_root` 밖 임의 파일을 해시해 리포트에 노출할 수 있었다 — `halo doctor
+verify`가 항상 실행하는 검증 진입점의 실제 코드 결함. `validate_entry`에서
+두 경우 모두 다른 스키마 위반과 동일하게 fail-closed(exit 1)로 차단하도록
+수정. Python 408개 통과.
+
+2026-09-25 후속 6: [halo doctor verify()의 sandbox security_gate 침묵 누락 수정](2026-09-25-doctor-verify-sandbox-gate-silent-gap-fix.ko.md).
+`verify --scope sandbox/all`에서 러너 바이너리가 아직 빌드되지 않았으면
+`security_gates`가 조용히 빈 배열이 되어 "확인 안 함"과 "문제 없음"을
+구분할 수 없었다 — 이 모듈의 다른 곳(rust-tests/sandbox-tests)이 지키는
+"환경 미설치는 not-installed로 명시 보고" 관례를 게이트만 어겼다. 항상
+게이트 항목을 내도록 수정(바이너리 없으면 `{"ok": None, "detail": "not
+built"}`). `security_gate=false` 자체는 이미 문서화된 B1 환경 한계이며 이
+수정으로 바뀌지 않는다. Python 418개 통과.
+
+2026-09-26 후속: [macOS 샌드박스 clean-launch 메타데이터 잔여 사례 9→3건 축소](../../artifacts/sandbox_benchmark/RUST_RUNNER.ko.md).
+`rust_runner`의 sandbox-exec 프로파일을 `file-read-data`/`file-read-metadata`로
+분리해 `/`에 대한 metadata 허용을 제거하고 outside 경로의 metadata read를
+명시적으로 deny했다. 판정기도 강화해 `metadata_chdir`이 실제로 canary를
+읽는지 확인하고(단순 syscall 성공만으로 escaped 처리하지 않음),
+`getcwd`/`getpid`/`access("/", F_OK)`처럼 민감하지 않은 자기 프로세스 정보는
+새 `informational` 분류로 분리했다 — 이 분류는 판정 게이트를 통과시키지
+않는다. 그 결과 root `fstatat`/`lstat` 2건은 실제로 차단되고, 3건은
+informational로 재분류됐다. 실제 `--repeats 1` 실행으로 clean-launch 잔여
+사례가 9건에서 3건(`statvfs`/`statfs`/`pathconf`, 여전히 escaped)으로 줄었음을
+확인했다 — `security_gate.passed`는 여전히 `false`이며 통합 테스트
+(`tests/runner.rs`)가 이를 명시적으로 단언한다. B1(별도 격리 환경 필요) 자체를
+해결했다고 주장하지 않는다. Rust 16개 + Python 418개 통과.
+
+2026-09-26 후속 2: [macOS 샌드박스 clean-launch 잔여 3건(statvfs/statfs/
+pathconf) 추가 수정 — 9→3→0](../../artifacts/sandbox_benchmark/RUST_RUNNER.ko.md).
+위 9→3 축소 이후 남은 세 호출은 경로 기반 `file-read-metadata` deny로는
+막히지 않았다 — Seatbelt의 vnode metadata 필터가 애초에 이 syscall들의
+mount/파일시스템 수준 조회를 다루지 않기 때문이다. 프로파일에 `(deny
+syscall-unix (syscall-number SYS_statfs SYS_statfs64 SYS_fstatfs
+SYS_fstatfs64 SYS_pathconf SYS_fpathconf))`를 추가해 경로·파일서술자
+인자와 무관하게 syscall 번호 단위로 차단했다(`statvfs`류는 libc 내부에서
+`statfs`류로 구현되어 함께 막힌다). 새 회귀 테스트로 파일서술자 기반
+변형까지 `sandbox-exec` 자식 프로세스 안에서 재실행해 `EPERM`을 직접
+확인했다. 이 기기의 실제 `sandbox-exec`로 재검증한 결과 clean-launch는
+차단 97·정보성 3·허용 3(escaped 0)이 됐고 `security_gate.passed=true`,
+`residual_cases=[]`다 — B1이 이 러너의 고정 100개 probe 범위 안에서는
+더 이상 열려 있지 않다. 이 러너가 검사하는 시행에 한정된 결과이며 완전한
+호스트 메타데이터 기밀성을 주장하지 않는다. Rust 17개 + Python 418개
+통과.
+
+2026-09-26 후속 3: [Docker 게이트웨이 이미지에 Claude Code CLI·guard-hook·
+사고 스킬 내장](2026-09-26-docker-embed-claude-cli-hook-skills.ko.md).
+버그 수정이 아니라 사용자가 명시적으로 요청한 기능 추가 — 게이트웨이
+컨테이너 안에서 작업할 때 호스트와 동일한 안전 후크·스킬을 쓸 수 있도록
+Dockerfile 빌드 단계에 Node.js·Claude Code CLI·`songjiun10-collab/hook`
+플러그인·`songjiun10-collab/Senior-thinking-skills`를 추가했다. `halo`
+사용자를 `--no-create-home`에서 `--create-home`으로 바꿔 `$HOME`이 없어
+플러그인 설정이 깨지는 문제를 먼저 막았다. **미검증**: 로컬에 Docker
+데몬이 없어 실제 빌드로 확인하지 못했다 — `claude plugin` CLI의 정확한
+비대화형 인자 계약이 특히 불확실하다. 게이트웨이 런타임 자체는 건드리지
+않아 Python 418개는 이 변경과 무관하다.
+
+2026-09-26 후속 4: [macOS 샌드박스 판정기의 정보성(informational) 분류 허위
+PASS 보완](../../artifacts/sandbox_benchmark/RUST_RUNNER.ko.md). 자기 신고
+`status="ok"`만으로 `metadata_getpid`/`metadata_getcwd`/`metadata_access_parent`를
+무조건 informational로 분류했던 지점을 강화 — PID는 부모가 실제로 생성한
+child PID와, cwd는 부모가 지정한 work 경로와 일치해야 informational로
+인정하고, 불일치·누락·잘못된 타입은 `error`로 분류한다. `report_passes()`도
+`attacks_informational` 필드가 음이 아닌 정수인지, 반복당 지정된 3개 사례
+수를 초과하지 않는지 검증해, 조작되거나 잘못된 요약이 임의의 escaped/blocked
+공격을 informational로 둔갑시켜 게이트를 통과시키는 경로를 막았다. 이는
+판정기 자체의 허위 PASS를 막는 보완이며 새로운 OS 권한 탈출을 발견했다는
+의미는 아니다 — `security_gate.passed`가 검사하는 실제 샌드박스 경계는
+바뀌지 않았다. Rust 18개(단위 16 + 통합 2) 통과, `cargo clippy --all-targets
+-- -D warnings` 통과. 이 변경은 Python 코드를 건드리지 않는다.
+
+2026-09-26 후속 5: [E007 — AI 전용 승인자/실행자 분리 게이트웨이 접근 모델](../../experiments/e007_dual_agent_provenance_gate/README.ko.md).
+사용자가 "헤일로는 이제 AI만을 위한 공간"이라는 방향을 밝히고 게이트웨이
+접근 모델의 재설계를 요청했다. `halo/authority.py`·`halo/gateway.py`·
+`halo/gateway_app.py`·`halo/dev_server.py`는 전혀 수정하지 않고, 승인자·
+실행자 역할을 각자 자신의 게이트웨이 키만 쥔 별도 OS 프로세스로 실행하는
+새 참조 구현(`experiments/e007_dual_agent_provenance_gate/`)을 추가했다.
+승인 판단은 전적으로 기존 `halo.policy.decide()` + `halo.safety_cases
+.evaluate_trace()`가 내리며(자유 형식 LLM 판단 없음), 실행자가 자기 신고
+provenance를 `"trusted"`로 주장해도 승인자가 독립적으로 분류한
+`host_provenance`가 이를 잡아내 거부하는, 이 저장소의 기존 P9-B2
+provenance-laundering 패턴을 승인/실행 경계에서 재현·검증했다(대조군으로
+"자기 신고를 그대로 믿었다면 ALLOW였을 것"도 같은 스위트에서 직접 증명).
+Claude가 핵심 로직(`experiment.py`, `channel.py`의 `Channel`/
+`LoopbackChannel`)과 그 단위·HTTP 종단 간 테스트를, Codex가 실제 2-프로세스
+배관(`UnixSocketChannel`, `approver_process.py`/`executor_process.py`/
+`run_two_process_demo.py`와 그 테스트)을 나눠 작업했다. Python 464개(신규
+46개) 통과. `intent_id`는 여전히 추적용 식별자일 뿐이며, 이 실험은 프로덕션
+`Authority`/`Gateway`가 요구하는 "호스트가 인증한 사용자 의도" 요건을
+대체하지 않는다 — README의 "정직한 한계" 참고.
+
+2026-09-26 후속 6: [Mac을 서버로 게이트웨이 인터넷 공개 1단계 — 프로덕션
+서버 + TLS + DDNS](DEPLOY.ko.md). 사용자가 실제 게이트웨이를 인터넷에
+공개하기를 요청했고, 프로덕션 서버·TLS를 먼저 갖추는 방안(권장)과 이
+Mac을 로컬 호스트로 쓰는 방안, 무료 동적 DNS(DuckDNS)를 확인받았다.
+`halo/authority.py`·`halo/gateway.py`·`halo/gateway_app.py`·
+`halo/dev_server.py`는 전혀 수정하지 않고, 새 `halo/wsgi.py`(umask 설정 후
+`dev_server.application()`을 감싸는 최소 엔트리포인트)를 추가해 개발용
+`wsgiref`를 gunicorn으로 교체했다. `compose.prod.yaml` 오버레이가 기존
+`compose.yaml`의 하드닝(read_only, cap_drop, 시크릿, 헬스체크, 네트워크)을
+재선언 없이 그대로 유지한 채 `command`만 gunicorn 호출로 바꾼다. TLS는
+호스트 네이티브 Caddy가 담당하며, 1단계 `deploy/Caddyfile`은 공개 라우트가
+아직 없으므로 모든 경로를 404로 응답한다 — `/approve`·`/execute`·
+`/revoke`·`/healthz`는 여전히 loopback 전용이다. `tools/duckdns_update.py`
+(stdlib만 사용, 0600 파일에서만 토큰을 읽고 symlink는 거부)와 launchd
+plist 템플릿으로 DNS 갱신을 자동화했다. 인증 없는 공개 API 래퍼
+(`halo/public_api.py`, 요청마다 fsync 디스크 쓰기 3회에 회전 없는 audit
+테이블이라는 실제 남용 벡터)는 설계만 해두고 이번 배치에 구현하지
+않았다 — 별도 승인 필요. Python 9개 신규(`test_wsgi.py`, `test_duckdns_update.py`)
+포함 473개 통과. **미검증**: 이 세션에는 Docker 데몬도 대상 라우터·macOS
+시스템 설정 접근도 없어, 실제 `docker compose -f compose.yaml -f
+compose.prod.yaml up` + Caddy + DuckDNS + launchd 전체 배포 경로는
+사용자가 자신의 Mac·네트워크에서 직접 확인해야 한다 — `docs/DEPLOY.ko.md`의
+"정직한 한계"·"사용자가 직접 해야 하는 것" 참고. `halo/GATEWAY.ko.md`의
+"인터넷 공개 운영 준비 완료로 판정하지 않는다"는 이 배포 이후에도
+바뀌지 않는다.
+
+2026-09-26 후속 7: 정적 프론트엔드 콘솔을 배포에 연결(`deploy/Caddyfile`).
+사용자가 "프론트하고 연결"을 요청해, 실제 `/public/hash` 공개 API까지
+연결할지 정적 페이지만 배포에 연결할지 먼저 확인했다 — 후자(권장, 안전한
+쪽)로 확정됐다. `web/halo-console.html`(별도 세션에서 만들어진 인라인
+CSS/JS 단일 정적 파일, 기본값이 `api.mode='simulation'`이라 fetch를 전혀
+호출하지 않고 SHA-256도 브라우저 Web Crypto로 계산)을 `deploy/Caddyfile`의
+`handle /` 블록이 `file_server`로 정확히 `/` 경로에서만 서빙하도록
+수정했다. `/approve`·`/execute`·`/revoke`·`/healthz`로 가는
+`reverse_proxy`는 여전히 없으므로 그 외 모든 경로는 이전과 동일하게
+404다 — 이번 변경으로 게이트웨이 API가 인터넷에 새로 열리지 않았다.
+`halo/public_api.py`(2단계, `/public/hash`)는 이전과 마찬가지로 별도
+승인 없이는 구현하지 않는다. Python 코드 변경 없음(설정 파일과
+`docs/DEPLOY.ko.md`만 갱신), 회귀 473개 그대로 통과.
+
+2026-09-26 후속 8: [computer-use 전용 브라우저 — 승인·실행 경계를 실제
+Chromium 제어에 적용](../superpowers/specs/2026-09-26-computer-use-browser-design.md).
+사용자가 "이제 우리는 브라우저를 만든다, 컴퓨터 유즈 전용 브라우저"를
+요청했고, 업계 조사(ceLLMate·AIRGuard·Perplexity Comet 제로클릭 파일 유출
+사고·ChatGPT Atlas의 다운로드 전면 금지 등)를 거쳐 이 프로젝트가 이미
+연구해온 승인-실행 분리를 처음으로 실제 웹 공격 표면(간접 프롬프트 주입)에
+적용하는 확장으로 확정했다. Codex와 역할을 분담해(Claude: Electron
+main/preload/승인자 프로세스·승인-실행 경계·통합 테스트, Codex: renderer
+UI·UI 테스트) `apps/computer-browser/`를 새로 만들었다. Electron main을
+실행자(`HALO_EXECUTOR_KEY` 없음 — Gateway HTTP를 호출하지 않으므로 그
+키 자체가 무의미해 도입하지 않았다)로, 별도 상시 구동 Python 프로세스를
+승인자로 분리하고 E007의 `UnixSocketChannel`을 그대로 재사용했다. 승인
+판단은 전적으로 `halo.policy.decide()` + `halo.safety_cases.evaluate_trace()`
+이며, 에이전트가 "방금 읽은 페이지 내용"에서 나온 행동은 호스트 규칙으로
+독립적으로 untrusted로 분류돼 자기 신고("trusted")와 불일치하면 DENY —
+Comet 사고와 정확히 같은 위협 패턴을 겨냥한다. 구현 중 halo의 기존 action
+어휘(`read/.../post_web/...`)에 브라우저 동작이 하나도 없어 매핑 없이는
+모든 요청이 항상 거부된다는 것을 발견해 매핑 테이블을 추가했고, 그 결과
+`submit_form`/`download`는 독립 텔레메트리가 없어 이 참조 구현에서
+provenance와 무관하게 항상 거부됨을 확인했다(의도된 보수적 동작). 실제
+`npm install && electron .`로 앱을 띄우고 CDP로 `startTask()`를 호출해
+실행자→승인자(Unix 소켓)→실제 `WebContentsView` 페이지 로드까지 종단
+간으로 검증했고, 그 과정에서 진짜 버그 3개(IPC 직렬화 예외, bounds 캐시로
+인한 미적용, macOS `/var` 심링크로 인한 승인자 소켓 바인딩 무한 실패)를
+찾아 고쳤다. Python 21개 신규(`tests/test_computer_browser_approver.py`)
+포함 494개, JS 12개(`node --test`) 통과. `halo/authority.py`·
+`halo/gateway.py`·`halo/gateway_app.py`·`halo/dev_server.py`는 전혀
+수정하지 않았다. **정직한 한계**: 이 버전의 `startTask` 데모 경로는 항상
+`source="user_prompt"`만 만들어, 이 프로젝트의 핵심 시나리오(REVIEW·
+provenance mismatch DENY)는 UI로 직접 트리거되지 않고 Python 유닛
+테스트에서만 검증됐다 — 실제 페이지 콘텐츠를 읽고 그로부터 행동을
+제안하는 멀티스텝 에이전트 루프는 아직 없다(설계 문서 참고). `click`/
+`type`을 halo의 `read` 어휘로 매핑한 것도 근사치이며 상태 변경 클릭과
+무해한 클릭을 구분하지 못한다.
+
+2026-09-26 후속 9: computer-use 브라우저의 REVIEW 경로를 UI에서 실제로
+도달 가능하게 확장(같은 [설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트" 절). `startTask`를 2단계로 확장했다 — 1단계는 사용자
+프롬프트의 URL로 이동(`source="user_prompt"`), 성공하면 2단계로 방금
+로드된 페이지에서 외부 링크 하나를 실제로 찾아(고정 추출 스크립트로 읽기,
+페이지 콘텐츠를 eval하지 않음) `source="page_content"`로 후속 이동을
+제안한다. 실제 Electron 앱 + CDP로 `https://example.com/` → "Learn more"
+링크가 실제로 `approvalQueue`에 큐잉됨 → `approve()` 호출 → 실제
+`iana.org`로 이동까지 종단 간 확인했다. 여전히 정해진 2단계 스크립트이지
+루프가 있는 진짜 플래너는 아니며, 거짓 self-report로 인한 DENY 경로는
+여전히 Python 유닛 테스트에서만 검증된다(정직하게 동작하는 데모 에이전트는
+스스로 거짓말하지 않으므로). Python/JS 코드는 `control-api.js`만 수정,
+회귀 494개(Python)·13개(JS) 그대로 통과.
+
+2026-09-27 후속 10: computer-use 브라우저의 `stopTask()`/`pauseTask()`
+경쟁 상태 수정(같은 [설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트 2" 절). Codex가 런타임 경계를 검수하다 발견해 알려온
+버그다 — `stopTask()`가 이미 승인자에게 보낸 요청을 취소하지 않아 정지
+후 늦게 도착한 ALLOW가 그대로 실행되거나, 늦게 도착한 REVIEW가 방금 비운
+`approvalQueue`를 되살리며 `_task.state`를 `"stopped"`에서
+`"awaiting_approval"`로 조용히 되돌릴 수 있었다. `pauseTask()`도 동일한
+문제였다. `apps/computer-browser/main/control-api.js`에 세대 카운터
+(`_stopEpoch`)와 단일 슬롯 보류(`_deferredDecision`)를 추가해, 정지 후
+도착한 결정은 폐기하고 일시정지 중 도착한 결정은 `resumeTask()`가 명시적
+으로 적용하도록 고쳤다. **정직한 한계**: `resumeTask()`가 보류된 결정을
+적용해도 이미 반환된 `startTask()`의 1→2단계 흐름 자체를 재개하지는
+않는다 — 진짜 루프가 아니라 정해진 2단계 스크립트이기 때문이다. 검증:
+`test/control-api.test.js`에 회귀 테스트 7개 추가, `node --test` 20/20
+통과, 전체 Python 회귀 494/494 통과 유지 확인.
+
+2026-09-27 후속 11: 위 수정의 사각지대를 Codex가 독립적으로 재현·보고해
+추가 수정(같은 설계서의 "후속 업데이트 3" 절). 후속 10의 수정은 "판정이
+오기 전"에 정지/일시정지되는 경우만 막았고, "판정은 이미 ALLOW로 왔고
+`execute()`(예: 실제 `navigate()`)가 진행 중인 동안 `stopTask()`가 오는"
+경우는 여전히 놓쳤다 — `startTask()`가 `_findFirstOutboundLink()` 이후
+("링크 없음" 분기 포함)와 `execute()` 이후 지점에서 정지 세대를 다시
+확인하지 않아, 이미 유효했던 ALLOW가 그대로 통과해 `_task.state`를
+`"stopped"`에서 `"completed"`로 덮어썼다. Codex가 제시한 재현 절차(즉시
+ALLOW·수동 resolve하는 navigate·링크 없음 반환 후 `execute()` 대기 중
+`stopTask()` 호출)로 먼저 직접 재현해 확인한 뒤 수정했다. `_applyDecision`
+이 `execute()` 직후 정지 세대를 재확인해 `"cancelled"`를 반환하도록
+하고, `startTask()`/`resumeTask()`/`approve()` 세 곳 모두에 같은 가드를
+추가했다(세 곳 다 같은 클래스의 구멍이었다). `execute()` 자체를 중단시키지는
+않는다 — 이미 시작된 실행을 되돌릴 방법이 없으므로, 고치는 것은 그 이후의
+상태 장부 기록이다. 검증: 재현 절차를 그대로 회귀 테스트 4개로 추가,
+`test/control-api.test.js` 최종 11개, `node --test` 24/24 통과, 전체
+Python 회귀 494/494 통과 유지 확인.
+
+2026-09-27 후속 12: computer-use 브라우저에 요청 pacing 기본값과 CAPTCHA
+감지·보존·핸드오프 추가(같은 [설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트 4" 절). 사용자가 Codex·Claude 모두에게 "자동 브라우징이
+CAPTCHA를 유발하는 빈도 자체를 낮추라"(anti-bot 우회가 아니라 정상 이용
+pacing으로), 그리고 별도로 "CAPTCHA 때문에 작업이 사라지거나 실패
+처리되지 않게 하되, 포괄적 허락만으로 자동 해결하지는 말라"고 요청했다
+— 둘 다 이 프로젝트의 기존 원칙(CAPTCHA 자동 해결·우회 금지)과 일치한다.
+사람이 직접 하는 free action은 건드리지 않고, 에이전트가 개시해 실제
+실행되는 탐색에만 최소 간격(`MIN_AGENT_ACTION_INTERVAL_MS`, 기본
+2000ms)을 강제했다. CAPTCHA 쪽은 `shared/captcha-heuristics.js`의
+순수 문자열 대조 함수(`looksLikeCaptcha`)로 감지하며 DOM을 읽거나
+챌린지에 손대지 않는다 — 감지되면 진행 중인 작업만 자동으로
+일시정지(`task.pauseReason: "captcha"`)하고, 이미 항상 사람이 직접
+쓸 수 있는 `WebContentsView`를 통해 사람이 직접 풀도록 남긴다. 재개는
+`resumeAfterCaptcha()`로 분리해 재개 직전 같은 휴리스틱을 다시 확인하고,
+여전히 CAPTCHA로 보이면 자동 재시도 없이 거부·유지한다. IPC 계약에
+`resumeAfterCaptcha()`와 `page.captchaSuspected`/`task.pauseReason`
+필드를 추가했다(렌더러 UI 자체는 범위 밖 — 렌더러는 별도로 다시 만들어지는
+중). **정직한 한계**: 감지는 알려진 문자열 몇 개만 대조하는 최선-노력
+휴리스틱이라 완전한 감지를 보장하지 않는다(위음성 쪽으로 보수적 — 놓치면
+그냥 평소 페이지로 보일 뿐이라 안전 방향은 동일). 검증:
+`test/captcha-heuristics.test.js`(순수 함수 5개), `test/control-api.test.js`
+에 pacing 2개 + CAPTCHA 핸드오프 7개 추가, `node --test` 38/38 통과,
+전체 Python 회귀 494/494 통과 유지 확인.
+
+2026-09-27 후속 13: CAPTCHA 재개가 실제로 이어지지 않던 문제 수정(같은
+[설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트 5" 절 — 바로 위 후속 12에서 "resume은 1→2단계 흐름 자체를
+재개하지 않는다"고 적었던 것을 검증 요청받아 재현·정정). CAPTCHA로
+일시정지된 뒤 `resumeAfterCaptcha()`를 불러도 `_task.state`만
+`"running"`으로 바뀔 뿐 2단계 링크 탐색·후속 승인 흐름은 전혀 재실행되지
+않아, 작업이 "실행 중"으로 보이는 채 조용히 멈춰 있었다(직접 재현해
+확인: `_findFirstOutboundLink` 호출 횟수가 재개 후에도 0으로 그대로).
+"일시정지"보다 나쁜 상태였다 — UI엔 진행 중이라고 뜨는데 실제로는 아무
+일도 안 일어나므로. `_taskCursor`를 도입해 `startTask()`의 각 단계 완료
+처리(`_afterStepOutcome()`)와 2단계 실행(`_runStepTwo()`)을 별도 메서드로
+뽑아, 판정이 실행 전에 보류됐든(사람의 사전 `pauseTask()`) 이미 실행된
+뒤 보류됐든(CAPTCHA 감지) 재개 시 실제로 다음 단계까지 이어지게 했다 —
+2단계 자체가 끊긴 경우는 이 고정 2단계 데모의 마지막 단계이므로 재개는
+`"completed"`로 정리한다. `startTask()`를 거치지 않은 단발
+`performGatedAction()` 호출은 커서가 없어 기존 동작(재개 후 단순 완료
+처리) 그대로 유지된다. 검증: 재현 절차를 그대로 회귀 테스트 3개로
+추가(CAPTCHA 재개 후 2단계 완료, CAPTCHA 재개 후 2단계 REVIEW 도달,
+실행 전 보류 재개 후 2단계 완료) — `test/control-api.test.js` 최종
+23개, `node --test` 41/41 통과, 전체 Python 회귀 494/494 통과 유지 확인.
+
+2026-09-27 후속 14: computer-use 브라우저에 지연 계측 + navigation
+timeout/abort + DOM 스캔 상한 추가(같은 [설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트 6" 절). 사용자가 웹 근거(Anthropic computer-use 문서,
+WebArena 논문, Electron `loadURL()` 공식 문서)와 로컬 코드 병목 분석을
+근거로 5가지 우선순위를 제시했고, 그중 (1) 지연·실패 사유 계측
+(p50/p95, 테스트 가능한 fixture), (2) navigation timeout/abort 연동,
+(4) DOM 스캔 상한을 구현했다 — (1)은 나머지 판단의 증거이므로 먼저,
+(2)는 `navigate()`가 `loadURL()`을 무기한 대기하던 실제 안전 공백이라
+가장 구체적인 병목, (4)는 (2)를 손보는 김에 저비용으로 추가했다. (3)
+bounded agent loop는 "설계부터", (5) 렌더러 증분 렌더링은 "실측 후에만"
+이라는 지시대로 이번 범위에서 제외했다. `shared/metrics.js`(신규)의
+순수 함수가 `{kind, ms, outcome}` 기록을 종류별 `count/p50/p95/outcomes`
+로 요약하고, `ControlApi`는 승인 왕복·실행·탐색·DOM 읽기·대기열 체류·
+작업 전체 시간 6종류를 기록해 `getMetricsSummary()`(IPC 노출)로
+조회한다. `navigate()`는 `loadURL()`을 타이머와 경쟁시켜 기본 30초 안에
+끝나지 않으면 `webContents.stop()`으로 실제 중단하고 `loadState:
+"error"`로 보고한다(예외를 던지지 않아 게이티드 파이프라인에 새 미처리
+예외를 만들지 않음). `_findFirstOutboundLink()`의 앵커 순회는
+`maxDomLinksScanned`(기본 500)로 상한을 두었다. `bench/latency-bench.js`
+(신규)로 계측이 실제로 의미 있는 수치를 만드는지 시연했다 — **시뮬레이션
+수치이며 실제 운영 측정치가 아니다**(실제 측정은 살아있는 Electron
+앱·실제 승인자·실제 외부 사이트가 필요해 범위 밖). **정직한 한계**:
+`MAX_METRICS=500`은 종류 구분 없는 공유 롤링 윈도우라 드문 종류의 표본이
+상대적으로 더 빨리 밀려날 수 있다; navigation timeout 기본값(30초)은
+실측 없이 고른 정적 추정치다; `executeJavaScript` 자체엔 타임아웃이
+없다(앵커 개수만 상한); 렌더러 페인트/스냅샷 지연은 계측 범위 밖이다.
+검증: `test/metrics.test.js`(순수 함수 6개), `test/control-api.test.js`
+에 계측·타임아웃·DOM 상한 회귀 테스트 7개 추가 — `node --test` 54/54
+통과, 전체 Python 회귀 494/494 통과 유지 확인.
+
+2026-09-27 후속 15: computer-use 속도/효율 연구(OSWorld-Human, WABER,
+D2Snap, Anthropic/OpenAI computer-use·latency·caching 문서, Playwright
+networkidle 비권장) 반영 — navigation readiness 옵션 추가(같은
+[설계서](../superpowers/specs/2026-09-26-computer-use-browser-design.md)의
+"후속 업데이트 7" 절). 사용자가 제시한 7가지 속도 개선안 중 4개(LLM
+지연 decomposition, 스크린샷/DOM downsampling, 모델 배치 실행, prompt
+caching)는 이 코드베이스에 아직 LLM 모델 호출·스크린샷·모델 왕복 자체가
+없어(고정 2단계 스크립트) 적용 대상이 없다고 정직하게 판정하고
+구현하지 않았다 — 없는 파이프라인을 벤치마크했다고 주장하지 않기
+위해서다. 1개(pacing 상수 조정)는 사용자가 직접 "근거 없이 조정하지
+말라"고 지시해 그대로 두었다. 1개(불필요 action 수 지표)는 지난 커밋의
+`getMetricsSummary()` 카운트가 이미 일부 커버한다. 실제로 새로 구현
+가능했던 것은 navigation readiness(항목 3) 하나였다 — Electron
+`loadURL()`은 전체 로드(`did-finish-load`)까지 기다리는데, 이 앱의
+유일한 페이지 읽기(`_findFirstOutboundLink()`)엔 더 이른 `dom-ready`
+시점으로 충분할 수 있어(Playwright의 networkidle 비권장과 같은 맥락)
+`navigationWaitUntil`(`"load"` 기본 | `"dom-ready"`) 옵션을 추가했다.
+기존 timeout/abort·`did-fail-load` 경로는 그대로 유지된다. **기본값은
+바꾸지 않았다** — 스크립트로 뒤늦게 그려지는 링크를 놓칠 수 있는
+완전성 트레이드오프가 있고, 실제 페이지로 측정한 근거가 없기
+때문이다. `bench/navigation-readiness-bench.js`(신규)로 동일한 모의
+페이지 로드 모양에 대해 두 모드를 직접 비교했다(30회, "load"
+p50=402ms vs "dom-ready" p50=52ms) — **이 수치는 만든 시나리오에 대한
+통제된 비교이지 실제 페이지 측정치가 아니다.** 검증: `test/control-api
+.test.js`에 회귀 테스트 3개 추가(기본값 미변경 확인, dom-ready 조기
+해소 확인, dom-ready 모드에서도 timeout/abort 유지 확인) — `node
+--test` 57/57 통과, 전체 Python 회귀 494/494 통과 유지 확인.
+
+2026-09-27 후속 16: 장기 브라우저 작업 하네스(goal-preserving long-horizon
+harness) 구현 착수 — Task 1: durable goal/task store. Codex가 작성해 커밋
+(07c9887)한 새 [설계서](../superpowers/specs/2026-09-27-long-horizon-browser-harness-design.md)/
+[계획서](../superpowers/plans/2026-09-27-long-horizon-browser-harness.md)의
+6단계 계획 중 첫 단계를 구현했다. 핵심은 컨텍스트 교체·재시작을 거쳐도
+최초 목표·제약·완료조건·검증된 진척을 잃지 않는 실행기이며, 속도 최적화가
+아니다.
+
+이번 커밋 범위(Task 1)는 다음과 같다: `shared/harness-contracts.js`(신규)는
+GoalSpec/Amendment/Constraint/Criterion/Limits/JournalEvent/Checkpoint의
+런타임 검증기로, 모르는 필드·스키마 버전·enum을 전부 거부한다.
+`main/harness/task-store.js`(신규)는 태스크별 `<storageRoot>/tasks/<uuid>/`
+저장소로, `goal-vNNNN.json`(불변, 절대 덮어쓰지 않음)·`events.jsonl`
+(append+fsync)·`checkpoint.json`(tmp+fsync+원자적 rename+부모 디렉터리
+fsync)·`writer.lock`(배타적, 죽은 pid만 회수)을 구현했다. taskId는 UUID
+정규식으로만 경로에 연결하고, 디렉터리/파일은 O_NOFOLLOW로 열어 심볼릭
+링크 task 디렉터리를 거부한다.
+
+검증한 안전 속성(`test/task-store.test.js`, 신규 15개): goal-v1 원문이
+`amendGoal()` 이후에도 바이트 단위로 불변, 대체 대상이 명시된 제약만
+amendment가 대체, 같은 task를 두 번째 writer가 열면 거부(죽은 프로세스의
+lock은 회수), 잘못된 taskId·미래 스키마 버전·심볼릭 링크 task 디렉터리
+거부, 체크포인트 이후 재생이 정확히 그 이후 이벤트만 반환, 크래시로 생긴
+마지막 미완성 JSONL 줄만 조용히 버려지고 그 앞의 유효한 줄은 보존, 중간
+줄 손상은 즉시 storage_corrupt로 중단, 저널 쓰기가 한 번 실패하면 그
+인스턴스는 원인이 나중에 해결돼도 계속 거부하는 fail-closed 래치,
+action_started만 있고 대응하는 action_outcome이 없으면
+execution_uncertain으로 복구.
+
+**정직한 한계**: 이 단계는 저장소 계층뿐이다 — ContextBuilder·진척/완료
+게이트(Task 2), TaskController·Planner stdio 경계(Task 3), 실제
+Electron+approver 실행 통합(Task 4), host/UI 수명주기(Task 5), 종단 간
+실제 fixture 검증(Task 6)은 아직 구현하지 않았다. 100단계·10회 컨텍스트
+재구성 보존이라는 필수 검증 기준은 Task 3에서 TaskController가 만들어진
+뒤에야 테스트할 수 있다. 이 커밋은 Node 코드만 추가했다(Python 미변경).
+검증: `node --test` 72/72 통과(신규 15개 포함), 전체 Python 회귀 494/494
+통과 유지 확인.
+
+2026-09-27 후속 17: 장기 브라우저 하네스에 전체 프로세스 메모리 예산(<1GB) 추가,
+Task 1 journal 재생을 스트리밍으로 수정. 사용자가 "메모리 1기가 미만으로 먹게
+만들어"를 새 확정 요구로 이양했다 — Electron main·renderer·GPU/utility·Python
+approver·local planner worker와 그 자식 전체 합계가 decimal 1,000,000,000 바이트
+미만이어야 하며, V8 heap만 재거나 worker를 합계에서 빼서 통과시키는 방식은 금지다.
+Codex가 이 조건으로 설계/계획 문서를 아직 수정하지 않아 Claude가 직접 설계서
+[§10](../superpowers/specs/2026-09-27-long-horizon-browser-harness-design.md)과
+[계획서](../superpowers/plans/2026-09-27-long-horizon-browser-harness.md)에
+추가했다(커밋 `70db97b`) — 측정은 `app.getAppMetrics()`(KB 단위) + 등록된 외부
+자식의 OS 메모리를 `(pid, creationTime)`으로 중복 제거·합산, macOS의
+`residentSet` 미지원/압축 메모리 값은 0이 아니라 측정 불가로 표시, 700/800/900MB
+3단계 압력 정책(캐시 해제 → dispatch 정지+durable checkpoint+`paused:
+memory_pressure` → 소유 renderer/worker 정리, 재로드 폭주 금지), 폴링으로는
+실제 macOS에서 순간 피크까지 절대 차단할 수 없다는 정직한 한계를 명시했다.
+
+사용자가 직접 코드 근거로 지적한 부분도 같은 요청에 포함되어 있었다 — 이미 커밋된
+`b60a94c`의 `task-store.js` `readJournal()`이 journal 전체를 하나의 배열로 읽어
+들이는 구조였다. 직접 확인 후 `streamJournalReplay()`로 교체했다(커밋 `bb9b3fa`):
+64KB 청크로 스트리밍하며 seq·단일 in-flight action id(같은 설계의 "한 task에 한
+action dispatch" 불변식을 이용해 Map 대신 스칼라 하나로 충분)만 O(1)로 추적하고,
+checkpoint 이후 이벤트는 §5의 "최근 10쌍" 상한과 동일하게 최근
+`MAX_RECENT_EVENTS_IN_CONTEXT`(10)개로만 제한한다. 부수 효과로 겹치는
+action_started나 actionId가 안 맞는 action_outcome도 이제 storage_corrupt로
+더 엄격하게 잡는다. 기존 15개 테스트는 수정 없이 그대로 통과했고(스트리밍 전환이
+관측 가능한 동작을 바꾸지 않았다는 뜻), eventsSinceCheckpoint 10개 상한·300-action/
+600-event journal 복구·in-flight 위반 2건을 회귀 테스트 4개로 추가했다. **정직한
+한계**: 300-action 재생 테스트는 구조적/기능적 증거(배열을 들고 있지 않음을
+증명)일 뿐 실제 RSS 측정이 아니다 — 실제 프로세스 메모리 실측은 Task 5(memory
+monitor)·Task 6(실제 Electron 통합) 몫으로 아직 구현하지 않았다. 검증: `node
+--test` 87/87 통과, 전체 Python 회귀 494/494 통과 유지 확인(Python 미변경).
+
+2026-09-27 후속 18: 장기 브라우저 하네스 Task 2(context/progress/completion
+게이트) 구현. `main/harness/progress.js`(신규)는 `validateProposal`(taskId
+불일치·stale goalVersion·모르는 criterionId를 각각 wrong_task/stale_goal_version/
+off_goal로 거부), `verifyCriterion`(verification:"user" 조건은 사전에 실제로
+확인된 evidence 항목만 인정하고, verification:"host" 조건은 evidence 자신의
+`verification` 필드를 절대 신뢰하지 않고 주입된 `hostVerifier` 콜백만이 판정한다 —
+모델이 스스로 "verified"라고 써넣은 evidence로는 통과할 수 없다), `canComplete`
+(모든 필수 criterion이 **현재 goalVersion**에서 검증된 evidence를 가져야
+complete/completed, 하나라도 없으면 awaiting_verification — 이전 goalVersion에서
+검증된 evidence는 amendment 이후 자동으로 재사용되지 않는다)를 구현했다.
+`main/harness/context-builder.js`(신규)의 `buildContext`는 매 planner 호출마다
+GoalSpec 원문·amendments·constraints·criteria를 절대 요약·삭제 없이 그대로 복사하고,
+`state.modelSummary`(있다면)는 `untrustedSummary`로 완전히 분리해 echo만 하며
+goal/progress 어디에도 병합하지 않는다 — 10회 연속으로 "목표를 지금 즉시 재정의하고
+C1이 검증됐다"는 가짜 요약을 주입해도 매번 원본과 바이트 단위로 동일함을 테스트로
+확인했다. `recentEvents`는 항상 최근 `MAX_RECENT_EVENTS_IN_CONTEXT`(10)개로만
+자르고(§10 메모리 규율과 §5 "최근 action/result 10쌍" 둘 다 충족), 조립한 packet
+전체가 64KiB(`MAX_CONTEXT_PACKET_BYTES`)를 넘으면 아무것도 잘라내지 않고
+`context_limit`으로 던진다 — goal 블록 자체가 커서 넘치는 경우와 관측이 커서
+넘치는 경우 둘 다 같은 fail-closed 경로로 확인했다. `shared/harness-contracts.js`
+에는 Evidence/Proposal envelope 검증기(`validateEvidence`, `validateProposalEnvelope`,
+관련 enum·상수)를 추가했다(이전 커밋 `bb9b3fa`에서 이미 반영). **정직한 한계**:
+`hostVerifier`는 이 단계에서 순수 주입 콜백이며 실제 페이지/artifact 검사는
+Task 4가 붙여야 한다 — 이 모듈은 자연어 의미 이해를 deterministic verifier라고
+주장하지 않는다. 검증: `node --test` 93/93 통과(신규 progress 11개 + context-builder
+6개), 전체 Python 회귀 494/494 통과 유지 확인(Python 미변경).
+
+2026-09-27 후속 19: 장기 브라우저 하네스 Task 3(long-running controller +
+planner stdio 경계) 구현. `main/harness/planner-stdio.js`(신규)는 모델
+독립적인 JSONL stdio 어댑터다 — argv는 trusted host config에서만 받고
+`shell:false`로 spawn, 환경변수는 명시적 allowlist만 통과시켜(로컬
+worker에 `HALO_APPROVER_KEY`/`HALO_EXECUTOR_KEY`류가 절대 전달되지 않음을
+테스트로 확인) 1개 in-flight·프레임 64KiB(양방향)·60초 timeout을 강제하고,
+requestId가 다르거나 늦게/중복으로 온 응답은 현재 요청의 답으로 절대
+받아들이지 않는다. worker 미설정 시 가짜 완료를 지어내지 않고 정직하게
+`planner_unavailable`을 던진다. `fixtures/scripted-planner.js`(신규,
+예제 JSONL worker)를 실제 자식 프로세스로 띄워 실제 stdio pipe로 종단 간
+검증했다. **이 파일은 계획서가 지정한 `test/fixtures/scripted-planner.js`
+경로가 아니라 `fixtures/scripted-planner.js`에 뒀다** — `node --test`의
+기본 파일 탐색이 `test`/`tests` 디렉터리 아래 모든 파일을 테스트로 실행
+시도한다는 것을 직접 재현으로 확인했고(이 worker는 stdin을 영원히 기다리는
+장기 실행 프로세스라 그대로 두면 전체 테스트 스위트가 멈춘다), 계획서에도
+같은 이유와 경로를 기록해 정정했다.
+
+`main/harness/task-controller.js`(신규)는 observe→plan→approve→execute→
+verify→checkpoint 상태기계다. 모든 await 직후 정지 세대를 재확인해 `stop()`
+이후 늦게 도착한 planner 응답을 폐기하고, 매 action 전 durable
+`action_started`·결과 후 `action_outcome`(+검증된 evidence는
+`evidence_recorded`)을 journal에 기록한다. `verifyCriterion`/`canComplete`
+(Task 2)를 그대로 사용해 모델의 자기 신고만으로는 criterion이 verified되지
+않는다. 25(테스트 주입 시 10)회 planner 호출마다 segment를 회전시키되
+누적 budget(action/planner call 수)은 회전과 무관하게 계속 쌓인다 — 100회
+action·10회 이상 segment 회전을 실제로 구동해 원문 목표가 바뀌지 않음을
+확인했다. 동일 (action, observation) 3연속 무진척에 재계획 1회를 무료로
+허용하고, 다시 반복되면 `paused: no_progress`로 멈춘다. `awaiting_approval`
+동안의 사용자 대기 시간은 activeMs 예산에서 제외된다(1시간 대기를 주입해
+확인). planner transport 오류는 자동 재시도 없이 `paused: planner_error`로
+남는다. `execution_uncertain`으로 복구된 task는 `resume({confirmed:true})`
+로 명시적으로 확인해야만 재개되며, 그 전까지는 planner도 browser.execute도
+전혀 호출되지 않는다(둘 다 0회임을 확인) — 걸려 있던 action은 재생하지
+않고 새 관측부터 다시 시작한다.
+
+**자체 재현·수정한 버그**: 구현 도중 `amend()`로 목표를 버전업한 뒤에도
+이전 버전에서 이미 verified였던 criterion이 새 버전의 완료 판정에 그대로
+카운트되는 문제를 직접 찾아 고쳤다 — `_criteriaStatus`에 검증 당시의
+goalVersion을 함께 저장하지 않고 완료 확인 시 컨트롤러의 "현재" goalVersion을
+잘못 덧씌우고 있었다. 검증 당시 goalVersion을 그대로 보존하도록 고치고,
+"host-check criterion을 v1에서 verified시킨 뒤 amend()로 v2로 올리면 finish가
+awaiting_verification으로 남는다"는 회귀 테스트를 추가해 확인했다.
+
+**정직한 한계**: `browser`/`approve`는 이 단계에서 주입된 fake이며 실제
+Electron/실제 Python approver 연결은 Task 4의 몫이다. 승인 요청의
+source/selfProvenance는 이 컨트롤러가 항상 `page_content`/`untrusted`로
+고정한다 — 사용자가 직접 입력한 최초 URL을 `user_prompt`로 분류하는 구분은
+Task 4의 browser-adapter 통합에서 다룬다. 형식이 잘못된(예: 필수 필드
+누락) proposal이 반복돼도 즉시 감지해 멈추지 않고 `maxPlannerCalls`
+예산 소진까지는 계속 재시도한다 — 무한 루프는 아니지만(예산으로
+bounded) no_progress 감지만큼 빠르지 않다는 점은 남은 한계로 기록한다.
+검증: `node --test` 113/113 통과(신규 planner-stdio 11개 + task-controller
+9개), 전체 Python 회귀 494/494 통과 유지 확인(Python 미변경).
+
+2026-09-27 후속 20: 장기 브라우저 하네스 Task 4(browser + approver 실행 통합)
+구현과 함께, 계획서가 지정한 기존 `main/control-api.js`의 known bug 3개 중
+2개를 이번에 실제로 재현·수정했다.
+
+**버그 수정 (`main/control-api.js`)**:
+1. **navigation error swallowing** — `_loadWithTimeout()`의 "load" 모드가
+   `wc.loadURL(target).then(() => false).catch(() => false)`로 구현돼 있어,
+   `loadURL()`이 실제로 reject해도(DNS 실패, connection refused 등) timeout과
+   구별되지 않고 성공과 똑같이 처리됐다 — `navigate()`는 실패한 페이지에도
+   "Navigated to X" 타임라인을 남기고 metric을 `ok`로 기록했다. 실패 재현 후
+   `_loadWithTimeout()`이 `{outcome:"ok"|"timeout"|"error"}`를 반환하도록
+   고쳐 `navigate()`가 세 결과를 각각 정확히 구분해 기록하게 했다.
+2. **pacing-during-stop race** — `_applyDecision()`의 allow 분기가
+   `_paceAgentAction()`(최대 2초 대기) 완료 후 stop 여부를 재확인하지 않아,
+   대기 도중 `stopTask()`가 호출돼도 대기가 끝나면 그대로 `execute()`를
+   실행했다. `stopTask`가 pacing 대기를 즉시 깨우는 waiter 집합을 추가하고,
+   대기 직후 stop epoch를 재확인해 dispatch 0회를 보장하도록 고쳤다.
+3. **source self-report boundary** — 재현 결과 `task-controller.js`의
+   `_dispatchActionsBatch()`는 이미 모든 planner-제안 action에
+   `source:"page_content"`/`selfProvenance:"untrusted"`를 하드코딩하고
+   있어 모델이 자신의 action에 `source:"user_prompt"`를 실어 보내도 무시된다
+   — 새로운 버그는 아니었으므로, 악의적 proposal이 이를 위조해도 통과되지
+   않는다는 회귀 테스트를 `task-controller.test.js`에 추가해 고정했다.
+
+**신규: `main/harness/browser-adapter.js`** — TaskController가 구동하는 실제
+observe()/execute() 어댑터(design doc 6-7절). TreeWalker로 최대 500 노드
+방문·100 element·12KiB 텍스트로 제한된 DOM 관측을 만들고, `elementId`는
+host가 매긴 순번일 뿐 모델이 임의 selector/href를 주입할 방법이 없다.
+`follow_link`는 action이 주장하는 href를 무시하고 그 elementId의 **실제
+현재** href를 다시 읽어 navigate한다. `documentEpoch`가 현재와 다른 action은
+`stale_document`로 실행 전에 거부한다(navigate 자체는 새 문서를 여는 것이므로
+epoch 검사 대상이 아님). navigate는 `navSeq`로 호출을 구분해, 더 나중에 시작한
+navigate가 이미 끝난 뒤 더 이전 호출의 loadURL이 뒤늦게 settle돼도 epoch를
+다시 올리거나 성공으로 보고하지 않는다(cross-event isolation). click/type/
+submit_form/download는 `unsupported_action`으로 정직하게 보고한다. evidence는
+`shared/harness-contracts.js`의 `EVIDENCE_KINDS`(host_check/user_confirmation/
+artifact)에 맞춰 내보낸다 — 처음에는 `kind:"navigation"`/`"observation"`으로
+구현했다가, TaskController + 실제 BrowserAdapter 통합 테스트를 작성하는 과정
+에서 `validateEvidence()`가 이를 unknown enum으로 거부해 task store가
+`storage_corrupt`로 latch된다는 것을 직접 발견해 `host_check`/`artifact`로
+고쳤다 — 이 버그는 어떤 실제 navigate 1회 dispatch만으로도 발생했을 것이다.
+
+**`main/approver-client.js` 강화**: approver 응답이 JSON으로 파싱되기만
+하면 `decision`/`reasons`의 실제 값은 전혀 검증하지 않고 그대로 통과시키고
+있었다 — `decision`이 알 수 없는 문자열이거나 아예 없으면
+`control-api.js`의 `_applyDecision()` 마지막 분기가 `decision.decision`
+(즉 `undefined`)을 그대로 반환해, 호출부(`_afterStepOutcome`)가 이를
+"allow 아님"으로 취급해 task를 조용히 `completed`로 마킹해버리는 경로가
+있었다. `decision`을 닫힌 enum(allow/review/deny/quarantine)으로,
+`reasons`를 배열로 검증해 아니면 reject하도록 고쳤다. 이 강화로
+`requestDecision()`이 reject할 가능성이 실질적으로 높아졌는데,
+`performGatedAction()`에는 애초에 이 호출을 감싸는 try/catch가 전혀 없어
+(스키마 검증 이전에도 transport 오류/timeout에 이미 존재하던 gap)
+그대로 뒀다면 uncaught rejection으로 새 버그를 만들 뻔했다 — 같이
+`performGatedAction()`에 try/catch를 추가해 approver 실패를 명시적
+`deny`로 fail-closed 처리하도록 했다. 요청 취소를 위한 `AbortSignal` 지원도
+추가했다(실제 소켓 서버를 띄운 `test/approver-client.test.js`로 검증).
+
+**`main/harness/task-controller.js`의 approval-binding 수정**: design doc
+7절이 요구하는 `{..., epoch, ..., expiresAt}` 바인딩과 60초 만료가
+구현에는 없었다 — `approve(requestId)`는 큐에 든 항목을 goalVersion/epoch를
+전혀 재검증하지 않고 그대로 dispatch했다. 재현 결과: review 큐에 항목이
+있는 상태에서 `amend()`(goal 버전 상승, epoch 증가)나 시간 경과(60초 초과)가
+있어도 `approve()`를 부르면 실제로 `browser.execute()`가 호출됐다. 큐에
+넣을 때 `epoch`/`goalVersion`/`expiresAt`(60초, `APPROVAL_EXPIRY_MS`를
+`shared/harness-contracts.js`에 신설)을 함께 저장하고, `approve()`가 이를
+재검증해 stale/expired 항목은 `deny()`와 동일하게 폐기(dispatch 없이)하도록
+고쳤다.
+
+**통합 테스트**: `task-controller.test.js`에 실제 `BrowserAdapter`(fake
+WebContentsView 주입)를 사용하는 컨트롤러 테스트를 추가해 두 모듈이 실제로
+맞물려 동작함을 확인했다 — 위에서 언급한 evidence kind 버그를 바로 이
+테스트가 잡아냈다.
+
+**정직한 한계**: (1) `approver_service.py`의 wire 포맷 자체는 이번 라운드에서
+바꾸지 않았다(클라이언트 측 검증만 강화) — 계획서의
+`tests/test_computer_browser_harness_approver.py`는 실제 Python 변경이
+필요해지는 시점(Task 5/6에서 실제 프로세스 spawn 연동이 붙을 때)에 추가한다.
+(2) "old fixed startTask flow를 controller facade로 전환"은 Task 5로
+이연했다 — Task 5가 `main/index.js`/`main/ipc.js`에 `createTask`/
+`resumeSavedTask` 등 IPC 계약을 추가하는 작업과 함께 해야 그 설계를 앞지르지
+않는다. 기존 URL demo(`startTask`)는 이번에 변경하지 않았다. (3) remote
+frame 요청 거부는 계획서에도 명시된 대로 Task 5(IPC sender 검증)의 몫이다.
+(4) approver/local worker 프로세스의 pid+creationTime을 memory-monitor에
+등록하는 항목은 memory-monitor.js 자체가 아직 없어(Task 5 산출물) 이연했다.
+(5) `main/control-api.js`의 pause-during-pacing(stop이 아니라 pause가
+pacing 대기 중 발생하는 경우)은 이번 3개 버그 목록에 없었고 이번에도 다루지
+않았다 — 별도의 잠재적 개선 여지로만 기록한다.
+
+검증: `node --test` 155/155 통과(신규 browser-adapter 20개 + approver-client
+11개 + control-api/task-controller 신규 회귀 다수 포함), 전체 Python 회귀
+494/494 통과 유지 확인(Python 미변경).
+
+2026-09-27 후속 21: 장기 브라우저 하네스 Task 5(host/UI lifecycle bridge)
+마무리 + Task 6(실제 Electron end-to-end 증거) 완료. Task 5의 핵심 모듈
+(`memory-monitor.js`/`trusted-sender.js`/`task-host.js`/`confirmCriterion`/
+`TaskStore.listTaskIds`)은 이미 별도 커밋(`6dcba33`)에 있었으나 이 문서에는
+아직 기록되지 않았던 것을 여기서 함께 정리한다.
+
+**Task 5 마무리 배선**: `main/ipc.js`를 `{ipcMain, taskHost}` 주입 가능하게
+리팩터링했다 — 이 저장소에서 `require("electron")`이 실제 Electron 프로세스
+밖에서는 경로 문자열로만 해석되어(직접 확인함) 기존 방식으로는 테스트가
+아예 불가능했기 때문이다. 신규 harness IPC 채널 10개(`halo:createTask`
+~`halo:taskStop`)를 각각 `isTrustedSender(event, win)` 게이트 뒤에 연결하고
+(신뢰되지 않은 sender는 taskHost를 아예 호출하지 않고 reject),
+`preload/index.js`에 대응 메서드를 노출했다. `main/index.js`에 실제
+`TaskHost`(storageRoot: `app.getPath("userData")/harness-tasks`)와
+`WebContentsView` 기반 harness browser/실제 Python approver/`HALO_PLANNER_*`
+env 기반 planner 팩토리, 5초 간격 `memoryMonitor.sample()` 백그라운드 폴러를
+배선했다. **메모리 비상 정리(사용자 지시로 재확인된 요구사항)**: 800MB
+(`memory_pressure`)는 기존처럼 checkpoint 후 pause만 하지만, 900MB
+(`memory_emergency`)는 `_pauseForMemoryEmergency()`가 checkpoint 후
+`browser.dispose()`/`planner.close()`/`store.close()`를 각각 독립된
+try/catch로 정리해(하나가 실패해도 나머지를 막지 않음) 실제로 자원을
+반환한다. `resume()`은 이 상태를 `resources_disposed`로 거부(execution_uncertain과
+달리 `confirmed:true`로도 구제 불가)하고, 오직 `TaskHost.resumeSavedTask()`가
+이 경우를 감지해 기존 항목을 버리고 완전히 새 browser/planner 인스턴스로
+재부착하는 경로만 허용 — 실제 프로세스 재시작과 동등하게 취급한다.
+`test/harness-ipc.test.js`(6개, 모든 harness 채널이 신뢰되지 않은 sender를
+거부하는지 개별 확인) 신설.
+
+**Task 6: 실제 Electron E2E** — `fixtures/long-horizon-site.js`(로컬 3페이지
+HTTP fixture, port 0), `fixtures/scripted-planner-long-horizon.js`(결정론적
+JSONL stdio planner, 자연어 능력의 증거 아님을 헤더에 명시),
+`integration/long-horizon-electron.js`(실제 Electron 앱으로 실행, 실제
+Python approver 프로세스, 실제 `BrowserAdapter`+`WebContentsView`, 실제
+`app.getAppMetrics()`+`ps` 기반 approver RSS 합산), `test/long-horizon-integration.test.js`
+(`electron` 바이너리를 실제 자식 프로세스로 spawn해 `RESULT_JSON:` 라인을
+검증 — 다른 모든 `*.test.js`와 달리 fake가 아니라 진짜 실행 경로).
+
+**실제 Electron 실행으로만 드러난 실제 버그 3건** (fake 기반 단위 테스트는
+전부 통과한 채로 숨어 있었다):
+1. `webContents.executeJavaScript()`가 그 webContents에 단 한 번도 실제
+   navigate가 커밋되기 전에 호출되면 창의 표시 여부와 무관하게 영원히
+   hang한다. 4개의 격리된 디버그 스크립트로 원인을 이진 탐색해 확정한 뒤,
+   `browser-adapter.js`에 `_ensureReadyForScriptExecution(wc)`를 추가해
+   `wc.getURL()`이 falsy(실제로 한 번도 navigate 안 한 실제 webContents)일
+   때만 `loadURL("about:blank")`을 1회 선행 호출하도록 수정했다(`getURL`이
+   없는 fake view는 전혀 영향받지 않아 기존 테스트 전부 그대로 통과).
+2. Electron 메인 프로세스 안에서 `process.execPath`는 plain Node가 아니라
+   Electron 바이너리 자체를 가리킨다 — `ELECTRON_RUN_AS_NODE=1` 없이 이
+   값으로 planner worker를 spawn하면 대상 스크립트를 Node로 실행하지 못해
+   응답이 사실상 기능하지 않는다. `integration/long-horizon-electron.js`의
+   3곳 `PlannerStdioAdapter` 생성에 `env:{ELECTRON_RUN_AS_NODE:"1"}`을
+   추가해 수정(오케스트레이션 스크립트의 버그이지 하네스 본체 결함은 아님).
+3. **하네스 본체의 실제 결함, regression test로 고정**: `task-controller.js`의
+   `observationKey()`가 `JSON.stringify(observation)`을 그대로 키로
+   사용하는데, 실제 `BrowserAdapter`는 매 `observe()` 호출마다 새 임의 `id`
+   (`_randomId()`)를 관측에 부여한다. 그 결과 동일한 페이지를 반복
+   관찰해도 키가 절대 일치하지 않아, design doc 5절이 규정한 no-progress
+   감지(3회 동일 반복 → 1회 무료 replan → 재발 시 pause)가 실질적으로
+   완전히 무력화되어 있었다 — 실제 실행에서 500회에 가까운 planner 호출
+   예산을 아무 진척 없이 소진하는 것으로 재현했다. 기존 가짜 기반 테스트는
+   전부 고정 문자열 id("same-observation")를 쓰는 fake만 사용해 이 결함을
+   전혀 잡지 못했다. `id` 필드를 제외하고 나머지 필드로만 키를 계산하도록
+   고치고, 실제 BrowserAdapter의 임의 id 부여를 흉내 낸 새 회귀 테스트를
+   `task-controller.test.js`에 추가했다(수정 전 재현 실패 확인 → 수정 →
+   통과 확인, TDD 그대로 준수).
+
+**정직한 한계**: 실제 Electron 통합 실행에서 3페이지 전체 여정(navigate →
+follow_link → follow_link → finish)이 "completed"까지 안정적으로 완주하는
+것은 이번 세션에서 확인하지 못했다. 실제 Python approver가 반복되는 gated
+action 승인 요청 중 상당수 호출 이후 예외를 던지는("approver_error") 현상이
+관찰되었고, 근본 원인(반복 소켓 왕복 자체의 부하인지 다른 원인인지)은 완전히
+규명하지 못한 채로 남아 있다 — 추측성 수정을 하지 않고 정직하게 미해결로
+기록한다. `test/long-horizon-integration.test.js`는 이를 숨기지 않고
+`scenario2`의 최종 상태가 crash 없는 안정 상태(completed/paused/
+awaiting_approval/awaiting_verification) 중 하나인지만 단언하며, 실제
+완주 여부는 `t.diagnostic`으로 있는 그대로 보고한다. 100단계/10회 컨텍스트
+초기화 규모의 장기 목표 보존은 여전히 가짜 기반 `task-controller.test.js`
+(2026-09-27 후속 19 기록)에서만 검증했고, 실제 Electron 실행에서는 실제
+페이지 로드·실제 approver 왕복이 느려 4회 컨텍스트 초기화만 수행했다.
+단일 macOS 머신·단일 실행 기준 측정치이며 여러 번 반복한 통계 분포는 없다.
+실제 자연어 planner는 한 번도 연결하지 않았다.
+
+**측정 방법(실제, 가짜 정책 테스트와 구분)**: `integration/long-horizon-electron.js`가
+300ms 간격으로 `memoryMonitor.sample()`을 호출해 실제 `app.getAppMetrics()`
+(Electron main/renderer/GPU/utility helper 포함)와 실제 `ps -o rss= -p <pid>`로
+읽은 Python approver 프로세스 RSS를 pid+creationTime 기준 중복 제거 후
+합산한다(프로덕션 `main/index.js`의 백그라운드 폴러는 5000ms 간격, 동일
+`memory-monitor.js` 코드). 가장 최근 실행 관측치: 실측 피크 약 665MB
+(한도 1GB, `pass:true`), wall time 약 2.1~2.8초, 4회 실제 컨텍스트 초기화,
+`unmeasurable: []`(측정 불가 프로세스 없음). 이 수치는 `memory-monitor.test.js`의
+주입된 가짜 메모리로 만든 정책 테스트 결과와는 명확히 별개 파일(`integration/`,
+`RESULT_JSON.memory`)에 존재하며 섞이지 않는다.
+
+검증: `node --test`(apps/computer-browser 전체) 211/211 통과(신규
+`harness-ipc.test.js` 6개, `long-horizon-integration.test.js` 1개, 신규
+no-progress 회귀 1개 포함), 전체 Python 회귀 `.venv/bin/python -m pytest -q`
+494/494 통과 유지 확인(Python 미변경).
+
+2026-09-27 후속 22: 후속 21이 미해결로 남긴 approver_error를 근본원인까지
+규명하고 수정해, 실제 3페이지 전체 여정(navigate → follow_link →
+follow_link → finish)이 실제 Electron·실제 Python approver·실제
+planner worker 위에서 안정적으로 완주함을 20회 연속 실행으로 확인했다.
+
+**재현**: `/private/tmp/.../scratchpad/repro-approver-error.js`(세션
+scratchpad, 프로젝트에 커밋하지 않음)로 실제 approve() 호출마다
+`{requestId, action, errorName, errorMessage, errorCode, approverExitCode,
+approverSignalCode, approverStderrTail}`를 수집하도록 계측했다 — role
+key·approval token은 이 채널에 애초에 존재하지 않아(approver_service.py
+자신의 헤더 주석 참고) 별도 마스킹 없이도 안전하다. 실제 실행에서
+`errorCode:"ECONNREFUSED"`(approver 프로세스는 살아있음, exitCode/
+signalCode 모두 null)를 확인했다.
+
+**근본원인 3건 (순서대로 발견, 각각 재현 후 수정)**:
+
+1. **approver-client.js: ECONNREFUSED가 재시도 대상이 아니었다.**
+   `experiments/e007_dual_agent_provenance_gate/channel.py`의
+   `UnixSocketChannel.listen()`을 직접 읽어 확인: 이 채널은 `accept()`가
+   반환하는 즉시(`finally` 블록에서, 요청을 읽기도 전에) 리스닝 소켓을
+   `close()`하고 경로 파일을 `unlink()`한 뒤, 다음 `while True` 루프
+   반복에서만 다시 bind한다. 이 재사용 루프의 같은 레이스가 이미 문서화된
+   ENOENT("경로가 아직 없음") 외에 ECONNREFUSED("경로는 있지만 bind는
+   됐고 listen 전", 또는 "리스너가 이미 닫힘")로도 나타난다. 기존
+   `requestDecision()`은 `error.code === "ENOENT"`만 재시도했다. 실제
+   Electron 실행에서 약 234회의 빠른 approve() 왕복 뒤 이 레이스를 실제로
+   맞혀 재현했다. 수정: `RETRYABLE_CONNECT_ERROR_CODES =
+   new Set(["ENOENT","ECONNREFUSED"])`로 동일한 짧고 유한한 재시도 예산
+   (10/25/50/100/200/400ms, 총 ~785ms)을 확장 — approver가 실제로
+   죽었다면 이 예산을 넘겨도 ECONNREFUSED가 계속되므로 여전히
+   fail-closed로 거부된다(무제한/broad 재시도 아님). 회귀 테스트 2개
+   추가(`test/approver-client.test.js`): 실제 SIGKILL로 소켓 파일만 남긴
+   "죽은" 프로세스를 만들어 진짜 ECONNREFUSED를 재현하고, (a) 짧은 지연
+   뒤 진짜 리스너가 뜨면 재시도 끝에 성공, (b) 계속 죽어있으면 예산을
+   넘겨 정상적으로 거부됨을 각각 확인.
+
+2. **approver_service.py: follow_link/scroll/observe가 승인 어휘에
+   없었다.** `main/harness/browser-adapter.js`의 `execute()`가 실제로
+   구현하는 action 종류는 navigate/follow_link/scroll/observe 4개인데,
+   `approver_service.py`의 `VALID_ACTIONS`/`_ACTION_MAPPING`은 더 오래된
+   `control-api.js` 데모 어휘(click/type/submit_form/navigate/download)만
+   갖고 있었다. follow_link/scroll/observe는 `VALID_ACTIONS`에 없어
+   `build_event()`가 `ValueError`를 던지고, `evaluate()`가 이를 무조건
+   `deny`로 바꿔버려 — provenance/source와 무관하게 매번 거부되고,
+   `evaluate_trace()`/`decide()`(실제 정책 엔진)에는 아예 도달하지 못한다.
+   실제 재현: 전체 여정이 매번 첫 follow_link에서 막혀 planner 호출
+   예산을 전부 소진했다(수정 전 ECONNREFUSED 픽스만 적용한 재현 실행에서
+   499회 연속 `deny`로 확인). 의도된 보안 결정이 아니라 어휘 목록이
+   갱신되지 않은 누락이었다 — 이 세 action 모두 navigate/click과 같은
+   "read" 취급으로 매핑했다(follow_link는 페이지 내 링크를 따라가는
+   navigate와 동일 범주, scroll은 뷰포트 변경뿐, observe는 이미 렌더링된
+   DOM 재읽기라 navigate보다도 더 무해함) — 새로운 관대함이 아니라
+   navigate/click이 이미 받던 것과 같은 처리를 실제 하네스 어휘에
+   맞게 확장한 것이다. `tests/test_computer_browser_approver.py`에
+   회귀 테스트 추가: 수정 전 세 action이 "unknown action"으로 무조건
+   deny됨을 문서화하는 특성 테스트로 먼저 재현 확인 후, 수정 뒤에는 세
+   action 모두 navigate와 동일한 provenance별 결정(allow/review/deny)을
+   받는지 확인하는 영구 회귀 테스트로 교체했다.
+
+3. **browser-adapter.js: buildObserveScript()의 텍스트 추출이 사실상
+   항상 빈 문자열이었다.** 생성된 관찰 스크립트가
+   `node.childNodes.length === 0`일 때만 `ownText`를 채웠는데, 실제
+   DOM에서 `<p>hello</p>`처럼 텍스트가 있는 보통 element는 텍스트
+   노드 자식이 정확히 1개라서 `childNodes.length`가 0이 아니라 1이다 —
+   즉 이 조건은 진짜로 아무 자식도 없는 element에만 맞아, 사실상 모든
+   보통 페이지에서 `text` 필드가 비어 있었다. 실제 Electron 실행으로
+   재현: page3의 리터럴 완료 마커 "DONE-XYZ"가 observation에 전혀
+   나타나지 않아, scripted planner가 "finish"를 절대 제안하지 못하고
+   "observe"만 반복 제안했다(approve 로그로 확인, 18회 연속 observe
+   review). 수정: `node.childElementCount === 0`(ELEMENT 자식이 없음 —
+   텍스트 노드 자식은 상관없음)으로 조건 교체. `buildObserveScript`를
+   `module.exports`에 추가하고, `test/browser-adapter.test.js`에 Node
+   `vm` 모듈로 실제 프로덕션 스크립트 문자열을 최소 fake DOM(TreeWalker
+   포함) 위에서 그대로 실행하는 회귀 테스트 2개 추가 — 재구현이 아니라
+   진짜 스크립트 코드 경로를 실행해 검증한다. 수정 전 재현 실패 →
+   수정 → 통과 확인.
+
+**추가로 발견한 관련 결함 (같은 조사 중 발견, 범위를 좁혀 별도로 수정)**:
+`TaskController` 생성자와 `TaskHost.listTasks()`의 미부착(peek) 경로
+모두 초기/보고 상태를 오직 `store.recoveryReason`
+("execution_uncertain"/"recovered"/else)에서만 도출하고, `store.
+lastCheckpoint`(마지막 체크포인트, "completed"/"stopped" 도달 즉시
+동기적으로 기록됨)는 전혀 참조하지 않았다 — 그 결과 이미 정상적으로
+"completed"에 도달한 task를 재적재(리로드)하면 항상 그냥
+"paused"/"recovered"로만 보고되어, 방금 막 끝난 task와 중간에 끊긴
+task를 구분할 수 없었다. 단순 오분류가 아니다: `resume()`은 "paused"
+상태를 무조건 받아들이므로, 정상적인 paused→resume() 프로토콜을 따르는
+호출자가 이미 끝난 task에 대해 planner/browser를 다시 호출하게 된다.
+이 세션의 20회 반복 검증 자체도 "완주했는지"를 리로드 후 상태로
+판정하려다 이 버그에 걸려 처음엔 잘못된 결과를 낼 뻔했다 — 그래서 이번
+수정은 approver_error 조사와 직접 연결된, 범위 안의 수정이다. "completed"/
+"stopped" 두 종결 상태만 체크포인트에서 복원하도록 좁게 수정했고(진행
+중이던 budgets/segment/criteriaStatus 전체를 체크포인트+저널에서
+재구성하는 것은 더 큰 별도 설계 과제로 남겨, 정직한 한계에 기록한다),
+`awaiting_verification`은 이번에 다루지 않았다. `task-controller.test.js`·
+`task-host.test.js`에 각각 회귀 테스트 추가(수정 전 재현 실패 → 수정 →
+통과 확인).
+
+**20회 연속 검증**: 신규 `integration/repeat-journey-verification.js`
+(하나의 실제 Electron 앱 + 하나의 실제 Python approver 프로세스를
+재사용하면서, 매 반복마다 완전히 독립된 새 TaskStore/taskId·새
+WebContentsView·새 PlannerStdioAdapter worker 프로세스를 사용)로 실행.
+명령: `HALO_PYTHON=.venv/bin/python HALO_REPEAT_COUNT=20
+node_modules/.bin/electron integration/repeat-journey-verification.js`.
+결과: **20/20 성공, 0 실패**. 반복별 elapsed: 최소 395ms·최대 423ms·평균
+약 405ms, 전체 wall time 8329ms. 매 반복마다 `/`·`/page2`·`/page3`를
+정확히 한 번씩만 요청함을 확인(재실행/중복 navigate 없음). 라이트
+버전(5회 반복)을 `test/repeat-journey-verification.test.js`로
+`node --test`에 상시 등록해 향후 회귀를 자동으로 잡는다(node --test
+`long-horizon-integration.test.js`는 시나리오 1·2 모두 이제
+`finalState:"completed"`를 엄격히 요구하도록 강화했다 — 이전 버전은
+"완주 못 함"을 허용하는 관대한 단언이었는데, 실제 원인을 고친 지금은
+그 관대함이 더 이상 정직하지 않기 때문이다).
+
+**메모리 재점검 (approver/planner worker 포함)**: 20회 실행 동안
+300ms 간격으로 `memoryMonitor.sample()`을 계속 호출해 실측. 커버리지:
+Electron main/renderer/GPU/utility(`app.getAppMetrics()`) + Python
+approver 프로세스(`ps -o rss= -p <pid>`, pid+creationTime 중복 제거).
+결과: **실측 피크 467,927,040 bytes(약 446MB), 27개 샘플, 측정 불가
+프로세스 0개**, 1GB 한도 대비 `pass:true`. 이는 폴링 기반 관측치이며
+(300ms 간격보다 짧게 존재했다 사라지는 순간 최고치는 놓칠 수 있다)
+"1GB를 초과한 적이 전혀 없다"는 절대적 보증이 아니라 "이 간격으로
+관측한 최고치가 이 값이었다"는 실측 보고임을 명시한다. planner worker
+(Node/Electron 서브프로세스로 spawn되는 scripted planner)는 이 스크립트
+에서 별도 pid로 등록해 합산하지 않았다 — Electron이 같은 UID의 자식
+프로세스를 `app.getAppMetrics()`로 함께 보고하는지는 확인하지 않았고,
+정직한 한계로 남긴다(실측 피크가 한도 대비 충분히 낮아 이 누락이 결론을
+바꾸지는 않을 것으로 판단하나, 검증하지는 않았다).
+
+**100단계/10회 컨텍스트 초기화 및 재시작/execution_uncertain 검증과의
+분리**: 이번 20회 검증은 오직 실제 3페이지 저니(각 반복은 완전히 독립된
+task, 컨텍스트 리셋 없이 단일 연속 실행으로 완주)만 다룬다.
+100단계/10회 컨텍스트 초기화 규모의 장기 목표 보존은 여전히 가짜 기반
+`task-controller.test.js`(후속 19 기록)에서만 검증되며, 이번 20회 실행이
+그 커버리지를 대체하지 않는다. 마찬가지로 재시작 중 pause/fresh-reattach
+(scenario 2, `long-horizon-electron.js`)와 execution_uncertain 게이팅
+(scenario 3)은 별도로 유지되는 시나리오이며, 이번 20회 반복 검증
+스크립트에는 포함되지 않는다 — 세 검증 축(컨텍스트 리셋 규모, 재시작
+복구, 반복 완주 안정성)을 하나의 숫자로 섞어 보고하지 않는다.
+
+**정직한 한계**:
+- criteriaStatus/budgets/segment를 진행 중(터미널이 아닌) task의
+  리로드에서 체크포인트+저널로부터 재구성하는 문제는 이번에 다루지
+  않았다 — completed/stopped 두 종결 상태만 좁게 고쳤다.
+  awaiting_verification 상태의 리로드/peek 표시도 마찬가지로 미해결이다.
+- planner worker 프로세스 자체의 메모리가 20회 검증의 실측 합계에
+  포함됐는지 별도로 확인하지 않았다(위 참고).
+- 20회는 전부 같은 macOS 머신의 같은 프로세스 안에서 순차 실행한
+  결과다 — 여러 머신·여러 프로세스에 걸친 반복이나, 동시(병렬) 다중
+  task 실행은 검증하지 않았다.
+- 실제 자연어 planner는 여전히 한 번도 연결하지 않았다(scripted fixture
+  worker만 사용).
+
+검증: `node --test`(apps/computer-browser 전체) 218/218 통과(신규
+approver-client 회귀 2개, browser-adapter vm 기반 회귀 2개,
+task-controller 체크포인트 복원 회귀 1개, task-host 체크포인트 복원
+회귀 1개, `repeat-journey-verification.test.js` 1개 포함), 전체 Python
+회귀 `.venv/bin/python -m pytest -q` 497/497 통과(신규 approver 어휘
+회귀 3개 포함).
+
+전체 요청은 아직 **미완료**다. 재현된 로컬 코드 결함은 아래와 같이 수정했으나,
+B1(새 격리 실행 환경)과 B2(신뢰 영역 밖의 감사·복구)는 별도의 환경/운영 작업이다.
+연구에서 의도적으로 측정하는 실패율을 0으로 바꾸거나, 보안 게이트를 완화하지 않았다.
+장기 브라우저 하네스는 Task 1(+메모리 스트리밍 수정)~Task 6까지 구현·실제
+Electron E2E 검증을 마쳤고, 후속 22에서 실제 3페이지 전체 여정의 approver_error
+근본원인을 규명·수정해 20회 연속 완주를 확인했다. 실제 프로세스 메모리 실측은
+<1GB로 확인되었다(약 446~665MB 범위, 실행마다 다름 — 위 각 측정 방법 참고).
+남은 한계는 위 "정직한 한계"와 각 후속 항목에 기록된 대로다.
+
+## 판정 기준
+
+- **수정·재현 / 회귀:** 현재 코드의 실행 결과로 확인한 해당 결함·경계만 의미한다.
+- **연구 한계:** 합성 비교군의 실제 실패/trade-off다. 버그 수정으로 제거한 척하지 않는다.
+- **혼합:** 해당 보고서의 일부만 코드 수정으로 닫혔다. 나머지는 명시한 B/R 항목이다.
+- **과거 기록:** 당시 원자료를 보존한다. 같은 규모·모든 공격을 새로 실행했다는 뜻이 아니다.
+- 전체 테스트 통과나 탐지기의 ALLOW는 실제 실행 capability/운영 배포 승인과 다르다.
+
+## 보고서별 처리 상태
+
+| 원문 | 지적 범위 | 상태 | 조치·한계 |
+|---|---|---|---|
+| [HALO_EXPLOIT_V1_DEEP_FINDINGS.md](../../HALO_EXPLOIT_V1_DEEP_FINDINGS.md) | D1–D5 | 수정·재현 | critical severity, 기본 effectful, API 일치, 자기신고 승인 거부 |
+| [HALO_EXPLOIT_V2_DEEP_FINDINGS.md](../../HALO_EXPLOIT_V2_DEEP_FINDINGS.md) | N1–N4 | 수정·재현 | plain schema, iterable 재사용 거부, Boolean probe |
+| [DEEP_EXPLOIT_FINDINGS_3.md](../../DEEP_EXPLOIT_FINDINGS_3.md) | Z/P/U/N2b | 수정·재현 | effect-only 자기승인 및 중첩 객체 우회 거부 |
+| [DEEP_EXPLOIT_FINDINGS_4.md](../../DEEP_EXPLOIT_FINDINGS_4.md) | X/S1–S5/C | 수정·재현 | Unicode format 문자 검사, 문자열/컨테이너 subclass 거부 |
+| [DEEP_EXPLOIT_FINDINGS_4B.md](../../DEEP_EXPLOIT_FINDINGS_4B.md) | G1–G4/G6 | 수정·재현 | known provenance, snapshot, 비교·repr·반복자 callback 거부 |
+| [DEEP_EXPLOIT_FINDINGS_5.md](../../DEEP_EXPLOIT_FINDINGS_5.md) | G1–G3 | 수정·재현 | 보고된 8종 credential 형식, truthiness 및 iteration 예외 |
+| [HALO_EXPLOIT_V3_DIRECT_FINDINGS.md](../../HALO_EXPLOIT_V3_DIRECT_FINDINGS.md) | trace 1a–1f; E001B–E005 | 혼합 | trace 수정, E004 strict; 실험 한계는 아래 R1–R4 |
+| [HALO_EXPLOIT_V4_REPORT.md](../../HALO_EXPLOIT_V4_REPORT.md) | 직접 공격 round 1–6 및 실험 | 혼합 | trace·E004 수정, E003 false claim 정정, 비교군/분포 한계 보존 |
+| [HALO_EXPLOIT_V5_DIRECT_REPORT.md](../../HALO_EXPLOIT_V5_DIRECT_REPORT.md) | E001B/E002/E003 | 연구 한계 | 고오류율·저FPR·freshness 재사용의 trade-off; R1–R3 |
+| [HALO_EXPLOIT_V6_DIRECT4_REPORT.md](../../HALO_EXPLOIT_V6_DIRECT4_REPORT.md) | A–F | 수정·재현 | scope/effect 타입, bytes 거부, 자기신고 상태·digest의 비권한화 |
+| [HALO_EXPLOIT_V7_ULTRA_REPORT.md](../../HALO_EXPLOIT_V7_ULTRA_REPORT.md) | E001B/E002/E003 극한값 | 연구 한계 | 안전성 보장이 아닌 합성 비교군; R1–R3 |
+| [HALO_EXPLOIT_V8_ISOLATED_FINDINGS.md](../../HALO_EXPLOIT_V8_ISOLATED_FINDINGS.md) | gateway 31 checks | 혼합 | 현행 schema 회귀로 parser·capacity·claim 검사; 관리자 변조/감사 삭제는 B2 |
+| [HALO_EXPLOIT_V9_ISOLATED_FINDINGS.ko.md](../../HALO_EXPLOIT_V9_ISOLATED_FINDINGS.ko.md) | P9-A–H | 혼합 | A–E trace 수정; G DB-only 복제 거부, H 명시 realm 키 바인딩; full snapshot은 B2; 양쪽 자기주장 trusted 허용은 2026-09-22 잔여 |
+| [halo/HALO_GATEWAY_V1_ATTACK_REVIEW.ko.md](../../halo/HALO_GATEWAY_V1_ATTACK_REVIEW.ko.md) | 인증·preflight·실행후·취소 | 수정·회귀 | 기존 회귀 및 실행+감사 이중 실패·재생 거부 |
+| [artifacts/sandbox_benchmark/REPORT.ko.md](../../artifacts/sandbox_benchmark/REPORT.ko.md) | 기본 I/O 및 실험 수정 | 과거 기록 / B1 | 원자료 보존; 현행 pytest 및 Rust runner 회귀와 분리 |
+| [artifacts/sandbox_benchmark/EXPLOIT_REPORT.ko.md](../../artifacts/sandbox_benchmark/EXPLOIT_REPORT.ko.md) | sysctl/metadata/config/exec/fork | 혼합 / B1 | 후속 runner 회귀 보유; 전 metadata 비노출 미달 |
+| [artifacts/sandbox_benchmark/RECHECK.ko.md](../../artifacts/sandbox_benchmark/RECHECK.ko.md) | 9종 확장 / ABI / errno | 혼합 / B1 | 판정 오류 수정은 회귀 대상; 당시 VM 미설치 문구는 역사적 상태 |
+| [artifacts/sandbox_benchmark/RUST_RUNNER.ko.md](../../artifacts/sandbox_benchmark/RUST_RUNNER.ko.md) | Rust runner | 회귀 / B1 | 14개 테스트; 309건 실행의 실패 gate를 정직하게 유지 |
+| [artifacts/sandbox_benchmark/HALO_SANDBOX_V1_DIRECT_ATTACK.ko.md](../../artifacts/sandbox_benchmark/HALO_SANDBOX_V1_DIRECT_ATTACK.ko.md) | IOKit/Mach/IPC/metadata | 미완료 / B1 | 호스트 정보 비노출을 네이티브 Seatbelt만으로 보증하지 않음 |
+| [artifacts/sandbox_benchmark/HALO_SANDBOX_V2_DYNAMIC_VERIFICATION.ko.md](../../artifacts/sandbox_benchmark/HALO_SANDBOX_V2_DYNAMIC_VERIFICATION.ko.md) | round 2–3 노출 | 미완료 / B1 | 과거 대규모 탐침 전부를 이번에 재실행한 것은 아님 |
+| [artifacts/sandbox_benchmark/HALO_SANDBOX_V3_ROUND4_VERIFICATION.ko.md](../../artifacts/sandbox_benchmark/HALO_SANDBOX_V3_ROUND4_VERIFICATION.ko.md) | access/getfsstat/runtime/Mach | 미완료 / B1 | runtime 내용 차단과 metadata 노출을 구분 |
+| [artifacts/sandbox_benchmark/HALO_SANDBOX_V4_CORRECTIONS.ko.md](../../artifacts/sandbox_benchmark/HALO_SANDBOX_V4_CORRECTIONS.ko.md) | sem_open/fsgetpath 판정 | 정정 보존 / B1 | unsupported는 차단 성공 아님; Mach·mount 노출 잔여 |
+| [rust/ROW_AUDIT.ko.md](../../rust/ROW_AUDIT.ko.md) | 수치 오버플로·상쇄 및 행 감사 | 회귀 / 연구 한계 | Rust 수치 회귀 통과; 1,920행 sweep 전부를 새로 실행하지 않음 |
+| [rust/SHIFT_BENCH.ko.md](../../rust/SHIFT_BENCH.ko.md) | 분포 이동·오탐 budget | 연구 한계 | FPR 초과는 수치 오류와 별개; 기대 성능을 임의로 올리지 않음 |
+| [rust/HARD_BENCH.ko.md](../../rust/HARD_BENCH.ko.md) | 부하·불변식·sandbox | 과거 기록 / B1 | 회귀는 재실행; 과거 전체 규모 benchmark는 보존 |
+| [rust/SHIELD.ko.md](../../rust/SHIELD.ko.md) | centered/hybrid/센서 손실 | 연구 한계 | Revalidate는 중지/새 증거 요구, detection=100%가 아님 |
+| [rust/ENFORCEMENT.ko.md](../../rust/ENFORCEMENT.ko.md) | 실제 객체 접근 ACL | 회귀 | Rust protected_store 재검증·불확실시 접근 거부 테스트 |
+| [rust/SANDBOX_BOUNDARY.ko.md](../../rust/SANDBOX_BOUNDARY.ko.md) | 9개 metadata 잔여 | 미완료 / B1 | 작업 환경 변경 필요; 게이트는 실패 유지 |
+| [halo/AUTHORITY.ko.md](../../halo/AUTHORITY.ko.md) | host authority / 메모리 backend | 회귀 | 위조·stale·cross-instance·경합·감사 실패 회귀 |
+| [halo/GATEWAY.ko.md](../../halo/GATEWAY.ko.md) | 운영 인계 | 혼합 / B2 | 코드/계약 갱신; TLS·외부 감사·복구는 미배포 |
+| [docs/EVALUATION.md](../../docs/EVALUATION.md) | 집계·원문 매핑·PoC 결론 | 정정 | 현재/과거 분리; unsupported 완전 우회 결론 철회 |
+| [docs/reviews/2026-09-21-review.ko.md](../../docs/reviews/2026-09-21-review.ko.md) | F01–F13 | 수정 / CI 미확인 | 기존 보완과 이번 추가 회귀; 원격 CI 미실행 |
+
+## 공통 원인별 수정 근거
+
+- **M1 객체/타입 경계:** 정확한 Event·list/tuple·JSON 데이터만 bounded snapshot으로 복사.
+  중첩 subclass/bytes/비문자 키/순환/과도한 깊이·크기/비유한 값을 fail-closed 처리한다.
+  공격자 repr/eq/iterator 호출로 감사와 판단이 달라지는 경로를 막는다.
+- **M2 판정 일치:** severity=5는 항상 DENY, 기본 effectful=True,
+  should_fail_closed는 같은 denial 규칙을 사용한다. 소모성 iterator 재사용은 거부한다.
+- **M3 권한:** 외부 효과의 자기신고 approved=True는 기본 거부.
+  trusted_telemetry=True는 호스트가 보증한 모의 telemetry에만 쓰며 실제 실행권한이 아니다.
+  Gateway/Authority의 capability·상태 검증은 여전히 필요하다.
+- **M4 비밀 탐지:** 보고된 segmented credential/PEM/AWS/GitHub 형식과 제로폭 분할,
+  benign action으로 위장한 external secret 데이터 경로를 검사한다.
+  unknown/암호화된 모든 secret을 완전 검출한다는 보장은 없다.
+- **G1 게이트웨이:** strict ASCII Content-Length, 명시 realm에서도 역할 키 identity 바인딩,
+  private regular sidecar·symlink 거부, DB-only fork 거부, 현재 schema의 capacity/expiry 회귀.
+- **E4 robust:** 최소 TPR/FPR 제약을 조용히 완화하지 않고 infeasible 오류 반환.
+  shifted mixture는 실제 비중으로 계산한다.
+
+직접 근거: [trace/policy 회귀](../../tests/test_report_security_regressions.py),
+[gateway 회귀](../../tests/test_report_gateway_regressions.py),
+[실험 주장 재검증](../../tests/test_report_experiment_claims.py),
+[실행 기록](2026-09-21-report-rechecks.json).
+
+## R1–R4: 실험 주장 정정과 유지할 비교군
+
+- **R1 E001-B:** 높은 오류율/상관에서 실패하는 것은 연구 대상이다.
+  correlation_aware는 rho를 온라인 추정하는 알고리즘이 아니라 고정 source-3 corroboration 규칙이다.
+  미사용 adaptive_redundant를 제거했다. 이 Boolean write 정책에서 두 소스가 모두 허용하면
+  관련 metadata도 일치하므로 “추가 불일치 write 허용” 주장은 프로브의 0건 결과와 모순된다.
+- **R2 E002:** conservative_max는 separately calibrated max_pool scale control이다.
+  추가 안전 마진/독립 방어라는 설명을 철회했다. 낮은 FPR budget의 TPR 저하는 실제 trade-off다.
+- **R3 E003:** 읽기 위주 “완전 우회” PoC는 실제 unsafe_allowed=0이었다.
+  현재 production run을 호출하는 재검증기로 교체했다. 20개 조건에서 adaptive/use-time
+  breach cell=0, progressive=11이었다. progressive의 허용된 reuse 기간 내 stale 위험은
+  비교군의 성질이며 감추지 않는다. 읽기가 안전하다는 합성 정의는 실제 기밀성을 증명하지 않는다.
+  **2026-09-25 후속:** 그 11건 중 `volatility≥0.75` 부근에서 나타난 실패는 trade-off가
+  아니라 `adaptive_window()` floor 버그(항상 최소 1을 강제해 고변동성에서 refresh
+  주기가 상태의 parity와 aliasing됨)였다. floor를 0으로 낮춰 수정했고, 수식대로
+  정당하게 window=1인 나머지 경우의 stale 위험은 그대로 유지했다.
+  [상세](2026-09-25-e003-progressive-refresh-fix.ko.md).
+- **R4 E005/Shield:** moving-target의 큰 분산, sensor-loss의 전부 Revalidate,
+  shift에서 FPR 예산 초과는 잔여 연구 한계다. 출력 이름·평가 기준을 바꿔 성공으로 만들지 않는다.
+
+## B1: OS 격리 — 미완료
+
+현재 Seatbelt 100-case 실행에서는 clean-launch의 metadata 잔여 9개로 gate=false다.
+14개 runner 테스트는 이 실패를 정확히 보고하는 검사까지 포함한다.
+기존 VM `halo-secure`는 중지 상태이며 설정상 홈 디렉터리 공유가 있으므로
+“호스트 파일 비노출” 환경으로 간주하지 않는다. 읽기 전용 확인만 했고 VM을 시작하거나
+설정을 바꾸지 않았다. Wasmtime 설치 존재도 네이티브 실행기 격리의 완료 증거가 아니다.
+
+별도의 홈 공유·외부 네트워크 없는 실행 환경을 구성하고, 정상 작업·metadata·파일·network·IPC·
+자원 제한을 그 경계에서 다시 검증해야 한다. 사용자에게 새 전용 VM 구성 범위를 질문한 상태다.
+기존 host benchmark의 실패 gate는 새 backend가 생겨도 소급하여 통과로 바꾸지 않는다.
+
+## B2: 운영 신뢰 영역 — 미완료
+
+DB 및 realm identity까지 복제한 전체 snapshot의 anti-rollback/double-spend,
+서비스 관리자에 의한 DB·감사 삭제 방지는 동일 호스트의 SQLite만으로 보장하지 않는다.
+DB-only 복사 거부와 role-key binding은 이 위협의 완전 해결이 아니다.
+별도 신뢰 영역의 불변 감사/권한 ledger, 복구 시 pending grant 폐기·효과 대조,
+사용자 인증·TLS·proxy 및 도구별 원자적 상태검사가 필요하다.
+외부 서버·계정·네트워크 배포는 이번 작업에서 수행하지 않았다.
+
+## 2026-09-22 독립 재검증 — 신규 발견과 도구 갱신
+
+서브에이전트 없이 로컬에서만 실행한 독립 재검증 결과다. 라운드9 익스플로이트를
+현재 트리 기준으로 재구축한 격리 사본에서 재실행했고, benign·악성 양쪽 비용을
+함께 측정하는 벤치마크를 추가했다.
+
+- 실행: `pytest` 260 통과 / 0 실패. 라운드9 익스플로이트 재실행 — 모니터 경로
+  10/10 방어, 게이트웨이 fork DB-only 복사 거부·교차 인스턴스 거부·claim-once
+  5회 유지. 최강 fork 프로브(sidecar를 계산된 이름으로까지 복제) → double spend
+  실제 발생 — `gateway.py`의 documented limit 주석과 B2 문서와 일치.
+- 신규 도구: `false_block_benchmark.py`(benign 10/11 통과, 확인된 false block
+  1개, 악성 벡터 9/9 방어), `gateway_round9.py`를 F03 수정 후 동작에 맞게 갱신
+  (열기 거부를 HELD로 보고, full snapshot 섹션 추가, 표준 exit code로 변경).
+- 신규 발견 (P9-B2, 잔여): 두 이벤트가 모두 `provenance="trusted"`를 자기주장하면
+  `trusted_telemetry=True`에서 untrusted 채널이 소멸하고 ALLOW에 도달한다.
+  V9 권고 #2(호스트 주입 provenance)가 코드에 미구현이라는 뜻이다. 영향은
+  bounded다 — 평가기의 ALLOW는 capability가 아니고, host-only 스위치 계약상
+  독립 telemetry를 보증한 호스트가 공격자 영향 provenance를 그대로 Event에
+  통과시킬 때만 발화한다. 위 표의 "A–E trace 수정"은 V9 기록 구성(write
+  provenance unknown)에 한정된다.
+- 신규 발견 (false block, 잔여): external 스코프 read의 URL 쿼리 스트링
+  (`?token=abc&format=json`)이 `credential_assignment` 패턴으로 오탐되어
+  secret_egress@5 → DENY다. F10의 base64 marker 수정이 sha256 해시는 커버했지만
+  URL 쿼리 파라미터는 커버하지 않는다. benign 통과율 10/11(90.9%)의 유일한
+  false block이다.
+
+## 검증 방법
+
+`.venv/bin/python -m pytest -q`와 Rust 두 workspace의 locked tests,
+현재 모듈을 import하는 legacy trace 공격 10개 및 structural round6,
+E003 실제 함수 재검증을 실행했다.
+legacy 스크립트 일부는 “우회 없음”일 때 exit=1이므로 JSON은 종료 코드와 출력 판정을 함께 저장한다.
+안전하지 않은 고정 경로 삭제/낡은 SQLite 열 개수를 사용하는 V8/V9 gateway 스크립트를
+그대로 실행하지 않고 임시 디렉터리 기반 현행 schema 회귀로 대체했다.
+모든 역사적 sweep·플랫폼·공격군의 전수 재실행이라고 주장하지 않는다.
+2026-09-22 재검증은 현재 트리 기준으로 재구축한 격리 사본에서 라운드9 스크립트와
+`false_block_benchmark.py`를 실행했다.

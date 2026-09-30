@@ -41,29 +41,20 @@ def run(seed: int, p: float, rho: float, n: int = 100_000):
     agree = (s1_sensitive == s2_sensitive) & (s1_writable == s2_writable)
     redundant_allow = (~is_write) | (agree & allow1 & allow2)
 
-    # Improved adaptive redundancy that accounts for correlation
-    # When sources disagree, be more conservative (fail-closed)
-    # When they agree, still require stronger evidence for writes
-    disagree = ~agree
-    adaptive_redundant = (~is_write) | ((agree & allow1 & allow2) | (disagree & allow1 & allow2))
-
-    # Add a third source with forced independence (zero correlation)
-    # This simulates adding a truly independent safety mechanism
-    # Use different random seeds to ensure true independence
-    rng3 = np.random.default_rng(seed + 1000)  # Different seed for independence
-    es3 = rng3.random(n) < p  # Completely independent with different seed
+    # Model an additional error stream using a separate PRNG. Independence is
+    # a synthetic model assumption, not a guarantee for real monitor channels.
+    rng3 = np.random.default_rng(seed + 1000)
+    es3 = rng3.random(n) < p
     ew3 = rng3.random(n) < p  # Completely independent with different seed
     s3_sensitive = np.logical_xor(sensitive, es3)
     s3_writable = np.logical_xor(writable, ew3)
     allow3 = (~is_write) | ((~s3_sensitive) & s3_writable)
 
-    # Correlation-adaptive: use third source as independent validator
-    # Only allow write if at least one independent source allows it
+    # Historical protocol name: this fixed rule does not estimate rho or adapt
+    # online. Source 3 must agree with at least one of sources 1 and 2.
     correlation_aware = (~is_write) | (allow1 & allow3) | (allow2 & allow3)
 
-    # Three-source majority voting with stricter requirement
-    # Require at least 2 sources to agree, but for writes require higher consensus
-    majority_vote = (allow1.astype(int) + allow2.astype(int) + allow3.astype(int)) >= 2
+    # Two-of-three majority is a comparison arm, not a stronger guarantee.
     strict_majority = (allow1.astype(int) + allow2.astype(int) + allow3.astype(int)) >= 2
     three_source_redundant = (~is_write) | strict_majority
 

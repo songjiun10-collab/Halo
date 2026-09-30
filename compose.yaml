@@ -1,0 +1,42 @@
+services:
+  gateway:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      HALO_STATE_DIR: /state/private
+      HALO_APPROVER_KEY_FILE: /run/secrets/approver_key
+      HALO_EXECUTOR_KEY_FILE: /run/secrets/executor_key
+    secrets:
+      - approver_key
+      - executor_key
+    volumes:
+      - gateway-state:/state
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    stop_grace_period: 10s
+    networks: [gateway]
+
+secrets:
+  approver_key:
+    file: .docker-secrets/approver_key
+  executor_key:
+    file: .docker-secrets/executor_key
+
+volumes:
+  gateway-state:
+
+networks:
+  gateway:
+    internal: true

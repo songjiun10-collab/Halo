@@ -1,5 +1,7 @@
 # HALO 보호막 후보와 평가
 
+> 2026-09-21 후속 상태: **연구 한계**. [보고서별 조치 원장](../docs/reviews/REPORT_REMEDIATION.ko.md)에서 수정·재현과 잔여 범위를 구분한다. 아래 과거 수치는 현재의 전체 해결 판정이 아니다.
+
 > 이 문서는 보호막 후보의 합성 평가 기록이다. 현재 실행·보안 게이트 판정은 [REPORT_INDEX.ko.md](../REPORT_INDEX.ko.md)를 우선하며, 이 후보가 OS 샌드박스나 배포 승인을 제공하지는 않는다.
 
 신뢰된 ACL 재검증을 실제 메모리 객체 읽기에 연결한 구현과 테스트 범위는 [ENFORCEMENT.ko.md](ENFORCEMENT.ko.md)에 있다. 점수 지표와 실행 권한은 별도 개념이다.
@@ -19,7 +21,7 @@
 
 Hybrid는 clean 탐지 손실을 줄였지만 모든 도메인에서 우월하지 않다. 특히 offset 오탐 예산은 지키지 못한다. 센서 전손·복합 최대 강도에서는 두 모드 모두 정상·공격 전부 재검증하여 가용성 손실이 남는다. 검증 seed는 구현 선택에 사용하지 않았으며 결과 확인 후 추가 가중치 조정도 하지 않았다.
 
-전체 실행은 seed 0–9로 기존 3,840행과 보호막 3모드의 1,440행을 생성한다. 위 표는 새 seed 5–9만 사용한다. 원시 결과: `rust/results/shield-hybrid-validation.json`. 이 문서 작성 당시 Rust 테스트 53개가 통과했으며, 현재 통계 워크스페이스 테스트는 57개가 통과한다.
+전체 실행은 seed 0–9로 기존 3,840행과 보호막 3모드의 1,440행을 생성한다. 위 표는 새 seed 5–9만 사용한다. 원시 결과: `rust/results/shield-hybrid-validation.json`. 이 문서 작성 당시 Rust 테스트 53개가 통과했으며, 현재 테스트 판정은 보고서 조치 원장과 REPORT_INDEX를 따른다.
 
 ```sh
 rust/target/release/shift_bench --n 10000 --seeds 10 --output rust/results/shield-hybrid-validation.json
@@ -52,4 +54,4 @@ cargo build --release --locked --manifest-path rust/Cargo.toml --bin shift_bench
 rust/target/release/shift_bench --n 10000 --seeds 5 --output rust/results/shield-evaluation.json
 ```
 
-이 문서 작성 당시 전체 Rust 실험 테스트 52개가 통과했다. 현재 통계 워크스페이스 테스트는 57개가 통과한다. 원시 결과는 `rust/results/shield-evaluation.json`. 기존 `--fail-on-fpr`는 기존 baseline 행만 대상으로 하며 새 보호막의 합격 판정이 아니다.
+이 문서 작성 당시 전체 Rust 실험 테스트 52개가 통과했다. 현재 테스트 판정은 보고서 조치 원장과 REPORT_INDEX를 따른다. 원시 결과는 `rust/results/shield-evaluation.json`. 기존 `--fail-on-fpr`는 기존 baseline 행만 대상으로 하며 새 보호막의 합격 판정이 아니다.

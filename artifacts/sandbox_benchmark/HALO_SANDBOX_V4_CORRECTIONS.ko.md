@@ -1,5 +1,7 @@
 # 직접 탐침 판정 정정
 
+> 2026-09-21 후속 상태: **정정 보존 / B1**. [보고서별 조치 원장](../../docs/reviews/REPORT_REMEDIATION.ko.md)에서 수정·재현과 잔여 범위를 구분한다. 아래 과거 수치는 현재의 전체 해결 판정이 아니다.
+
 - `sem_open`: Darwin의 SEM_FAILED는 -1 포인터다. 기존 bool(pointer)
   검사는 EPERM 실패를 성공으로 오인했다. 생성 및 정리 성공이라는 과거
   보고는 철회한다. 실패 핸들은 close/unlink하지 않는다.

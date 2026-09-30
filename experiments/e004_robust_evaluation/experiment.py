@@ -169,24 +169,6 @@ def select_robust_threshold(
             feasible.append(metrics)
 
     if not feasible:
-        # If no threshold meets all constraints, relax the any-group constraint but keep worst-group
-        for threshold in thresholds:
-            metrics = evaluate(
-                benign_scores, attack_scores, float(threshold), attack_weights, enforce_balance=True
-            )
-            if metrics.false_positive_rate <= max_fpr and metrics.worst_group_tpr >= min_worst_group_tpr:
-                feasible.append(metrics)
-    
-    if not feasible:
-        # Final fallback: relax worst-group constraint
-        for threshold in thresholds:
-            metrics = evaluate(
-                benign_scores, attack_scores, float(threshold), attack_weights, enforce_balance=True
-            )
-            if metrics.false_positive_rate <= max_fpr:
-                feasible.append(metrics)
-
-    if not feasible:
         raise ValueError("no threshold satisfies constraints")
 
     # Score thresholds with multiple criteria to prevent clustering exploitation
@@ -259,7 +241,7 @@ def run(seed: int = 7, n: int = 20_000) -> dict[str, object]:
                 benign, attacks, worst_group.threshold, weights
             ),
             "robust_constrained": evaluate(
-                benign, attacks, robust_threshold.threshold, weights, enforce_balance=True
+                benign, attacks, robust_threshold.threshold, weights, enforce_balance=False
             ),
         }
 

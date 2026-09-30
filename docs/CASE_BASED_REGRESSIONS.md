@@ -28,6 +28,32 @@ translated, obfuscated, or otherwise changes surface form.
 
 ## Invariants encoded in `halo/safety_cases.py`
 
+### Current API contract (2026-09-21)
+
+`evaluate_trace` accepts a bounded plain list/tuple of exact `Event` objects and
+copies plain JSON metadata before evaluation. Custom objects/subclasses, bytes,
+non-string keys, cycles, excessive depth/size and invalid field types fail closed;
+they are not passed to attacker-controlled `repr`, comparison or iterator hooks.
+Callers must decode binary content under a documented host schema first.
+
+The default is `trusted_telemetry=False`: self-reported `approved=True` is not an
+authorization. A trusted host may explicitly select `trusted_telemetry=True` for
+simulation of independently collected telemetry with known provenance. Never
+derive that keyword from request data. Neither mode mints a capability; actual
+effects require `Authority`/`Gateway` and adapter-specific use-time checks.
+
+`decide` and `should_fail_closed` default to effectful policy and share the same
+denial rules. Severity 5 always denies. Single-use findings iterators are rejected
+without consumption; reuse an ordinary findings snapshot instead. Read-only
+observational analysis may explicitly select `effectful=False` for REVIEW of
+noncritical gaps. This is an intentional API tightening, not a claim of unchanged
+behavior for old callers.
+
+Credential signatures are defense in depth, not an exhaustive secret detector.
+The report regressions cover segmented keys, PEM headers, nested plain data and
+Unicode format-character splitting; encoded/encrypted data and unknown formats
+still need host classification and an independently enforced egress policy.
+
 1. Untrusted content does not gain authority merely because it appears inside a tool
    result or another representation.
 2. External writes require independent approval.

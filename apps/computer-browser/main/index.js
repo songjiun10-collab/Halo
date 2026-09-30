@@ -1,0 +1,574 @@
+"use strict";
+
+const { app, BrowserWindow, WebContentsView, dialog } = require("electron");
+const path = require("path");
+const os = require("os");
+const fs = require("fs");
+const crypto = require("crypto");
+const { spawn, execFile } = require("child_process");
+const { ControlApi } = require("./control-api");
+const registerIpc = require("./ipc");
+const layoutConstants = require("../shared/layout-constants");
+const { requestDecision } = require("./approver-client");
+const { TaskHost } = require("./harness/task-host");
+const { BrowserAdapter } = require("./harness/browser-adapter");
+const { BrowserSurfaces } = require("./harness/browser-surfaces");
+const { PlannerStdioAdapter } = require("./harness/planner-stdio");
+const { MemoryMonitor } = require("./harness/memory-monitor");
+const { AgentViewportHost, makeDualSurfaceBrowser } = require("./harness/agent-viewport-host");
+const { resolvePlannerCommand } = require("./harness/planner-command");
+const { HostSettingsStore } = require("./harness/host-settings");
+const { LocalMemoryStore } = require("./harness/local-memory-store");
+const { LocalCredentialVault } = require("./harness/local-credential-vault");
+const { sumProcessTreeRssBytes } = require("./harness/process-tree-memory");
+const { BackgroundRuntimeService } = require("./harness/background-runtime-service");
+const { BackgroundRuntimeClient } = require("./harness/background-runtime-client");
+const { prepareSocketDir } = require("./harness/background-runtime-ipc");
+
+// Real OS-level process-tree RSS lookup for workers Electron does not track
+// (the Python approver and local planner worker, including its CLI child).
+// Query the full process table and sum each registered root plus descendants;
+// `ps` reports RSS in KB on macOS/Linux. Missing roots and ps failures return
+// null, so unmeasurable workers fail closed for parallel admission.
+function getExternalMemoryBytesViaPs(pid) {
+  return new Promise((resolve) => {
+    execFile("ps", ["-axo", "pid=,ppid=,rss="], (err, stdout) => {
+      if (err) {
+        resolve(null);
+        return;
+      }
+      resolve(sumProcessTreeRssBytes(stdout, pid));
+    });
+  });
+}
+
+// The single source of truth for these values. The main process is not
+// sandboxed, so it can require the shared module directly; preload cannot
+// (see preload/index.js) and receives this same object serialized through
+// additionalArguments instead -- one source, two consumers, no drift.
+const RENDERER_LAYOUT = Object.freeze({
+  headerHeight: layoutConstants.HEADER_HEIGHT,
+  footerHeight: layoutConstants.FOOTER_HEIGHT,
+  sidePanelWidth: layoutConstants.SIDE_PANEL_WIDTH,
+  mobileBreakpoint: layoutConstants.MOBILE_BREAKPOINT,
+});
+
+const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+const APPROVER_SCRIPT = path.join(REPO_ROOT, "apps", "computer-browser", "approver", "approver_service.py");
+const SERVICE_MODE = process.argv.includes("--halo-background-service");
+const RUNTIME_DIR_NAME = "background-runtime";
+const CAPABILITY_FILE_NAME = "capability";
+
+let approverProcess = null;
+let socketDir = null;
+let memoryPollTimer = null;
+let runtimeService = null;
+let runtimeClient = null;
+let runtimeContainer = null;
+let runtimeCapability = null;
+let runtimeCapabilityPath = null;
+let quitDecisionPending = false;
+const taskHosts = new Set();
+const closingTaskHosts = [];
+let shutdownStarted = false;
+
+// Single MemoryMonitor for the whole app (design doc section 10, user
+// mandate: sum every process HALO's computer-browser actually launches --
+// Electron main/renderer/GPU/utility plus the Python approver and any local
+// planner worker -- and never satisfy the <1GB budget by measuring V8 heap
+// alone or excluding worker processes). Polled on an interval below rather
+// than sampled fresh on every getPressureLevel() call, so a per-dispatch
+// check in task-controller.js's hot loop never itself does a synchronous OS
+// query.
+const memoryMonitor = new MemoryMonitor({
+  getAppMetrics: () => app.getAppMetrics(),
+  getExternalMemoryBytes: getExternalMemoryBytesViaPs,
+});
+
+// Single app-wide registry of hidden per-task agent viewports (P0 agent
+// viewport/background isolation -- see main/harness/agent-viewport-host.js
+// for the full contract and its scope note). Module-level like
+// memoryMonitor: it outlives any single visible BrowserWindow, and every
+// task's hidden view is disposed via its own browser.dispose() call (see
+// makeHarnessBrowser below), not tied to the visible window's lifecycle.
+const agentViewportHost = new AgentViewportHost();
+
+function makeSocketDir() {
+  // 0700, owned by this process's uid -- the same contract
+  // experiments/e007_dual_agent_provenance_gate/channel.py's
+  // UnixSocketChannel enforces on the Python side. realpathSync is required
+  // here: macOS's os.tmpdir() resolves under /var, which is itself a symlink
+  // to /private/var, and UnixSocketChannel walks every path component from
+  // root rejecting any symlink -- an unresolved path makes the approver's
+  // listen() fail (silently retried in its loop) forever, and the socket
+  // file never gets created. Confirmed by actually running the app: the
+  // executor saw a permanent ENOENT until this fix.
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "halo-browser-approver-")));
+  fs.chmodSync(dir, 0o700);
+  return dir;
+}
+
+function runtimePaths() {
+  const dir = path.join(app.getPath("userData"), RUNTIME_DIR_NAME);
+  return {
+    dir,
+    socketPath: path.join(dir, "ipc", "runtime.sock"),
+    capabilityPath: path.join(dir, CAPABILITY_FILE_NAME),
+  };
+}
+
+function assertPrivateCapabilityFile(capabilityPath) {
+  const stat = fs.lstatSync(capabilityPath);
+  if (!stat.isFile() || stat.isSymbolicLink() ||
+      (typeof process.getuid === "function" && stat.uid !== process.getuid()) ||
+      (stat.mode & 0o077) !== 0 || stat.size !== 64) {
+    throw new Error("background runtime capability file is not a private regular file");
+  }
+}
+
+async function readRuntimeCapability(paths) {
+  // The service owns this 0700 directory. A missing directory/file means
+  // background mode was never configured; a malformed existing file is an
+  // error, never a reason to trust an unverified endpoint.
+  let dirStat;
+  try {
+    dirStat = fs.lstatSync(paths.dir);
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink() ||
+      (typeof process.getuid === "function" && dirStat.uid !== process.getuid()) ||
+      (dirStat.mode & 0o077) !== 0) {
+    throw new Error("background runtime directory is not private");
+  }
+  try {
+    assertPrivateCapabilityFile(paths.capabilityPath);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      // The service creates this directory before binding its socket and
+      // publishing the capability. Treat even an empty prepared directory
+      // as an in-progress/unavailable service, never as permission for a
+      // second local writer of the same task journals.
+      throw new Error("background runtime directory exists without a ready capability");
+    }
+    throw error;
+  }
+  const fd = fs.openSync(paths.capabilityPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size !== 64 || (stat.mode & 0o077) !== 0 ||
+        (typeof process.getuid === "function" && stat.uid !== process.getuid())) {
+      throw new Error("background runtime capability file changed during read");
+    }
+    const capability = fs.readFileSync(fd, "utf8");
+    if (!/^[0-9a-f]{64}$/.test(capability)) throw new Error("background runtime capability is invalid");
+    return capability;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+async function publishRuntimeCapability(paths, capability) {
+  if (!/^[0-9a-f]{64}$/.test(capability)) throw new Error("background runtime returned an invalid capability");
+  try {
+    assertPrivateCapabilityFile(paths.capabilityPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const temporaryPath = path.join(paths.dir, `capability.${process.pid}.${crypto.randomBytes(8).toString("hex")}`);
+  const fd = fs.openSync(temporaryPath,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
+  try {
+    fs.writeFileSync(fd, capability, "utf8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    fs.renameSync(temporaryPath, paths.capabilityPath);
+  } catch (error) {
+    fs.unlinkSync(temporaryPath);
+    throw error;
+  }
+  runtimeCapability = capability;
+  runtimeCapabilityPath = paths.capabilityPath;
+}
+
+function removeOwnRuntimeCapability() {
+  if (!runtimeCapability || !runtimeCapabilityPath) return;
+  try {
+    const paths = runtimePaths();
+    if (fs.lstatSync(paths.dir).isDirectory() &&
+        fs.lstatSync(runtimeCapabilityPath).isFile() &&
+        fs.readFileSync(runtimeCapabilityPath, "utf8") === runtimeCapability) {
+      fs.unlinkSync(runtimeCapabilityPath);
+    }
+  } catch {
+    // A newer service or a changed path must not be removed by this one.
+  }
+}
+
+function spawnApprover(socketPath) {
+  const python = process.env.HALO_PYTHON || "python3";
+  const child = spawn(python, [APPROVER_SCRIPT, "--socket", socketPath], {
+    cwd: REPO_ROOT,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.on("data", (chunk) => process.stdout.write(`[approver] ${chunk}`));
+  child.stderr.on("data", (chunk) => process.stderr.write(`[approver] ${chunk}`));
+  child.on("exit", (code, signal) => {
+    console.error(`[approver] exited unexpectedly (code=${code}, signal=${signal})`);
+    memoryMonitor.unregister(child.pid);
+  });
+  // Node's child_process doesn't expose the OS's own process-creation
+  // timestamp; Date.now() at spawn time is used as the creationTime half of
+  // MemoryMonitor's (pid, creationTime) dedup key instead. This is an
+  // approximation (not the kernel's actual start time), disclosed here
+  // rather than silently treated as exact -- it is precise enough to tell
+  // this specific spawn apart from a later, different process that happens
+  // to reuse the same pid, which is the only thing the dedup key needs.
+  memoryMonitor.registerExternalProcess({ pid: child.pid, creationTime: Date.now(), label: "approver" });
+  return child;
+}
+
+// Default hostVerifier for "host"-kind criteria (progress.js's
+// verifyCriterion): "host_check" evidence, which browser-adapter.js only
+// ever produces when a real navigate()/follow_link() genuinely succeeded,
+// IS the host's own direct confirmation that A navigation happened -- but
+// not, by itself, confirmation that THIS SPECIFIC criterion was satisfied.
+// task-controller.js's _afterActionDispatched() attaches one action's
+// evidenceCandidate to every criterionId the planner lists in
+// proposal.criterionIds, so accepting any host_check unconditionally let a
+// planner satisfy every host-verified criterion in the goal from a single
+// arbitrary navigation. The criterion schema has no structured expected-URL
+// field (criterion.text is free-form natural language), so the only
+// non-semantic, mechanical check available without inventing page-content
+// understanding is: does the criterion's own text actually name the host
+// this navigation reached? That closes the arbitrary-navigation exploit
+// while staying honest about not understanding page content -- a criterion
+// whose text does not mention any host stays "pending" (evaluates to
+// undefined) exactly like "artifact" evidence does, rather than being
+// silently auto-verified or auto-rejected. A "user"-verification criterion
+// never reaches this callback at all (progress.js handles that kind itself).
+function defaultHostVerifier(criterion, evidence) {
+  if (evidence.kind !== "host_check" || typeof evidence.sourceUrl !== "string") return undefined;
+  let hostname;
+  try {
+    hostname = new URL(evidence.sourceUrl).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  if (!hostname || typeof criterion.text !== "string") return undefined;
+  return criterion.text.toLowerCase().includes(hostname) ? true : undefined;
+}
+
+// Builds the real approve() TaskController dependency: routes a harness
+// task's gated-action descriptor through the same approver-client.js/
+// approver_service.py boundary control-api.js's legacy path uses, so both
+// paths are judged by the identical independent ALLOW/REVIEW/DENY decision.
+function makeHarnessApprove(socketPath) {
+  return (taskId, descriptor) =>
+    requestDecision(socketPath, {
+      request_id: descriptor.requestId,
+      action: descriptor.action,
+      origin: descriptor.origin || "",
+      summary: descriptor.summary,
+      self_provenance: descriptor.selfProvenance,
+      source: descriptor.source,
+      target_scope: descriptor.targetScope ?? null,
+      contains_secret: Boolean(descriptor.containsSecret),
+    });
+}
+
+// Each harness task owns TWO surfaces now, not one:
+//   - a VISIBLE page (unchanged from before): laid out beneath the React
+//     chrome, BrowserSurfaces hides it for renderer overlays, and it is what
+//     taskBrowserAction/getTaskBrowser/setTaskViewport (the existing,
+//     already-shipped renderer contract) operate on -- exactly as before
+//     this change, byte-for-byte.
+//   - a hidden, fixed-1440x900 agent view (main/harness/agent-viewport-host.js)
+//     that is the REAL target of the task's autonomous observe()/execute()
+//     calls. This is the P0 agent-viewport/background-isolation requirement:
+//     autonomous execution actually happens against a fixed, isolated,
+//     off-screen view, not the user's responsive visible page.
+// makeDualSurfaceBrowser composes both into the single `browser` object
+// task-controller.js/task-host.js already expect, with no changes to either
+// file -- see agent-viewport-host.js's own doc comment for the exact routing
+// contract and why it is fail-closed for user actions by construction.
+function makeHarnessBrowser(surfaces, agentViewportHost) {
+  return (taskId) => {
+    const view = new WebContentsView({ webPreferences: {
+      sandbox: true, contextIsolation: true, nodeIntegration: false,
+      partition: `halo-task-${taskId}`,
+    } });
+    view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    view.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    view.webContents.session.setPermissionCheckHandler(() => false);
+    view.webContents.on("will-navigate", (event, url) => {
+      if (!/^https?:\/\//i.test(url)) event.preventDefault();
+    });
+    view.webContents.session.on("will-download", (event) => event.preventDefault());
+    surfaces.register(taskId, view);
+    const visibleAdapter = new BrowserAdapter({ view });
+    // Same session partition as the visible view above (`halo-task-${taskId}`)
+    // -- design doc's session/cookie boundary section: the agent view must
+    // share the task's existing login/cookie state, not start a fresh one.
+    const agentAdapter = agentViewportHost.ensure(taskId);
+    return makeDualSurfaceBrowser({
+      agentAdapter,
+      visibleAdapter,
+      disposeAgent: () => agentViewportHost.dispose(taskId),
+    });
+  };
+}
+
+function makeChildHarnessBrowser(parentTaskId, childId, origin) {
+  const adapter = agentViewportHost.ensureChild(parentTaskId, childId, { assignedOrigin: origin });
+  // ChildAgentCoordinator disposes the browser it received. A bare adapter
+  // would destroy the WebContents but leave AgentViewportHost's hidden
+  // BrowserWindow and childId registry alive across completed children.
+  return new Proxy(adapter, {
+    get(target, property) {
+      if (property === "dispose") return () => agentViewportHost.disposeChild(childId);
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+// Planner worker command comes ONLY from trusted host config (env vars set
+// by whoever launches this Electron app, or a real `node` binary this host
+// discovers on its own PATH -- see harness/planner-command.js) -- never from
+// the UI, a page, or the model itself (design doc section 6). With nothing
+// configured and no real node found, the adapter stays honestly
+// "unavailable" (PlannerStdioAdapter throws
+// PlannerTransportError("planner_unavailable", ...) from next()) rather
+// than fabricating a natural-language-sounding proposal; task-controller.js
+// surfaces that as paused:planner_unavailable.
+//
+// Resolved ONCE here, not inside the returned per-task factory below:
+// resolution may itself spawn a short-lived `node --version` verification
+// process (harness/planner-command.js), and redoing that on every task/
+// context-reset would add back exactly the kind of per-task process-spawn
+// overhead this exists to reduce.
+function makeHarnessPlanner() {
+  const { command: plannerCommand, env: plannerEnv } = resolvePlannerCommand();
+  let args = [];
+  let configured = Boolean(process.env.HALO_PLANNER_COMMAND);
+  if (process.env.HALO_PLANNER_ARGS) {
+    try {
+      args = JSON.parse(process.env.HALO_PLANNER_ARGS);
+      configured = Array.isArray(args) && args.length > 0 && args.every((arg) => typeof arg === "string");
+    } catch {
+      configured = false;
+    }
+    if (!configured) {
+      args = [];
+      console.error("[harness] HALO_PLANNER_ARGS must be a non-empty JSON array of worker arguments");
+    }
+  }
+  return (_taskId, { role = "parent" } = {}) => {
+    return new PlannerStdioAdapter({
+      // A Node executable on PATH alone is not a configured agent worker.
+      command: configured ? plannerCommand : null,
+      args,
+      cwd: REPO_ROOT,
+      env: plannerEnv,
+      role,
+      // Host-owned hooks so every planner worker this app ever spawns is
+      // counted in the same <1GB aggregate memory budget the Python
+      // approver already is (see the memoryMonitor comment above) --
+      // consumed by planner-stdio.js's own spawn/exit handling.
+      onWorkerStart: ({ pid, creationTime }) => memoryMonitor.registerExternalProcess({ pid, creationTime, label: "planner" }),
+      onWorkerExit: ({ pid, creationTime }) => memoryMonitor.unregister(pid, creationTime),
+    });
+  };
+}
+
+async function createHarnessHost(socketPath, hostWindow) {
+  const dataRoot = path.join(app.getPath("userData"), "harness-data");
+  const settingsStore = new HostSettingsStore({ storageRoot: dataRoot });
+  const settings = await settingsStore.load();
+  const memoryStore = new LocalMemoryStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
+  const credentialVault = new LocalCredentialVault({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
+  let taskHost;
+  const surfaces = new BrowserSurfaces(hostWindow, { isUserControlled: (taskId) => taskHost.canUseTaskBrowser(taskId) });
+  taskHost = new TaskHost({
+    storageRoot: path.join(app.getPath("userData"), "harness-tasks"),
+    makeBrowser: makeHarnessBrowser(surfaces, agentViewportHost),
+    makeChildBrowser: makeChildHarnessBrowser,
+    setViewport: (taskId, bounds) => surfaces.setViewport(taskId, bounds),
+    makePlanner: makeHarnessPlanner(),
+    hostVerifier: defaultHostVerifier,
+    approve: makeHarnessApprove(socketPath),
+    memoryMonitor,
+    memoryStore,
+    permissionMode: settings.permissionMode,
+    plannerEffort: settings.plannerEffort,
+    executionMode: settings.executionMode,
+    settingsStore,
+    credentialVault,
+  });
+  taskHosts.add(taskHost);
+  return taskHost;
+}
+
+async function createWindow(socketPath, attachedClient = undefined) {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    webPreferences: {
+      preload: path.join(__dirname, "..", "preload", "index.js"),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      additionalArguments: [`--halo-layout=${JSON.stringify(RENDERER_LAYOUT)}`],
+    },
+  });
+
+  const controlApi = new ControlApi({ window: win, socketPath });
+  const taskHost = attachedClient === undefined ? await createHarnessHost(socketPath, win) : attachedClient;
+  win.once("closed", () => {
+    const closing = (attachedClient ? attachedClient.detach() : taskHost?.close())?.catch((error) => {
+      console.error("[harness] failed to detach or close task resources:", error);
+    }).finally(() => { if (attachedClient === undefined) taskHosts.delete(taskHost); });
+    if (!closing) return;
+    closingTaskHosts.push(closing);
+    if (attachedClient) runtimeClient = null;
+  });
+  registerIpc(win, controlApi, { taskHost });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event) => event.preventDefault());
+  win.loadFile(path.join(__dirname, "..", "renderer", "dist", "index.html"));
+  return win;
+}
+
+async function connectRuntimeClient() {
+  const paths = runtimePaths();
+  let capability;
+  try {
+    capability = await readRuntimeCapability(paths);
+  } catch (error) {
+    console.error("[harness] background runtime credential is unavailable:", error);
+    return null;
+  }
+  if (!capability) return undefined;
+  const client = new BackgroundRuntimeClient({
+    socketPath: paths.socketPath,
+    capability,
+    clientId: `ui-${process.pid}-${crypto.randomBytes(8).toString("hex")}`,
+  });
+  try {
+    await client.connect();
+    runtimeClient = client;
+    return client;
+  } catch (error) {
+    console.error("[harness] background runtime is unavailable:", error);
+    await client.detach().catch(() => {});
+    return null;
+  }
+}
+
+function startMemoryPolling() {
+  // Keep the sample outside TaskController's dispatch hot path. In service
+  // mode this process owns all task hosts; in local mode it owns the one UI
+  // host; a UI attached to an external service has no local task host.
+  memoryPollTimer = setInterval(() => {
+    memoryMonitor.sample().then(() => Promise.allSettled([...taskHosts].map((host) => host.onMemorySample()))).catch(() => {
+      // A transient measurement failure leaves the last sample in place.
+    });
+  }, 5000);
+  memoryMonitor.sample().catch(() => {});
+}
+
+app.whenReady().then(async () => {
+  socketDir = makeSocketDir();
+  const socketPath = path.join(socketDir, "approver.sock");
+  approverProcess = spawnApprover(socketPath);
+  if (SERVICE_MODE) {
+    app.dock?.hide();
+    const paths = runtimePaths();
+    await prepareSocketDir(paths.dir);
+    runtimeContainer = new BrowserWindow({
+      show: false,
+      width: 1440,
+      height: 900,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    const taskHost = await createHarnessHost(socketPath, runtimeContainer);
+    runtimeService = new BackgroundRuntimeService({ socketPath: paths.socketPath, socketRoot: paths.dir, taskHost });
+    const { capability } = await runtimeService.start();
+    runtimeService.onEvent((event) => {
+      if (event === "serviceStopped") app.quit();
+    });
+    await publishRuntimeCapability(paths, capability);
+  } else {
+    await createWindow(socketPath, await connectRuntimeClient());
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        Promise.allSettled(closingTaskHosts.splice(0))
+          .then(() => connectRuntimeClient())
+          .then((client) => createWindow(socketPath, client))
+          .catch((error) => console.error("[harness] failed to reopen the UI:", error));
+      }
+    });
+  }
+  startMemoryPolling();
+}).catch((error) => {
+  console.error("[harness] startup failed:", error);
+  app.quit();
+});
+
+app.on("window-all-closed", () => {
+  if (!SERVICE_MODE && process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", (event) => {
+  if (shutdownStarted) return;
+  event.preventDefault();
+  if (quitDecisionPending) return;
+  quitDecisionPending = true;
+  (async () => {
+    if (runtimeClient && !SERVICE_MODE) {
+      const { response } = await dialog.showMessageBox({
+        type: "question",
+        title: "Halo background work",
+        message: "What should happen to background tasks when Halo closes?",
+        buttons: ["Continue in background", "Stop background service", "Cancel"],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      });
+      if (response === 2) {
+        quitDecisionPending = false;
+        return;
+      }
+      if (response === 1) await runtimeClient.stopService("user_quit");
+      await runtimeClient.detach();
+      runtimeClient = null;
+    }
+    shutdownStarted = true;
+    if (memoryPollTimer) clearInterval(memoryPollTimer);
+    if (runtimeService) await runtimeService.stopService("service_quit");
+    const results = await Promise.allSettled([...taskHosts].map((host) => host.close()));
+    for (const result of results) {
+      if (result.status === "rejected") console.error("[harness] failed to close task resources:", result.reason);
+    }
+    await agentViewportHost.disposeAll();
+    removeOwnRuntimeCapability();
+    runtimeContainer?.destroy();
+    if (approverProcess) approverProcess.kill();
+    if (socketDir) {
+      try {
+        fs.rmSync(socketDir, { recursive: true, force: true });
+      } catch {
+        // A leftover empty approver temp dir is not a task-lifecycle event.
+      }
+    }
+    app.quit();
+  })().catch((error) => {
+    quitDecisionPending = false;
+    console.error("[harness] failed to complete Quit:", error);
+  });
+});

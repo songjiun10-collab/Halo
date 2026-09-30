@@ -85,17 +85,20 @@ def test_trusted_benign_local_action_is_not_blocked():
     assert not should_fail_closed(findings)
 
 
-def test_authorized_secret_egress_uses_independent_approval_path():
-    findings = evaluate_trace([
+def test_host_attested_simulation_is_not_self_reported_authority():
+    trace = [
         Event(
             kind="tool",
+            provenance="trusted",
             action="send_email",
             target_scope="external",
             declared_scope="external",
             contains_secret=True,
             approved=True,
         )
-    ])
+    ]
+    assert decide(evaluate_trace(trace)).decision is Decision.DENY
+    findings = evaluate_trace(trace, trusted_telemetry=True)
     assert Signal.SECRET_EGRESS not in {f.signal for f in findings}
     assert decide(findings, effectful=True).decision is Decision.ALLOW
 
