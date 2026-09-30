@@ -10,7 +10,7 @@ HALO already has a child-agent planning boundary: the parent proposes a bounded 
 
 The design borrows a useful interaction shape from the public, unofficial Grok Bot 0.18.0 reconstruction: messages are queued and persisted, delivery wakes the recipient as a later turn, and messaging, steering, and stopping are distinct operations. This is a design reference, not a claim that the reconstruction is official Grok source or that its implementation should be copied. The important adaptation for HALO is to make the host the authority and durable record keeper.
 
-Relevant HALO surfaces include [`child-agent-coordinator.js`](/Users/songjiun/Halo/apps/computer-browser/main/harness/child-agent-coordinator.js:42), [`planner-stdio.js`](/Users/songjiun/Halo/apps/computer-browser/main/harness/planner-stdio.js:167), and [`harness-contracts.js`](/Users/songjiun/Halo/apps/computer-browser/shared/harness-contracts.js:1). The existing planner frame limit is 64 KiB; child assignments are already bounded by existing contracts. The protocol must not bypass or weaken those limits.
+Relevant HALO surfaces include [`child-agent-coordinator.js`](../../../apps/computer-browser/main/harness/child-agent-coordinator.js#L42), [`planner-stdio.js`](../../../apps/computer-browser/main/harness/planner-stdio.js#L167), and [`harness-contracts.js`](../../../apps/computer-browser/shared/harness-contracts.js#L1). The existing planner frame limit is 64 KiB; child assignments are already bounded by existing contracts. The protocol must not bypass or weaken those limits.
 
 Reference implementation patterns reviewed:
 
