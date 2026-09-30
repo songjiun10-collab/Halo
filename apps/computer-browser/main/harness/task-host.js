@@ -385,6 +385,15 @@ class TaskHost {
       // Electron cannot confirm that every cookie left the partition.
       await Promise.allSettled(affected.map(async (entry) => {
         try {
+          // Child agents share the parent's partition, so stopping only the
+          // parent would leave another live renderer able to use the same
+          // session. cancelPlan() is a no-op error when no child plan exists.
+          try {
+            await this._childCoordinator.cancelPlan(entry.store.taskId, "session_revocation_failed", { parentStore: entry.store });
+          } catch {
+            // Continue to stop and tear down the parent even if child-plan
+            // cancellation could not be durably recorded.
+          }
           const state = entry.controller?.getSnapshot?.().state;
           if (!state || !["stopped", "completed"].includes(state)) await entry.controller?.stop?.();
         } finally {
