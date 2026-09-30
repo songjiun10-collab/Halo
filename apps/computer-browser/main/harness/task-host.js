@@ -1239,6 +1239,17 @@ class TaskHost {
     return this._usageLedger.summary(typeof taskId === "string" ? { taskId } : {});
   }
 
+  async setUsageLimit(provider, patch) {
+    this._assertOpen();
+    if (!this._usageLedger) throw new TaskHostError("usage_unavailable", "usage ledger is unavailable");
+    try {
+      this._usageLedger.setLimit(provider, patch);
+    } catch (error) {
+      throw new TaskHostError(error.code || "invalid_limit", error.message);
+    }
+    return this._usageLedger.summary();
+  }
+
   async getHostSettings() {
     this._assertOpen();
     if (!this._settingsStore) throw new TaskHostError("settings_unavailable", "host settings are unavailable");

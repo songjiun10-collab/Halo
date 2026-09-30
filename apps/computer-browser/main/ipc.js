@@ -38,6 +38,7 @@ const HARNESS_METHODS = {
   "halo:setTaskViewport": "setTaskViewport",
   "halo:getHostSettings": "getHostSettings",
   "halo:getUsage": "getUsage",
+  "halo:setUsageLimit": "setUsageLimit",
   "halo:updateHostSettings": "updateHostSettings",
   "halo:listCredentials": "listCredentials",
   "halo:saveCredential": "saveCredential",

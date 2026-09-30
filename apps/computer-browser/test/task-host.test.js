@@ -2169,3 +2169,17 @@ test("failed session revocation cancels child agents sharing the parent session 
   ]);
   host._active.delete("parent-with-unrevoked-cookie");
 });
+
+test("host exposes usage and display-only limits, and maps ledger errors to TaskHostError", async () => {
+  const { UsageLedger } = require("../main/harness/usage-ledger");
+  const storageRoot = await mkTempRoot();
+  const usageLedger = new UsageLedger({});
+  usageLedger.record("t1", "claude", { provider: "claude", inputTokens: 5, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 1, durationMs: 1 });
+  const host = makeHost(storageRoot, { usageLedger });
+  assert.equal((await host.getUsage("t1")).task.claude.calls, 1);
+  const after = await host.setUsageLimit("claude", { tokens: 100 });
+  assert.equal(after.limits.claude.remainingTokens, 90);
+  await assert.rejects(() => host.setUsageLimit("claude", { tokens: -1 }), (e) => e.name === "TaskHostError" && e.code === "invalid_limit");
+  const bare = makeHost(await mkTempRoot());
+  await assert.rejects(() => bare.getUsage(), (e) => e.code === "usage_unavailable");
+});

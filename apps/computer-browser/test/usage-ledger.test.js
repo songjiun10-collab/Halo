@@ -52,3 +52,35 @@ test("ledger totals per provider and per task, persists atomically, and survives
   const fresh = await new UsageLedger({ storageRoot: dir }).load();
   assert.equal(fresh.summary().byProvider.claude.calls, 0);
 });
+
+test("display-only limits report remaining/exceeded, validate input, persist, and never touch usage totals", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "halo-usage-limit-"));
+  const ledger = await new UsageLedger({ storageRoot: dir }).load();
+  ledger.record("t1", "claude", normalizeUsage("claude", { usage: { input_tokens: 600, output_tokens: 100 }, total_cost_usd: 2 }));
+
+  assert.equal(ledger.summary().limits.claude.exceeded, false);
+  ledger.setLimit("claude", { tokens: 1000, costUsd: 10 });
+  let s = ledger.summary().limits.claude;
+  assert.equal(s.remainingTokens, 300);
+  assert.equal(s.remainingCostUsd, 8);
+  assert.equal(s.tokensUsedRatio, 0.7);
+  assert.equal(s.exceeded, false);
+
+  ledger.setLimit("claude", { costUsd: 1 });
+  s = ledger.summary().limits.claude;
+  assert.equal(s.limit.tokens, 1000, "omitted field keeps its value");
+  assert.equal(s.remainingCostUsd, 0);
+  assert.equal(s.exceeded, true);
+  ledger.setLimit("claude", { costUsd: null });
+  assert.equal(ledger.summary().limits.claude.exceeded, false);
+
+  for (const bad of [{ tokens: -1 }, { tokens: 0 }, { tokens: "9" }, { costUsd: NaN }, { other: 1 }, null, [1]]) {
+    assert.throws(() => ledger.setLimit("claude", bad), (e) => e.code === "invalid_limit");
+  }
+  assert.throws(() => ledger.setLimit("gpt", { tokens: 1 }), (e) => e.code === "invalid_provider");
+
+  await ledger.flush();
+  const reloaded = await new UsageLedger({ storageRoot: dir }).load();
+  assert.equal(reloaded.summary().limits.claude.limit.tokens, 1000);
+  assert.equal(reloaded.summary().byProvider.claude.inputTokens, 600);
+});
