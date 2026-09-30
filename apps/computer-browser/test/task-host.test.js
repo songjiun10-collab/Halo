@@ -2083,3 +2083,33 @@ test("a task is stopped and its browser disposed when imported-session revocatio
   assert.equal(disposeCalls, 1, "the authenticated page must be torn down");
   host._active.delete("task-with-unrevoked-cookie");
 });
+
+test("failed session revocation cancels child agents sharing the parent session partition", async () => {
+  const session = {
+    cookies: {
+      get: async () => [{ domain: ".claude.ai", name: "session", path: "/", secure: true }],
+      remove: async () => {},
+    },
+  };
+  const calls = [];
+  const host = makeHost(await mkTempRoot(), { profileImporter: fakeProfileImporter() });
+  host._childCoordinator.listChildren = async () => [{ childId: "child-1", state: "running" }];
+  host._childCoordinator.cancelPlan = async (parentTaskId, reason) => { calls.push(["cancelChildren", parentTaskId, reason]); };
+  host._active.set("parent-with-unrevoked-cookie", {
+    importedSession: session,
+    store: { taskId: "parent-with-unrevoked-cookie", append: async () => {} },
+    controller: {
+      getSnapshot: () => ({ state: "running" }),
+      stop: async () => { calls.push(["stopParent"]); },
+    },
+    browser: { dispose: async () => { calls.push(["disposeParent"]); } },
+  });
+
+  await assert.rejects(host._clearActiveSessionCookies(["claude.ai"]), { code: "session_revoke_failed" });
+  assert.deepEqual(calls, [
+    ["cancelChildren", "parent-with-unrevoked-cookie", "session_revocation_failed"],
+    ["stopParent"],
+    ["disposeParent"],
+  ]);
+  host._active.delete("parent-with-unrevoked-cookie");
+});
