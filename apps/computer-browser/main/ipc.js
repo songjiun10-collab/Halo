@@ -62,6 +62,13 @@ const HARNESS_METHODS = {
   "halo:verifyWorkGoalCriterion": "verifyWorkGoalCriterion",
   "halo:getWorkGoalRecoveryStatus": "getWorkGoalRecoveryStatus",
   "halo:repairWorkGoalReservation": "repairWorkGoalReservation",
+  "halo:importSessions": "importSessions",
+  "halo:listImportedSessions": "listImportedSessions",
+  "halo:removeImportedSession": "removeImportedSession",
+  "halo:getSessionAllowlist": "getSessionAllowlist",
+  "halo:setSessionAllowlist": "setSessionAllowlist",
+  "halo:importBrowserSettings": "importBrowserSettings",
+  "halo:getImportedSettings": "getImportedSettings",
 };
 
 // win, controlApi: unchanged from before. Options:

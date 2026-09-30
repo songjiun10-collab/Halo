@@ -36,8 +36,9 @@ const { WorkGoalOrchestrator } = require("./work-goal-orchestrator");
 const { isPlainObject, validateGoalTrigger, normalizeGoalSpec, DEFAULT_LIMITS } = require("../../shared/harness-contracts");
 const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
 const { resolveTaskProfile } = require("../../shared/task-profile-router");
+const { clearSessionCookies, clearDisallowedSessionCookies } = require("./profile-import/session-injector");
 
-const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone"]);
+const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone", "useImportedSessions"]);
 const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
   planner_unavailable: "planner", planner_error: "planner", observation_error: "browser_observation",
   context_error: "context_build", no_progress: "action_progress", budget_exhausted: "budget",
@@ -79,6 +80,8 @@ class TaskHost {
     memoryStore,
     settingsStore,
     credentialVault,
+    profileImporter,
+    getTaskSession,
     workGoalStore,
     workGoalOrchestrator,
     routineReadOnlyBatching = true,
@@ -107,6 +110,8 @@ class TaskHost {
     this._memoryStore = memoryStore || null;
     this._settingsStore = settingsStore || null;
     this._credentialVault = credentialVault || null;
+    this._profileImporter = profileImporter || null;
+    this._getTaskSession = typeof getTaskSession === "function" ? getTaskSession : null;
     this._workGoalStore = workGoalStore || new WorkGoalStore({ storageRoot, now });
     this._workGoalOrchestrator = workGoalOrchestrator || new WorkGoalOrchestrator({
       storageRoot,
@@ -131,6 +136,7 @@ class TaskHost {
     this._listeners = new Set();
     // taskId -> {store, controller, browser, planner}
     this._active = new Map();
+    this._sessionAccessChain = Promise.resolve();
     this._pendingAttachments = new Set();
     this._storeGate = Promise.resolve();
     this._triggeredRuns = new Map();
@@ -337,6 +343,93 @@ class TaskHost {
     return entry;
   }
 
+  // Injects the user's imported sessions into the task's own session partition
+  // before its browser is built, so the first navigation is already signed in.
+  // Only tasks that opted in (durably, at creation) are touched. A failure
+  // never blocks the task; the audit note records counts and domains only.
+  async _attachPrepared(store, routine = null) {
+    if (!this._profileImporter || !this._getTaskSession) return this._attach(store, routine);
+    let optedIn = false;
+    try { optedIn = await this._profileImporter.hasTaskOptIn(store.taskId); }
+    catch { return this._attach(store, routine); }
+    if (!optedIn) return this._attach(store, routine);
+
+    return this._withSessionAccess(async () => {
+      let summary = null;
+      const session = this._getTaskSession(store.taskId);
+      try { summary = await this._profileImporter.prepareTask(store.taskId, session); }
+      catch { summary = null; }
+      const entry = this._attach(store, routine);
+      entry.importedSession = session;
+      if (summary) {
+        entry.controller.recordHostNote({ kind: "imported_sessions_injected", injected: summary.injected, failed: summary.failed, domains: summary.domains }).catch(() => {});
+      }
+      return entry;
+    });
+  }
+
+  async _clearActiveSessionCookies(domains, { disallowed = false } = {}) {
+    const entries = [...this._active.values()].filter((entry) => entry.importedSession);
+    const results = await Promise.allSettled(entries.map((entry) => (
+      disallowed
+        ? clearDisallowedSessionCookies(entry.importedSession, domains)
+        : clearSessionCookies(entry.importedSession, domains)
+    )));
+    const failed = results.reduce((count, result) => count + (result.status === "rejected" ? 1 : result.value.failed), 0);
+    if (failed > 0) {
+      const affected = results.flatMap((result, index) => (
+        result.status === "rejected" || result.value.failed > 0 ? [entries[index]] : []
+      ));
+      // A failed revocation is not just a settings error: the task may still
+      // hold a usable login. Remove its automation and page runtime even when
+      // Electron cannot confirm that every cookie left the partition.
+      await Promise.allSettled(affected.map(async (entry) => {
+        try {
+          // Child agents share the parent's partition, so stopping only the
+          // parent would leave another live renderer able to use the same
+          // session. cancelPlan() is a no-op error when no child plan exists.
+          try {
+            await this._childCoordinator.cancelPlan(entry.store.taskId, "session_revocation_failed", { parentStore: entry.store });
+          } catch {
+            // Continue to stop and tear down the parent even if child-plan
+            // cancellation could not be durably recorded.
+          }
+          const state = entry.controller?.getSnapshot?.().state;
+          if (!state || !["stopped", "completed"].includes(state)) await entry.controller?.stop?.();
+        } finally {
+          await entry.browser?.dispose?.();
+        }
+      }));
+      throw new TaskHostError("session_revoke_failed", "one or more active task sessions could not be cleared; affected tasks were stopped");
+    }
+  }
+
+  _requireSessions() {
+    this._assertOpen();
+    if (!this._profileImporter) throw new TaskHostError("sessions_unavailable", "imported browser sessions are unavailable");
+    return this._profileImporter;
+  }
+
+  async importSessions(input) { return this._withSessionAccess(() => this._requireSessions().import(input)); }
+  async listImportedSessions() { return this._requireSessions().list(); }
+  async removeImportedSession(domain) {
+    return this._withSessionAccess(async () => {
+      const removed = await this._requireSessions().remove(domain);
+      await this._clearActiveSessionCookies([domain]);
+      return removed;
+    });
+  }
+  async getSessionAllowlist() { return this._requireSessions().getAllowlist(); }
+  async setSessionAllowlist(domains) {
+    return this._withSessionAccess(async () => {
+      const allowlist = await this._requireSessions().setAllowlist(domains);
+      await this._clearActiveSessionCookies(allowlist, { disallowed: true });
+      return allowlist;
+    });
+  }
+  async importBrowserSettings(input) { return this._requireSessions().importSettings(input); }
+  async getImportedSettings() { return this._requireSessions().getSettings(); }
+
   onEvent(listener) {
     if (typeof listener !== "function") throw new TypeError("onEvent requires a listener function");
     this._listeners.add(listener);
@@ -460,8 +553,12 @@ class TaskHost {
   _createTaskWithProfile(goalInput, selectors = {}) {
     this._assertOpen();
     if (!isPlainObject(selectors) || Object.keys(selectors).some((key) => !TASK_PROFILE_SELECTOR_FIELDS.includes(key)) ||
-        (Object.hasOwn(selectors, "standalone") && typeof selectors.standalone !== "boolean")) {
+        (Object.hasOwn(selectors, "standalone") && typeof selectors.standalone !== "boolean") ||
+        (Object.hasOwn(selectors, "useImportedSessions") && typeof selectors.useImportedSessions !== "boolean")) {
       return Promise.reject(new TaskHostError("invalid_selector", "task profile selectors contain unknown fields"));
+    }
+    if (selectors.useImportedSessions === true && !(this._profileImporter && this._getTaskSession)) {
+      return Promise.reject(new TaskHostError("sessions_unavailable", "imported browser sessions are unavailable"));
     }
     let stableGoalInput;
     try { stableGoalInput = structuredClone(goalInput); }
@@ -476,7 +573,7 @@ class TaskHost {
     } catch (error) {
       return Promise.reject(new TaskHostError(error.code || "profile_resolution_failed", error.message));
     }
-    return this._createNewTask(stableGoalInput, null, null, resolvedProfile, selectors.standalone === true);
+    return this._createNewTask(stableGoalInput, null, null, resolvedProfile, selectors.standalone === true, selectors.useImportedSessions === true);
   }
 
   async listRoutines() {
@@ -634,7 +731,7 @@ class TaskHost {
     });
   }
 
-  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null, standalone = false) {
+  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null, standalone = false, useImportedSessions = false) {
     this._assertOpen();
     if (!resolvedProfile) throw new TaskHostError("profile_required", "new tasks must have a host-resolved profile before storage or admission");
     return this._trackAttachment(async () => {
@@ -716,6 +813,14 @@ class TaskHost {
         return { store: taskStore, workGoalBinding: binding };
       });
       this._runMemoryPolicies.set(store.taskId, { mode: selected.mode, auditEventId: selected.auditEventId });
+      if (useImportedSessions) {
+        try { await this._profileImporter.markTaskOptIn(store.taskId); }
+        catch (error) {
+          this._runMemoryPolicies.delete(store.taskId);
+          await store.close();
+          throw error;
+        }
+      }
       // Validate the exact pinned revision while the task is still not
       // enqueued/admitted. A malformed or missing routine must never reserve
       // a browser lease and then strand an active queue entry.
@@ -747,7 +852,7 @@ class TaskHost {
         await store.close();
         return { taskId: store.taskId, snapshot: { state: "queued", queuePosition: this._queue.pendingIds().indexOf(store.taskId) + 1 }, goal };
       }
-      const { controller } = this._attach(store, routine);
+      const { controller } = await this._attachPrepared(store, routine);
       const started = controller.start();
       return { store, controller, started };
     }).then(async (result) => {
@@ -837,7 +942,7 @@ class TaskHost {
       if (this._closePromise) { await store.close(); return; }
       try {
         const routine = await this._resolveRoutineForStore(store);
-        const { controller } = this._attach(store, routine);
+        const { controller } = await this._attachPrepared(store, routine);
         // A queued task never ran, but a store loaded off disk always attaches
         // as paused/recovered, so it is released with resume(), not start().
         const snapshot = controller.getSnapshot();
@@ -996,7 +1101,7 @@ class TaskHost {
           await store.close();
           throw error;
         }
-        const attachedEntry = this._attach(store, routine);
+        const attachedEntry = await this._attachPrepared(store, routine);
         // Like createTask(), enter the controller synchronously so a
         // concurrent close() sees the active entry and can take it over,
         // without this attachment barrier waiting for the task's run loop.
@@ -1196,6 +1301,7 @@ class TaskHost {
       // state after its await, close its store, and reject. Never let a late
       // attachment escape this shutdown pass.
       await Promise.allSettled([...this._pendingAttachments]);
+      await this._sessionAccessChain;
       await this._queueTransition;
       const entries = [...this._active.values()];
       const errors = [];
@@ -1247,6 +1353,15 @@ class TaskHost {
       () => this._pendingAttachments.delete(pending),
       () => this._pendingAttachments.delete(pending),
     );
+    return pending;
+  }
+
+  _withSessionAccess(operation) {
+    const pending = this._sessionAccessChain.then(() => {
+      this._assertOpen();
+      return operation();
+    });
+    this._sessionAccessChain = pending.catch(() => {});
     return pending;
   }
 }

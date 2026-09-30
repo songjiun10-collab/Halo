@@ -380,8 +380,13 @@ class TaskController {
   }
 
   async recordHostNote(payload) {
-    if (!contracts.isPlainObject(payload) || payload.kind !== "credential_autofill_requested" ||
-        typeof payload.credentialId !== "string" || typeof payload.origin !== "string") {
+    const autofill = contracts.isPlainObject(payload) && payload.kind === "credential_autofill_requested" &&
+      typeof payload.credentialId === "string" && typeof payload.origin === "string";
+    const sessions = contracts.isPlainObject(payload) && payload.kind === "imported_sessions_injected" &&
+      Object.keys(payload).length === 4 && Number.isInteger(payload.injected) && payload.injected >= 0 &&
+      Number.isInteger(payload.failed) && payload.failed >= 0 && Array.isArray(payload.domains) &&
+      payload.domains.length <= 20 && payload.domains.every((domain) => typeof domain === "string" && domain.length <= 253);
+    if (!autofill && !sessions) {
       throw new TaskControllerError("invalid_host_note", "unsupported host audit note");
     }
     await this._store.append({ type: "note", payload });

@@ -44,6 +44,9 @@ const HARNESS_METHODS = [
   "pauseWorkGoal", "resumeWorkGoal", "completeWorkGoal", "archiveWorkGoal",
   "recordWorkGoalProgress", "verifyWorkGoalCriterion",
   "getWorkGoalRecoveryStatus", "repairWorkGoalReservation",
+  "importSessions", "listImportedSessions", "removeImportedSession",
+  "getSessionAllowlist", "setSessionAllowlist",
+  "importBrowserSettings", "getImportedSettings",
 ];
 
 const api = {};
