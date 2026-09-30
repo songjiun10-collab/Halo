@@ -67,6 +67,8 @@ const HARNESS_METHODS = {
   "halo:removeImportedSession": "removeImportedSession",
   "halo:getSessionAllowlist": "getSessionAllowlist",
   "halo:setSessionAllowlist": "setSessionAllowlist",
+  "halo:importBrowserSettings": "importBrowserSettings",
+  "halo:getImportedSettings": "getImportedSettings",
 };
 
 // win, controlApi: unchanged from before. Options:

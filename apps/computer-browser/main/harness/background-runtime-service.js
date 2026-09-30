@@ -91,6 +91,8 @@ const TASK_HOST_METHODS = new Set([
   "removeImportedSession",
   "getSessionAllowlist",
   "setSessionAllowlist",
+  "importBrowserSettings",
+  "getImportedSettings",
 ]);
 
 class BackgroundRuntimeService {

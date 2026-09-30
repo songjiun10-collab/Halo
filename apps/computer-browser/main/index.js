@@ -23,6 +23,7 @@ const { LocalCredentialVault } = require("./harness/local-credential-vault");
 const { SessionVault } = require("./harness/profile-import/session-vault");
 const { ProfileImporter, SessionConfigStore } = require("./harness/profile-import/profile-importer");
 const { readChromeCookies } = require("./harness/profile-import/chrome-cookie-reader");
+const { readChromeSettings } = require("./harness/profile-import/chrome-settings-reader");
 const { sumProcessTreeRssBytes } = require("./harness/process-tree-memory");
 const { BackgroundRuntimeService } = require("./harness/background-runtime-service");
 const { BackgroundRuntimeClient } = require("./harness/background-runtime-client");
@@ -399,6 +400,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     vault: new SessionVault({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage }),
     config: new SessionConfigStore({ storageRoot: dataRoot }),
     readers: { chrome: ({ domains, profile }) => readChromeCookies({ domains, profile }) },
+    settingsReaders: { chrome: ({ profile }) => readChromeSettings({ profile }) },
   });
   let taskHost;
   const surfaces = new BrowserSurfaces(hostWindow, { isUserControlled: (taskId) => taskHost.canUseTaskBrowser(taskId) });

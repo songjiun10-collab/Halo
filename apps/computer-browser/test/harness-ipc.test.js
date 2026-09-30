@@ -107,6 +107,8 @@ function makeFakeTaskHost() {
     removeImportedSession: record("removeImportedSession"),
     getSessionAllowlist: record("getSessionAllowlist"),
     setSessionAllowlist: record("setSessionAllowlist"),
+    importBrowserSettings: record("importBrowserSettings"),
+    getImportedSettings: record("getImportedSettings"),
     onEvent: (callback) => { listener = callback; return () => { listener = null; }; },
     _emit: (...args) => listener?.(...args),
   };
@@ -213,6 +215,8 @@ test("Work Goal lifecycle IPC maps only to trusted host methods", async () => {
     ["halo:removeImportedSession", ["claude.ai"], "removeImportedSession"],
     ["halo:getSessionAllowlist", [], "getSessionAllowlist"],
     ["halo:setSessionAllowlist", [["claude.ai"]], "setSessionAllowlist"],
+    ["halo:importBrowserSettings", [{ browser: "chrome" }], "importBrowserSettings"],
+    ["halo:getImportedSettings", [], "getImportedSettings"],
   ];
   for (const [channel, methodArgs, method] of calls) {
     assert.deepEqual(await ipcMain._invoke(channel, trustedEvent(win), ...methodArgs), { ok: method, args: methodArgs });
@@ -295,6 +299,8 @@ test("every harness channel rejects a request from an untrusted (non-main-frame)
     ["halo:removeImportedSession", ["claude.ai"]],
     ["halo:getSessionAllowlist", []],
     ["halo:setSessionAllowlist", [["claude.ai"]]],
+    ["halo:importBrowserSettings", [{ browser: "chrome" }]],
+    ["halo:getImportedSettings", []],
   ];
 
   for (const [channel, args] of channels) {

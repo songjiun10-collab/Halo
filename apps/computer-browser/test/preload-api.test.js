@@ -44,6 +44,8 @@ test("preload exposes the Work Goal API as narrow IPC invoke wrappers", async ()
     ["removeImportedSession", "halo:removeImportedSession", ["claude.ai"]],
     ["getSessionAllowlist", "halo:getSessionAllowlist", []],
     ["setSessionAllowlist", "halo:setSessionAllowlist", [["claude.ai"]]],
+    ["importBrowserSettings", "halo:importBrowserSettings", [{ browser: "chrome" }]],
+    ["getImportedSettings", "halo:getImportedSettings", []],
   ];
   for (const [method, channel, args] of methods) {
     assert.equal(typeof exposed[method], "function");

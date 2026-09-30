@@ -1867,6 +1867,8 @@ function fakeProfileImporter(overrides = {}) {
     remove: async (domain) => { calls.push(["remove", domain]); return true; },
     getAllowlist: async () => ["claude.ai"],
     setAllowlist: async (domains) => { calls.push(["allowlist", domains]); return domains; },
+    importSettings: async (input) => { calls.push(["importSettings", input]); return { status: "ok", browser: input.browser, bookmarks: 3 }; },
+    getSettings: async () => ({ browser: "chrome", bookmarks: [] }),
     ...overrides,
   };
 }
@@ -1924,7 +1926,10 @@ test("session import management is exposed through the host without returning co
   assert.equal(await host.removeImportedSession("claude.ai"), true);
   assert.deepEqual(await host.getSessionAllowlist(), ["claude.ai"]);
   assert.deepEqual(await host.setSessionAllowlist(["claude.ai", "example.org"]), ["claude.ai", "example.org"]);
+  assert.deepEqual(await host.importBrowserSettings({ browser: "chrome" }), { status: "ok", browser: "chrome", bookmarks: 3 });
+  assert.deepEqual(await host.getImportedSettings(), { browser: "chrome", bookmarks: [] });
   const bare = makeHost(await mkTempRoot());
+  await assert.rejects(bare.importBrowserSettings({ browser: "chrome" }), { code: "sessions_unavailable" });
   await assert.rejects(bare.listImportedSessions(), { code: "sessions_unavailable" });
   await assert.rejects(bare.importSessions({ browser: "chrome" }), { code: "sessions_unavailable" });
 });

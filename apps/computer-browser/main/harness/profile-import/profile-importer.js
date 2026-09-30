@@ -26,13 +26,14 @@ class SessionConfigStore {
   async _read() {
     let text;
     try { text = await fs.readFile(this._file, "utf8"); }
-    catch (error) { if (error.code === "ENOENT") return { allowlist: [...DEFAULT_ALLOWLIST], optIn: [] }; throw error; }
+    catch (error) { if (error.code === "ENOENT") return { allowlist: [...DEFAULT_ALLOWLIST], optIn: [], importedSettings: null }; throw error; }
     try {
       const data = JSON.parse(text);
       const allowlist = Array.isArray(data.allowlist) ? data.allowlist.map(normalizeDomain).filter(Boolean) : null;
       const optIn = Array.isArray(data.optIn) ? data.optIn.filter((id) => typeof id === "string" && id) : [];
       if (!allowlist || allowlist.length > MAX_ALLOWLIST) throw new Error("bad allowlist");
-      return { allowlist, optIn };
+      const importedSettings = data.importedSettings && typeof data.importedSettings === "object" ? data.importedSettings : null;
+      return { allowlist, optIn, importedSettings };
     } catch {
       throw new ProfileImportError("config_corrupt", "session configuration is unreadable");
     }
@@ -65,6 +66,12 @@ class SessionConfigStore {
     });
   }
 
+  async getImportedSettings() { return (await this._read()).importedSettings; }
+
+  setImportedSettings(settings) {
+    return this._mutate((data) => { data.importedSettings = settings; return true; });
+  }
+
   async hasOptIn(taskId) { return (await this._read()).optIn.includes(taskId); }
 
   addOptIn(taskId) {
@@ -78,12 +85,30 @@ class SessionConfigStore {
 }
 
 class ProfileImporter {
-  constructor({ vault, config, readers } = {}) {
+  constructor({ vault, config, readers, settingsReaders = {} } = {}) {
     if (!vault || !config || !readers) throw invalid("vault, config and readers are required");
     this._vault = vault;
     this._config = config;
     this._readers = readers;
+    this._settingsReaders = settingsReaders;
   }
+
+  async importSettings({ browser, profile = "Default" } = {}) {
+    if (!BROWSERS.has(browser)) throw invalid("unsupported browser");
+    const empty = { browser, bookmarks: 0, searchEngines: 0, startupUrls: 0, homepage: false };
+    const reader = this._settingsReaders[browser];
+    if (typeof reader !== "function") return { status: "unsupported", ...empty };
+    const result = await reader({ profile });
+    if (result.status !== "ok") return { status: result.status, ...empty };
+    const stored = {
+      browser, importedAt: new Date().toISOString(),
+      bookmarks: result.bookmarks, searchEngines: result.searchEngines, homepage: result.homepage, startupUrls: result.startupUrls,
+    };
+    await this._config.setImportedSettings(stored);
+    return { status: "ok", browser, bookmarks: stored.bookmarks.length, searchEngines: stored.searchEngines.length, startupUrls: stored.startupUrls.length, homepage: stored.homepage !== null };
+  }
+
+  getSettings() { return this._config.getImportedSettings(); }
 
   async import({ browser, profile = "Default" } = {}) {
     if (!BROWSERS.has(browser)) throw invalid("unsupported browser");

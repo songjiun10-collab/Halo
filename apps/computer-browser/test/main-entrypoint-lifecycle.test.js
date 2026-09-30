@@ -89,6 +89,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0 } = 
     "./harness/local-credential-vault": { LocalCredentialVault: class {} },
     "./harness/profile-import/session-vault": { SessionVault: class {} },
     "./harness/profile-import/profile-importer": { ProfileImporter: class {}, SessionConfigStore: class {} },
+    "./harness/profile-import/chrome-settings-reader": { readChromeSettings: async () => ({ status: "not_found" }) },
     "./harness/profile-import/chrome-cookie-reader": { readChromeCookies: async () => ({ status: "not_found", cookies: [] }) },
     "./harness/process-tree-memory": { sumProcessTreeRssBytes: () => null },
     "./harness/background-runtime-service": { BackgroundRuntimeService: FakeService },

@@ -1,6 +1,6 @@
 # HALO Browser Profile Import Design
 
-Status: phase 1 implemented (2026-09-30) on `feature/routine-scheduler`; phases 2-3 and the renderer UI are not built. Sub-project A of 2. Sub-project B (passing this Claude Code conversation's context into Halo browser tasks) is deferred and gets its own spec. Phase 1 = Chrome cookie import for the allowlist, `SessionVault`, per-task opt-in injection, main/preload/IPC surface. Verified: 33 new unit tests plus TaskHost/IPC/preload tests, and two real-Electron checks (a fixture Chrome DB with a >2^53 `expires_utc` decrypts under Electron's Node 24, and injected cookies are scoped correctly in a `halo-task-*` partition). Not verified: a real Keychain prompt, a real Chrome profile, and a signed-in load of claude.ai/chatgpt.com. No renderer UI exists yet (the credential vault has none either); the API is `window.halo.importSessions / listImportedSessions / removeImportedSession / getSessionAllowlist / setSessionAllowlist`, and a task opts in with `createTask(goal, { useImportedSessions: true })`.
+Status: phase 1 and the Chrome half of phase 2 (bookmarks, search engines, homepage/startup pages) implemented (2026-09-30) on `feature/routine-scheduler`; Safari, autofill, localStorage and the renderer UI are not built. Sub-project A of 2. Sub-project B (passing this Claude Code conversation's context into Halo browser tasks) is deferred and gets its own spec. Phase 1 = Chrome cookie import for the allowlist, `SessionVault`, per-task opt-in injection, main/preload/IPC surface. Verified: 33 new unit tests plus TaskHost/IPC/preload tests, and two real-Electron checks (a fixture Chrome DB with a >2^53 `expires_utc` decrypts under Electron's Node 24, and injected cookies are scoped correctly in a `halo-task-*` partition). Not verified: a real Keychain prompt, a real Chrome profile, and a signed-in load of claude.ai/chatgpt.com. No renderer UI exists yet (the credential vault has none either); the API is `window.halo.importSessions / listImportedSessions / removeImportedSession / getSessionAllowlist / setSessionAllowlist`, and a task opts in with `createTask(goal, { useImportedSessions: true })`.
 
 ## Goal
 
@@ -73,3 +73,10 @@ Sub-project B (conversation-context passthrough), extensions, passwords, payment
 - Opt-in and the allowlist live in plain (non-secret) `session-config.json`; cookie values only in the encrypted `sessions.enc`.
 - Injection runs before the task's browser is built, only for opted-in tasks; a failure never blocks the task. The journal gets one `imported_sessions_injected` note with counts and domains, never values.
 - Sessions injected into a task partition are a copy and are discarded with it; refreshed tokens are not written back.
+
+## Phase 2 (Chrome) implementation notes
+
+- `chrome-settings-reader.js` reads `Bookmarks` (JSON; http(s) only, 5000 max, folder path kept), `Preferences` (homepage, and startup pages only when Chrome is set to open specific pages) and `Web Data` `keywords` (https engines with `{searchTerms}` only, on a temp copy). Everything is read-only and non-secret.
+- Results are stored in `session-config.json` as `importedSettings` and exposed through `importBrowserSettings` / `getImportedSettings` (host, IPC, preload, background service). Nothing is applied to Halo's UI yet; the data is imported and readable.
+- Checked against the real Chrome profile on the development machine with counts only: status ok, 2 bookmarks, 7 search engines, no custom homepage.
+- A failed re-import keeps the previously stored settings.

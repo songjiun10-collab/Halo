@@ -119,3 +119,37 @@ test("removing a domain deletes its sessions", async () => {
     assert.deepEqual((await importer.list()).map((s) => s.domain), ["chatgpt.com"]);
   });
 });
+
+test("importSettings stores non-secret settings and reports counts; get returns them", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-importer-"));
+  try {
+    const settings = { status: "ok", bookmarks: [{ folder: "Bar", title: "A", url: "https://a.example/" }], searchEngines: [{ name: "G", keyword: "g", url: "https://g.example/?q={searchTerms}" }], homepage: { url: "https://h.example/", useNewTab: false }, startupUrls: ["https://s.example/"] };
+    const importer = new ProfileImporter({
+      vault: new SessionVault({ storageRoot: root, safeStorage: cipher }), config: new SessionConfigStore({ storageRoot: root }),
+      readers: {}, settingsReaders: { chrome: async () => settings },
+    });
+    assert.deepEqual(await importer.getSettings(), null);
+    assert.deepEqual(await importer.importSettings({ browser: "chrome" }), { status: "ok", browser: "chrome", bookmarks: 1, searchEngines: 1, startupUrls: 1, homepage: true });
+    const stored = await importer.getSettings();
+    assert.equal(stored.browser, "chrome");
+    assert.deepEqual(stored.bookmarks, settings.bookmarks);
+    assert.equal(typeof stored.importedAt, "string");
+    assert.deepEqual(await importer.importSettings({ browser: "safari" }), { status: "unsupported", browser: "safari", bookmarks: 0, searchEngines: 0, startupUrls: 0, homepage: false });
+    await assert.rejects(importer.importSettings({ browser: "firefox" }), { code: "invalid_config" });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("a failed settings import keeps the previously stored settings", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-importer-"));
+  try {
+    let status = "ok";
+    const importer = new ProfileImporter({
+      vault: new SessionVault({ storageRoot: root, safeStorage: cipher }), config: new SessionConfigStore({ storageRoot: root }),
+      readers: {}, settingsReaders: { chrome: async () => ({ status, bookmarks: status === "ok" ? [{ folder: "F", title: "T", url: "https://t.example/" }] : [], searchEngines: [], homepage: null, startupUrls: [] }) },
+    });
+    await importer.importSettings({ browser: "chrome" });
+    status = "not_found";
+    assert.equal((await importer.importSettings({ browser: "chrome" })).status, "not_found");
+    assert.equal((await importer.getSettings()).bookmarks.length, 1);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});

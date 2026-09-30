@@ -369,6 +369,8 @@ class TaskHost {
   async removeImportedSession(domain) { return this._requireSessions().remove(domain); }
   async getSessionAllowlist() { return this._requireSessions().getAllowlist(); }
   async setSessionAllowlist(domains) { return this._requireSessions().setAllowlist(domains); }
+  async importBrowserSettings(input) { return this._requireSessions().importSettings(input); }
+  async getImportedSettings() { return this._requireSessions().getSettings(); }
 
   onEvent(listener) {
     if (typeof listener !== "function") throw new TypeError("onEvent requires a listener function");
