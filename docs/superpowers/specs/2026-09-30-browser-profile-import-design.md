@@ -42,7 +42,7 @@ A task uses imported sessions only when its creator sets `useImportedSessions: t
 
 ### Failure behavior
 
-Each reader returns a structured result (`ok`, `permission_required`, `not_found`, `decrypt_failed`, `locked`). Partial success is reported per kind. Nothing is retried in a loop, no permission prompt is bypassed, and a failed import never deletes the existing vault.
+Each reader returns a structured result (`ok`, `permission_required`, `not_found`, `decrypt_failed`, `locked`). If Chrome decrypts only part of an otherwise readable cookie set, the host returns `partial` with the skipped-cookie count; successfully decrypted cookies may be stored, but the caller must not present the import as complete. Cookie values are never included in this status. Non-`ok` reader results do not touch the vault. Nothing is retried in a loop, and no permission prompt is bypassed.
 
 ### Security notes
 

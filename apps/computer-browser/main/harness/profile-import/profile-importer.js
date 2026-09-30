@@ -119,6 +119,8 @@ class ProfileImporter {
     const result = await reader({ domains, profile });
     if (result.status !== "ok") return { status: result.status, imported: 0, browser };
     const { imported } = await this._vault.replaceFromImport({ source: browser, cookies: result.cookies, replaceDomains: domains });
+    const skipped = Number.isSafeInteger(result.skipped) && result.skipped > 0 ? result.skipped : 0;
+    if (skipped > 0) return { status: "partial", imported, skipped, browser };
     return { status: "ok", imported, browser };
   }
 

@@ -62,6 +62,14 @@ test("import reads with the current allowlist, stores cookies and returns no val
   });
 });
 
+test("cookie import reports when the reader skipped cookies during decryption", async () => {
+  await withImporter(async ({ importer }) => {
+    const result = await importer.import({ browser: "chrome", profile: "Default" });
+    assert.deepEqual(result, { status: "partial", imported: 1, skipped: 2, browser: "chrome" });
+    assert.equal(JSON.stringify(result).includes("sk-secret"), false);
+  }, { readChrome: async () => ({ status: "ok", cookies: [cookie()], skipped: 2 }) });
+});
+
 test("reader failures pass through as structured status and never touch the vault", async () => {
   for (const status of ["permission_required", "not_found", "decrypt_failed", "locked"]) {
     await withImporter(async ({ importer }) => {
