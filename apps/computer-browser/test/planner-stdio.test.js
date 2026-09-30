@@ -396,3 +396,24 @@ test("a role:'parent' transport still accepts a send_message/steer proposal from
   assert.deepEqual(proposal, steerProposal);
   await adapter.close();
 });
+
+test("reports sanitized worker usage to onUsage and never fails a proposal because of it", async () => {
+  const seen = [];
+  for (const [usage, onUsage] of [
+    [{ provider: "claude", inputTokens: 10, outputTokens: 5, costUsd: 0.01 }, (u) => seen.push(u)],
+    [{ provider: "claude", inputTokens: 1 }, () => { throw new Error("ledger down"); }],
+    [{ provider: "evil", inputTokens: 99 }, (u) => seen.push(u)],
+  ]) {
+    const fakeChild = makeFakeChild();
+    const adapter = new PlannerStdioAdapter({ command: "node", args: [], spawnFn: () => fakeChild, onUsage });
+    const pending = adapter.next(makeContext(), {});
+    const sent = JSON.parse(fakeChild.stdin.written[0]);
+    fakeChild.stdout.emit("data", `${JSON.stringify({ requestId: sent.requestId, proposal: { ok: true }, usage })}\n`);
+    assert.deepEqual(await pending, { ok: true });
+    await adapter.close();
+  }
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].provider, "claude");
+  assert.equal(seen[0].inputTokens, 10);
+  assert.equal(seen[0].costUsd, 0.01);
+});

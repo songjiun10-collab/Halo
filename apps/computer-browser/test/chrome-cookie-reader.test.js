@@ -155,3 +155,72 @@ test("does not modify or leave copies of the source database", async () => {
     assert.equal((await fs.readdir(os.tmpdir())).filter((n) => n.startsWith("halo-chrome-cookies-")).length, tmpBefore);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+async function makePartitionedProfile(rows) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-chrome-chips-"));
+  const dir = path.join(root, "Default", "Network");
+  await fs.mkdir(dir, { recursive: true });
+  const db = new DatabaseSync(path.join(dir, "Cookies"));
+  db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+  db.prepare("INSERT INTO meta VALUES ('version', '24')").run();
+  db.exec(`CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB, path TEXT,
+    expires_utc INTEGER, is_secure INTEGER, is_httponly INTEGER, samesite INTEGER, top_frame_site_key TEXT NOT NULL DEFAULT '')`);
+  const insert = db.prepare("INSERT INTO cookies VALUES (?,?,?,?,?,?,?,?,?,?)");
+  for (const r of rows) insert.run(r.host, r.name, "", r.enc, "/", 0, 1, 1, -1, r.partition ?? "");
+  db.close();
+  return root;
+}
+
+test("partitioned (CHIPS) cookies are excluded and counted, never imported as ordinary cookies", async () => {
+  const enc = (host, value) => encrypt(value, { hostKey: host, hashPrefix: true });
+  const root = await makePartitionedProfile([
+    { host: ".claude.ai", name: "session", enc: enc(".claude.ai", "plain") },
+    { host: ".claude.ai", name: "embedded", enc: enc(".claude.ai", "partition-a"), partition: "https://a.example" },
+    { host: ".claude.ai", name: "embedded", enc: enc(".claude.ai", "partition-b"), partition: "https://b.example" },
+  ]);
+  try {
+    const result = await readChromeCookies(opts(root));
+    assert.equal(result.status, "ok");
+    assert.deepEqual(result.cookies.map((c) => `${c.name}=${c.value}`), ["session=plain"]);
+    assert.equal(result.partitioned, 2);
+    assert.equal(JSON.stringify(result).includes("partition-a"), false, "excluded values are never returned");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("a profile with only partitioned cookies imports nothing and says how many were skipped", async () => {
+  const root = await makePartitionedProfile([
+    { host: ".claude.ai", name: "embedded", enc: encrypt("v", { hostKey: ".claude.ai", hashPrefix: true }), partition: "https://a.example" },
+  ]);
+  try {
+    assert.deepEqual(await readChromeCookies(opts(root)), { status: "ok", cookies: [], partitioned: 1 });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("rows that fail to decrypt are reported by identity (never value) so a re-import can keep their stored copies", async () => {
+  const root = await makeProfile([
+    { host: ".claude.ai", name: "good", enc: encrypt("ok-value", { hostKey: ".claude.ai", hashPrefix: true }) },
+    { host: ".claude.ai", name: "broken", path: "/app", enc: Buffer.from("v10-not-decryptable-garbage!!") },
+  ]);
+  try {
+    const result = await readChromeCookies(opts(root));
+    assert.equal(result.status, "ok");
+    assert.equal(result.skipped, 1);
+    assert.deepEqual(result.failed, [{ domain: ".claude.ai", name: "broken", path: "/app" }]);
+    assert.deepEqual(result.cookies.map((c) => c.name), ["good"]);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("a public or private suffix in the allowlist matches nothing, so it cannot pull in unrelated sites", () => {
+  assert.equal(domainMatches("shop.co.uk", ["co.uk"]), false);
+  assert.equal(domainMatches("co.uk", ["co.uk"]), false);
+  assert.equal(domainMatches("victim.github.io", ["github.io"]), false);
+  assert.equal(domainMatches("victim.github.io", ["victim.github.io"]), true);
+  assert.equal(domainMatches("api.claude.ai", ["co.uk", "claude.ai"]), true);
+});
+
+test("the reader itself ignores a suffix-only allowlist instead of querying every site under it", async () => {
+  const root = await makeProfile([{ host: ".shop.co.uk", name: "sid", enc: encrypt("v", { hostKey: ".shop.co.uk", hashPrefix: true }) }]);
+  try {
+    await assert.rejects(readChromeCookies(opts(root, { domains: ["co.uk"] })), { code: "invalid_config" });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});

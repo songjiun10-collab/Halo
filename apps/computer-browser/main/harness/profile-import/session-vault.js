@@ -4,7 +4,7 @@ const fs = require("node:fs/promises");
 const fsConstants = require("node:fs").constants;
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
-const { normalizeDomain, domainMatches, matchingAllowedDomain } = require("./domain-utils");
+const { normalizeDomain, normalizeAllowlistEntry, domainMatches, matchingGroupDomain } = require("./domain-utils");
 
 const VERSION = 1;
 const MAX_COOKIES = 500;
@@ -122,7 +122,10 @@ class SessionVault {
     return operation;
   }
 
-  replaceFromImport({ source, cookies, replaceDomains } = {}) {
+  // `preserve` lists identities ({ domain, name, path }) of rows the reader
+  // could not decrypt this time: their previously stored copies are kept
+  // instead of being erased by an otherwise successful re-import.
+  replaceFromImport({ source, cookies, replaceDomains, preserve } = {}) {
     return this._mutate((existing) => {
       if (!SOURCES.has(source) || !Array.isArray(cookies)) throw new SessionVaultError("invalid_session", "import source or cookies are invalid");
       const clean = cookies.map(validateCookie);
@@ -130,11 +133,15 @@ class SessionVault {
       const importedAt = this._now();
       const groups = new Set([...(Array.isArray(replaceDomains) ? replaceDomains.map(normalizeDomain).filter(Boolean) : []), ...clean.map((c) => normalizeDomain(c.domain))]);
       const replace = [...groups];
+      const identity = (entry) => `${entry.domain}\u0000${entry.name}\u0000${entry.path}`;
+      const protectedKeys = new Set((Array.isArray(preserve) ? preserve : []).filter((item) => item && typeof item.domain === "string" && typeof item.name === "string" && typeof item.path === "string").map(identity));
+      const replaced = existing.filter((entry) => replace.includes(entry.group));
+      const preserved = replaced.filter((entry) => protectedKeys.has(identity(entry)));
       const kept = existing.filter((entry) => !replace.includes(entry.group));
-      const incoming = clean.map((cookie) => ({ ...cookie, group: matchingAllowedDomain(cookie.domain, replace), source, importedAt }));
-      const next = [...kept, ...incoming];
+      const incoming = clean.map((cookie) => ({ ...cookie, group: matchingGroupDomain(cookie.domain, replace), source, importedAt }));
+      const next = [...kept, ...preserved, ...incoming];
       if (next.length > MAX_COOKIES) throw new SessionVaultError("vault_limit", "session cookie limit reached");
-      return { cookies: next, result: { imported: incoming.length } };
+      return { cookies: next, result: { imported: incoming.length, preserved: preserved.length } };
     });
   }
 
@@ -149,7 +156,7 @@ class SessionVault {
   }
 
   async cookiesFor({ domains, nowSeconds = Date.now() / 1000 } = {}) {
-    const allowlist = (Array.isArray(domains) ? domains : []).map(normalizeDomain).filter(Boolean);
+    const allowlist = (Array.isArray(domains) ? domains : []).map(normalizeAllowlistEntry).filter(Boolean);
     if (!allowlist.length) return [];
     return (await this._read())
       .filter((entry) => domainMatches(entry.domain, allowlist) && (entry.expires === null || entry.expires > nowSeconds))

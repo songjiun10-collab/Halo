@@ -86,6 +86,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0 } = 
     "./harness/planner-command": { resolvePlannerCommand: () => ({ command: null, env: {} }) },
     "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } } },
     "./harness/local-memory-store": { LocalMemoryStore: class {} },
+    "./harness/usage-ledger": { UsageLedger: class { async load() { return this; } } },
     "./harness/local-credential-vault": { LocalCredentialVault: class {} },
     "./harness/profile-import/session-vault": { SessionVault: class {} },
     "./harness/profile-import/profile-importer": { ProfileImporter: class {}, SessionConfigStore: class {} },

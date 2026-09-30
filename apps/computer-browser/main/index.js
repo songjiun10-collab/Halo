@@ -11,6 +11,7 @@ const registerIpc = require("./ipc");
 const layoutConstants = require("../shared/layout-constants");
 const { requestDecision } = require("./approver-client");
 const { TaskHost } = require("./harness/task-host");
+const { UsageLedger } = require("./harness/usage-ledger");
 const { BrowserAdapter } = require("./harness/browser-adapter");
 const { BrowserSurfaces } = require("./harness/browser-surfaces");
 const { PlannerStdioAdapter } = require("./harness/planner-stdio");
@@ -356,7 +357,7 @@ function makeChildHarnessBrowser(parentTaskId, childId, origin) {
 // process (harness/planner-command.js), and redoing that on every task/
 // context-reset would add back exactly the kind of per-task process-spawn
 // overhead this exists to reduce.
-function makeHarnessPlanner() {
+function makeHarnessPlanner(usageLedger) {
   const { command: plannerCommand, env: plannerEnv } = resolvePlannerCommand();
   let args = [];
   let configured = Boolean(process.env.HALO_PLANNER_COMMAND);
@@ -372,7 +373,7 @@ function makeHarnessPlanner() {
       console.error("[harness] HALO_PLANNER_ARGS must be a non-empty JSON array of worker arguments");
     }
   }
-  return (_taskId, { role = "parent" } = {}) => {
+  return (taskId, { role = "parent" } = {}) => {
     return new PlannerStdioAdapter({
       // A Node executable on PATH alone is not a configured agent worker.
       command: configured ? plannerCommand : null,
@@ -380,6 +381,7 @@ function makeHarnessPlanner() {
       cwd: REPO_ROOT,
       env: plannerEnv,
       role,
+      onUsage: (usage) => usageLedger.record(taskId, usage.provider, usage),
       // Host-owned hooks so every planner worker this app ever spawns is
       // counted in the same <1GB aggregate memory budget the Python
       // approver already is (see the memoryMonitor comment above) --
@@ -402,6 +404,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     readers: { chrome: ({ domains, profile }) => readChromeCookies({ domains, profile }) },
     settingsReaders: { chrome: ({ profile }) => readChromeSettings({ profile }) },
   });
+  const usageLedger = await new UsageLedger({ storageRoot: dataRoot }).load();
   let taskHost;
   const surfaces = new BrowserSurfaces(hostWindow, { isUserControlled: (taskId) => taskHost.canUseTaskBrowser(taskId) });
   taskHost = new TaskHost({
@@ -409,7 +412,12 @@ async function createHarnessHost(socketPath, hostWindow) {
     makeBrowser: makeHarnessBrowser(surfaces, agentViewportHost),
     makeChildBrowser: makeChildHarnessBrowser,
     setViewport: (taskId, bounds) => surfaces.setViewport(taskId, bounds),
-    makePlanner: makeHarnessPlanner(),
+    makePlanner: makeHarnessPlanner(usageLedger),
+    usageLedger,
+    usageSources: {
+      claude: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "projects"),
+      codex: path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "sessions"),
+    },
     hostVerifier: defaultHostVerifier,
     approve: makeHarnessApprove(socketPath),
     memoryMonitor,

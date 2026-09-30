@@ -21,6 +21,9 @@ const crypto = require("node:crypto");
 // explicit human action that re-attaches it and calls controller.resume().
 // createTask() is the only path that auto-starts a BRAND NEW task.
 
+const path = require("node:path");
+const { importClaudeUsage, importCodexUsage } = require("./usage-import");
+const { fetchClaudeSubscription } = require("./subscription-usage");
 const { TaskStore } = require("./task-store");
 const { TaskController, TaskControllerError } = require("./task-controller");
 const { TaskQueue, TaskQueueError } = require("./task-queue");
@@ -79,6 +82,11 @@ class TaskHost {
     plannerEffort = "medium",
     memoryStore,
     settingsStore,
+    usageLedger,
+    usageSources,
+    subscriptionFetch,
+    subscriptionPlatform,
+    subscriptionExecFn,
     credentialVault,
     profileImporter,
     getTaskSession,
@@ -109,6 +117,11 @@ class TaskHost {
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
     this._settingsStore = settingsStore || null;
+    this._usageLedger = usageLedger || null;
+    this._usageSources = usageSources || {};
+    this._subscriptionFetch = subscriptionFetch; // undefined -> global fetch
+    this._subscriptionPlatform = subscriptionPlatform;
+    this._subscriptionExecFn = subscriptionExecFn;
     this._credentialVault = credentialVault || null;
     this._profileImporter = profileImporter || null;
     this._getTaskSession = typeof getTaskSession === "function" ? getTaskSession : null;
@@ -331,7 +344,11 @@ class TaskHost {
           });
         this._withWorkGoalAdmission(operation).catch(() => {});
       }
-      if (snapshot.state === "completed" || snapshot.state === "stopped") this._recordTerminal(store.taskId, snapshot.state);
+      if (snapshot.state === "completed" || snapshot.state === "stopped") {
+        // The task's session is discarded with it; stop tracking it for purges.
+        this._profileImporter?.releaseTask?.(store.taskId);
+        this._recordTerminal(store.taskId, snapshot.state);
+      }
     });
     entry.unsubscribeBrowser = browser.onChange?.((snapshot) => {
       this._emit(store.taskId, entry.snapshot, { browser: snapshot });
@@ -356,11 +373,20 @@ class TaskHost {
 
     return this._withSessionAccess(async () => {
       let summary = null;
+      let injectionErrorCode = null;
       const session = this._getTaskSession(store.taskId);
       try { summary = await this._profileImporter.prepareTask(store.taskId, session); }
-      catch { summary = null; }
+      catch (error) {
+        // Still non-blocking, but recorded: a value-free code distinguishes a
+        // failed injection from a task that never opted in.
+        summary = null;
+        injectionErrorCode = /^[A-Za-z0-9_.-]{1,64}$/.test(String(error?.code)) ? String(error.code) : "unknown";
+      }
       const entry = this._attach(store, routine);
       entry.importedSession = session;
+      if (injectionErrorCode) {
+        entry.controller.recordHostNote({ kind: "imported_sessions_injection_failed", errorCode: injectionErrorCode }).catch(() => {});
+      }
       if (summary) {
         entry.controller.recordHostNote({ kind: "imported_sessions_injected", injected: summary.injected, failed: summary.failed, domains: summary.domains }).catch(() => {});
       }
@@ -414,8 +440,15 @@ class TaskHost {
   async listImportedSessions() { return this._requireSessions().list(); }
   async removeImportedSession(domain) {
     return this._withSessionAccess(async () => {
-      const removed = await this._requireSessions().remove(domain);
+      const importer = this._requireSessions();
+      let removed;
+      let removeError;
+      try { removed = await importer.remove(domain); } catch (error) { removeError = error; }
+      // Always run the host-owned fail-closed path. The importer also purges
+      // tracked sessions, but its error must not bypass stopping/disposal of
+      // active tasks whose cookies could not be revoked.
       await this._clearActiveSessionCookies([domain]);
+      if (removeError) throw removeError;
       return removed;
     });
   }
@@ -743,7 +776,14 @@ class TaskHost {
       let taskId;
       try { taskId = crypto.randomUUID(); }
       catch (error) { throw new TaskHostError("task_id_unavailable", error.message); }
-      const { store, workGoalBinding } = await this._withWorkGoalAdmission(async () => {
+      // The task ID is host-generated before any storage exists, so the opt-in
+      // is made durable FIRST. A failed write rejects createTask with no task
+      // or Work Goal reservation left behind, and a crash after this point can
+      // never leave a recoverable task that silently lost its opt-in.
+      if (useImportedSessions) await this._profileImporter.markTaskOptIn(taskId);
+      let created;
+      try {
+        created = await this._withWorkGoalAdmission(async () => {
         let binding = null;
         let taskGoalInput = structuredClone(goalInput);
         const activeGoal = standalone ? null : await this._workGoalOrchestrator.getActiveWorkGoal();
@@ -811,16 +851,13 @@ class TaskHost {
           throw error;
         }
         return { store: taskStore, workGoalBinding: binding };
-      });
-      this._runMemoryPolicies.set(store.taskId, { mode: selected.mode, auditEventId: selected.auditEventId });
-      if (useImportedSessions) {
-        try { await this._profileImporter.markTaskOptIn(store.taskId); }
-        catch (error) {
-          this._runMemoryPolicies.delete(store.taskId);
-          await store.close();
-          throw error;
-        }
+        });
+      } catch (error) {
+        if (useImportedSessions) await this._profileImporter.unmarkTaskOptIn(taskId).catch(() => {});
+        throw error;
       }
+      const { store, workGoalBinding } = created;
+      this._runMemoryPolicies.set(store.taskId, { mode: selected.mode, auditEventId: selected.auditEventId });
       // Validate the exact pinned revision while the task is still not
       // enqueued/admitted. A malformed or missing routine must never reserve
       // a browser lease and then strand an active queue entry.
@@ -1212,6 +1249,56 @@ class TaskHost {
       throw new TaskHostError("browser_unavailable", "task viewport is unavailable");
     }
     return this._setViewport(taskId, { ...bounds, visible: taskId === null ? false : bounds.visible });
+  }
+
+  async getUsage(taskId) {
+    this._assertOpen();
+    if (!this._usageLedger) throw new TaskHostError("usage_unavailable", "usage ledger is unavailable");
+    return this._usageLedger.summary(typeof taskId === "string" ? { taskId } : {});
+  }
+
+  // Pulls the totals the local Claude/Codex CLIs recorded themselves. A source
+  // that is not configured or holds no records is reported, not faked.
+  async syncUsage() {
+    this._assertOpen();
+    if (!this._usageLedger) throw new TaskHostError("usage_unavailable", "usage ledger is unavailable");
+    const importers = { claude: importClaudeUsage, codex: importCodexUsage };
+    const results = {};
+    for (const provider of Object.keys(importers)) {
+      const root = this._usageSources[provider];
+      if (!root) { results[provider] = { status: "not_configured" }; continue; }
+      try {
+        const imported = await importers[provider]({ root });
+        if (imported.sessions === 0) {
+          this._usageLedger.setImported(provider, imported);
+          results[provider] = { status: "no_records" };
+          continue;
+        }
+        const { subscription, ...totals } = imported;
+        this._usageLedger.setImported(provider, totals);
+        if (subscription) this._usageLedger.setSubscription(provider, subscription);
+        results[provider] = { status: "synced", sessions: imported.sessions };
+      } catch {
+        results[provider] = { status: "failed" };
+      }
+    }
+    // Claude's plan quota comes from the account, not from local files.
+    const claudeConfigDir = this._usageSources.claude ? path.dirname(this._usageSources.claude) : null;
+    const subscription = await fetchClaudeSubscription({ configDir: claudeConfigDir, fetchFn: this._subscriptionFetch, platform: this._subscriptionPlatform, execFn: this._subscriptionExecFn });
+    if (subscription.snapshot) this._usageLedger.setSubscription("claude", subscription.snapshot);
+    results.claudeSubscription = { status: subscription.status };
+    return { results, usage: this._usageLedger.summary() };
+  }
+
+  async setUsageLimit(provider, patch) {
+    this._assertOpen();
+    if (!this._usageLedger) throw new TaskHostError("usage_unavailable", "usage ledger is unavailable");
+    try {
+      this._usageLedger.setLimit(provider, patch);
+    } catch (error) {
+      throw new TaskHostError(error.code || "invalid_limit", error.message);
+    }
+    return this._usageLedger.summary();
   }
 
   async getHostSettings() {

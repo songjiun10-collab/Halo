@@ -21,6 +21,7 @@
 const { spawn: nodeSpawn } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
 const contracts = require("../../shared/harness-contracts");
+const { normalizeUsage } = require("../../shared/usage");
 
 const STDERR_TAIL_MAX_BYTES = 4096;
 
@@ -56,7 +57,7 @@ function buildWorkerEnv(extraEnv) {
 const PLANNER_ROLES = ["parent", "child"];
 
 class PlannerStdioAdapter {
-  constructor({ command, args = [], cwd, env, timeoutMs, spawnFn, onWorkerStart, onWorkerExit, role = "parent" } = {}) {
+  constructor({ command, args = [], cwd, env, timeoutMs, spawnFn, onWorkerStart, onWorkerExit, onUsage, role = "parent" } = {}) {
     if (!PLANNER_ROLES.includes(role)) {
       throw new PlannerTransportError("invalid_config", `role must be one of ${PLANNER_ROLES.join("|")}`);
     }
@@ -68,6 +69,7 @@ class PlannerStdioAdapter {
     this._spawnFn = spawnFn || nodeSpawn;
     this._onWorkerStart = typeof onWorkerStart === "function" ? onWorkerStart : null;
     this._onWorkerExit = typeof onWorkerExit === "function" ? onWorkerExit : null;
+    this._onUsage = typeof onUsage === "function" ? onUsage : null;
     this._role = role;
     this._child = null;
     this._inFlight = null; // { requestId, resolve, reject, timer, onAbort, signal }
@@ -205,6 +207,12 @@ class PlannerStdioAdapter {
     ) {
       this._failInFlight(new PlannerTransportError("steer_forbidden", "a child planner returned a forbidden steer send_message proposal"));
       return;
+    }
+    if (this._onUsage && parsed.usage !== undefined) {
+      const usage = normalizeUsage(parsed.usage && parsed.usage.provider, parsed.usage);
+      if (usage) {
+        try { this._onUsage(usage); } catch { /* accounting must never fail a proposal */ }
+      }
     }
     this._resolveInFlight(parsed.proposal);
   }

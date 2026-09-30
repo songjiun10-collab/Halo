@@ -63,6 +63,7 @@
 // unbounded while a request is in flight.
 
 const { spawn: nodeSpawn } = require("node:child_process");
+const { normalizeUsage } = require("../../../shared/usage");
 const contracts = require("../../../shared/harness-contracts");
 
 class ClaudeCodeBridgeError extends Error {
@@ -280,6 +281,7 @@ class ClaudeCodeBridge {
     this._cwd = cwd;
     this._env = env;
     this._spawnFn = spawnFn || nodeSpawn;
+    this._lastUsage = null; // usage of the most recent successful CLI call, until takeUsage()
     this._child = null; // non-null from spawn until the OS has actually reaped it (the "close" event)
     this._inFlight = null; // { reject } -- only while a start() caller is still waiting on the promise
   }
@@ -423,6 +425,7 @@ class ClaudeCodeBridge {
           }
           const proposalText = extractProposalText(envelope);
           const proposal = parseAndValidateProposal(proposalText);
+          this._lastUsage = normalizeUsage("claude", envelope);
           settlePromise(resolve, proposal);
         } catch (error) {
           settlePromise(reject, error);
@@ -437,6 +440,13 @@ class ClaudeCodeBridge {
         child.stdin.end();
       });
     });
+  }
+
+  // Usage of the last call that produced a proposal; read once, then cleared.
+  takeUsage() {
+    const usage = this._lastUsage;
+    this._lastUsage = null;
+    return usage;
   }
 
   // Cancels the in-flight start() call, if any -- a no-op otherwise. Rejects

@@ -1859,6 +1859,8 @@ function fakeProfileImporter(overrides = {}) {
     optIn,
     markTaskOptIn: async (taskId) => { calls.push(["mark", taskId]); optIn.add(taskId); },
     hasTaskOptIn: async (taskId) => optIn.has(taskId),
+    unmarkTaskOptIn: async (taskId) => { calls.push(["unmark", taskId]); optIn.delete(taskId); },
+    releaseTask: (taskId) => { calls.push(["release", taskId]); },
     prepareTask: async (taskId, session) => {
       calls.push(["prepare", taskId, session.id]);
       return optIn.has(taskId) ? { injected: 2, failed: 0, domains: ["claude.ai"] } : null;
@@ -1909,6 +1911,60 @@ test("a failing session injection never blocks the task", async () => {
   const host = makeHost(storageRoot, { profileImporter: importer, getTaskSession: () => ({ id: "s" }) });
   const result = await host.createTask({ originalRequest: "use my login" }, { useImportedSessions: true });
   assert.ok(result.taskId);
+});
+
+test("a failed session injection is recorded in the audit as a value-free failure, distinct from a task that never opted in", async () => {
+  const storageRoot = await mkTempRoot();
+  const importer = fakeProfileImporter({ prepareTask: async () => { throw Object.assign(new Error("vault holds sk-secret-value"), { code: "vault_corrupt" }); } });
+  const host = makeHost(storageRoot, { profileImporter: importer, getTaskSession: () => ({ id: "s" }) });
+  const { taskId } = await host.createTask({ originalRequest: "use my login" }, { useImportedSessions: true });
+  const events = await host.getTaskEvents(taskId);
+  const failure = events.find((event) => event.payload?.kind === "imported_sessions_injection_failed");
+  assert.deepEqual(failure.payload, { kind: "imported_sessions_injection_failed", errorCode: "vault_corrupt" });
+  assert.equal(JSON.stringify(events).includes("sk-secret-value"), false, "the error message must never reach the journal");
+  assert.equal(events.some((event) => event.payload?.kind === "imported_sessions_injected"), false);
+
+  const odd = fakeProfileImporter({ prepareTask: async () => { throw Object.assign(new Error("x"), { code: "not a safe code!" }); } });
+  const host2 = makeHost(await mkTempRoot(), { profileImporter: odd, getTaskSession: () => ({ id: "s" }) });
+  const second = await host2.createTask({ originalRequest: "use my login" }, { useImportedSessions: true });
+  const note = (await host2.getTaskEvents(second.taskId)).find((event) => event.payload?.kind === "imported_sessions_injection_failed");
+  assert.equal(note.payload.errorCode, "unknown");
+});
+
+test("the opt-in is durable before any task exists: a failed opt-in write creates no task and builds nothing", async () => {
+  const storageRoot = await mkTempRoot();
+  let browsers = 0;
+  const importer = fakeProfileImporter({ markTaskOptIn: async () => { throw new Error("config write failed"); } });
+  const host = makeHost(storageRoot, {
+    profileImporter: importer,
+    getTaskSession: () => ({ id: "s" }),
+    makeBrowser: () => { browsers += 1; return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) }; },
+  });
+  await assert.rejects(host.createTask({ originalRequest: "use my login" }, { useImportedSessions: true }), /config write failed/);
+  assert.deepEqual(await host.listTasks(), [], "no durable task may be left behind");
+  assert.equal(browsers, 0);
+});
+
+test("if task creation fails after the opt-in was recorded, the opt-in is rolled back", async () => {
+  const storageRoot = await mkTempRoot();
+  const importer = fakeProfileImporter();
+  const host = makeHost(storageRoot, { profileImporter: importer, getTaskSession: () => ({ id: "s" }) });
+  host._withWorkGoalAdmission = async () => { throw new Error("admission failed"); };
+  await assert.rejects(host.createTask({ originalRequest: "use my login" }, { useImportedSessions: true }), /admission failed/);
+  const marked = importer.calls.find(([kind]) => kind === "mark");
+  assert.ok(marked, "the opt-in is written before creation is attempted");
+  assert.deepEqual(importer.calls.find(([kind]) => kind === "unmark"), ["unmark", marked[1]]);
+  assert.equal(importer.optIn.size, 0);
+});
+
+test("a task that ends releases its tracked session so a later domain removal does not touch it", async () => {
+  const storageRoot = await mkTempRoot();
+  const importer = fakeProfileImporter();
+  const host = makeHost(storageRoot, { profileImporter: importer, getTaskSession: () => ({ id: "s" }), makePlanner: () => pausingPlanner() });
+  const { taskId } = await host.createTask({ originalRequest: "use my login" }, { useImportedSessions: true });
+  await host.stopTask(taskId);
+  await waitForState(host, taskId, ["stopped"]);
+  assert.ok(importer.calls.some(([kind, id]) => kind === "release" && id === taskId));
 });
 
 test("useImportedSessions must be a boolean and requires a configured importer", async () => {
@@ -2084,6 +2140,26 @@ test("a task is stopped and its browser disposed when imported-session revocatio
   host._active.delete("task-with-unrevoked-cookie");
 });
 
+test("host teardown still runs when importer-side session purge reports an error", async () => {
+  const session = { cookies: {
+    get: async () => [{ domain: ".claude.ai", name: "session", path: "/", secure: true }],
+    remove: async () => {},
+  } };
+  let stopCalls = 0;
+  let disposeCalls = 0;
+  const importer = fakeProfileImporter({ remove: async () => { const e = new Error("purge incomplete"); e.code = "purge_incomplete"; throw e; } });
+  const host = makeHost(await mkTempRoot(), { profileImporter: importer });
+  host._active.set("task-with-unrevoked-cookie", {
+    importedSession: session,
+    controller: { getSnapshot: () => ({ state: "running" }), stop: async () => { stopCalls += 1; } },
+    browser: { dispose: async () => { disposeCalls += 1; } },
+  });
+  await assert.rejects(host.removeImportedSession("claude.ai"), { code: "session_revoke_failed" });
+  assert.equal(stopCalls, 1);
+  assert.equal(disposeCalls, 1);
+  host._active.delete("task-with-unrevoked-cookie");
+});
+
 test("failed session revocation cancels child agents sharing the parent session partition", async () => {
   const session = {
     cookies: {
@@ -2112,4 +2188,59 @@ test("failed session revocation cancels child agents sharing the parent session 
     ["disposeParent"],
   ]);
   host._active.delete("parent-with-unrevoked-cookie");
+});
+
+test("host exposes usage and display-only limits, and maps ledger errors to TaskHostError", async () => {
+  const { UsageLedger } = require("../main/harness/usage-ledger");
+  const storageRoot = await mkTempRoot();
+  const usageLedger = new UsageLedger({});
+  usageLedger.record("t1", "claude", { provider: "claude", inputTokens: 5, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 1, durationMs: 1 });
+  const host = makeHost(storageRoot, { usageLedger });
+  assert.equal((await host.getUsage("t1")).task.claude.calls, 1);
+  const after = await host.setUsageLimit("claude", { tokens: 100 });
+  assert.equal(after.limits.claude.remainingTokens, 90);
+  await assert.rejects(() => host.setUsageLimit("claude", { tokens: -1 }), (e) => e.name === "TaskHostError" && e.code === "invalid_limit");
+  const bare = makeHost(await mkTempRoot());
+  await assert.rejects(() => bare.getUsage(), (e) => e.code === "usage_unavailable");
+});
+
+test("syncUsage imports configured CLI records, reports unconfigured/empty sources honestly, and never throws for one bad source", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const { UsageLedger } = require("../main/harness/usage-ledger");
+  const claudeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "halo-sync-claude-"));
+  fs.writeFileSync(path.join(claudeRoot, "s.jsonl"), [
+    JSON.stringify({ type: "assistant", sessionId: "s", timestamp: "2026-09-29T01:00:00Z", message: { id: "m", usage: { input_tokens: 4, output_tokens: 6 } } }),
+    JSON.stringify({ type: "cost-state", sessionId: "s", totalCostUSD: 3 }),
+  ].join("\n"));
+  const usageLedger = new UsageLedger({});
+  const host = makeHost(await mkTempRoot(), { usageLedger, usageSources: { claude: claudeRoot, codex: path.join(claudeRoot, "missing") } });
+  const first = await host.syncUsage();
+  assert.equal(first.results.claude.status, "synced");
+  assert.equal(first.results.codex.status, "no_records");
+  assert.equal(first.usage.imported.claude.costUsd, 3);
+  const second = await host.syncUsage();
+  assert.equal(second.usage.imported.claude.outputTokens, 6, "re-sync does not double count");
+  fs.rmSync(path.join(claudeRoot, "s.jsonl"));
+  const empty = await host.syncUsage();
+  assert.equal(empty.results.claude.status, "no_records");
+  assert.equal(empty.usage.imported.claude.outputTokens, 0, "a zero-record resync clears stale imported totals");
+  const bare = makeHost(await mkTempRoot(), { usageLedger });
+  assert.equal((await bare.syncUsage()).results.claude.status, "not_configured");
+});
+
+test("syncUsage stores the Claude subscription snapshot and reports why it is missing otherwise", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const { UsageLedger } = require("../main/harness/usage-ledger");
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "halo-cfg-"));
+  fs.mkdirSync(path.join(cfg, "projects"));
+  fs.writeFileSync(path.join(cfg, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "t", expiresAt: Date.now() + 60000 } }));
+  const subscriptionFetch = async () => ({ ok: true, status: 200, json: async () => ({ five_hour: { utilization: 61, resets_at: "2026-09-30T09:00:00Z" } }) });
+  const host = makeHost(await mkTempRoot(), { usageLedger: new UsageLedger({}), usageSources: { claude: path.join(cfg, "projects") }, subscriptionFetch });
+  const r = await host.syncUsage();
+  assert.equal(r.results.claudeSubscription.status, "synced");
+  assert.equal(r.usage.subscription.claude.windows.session.usedPercent, 61);
+  const none = makeHost(await mkTempRoot(), { usageLedger: new UsageLedger({}), usageSources: { claude: path.join(cfg, "nope", "projects") }, subscriptionFetch, subscriptionPlatform: "linux" });
+  assert.equal((await none.syncUsage()).results.claudeSubscription.status, "no_credentials");
 });

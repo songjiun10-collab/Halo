@@ -50,7 +50,8 @@ function createWorkerLoop({ stdin, stdout, stderr, bridge }) {
     Promise.resolve()
       .then(() => bridge.start(context))
       .then((proposal) => {
-        stdout.write(`${JSON.stringify({ requestId, proposal })}\n`);
+        const usage = typeof bridge.takeUsage === "function" ? bridge.takeUsage() : null;
+        stdout.write(`${JSON.stringify(usage ? { requestId, proposal, usage } : { requestId, proposal })}\n`);
       })
       .catch((error) => {
         stderr.write(`[claude-code-worker] request ${requestId} failed: ${(error && error.message) || error}\n`);
