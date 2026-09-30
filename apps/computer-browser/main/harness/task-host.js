@@ -36,6 +36,7 @@ const { WorkGoalOrchestrator } = require("./work-goal-orchestrator");
 const { isPlainObject, validateGoalTrigger, normalizeGoalSpec, DEFAULT_LIMITS } = require("../../shared/harness-contracts");
 const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
 const { resolveTaskProfile } = require("../../shared/task-profile-router");
+const { clearSessionCookies, clearDisallowedSessionCookies } = require("./profile-import/session-injector");
 
 const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone", "useImportedSessions"]);
 const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
@@ -135,6 +136,7 @@ class TaskHost {
     this._listeners = new Set();
     // taskId -> {store, controller, browser, planner}
     this._active = new Map();
+    this._sessionAccessChain = Promise.resolve();
     this._pendingAttachments = new Set();
     this._storeGate = Promise.resolve();
     this._triggeredRuns = new Map();
@@ -346,16 +348,35 @@ class TaskHost {
   // Only tasks that opted in (durably, at creation) are touched. A failure
   // never blocks the task; the audit note records counts and domains only.
   async _attachPrepared(store, routine = null) {
-    let summary = null;
-    if (this._profileImporter && this._getTaskSession) {
-      try { summary = await this._profileImporter.prepareTask(store.taskId, this._getTaskSession(store.taskId)); }
+    if (!this._profileImporter || !this._getTaskSession) return this._attach(store, routine);
+    let optedIn = false;
+    try { optedIn = await this._profileImporter.hasTaskOptIn(store.taskId); }
+    catch { return this._attach(store, routine); }
+    if (!optedIn) return this._attach(store, routine);
+
+    return this._withSessionAccess(async () => {
+      let summary = null;
+      const session = this._getTaskSession(store.taskId);
+      try { summary = await this._profileImporter.prepareTask(store.taskId, session); }
       catch { summary = null; }
-    }
-    const entry = this._attach(store, routine);
-    if (summary) {
-      entry.controller.recordHostNote({ kind: "imported_sessions_injected", injected: summary.injected, failed: summary.failed, domains: summary.domains }).catch(() => {});
-    }
-    return entry;
+      const entry = this._attach(store, routine);
+      entry.importedSession = session;
+      if (summary) {
+        entry.controller.recordHostNote({ kind: "imported_sessions_injected", injected: summary.injected, failed: summary.failed, domains: summary.domains }).catch(() => {});
+      }
+      return entry;
+    });
+  }
+
+  async _clearActiveSessionCookies(domains, { disallowed = false } = {}) {
+    const entries = [...this._active.values()].filter((entry) => entry.importedSession);
+    const results = await Promise.allSettled(entries.map((entry) => (
+      disallowed
+        ? clearDisallowedSessionCookies(entry.importedSession, domains)
+        : clearSessionCookies(entry.importedSession, domains)
+    )));
+    const failed = results.reduce((count, result) => count + (result.status === "rejected" ? 1 : result.value.failed), 0);
+    if (failed > 0) throw new TaskHostError("session_revoke_failed", "one or more active task sessions could not be cleared");
   }
 
   _requireSessions() {
@@ -364,11 +385,23 @@ class TaskHost {
     return this._profileImporter;
   }
 
-  async importSessions(input) { return this._requireSessions().import(input); }
+  async importSessions(input) { return this._withSessionAccess(() => this._requireSessions().import(input)); }
   async listImportedSessions() { return this._requireSessions().list(); }
-  async removeImportedSession(domain) { return this._requireSessions().remove(domain); }
+  async removeImportedSession(domain) {
+    return this._withSessionAccess(async () => {
+      const removed = await this._requireSessions().remove(domain);
+      await this._clearActiveSessionCookies([domain]);
+      return removed;
+    });
+  }
   async getSessionAllowlist() { return this._requireSessions().getAllowlist(); }
-  async setSessionAllowlist(domains) { return this._requireSessions().setAllowlist(domains); }
+  async setSessionAllowlist(domains) {
+    return this._withSessionAccess(async () => {
+      const allowlist = await this._requireSessions().setAllowlist(domains);
+      await this._clearActiveSessionCookies(allowlist, { disallowed: true });
+      return allowlist;
+    });
+  }
   async importBrowserSettings(input) { return this._requireSessions().importSettings(input); }
   async getImportedSettings() { return this._requireSessions().getSettings(); }
 
@@ -1243,6 +1276,7 @@ class TaskHost {
       // state after its await, close its store, and reject. Never let a late
       // attachment escape this shutdown pass.
       await Promise.allSettled([...this._pendingAttachments]);
+      await this._sessionAccessChain;
       await this._queueTransition;
       const entries = [...this._active.values()];
       const errors = [];
@@ -1294,6 +1328,15 @@ class TaskHost {
       () => this._pendingAttachments.delete(pending),
       () => this._pendingAttachments.delete(pending),
     );
+    return pending;
+  }
+
+  _withSessionAccess(operation) {
+    const pending = this._sessionAccessChain.then(() => {
+      this._assertOpen();
+      return operation();
+    });
+    this._sessionAccessChain = pending.catch(() => {});
     return pending;
   }
 }

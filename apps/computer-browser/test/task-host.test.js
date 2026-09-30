@@ -1858,6 +1858,7 @@ function fakeProfileImporter(overrides = {}) {
     calls,
     optIn,
     markTaskOptIn: async (taskId) => { calls.push(["mark", taskId]); optIn.add(taskId); },
+    hasTaskOptIn: async (taskId) => optIn.has(taskId),
     prepareTask: async (taskId, session) => {
       calls.push(["prepare", taskId, session.id]);
       return optIn.has(taskId) ? { injected: 2, failed: 0, domains: ["claude.ai"] } : null;
@@ -1932,4 +1933,127 @@ test("session import management is exposed through the host without returning co
   await assert.rejects(bare.importBrowserSettings({ browser: "chrome" }), { code: "sessions_unavailable" });
   await assert.rejects(bare.listImportedSessions(), { code: "sessions_unavailable" });
   await assert.rejects(bare.importSessions({ browser: "chrome" }), { code: "sessions_unavailable" });
+});
+
+test("removing an imported session clears matching cookies from active opted-in task sessions", async () => {
+  const cookies = [
+    { domain: ".claude.ai", name: "session", path: "/", secure: true },
+    { domain: "accounts.claude.ai", name: "account", path: "/auth", secure: true },
+    { domain: ".chatgpt.com", name: "session", path: "/", secure: true },
+  ];
+  const removed = [];
+  const session = { id: "task-session", cookies: {
+    get: async () => cookies.map((cookie) => ({ ...cookie })),
+    remove: async (url, name) => {
+      removed.push([url, name]);
+      const parsed = new URL(url);
+      const index = cookies.findIndex((cookie) => cookie.name === name && cookie.domain.replace(/^\./, "") === parsed.hostname && cookie.path === parsed.pathname);
+      if (index >= 0) cookies.splice(index, 1);
+    },
+  } };
+  const importer = fakeProfileImporter();
+  const host = makeHost(await mkTempRoot(), {
+    profileImporter: importer,
+    getTaskSession: () => session,
+  });
+  await host.createTask({ originalRequest: "use my login" }, { useImportedSessions: true });
+
+  assert.equal(await host.removeImportedSession("claude.ai"), true);
+
+  assert.deepEqual(removed, [
+    ["https://claude.ai/", "session"],
+    ["https://accounts.claude.ai/auth", "account"],
+  ]);
+  assert.deepEqual(cookies.map((cookie) => cookie.domain), [".chatgpt.com"]);
+});
+
+test("narrowing the session allowlist clears previously injected cookies outside it", async () => {
+  const cookies = [
+    { domain: ".claude.ai", name: "session", path: "/", secure: true },
+    { domain: ".chatgpt.com", name: "session", path: "/", secure: true },
+  ];
+  const removed = [];
+  const session = { id: "task-session", cookies: {
+    get: async () => cookies.map((cookie) => ({ ...cookie })),
+    remove: async (url, name) => {
+      removed.push([url, name]);
+      const parsed = new URL(url);
+      const index = cookies.findIndex((cookie) => cookie.name === name && cookie.domain.replace(/^\./, "") === parsed.hostname && cookie.path === parsed.pathname);
+      if (index >= 0) cookies.splice(index, 1);
+    },
+  } };
+  const host = makeHost(await mkTempRoot(), {
+    profileImporter: fakeProfileImporter(),
+    getTaskSession: () => session,
+  });
+  await host.createTask({ originalRequest: "use my login" }, { useImportedSessions: true });
+
+  assert.deepEqual(await host.setSessionAllowlist(["chatgpt.com"]), ["chatgpt.com"]);
+
+  assert.deepEqual(removed, [["https://claude.ai/", "session"]]);
+});
+
+test("session revocation waits for an in-progress task injection", async () => {
+  const jar = [{ domain: ".chatgpt.com", name: "other", path: "/", secure: true }];
+  const removed = [];
+  const session = { id: "task-session", cookies: {
+    get: async () => jar.map((cookie) => ({ ...cookie })),
+    remove: async (url, name) => {
+      removed.push([url, name]);
+      const host = new URL(url).hostname;
+      const index = jar.findIndex((cookie) => cookie.name === name && cookie.domain.replace(/^\./, "") === host);
+      if (index >= 0) jar.splice(index, 1);
+    },
+  } };
+  let releasePrepare;
+  let signalPrepare;
+  const prepareGate = new Promise((resolve) => { releasePrepare = resolve; });
+  const prepareStarted = new Promise((resolve) => { signalPrepare = resolve; });
+  const importer = fakeProfileImporter({
+    prepareTask: async () => {
+      jar.push({ domain: ".claude.ai", name: "newly-injected", path: "/", secure: true });
+      signalPrepare();
+      await prepareGate;
+      return { injected: 1, failed: 0, domains: ["claude.ai"] };
+    },
+  });
+  const host = makeHost(await mkTempRoot(), { profileImporter: importer, getTaskSession: () => session });
+  const creating = host.createTask({ originalRequest: "use my login" }, { useImportedSessions: true });
+  await prepareStarted;
+  const revoking = host.removeImportedSession("claude.ai");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(importer.calls.some(([kind]) => kind === "remove"), false);
+
+  releasePrepare();
+  await Promise.all([creating, revoking]);
+
+  assert.deepEqual(removed, [["https://claude.ai/", "newly-injected"]]);
+  assert.deepEqual(jar.map((cookie) => cookie.domain), [".chatgpt.com"]);
+});
+
+test("an import in progress does not block a task that did not opt in to imported sessions", async () => {
+  let releaseImport;
+  let signalImport;
+  const importGate = new Promise((resolve) => { releaseImport = resolve; });
+  const importStarted = new Promise((resolve) => { signalImport = resolve; });
+  const importer = fakeProfileImporter({
+    import: async () => { signalImport(); await importGate; return { status: "ok", imported: 1, browser: "chrome" }; },
+  });
+  let taskBrowserBuilt = false;
+  const host = makeHost(await mkTempRoot(), {
+    profileImporter: importer,
+    getTaskSession: () => ({ id: "unused" }),
+    makeBrowser: () => { taskBrowserBuilt = true; return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) }; },
+  });
+  const importing = host.importSessions({ browser: "chrome" });
+  await importStarted;
+  const creating = host.createTask({ originalRequest: "ordinary task" });
+  const deadline = Date.now() + 1000;
+  while (!taskBrowserBuilt && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  const builtWithoutSessions = taskBrowserBuilt;
+
+  releaseImport();
+  await Promise.all([importing, creating]);
+
+  assert.equal(builtWithoutSessions, true);
 });

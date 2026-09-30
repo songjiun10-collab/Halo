@@ -1,6 +1,6 @@
 "use strict";
 
-const { matchingAllowedDomain, normalizeDomain } = require("./domain-utils");
+const { domainMatches, matchingAllowedDomain, normalizeDomain } = require("./domain-utils");
 
 const SAME_SITE = { lax: "lax", strict: "strict", none: "no_restriction", unspecified: "unspecified" };
 
@@ -34,4 +34,38 @@ async function injectSessions({ vault, session, domains, nowSeconds = Date.now()
   return { injected, failed, domains: allowlist.filter((d) => covered.has(d)) };
 }
 
-module.exports = { cookieToElectron, injectSessions };
+async function removeCookiesWhere(session, shouldRemove) {
+  if (typeof session?.cookies?.get !== "function" || typeof session?.cookies?.remove !== "function") {
+    throw new TypeError("session cookie removal is unavailable");
+  }
+  const cookies = await session.cookies.get({});
+  const matched = cookies.filter((cookie) => {
+    const host = normalizeDomain(cookie.domain);
+    return host && shouldRemove(host);
+  });
+  for (const cookie of matched) {
+    const host = normalizeDomain(cookie.domain);
+    const cookiePath = typeof cookie.path === "string" && cookie.path.startsWith("/") ? cookie.path : "/";
+    const url = `${cookie.secure ? "https" : "http"}://${host}${cookiePath}`;
+    try { await session.cookies.remove(url, cookie.name); } catch { /* final read is authoritative */ }
+  }
+  const remaining = await session.cookies.get({});
+  const stillPresent = remaining.reduce((count, cookie) => {
+    const host = normalizeDomain(cookie.domain);
+    return count + (host && shouldRemove(host) ? 1 : 0);
+  }, 0);
+  return { removed: Math.max(matched.length - stillPresent, 0), failed: stillPresent };
+}
+
+async function clearSessionCookies(session, domains) {
+  const allowlist = (Array.isArray(domains) ? domains : []).map(normalizeDomain).filter(Boolean);
+  if (!allowlist.length) return { removed: 0, failed: 0 };
+  return removeCookiesWhere(session, (host) => domainMatches(host, allowlist));
+}
+
+async function clearDisallowedSessionCookies(session, allowedDomains) {
+  const allowlist = (Array.isArray(allowedDomains) ? allowedDomains : []).map(normalizeDomain).filter(Boolean);
+  return removeCookiesWhere(session, (host) => !domainMatches(host, allowlist));
+}
+
+module.exports = { cookieToElectron, injectSessions, clearSessionCookies, clearDisallowedSessionCookies };
