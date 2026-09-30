@@ -23,15 +23,16 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
+const { createElectronTestProfile } = require("./electron-test-profile");
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const ELECTRON_BIN = path.join(APP_ROOT, "node_modules", ".bin", "electron");
 const SCRIPT = path.join(APP_ROOT, "integration", "repeat-journey-verification.js");
 const REPEAT_COUNT = 5;
 
-function runRepeatVerification({ storageRoot, timeoutMs }) {
+function runRepeatVerification({ storageRoot, timeoutMs, profile }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(ELECTRON_BIN, [SCRIPT], {
+    const child = spawn(ELECTRON_BIN, profile.argsFor(SCRIPT), {
       cwd: APP_ROOT,
       env: {
         ...process.env,
@@ -79,6 +80,8 @@ test(
   `real Electron + real Python approver: ${REPEAT_COUNT} consecutive independent 3-page journeys all complete`,
   { timeout: 60000 },
   async (t) => {
+    const profile = await createElectronTestProfile();
+    t.after(() => profile.cleanup());
     let storageRoot;
     try {
       storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-repeat-integration-"));
@@ -89,7 +92,7 @@ test(
 
     let result;
     try {
-      result = await runRepeatVerification({ storageRoot, timeoutMs: 50000 });
+      result = await runRepeatVerification({ storageRoot, timeoutMs: 50000, profile });
     } catch (err) {
       if (/ENOENT|spawn.*electron/i.test(String(err.message))) {
         t.skip(`electron binary unavailable in this environment: ${err.message}`);

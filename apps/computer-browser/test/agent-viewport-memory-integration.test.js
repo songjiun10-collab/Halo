@@ -15,14 +15,15 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
+const { createElectronTestProfile } = require("./electron-test-profile");
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const ELECTRON_BIN = path.join(APP_ROOT, "node_modules", ".bin", "electron");
 const SCRIPT = path.join(APP_ROOT, "integration", "agent-viewport-memory-electron.js");
 
-function runElectronIntegration({ timeoutMs }) {
+function runElectronIntegration({ timeoutMs, profile }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(ELECTRON_BIN, [SCRIPT], {
+    const child = spawn(ELECTRON_BIN, profile.argsFor(SCRIPT), {
       cwd: APP_ROOT,
       env: {
         ...process.env,
@@ -64,9 +65,11 @@ test(
   "real Electron + real AgentViewportHost + real approver/planner: same-journey memory/latency, cold/warm, cross-task isolation, real crash recovery",
   { timeout: 180000 },
   async (t) => {
+    const profile = await createElectronTestProfile();
+    t.after(() => profile.cleanup());
     let result;
     try {
-      result = await runElectronIntegration({ timeoutMs: 170000 });
+      result = await runElectronIntegration({ timeoutMs: 170000, profile });
     } catch (err) {
       if (/ENOENT|spawn.*electron/i.test(String(err.message))) {
         t.skip(`electron binary unavailable in this environment: ${err.message}`);
