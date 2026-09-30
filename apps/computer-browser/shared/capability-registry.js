@@ -7,6 +7,23 @@
 const CAPABILITY_REGISTRY_VERSION = 1;
 const CAPABILITY_IDS = Object.freeze(["browser", "computer_use", "multi_agent", "research", "routine"]);
 
+/**
+ * @typedef {{ capabilityId: string, adapterId: string, adapterVersion: number }} CapabilityAdapter
+ * @typedef {{
+ *   id: string,
+ *   available: boolean,
+ *   reasonCode?: string,
+ *   reason?: string,
+ *   dependencies: string[],
+ *   adapters: CapabilityAdapter[],
+ * }} CapabilityProfile
+ */
+
+/**
+ * @template {object} T
+ * @param {T} value
+ * @returns {Readonly<T>}
+ */
 function deepFreeze(value) {
   for (const child of Object.values(value)) {
     if (child && typeof child === "object" && !Object.isFrozen(child)) deepFreeze(child);
@@ -14,6 +31,7 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
+/** @type {Readonly<Record<string, Readonly<CapabilityProfile>>>} */
 const REGISTRY = deepFreeze({
   browser: {
     id: "browser",
@@ -57,11 +75,13 @@ const REGISTRY = deepFreeze({
   },
 });
 
+/**
+ * @param {unknown} id
+ * @returns {Readonly<CapabilityProfile>}
+ */
 function getCapabilityProfile(id) {
   if (typeof id !== "string" || !Object.hasOwn(REGISTRY, id)) {
-    const error = new Error(`unknown capability ${String(id)}`);
-    error.code = "unknown_capability";
-    throw error;
+    throw Object.assign(new Error(`unknown capability ${String(id)}`), { code: "unknown_capability" });
   }
   return REGISTRY[id];
 }

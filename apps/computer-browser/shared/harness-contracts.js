@@ -137,7 +137,15 @@ const MAX_STEER_PER_CHILD_PER_WINDOW = 3; // section 10
 const STEER_RATE_WINDOW_MS = 60 * 1000; // section 10: "rolling 60-second window"
 const MAX_MESSAGE_PREVIEW_CHARS = 200; // section 10/14-6
 
+/** @typedef {Record<string, unknown>} PlainObject */
+
 class ContractError extends Error {
+  /**
+   * `code` may be undefined when a caller forwards the code of a foreign
+   * error that carried none (see task-profile-contracts capabilityErrorCode).
+   * @param {string | undefined} code
+   * @param {string} message
+   */
   constructor(code, message) {
     super(message);
     this.name = "ContractError";
@@ -145,14 +153,39 @@ class ContractError extends Error {
   }
 }
 
+/**
+ * @param {unknown} value
+ * @returns {value is PlainObject}
+ */
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Membership test for a closed string enum. Equivalent to list.includes(value)
+ * for every input, since a string list contains no non-string element.
+ * @param {ReadonlyArray<string>} list
+ * @param {unknown} value
+ * @returns {value is string}
+ */
+function isOneOf(list, value) {
+  return typeof value === "string" && list.includes(value);
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {asserts value is PlainObject}
+ */
 function assertPlainObject(value, label) {
   if (!isPlainObject(value)) throw new ContractError("invalid_shape", `${label} must be a plain object`);
 }
 
+/**
+ * @param {PlainObject} obj
+ * @param {ReadonlyArray<string>} allowedKeys
+ * @param {string} label
+ */
 function assertNoUnknownKeys(obj, allowedKeys, label) {
   for (const key of Object.keys(obj)) {
     if (!allowedKeys.includes(key)) {
@@ -161,6 +194,12 @@ function assertNoUnknownKeys(obj, allowedKeys, label) {
   }
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @param {{ maxBytes?: number, maxChars?: number, allowEmpty?: boolean }} [options]
+ * @returns {asserts value is string}
+ */
 function assertString(value, label, { maxBytes, maxChars, allowEmpty = false } = {}) {
   if (typeof value !== "string") throw new ContractError("invalid_field", `${label} must be a string`);
   if (!allowEmpty && value.length === 0) throw new ContractError("invalid_field", `${label} must not be empty`);
@@ -172,38 +211,74 @@ function assertString(value, label, { maxBytes, maxChars, allowEmpty = false } =
   }
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {asserts value is string}
+ */
 function assertId(value, label) {
   assertString(value, label, { maxChars: 64 });
   if (!ID_RE.test(value)) throw new ContractError("invalid_id", `${label} has an invalid id: ${JSON.stringify(value)}`);
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {asserts value is string}
+ */
 function assertUuid(value, label) {
   assertString(value, label, { maxChars: 64 });
   if (!UUID_RE.test(value)) throw new ContractError("invalid_id", `${label} must be a UUID`);
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {asserts value is number}
+ */
 function assertPositiveInteger(value, label) {
-  if (!Number.isInteger(value) || value <= 0) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     throw new ContractError("invalid_field", `${label} must be a positive integer`);
   }
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {asserts value is number}
+ */
 function assertNonNegativeInteger(value, label) {
-  if (!Number.isInteger(value) || value < 0) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw new ContractError("invalid_field", `${label} must be a non-negative integer`);
   }
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {asserts value is boolean}
+ */
 function assertBoolean(value, label) {
   if (typeof value !== "boolean") throw new ContractError("invalid_field", `${label} must be a boolean`);
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {asserts value is string}
+ */
 function assertIsoTimestamp(value, label) {
   assertString(value, label);
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new ContractError("invalid_field", `${label} must be an ISO timestamp`);
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @param {{ itemLabel?: string, maxLength?: number, itemMaxChars?: number }} [options]
+ * @returns {asserts value is string[]}
+ */
 function assertStringArray(value, label, { itemLabel, maxLength, itemMaxChars } = {}) {
   if (!Array.isArray(value)) throw new ContractError("invalid_field", `${label} must be an array`);
   if (typeof maxLength === "number" && value.length > maxLength) {
@@ -212,6 +287,10 @@ function assertStringArray(value, label, { itemLabel, maxLength, itemMaxChars } 
   value.forEach((entry, i) => assertString(entry, itemLabel || `${label}[${i}]`, { maxChars: itemMaxChars }));
 }
 
+/**
+ * @param {unknown} constraint
+ * @param {string} label
+ */
 function validateConstraint(constraint, label) {
   assertPlainObject(constraint, label);
   assertNoUnknownKeys(constraint, ["id", "text", "sourceMessageId"], label);
@@ -222,13 +301,17 @@ function validateConstraint(constraint, label) {
   }
 }
 
+/**
+ * @param {unknown} criterion
+ * @param {string} label
+ */
 function validateCriterion(criterion, label) {
   assertPlainObject(criterion, label);
   assertNoUnknownKeys(criterion, ["id", "text", "required", "verification", "sourceMessageId"], label);
   assertId(criterion.id, `${label}.id`);
   assertString(criterion.text, `${label}.text`, { maxChars: MAX_CRITERION_TEXT_CHARS });
   assertBoolean(criterion.required, `${label}.required`);
-  if (!VERIFICATION_KINDS.includes(criterion.verification)) {
+  if (!isOneOf(VERIFICATION_KINDS, criterion.verification)) {
     throw new ContractError("unknown_enum", `${label}.verification must be one of ${VERIFICATION_KINDS.join("|")}`);
   }
   if (criterion.sourceMessageId !== undefined && criterion.sourceMessageId !== null) {
@@ -236,6 +319,10 @@ function validateCriterion(criterion, label) {
   }
 }
 
+/**
+ * @param {unknown} amendment
+ * @param {string} label
+ */
 function validateAmendment(amendment, label) {
   assertPlainObject(amendment, label);
   assertNoUnknownKeys(amendment, ["id", "text", "at", "supersedesConstraintIds", "authority"], label);
@@ -243,11 +330,15 @@ function validateAmendment(amendment, label) {
   assertString(amendment.text, `${label}.text`, { maxBytes: MAX_AMENDMENT_TEXT_BYTES });
   assertIsoTimestamp(amendment.at, `${label}.at`);
   assertStringArray(amendment.supersedesConstraintIds, `${label}.supersedesConstraintIds`);
-  if (!AMENDMENT_AUTHORITY.includes(amendment.authority)) {
+  if (!isOneOf(AMENDMENT_AUTHORITY, amendment.authority)) {
     throw new ContractError("unknown_enum", `${label}.authority must be one of ${AMENDMENT_AUTHORITY.join("|")}`);
   }
 }
 
+/**
+ * @param {unknown} limits
+ * @param {string} label
+ */
 function validateLimits(limits, label) {
   assertPlainObject(limits, label);
   assertNoUnknownKeys(limits, ["maxActions", "maxPlannerCalls", "maxActiveMs"], label);
@@ -255,6 +346,26 @@ function validateLimits(limits, label) {
   assertPositiveInteger(limits.maxPlannerCalls, `${label}.maxPlannerCalls`);
   assertPositiveInteger(limits.maxActiveMs, `${label}.maxActiveMs`);
 }
+
+/**
+ * @typedef {{ id: string, text: string, sourceMessageId?: string | null }} Constraint
+ * @typedef {{ id: string, text: string, required: boolean, verification: string, sourceMessageId?: string | null }} Criterion
+ * @typedef {{ id: string, text: string, at: string, supersedesConstraintIds: string[], authority: string }} Amendment
+ * @typedef {{ maxActions: number, maxPlannerCalls: number, maxActiveMs: number }} Limits
+ * @typedef {{ scheduleId: string, occurrenceAt: string }} GoalTrigger
+ * @typedef {{
+ *   schemaVersion: number,
+ *   taskId: string,
+ *   goalVersion: number,
+ *   originalRequest: string,
+ *   amendments: Amendment[],
+ *   constraints: Constraint[],
+ *   criteria: Criterion[],
+ *   limits: Limits,
+ *   createdAt: string,
+ *   trigger?: GoalTrigger,
+ * }} GoalSpec
+ */
 
 const GOAL_SPEC_FIELDS = [
   "schemaVersion",
@@ -271,6 +382,10 @@ const GOAL_SPEC_FIELDS = [
 
 // Scheduled-occurrence key. Lives on the goal (not the routineRun checkpoint)
 // because TaskStore.create writes the goal atomically with the task.
+/**
+ * @param {unknown} trigger
+ * @param {string} label
+ */
 function validateGoalTrigger(trigger, label) {
   assertPlainObject(trigger, label);
   assertNoUnknownKeys(trigger, ["scheduleId", "occurrenceAt"], label);
@@ -282,6 +397,11 @@ function validateGoalTrigger(trigger, label) {
 // (used both when writing a new goal-vNNNN.json and when re-reading one, so
 // a hand-edited or future-version file is rejected the same way either
 // time). Does NOT fill defaults -- see normalizeGoalSpec for that.
+/**
+ * @param {unknown} goal
+ * @param {string} [label]
+ * @returns {GoalSpec}
+ */
 function validateGoalSpec(goal, label = "goal") {
   assertPlainObject(goal, label);
   assertNoUnknownKeys(goal, GOAL_SPEC_FIELDS, label);
@@ -304,7 +424,7 @@ function validateGoalSpec(goal, label = "goal") {
   validateLimits(goal.limits, `${label}.limits`);
   assertIsoTimestamp(goal.createdAt, `${label}.createdAt`);
   if (goal.trigger !== undefined) validateGoalTrigger(goal.trigger, `${label}.trigger`);
-  return goal;
+  return /** @type {GoalSpec} */ (goal);
 }
 
 // Builds a fully-formed, validated GoalSpec (schemaVersion 1) from host
@@ -312,13 +432,22 @@ function validateGoalSpec(goal, label = "goal") {
 // optional constraints/criteria/limits); `host` carries fields only the
 // store may assign (taskId, goalVersion, createdAt) so a caller can never
 // forge its own taskId or backdate creation.
+/**
+ * @param {unknown} input
+ * @param {unknown} host
+ * @returns {GoalSpec}
+ */
 function normalizeGoalSpec(input, host) {
   assertPlainObject(input, "goalInput");
   assertNoUnknownKeys(input, ["originalRequest", "constraints", "criteria", "limits", "amendments", "trigger"], "goalInput");
   assertPlainObject(host, "host");
   assertNoUnknownKeys(host, ["taskId", "goalVersion", "createdAt"], "host");
 
-  const criteria = input.criteria && input.criteria.length > 0 ? input.criteria : [DEFAULT_CRITERION_C1];
+  // Type-only view: the expression below is unchanged, and validateGoalSpec
+  // rejects any non-array value that it lets through.
+  const inputCriteria = /** @type {{ length: number } | null | undefined} */ (input.criteria);
+  const criteria = inputCriteria && inputCriteria.length > 0 ? inputCriteria : [DEFAULT_CRITERION_C1];
+  /** @type {PlainObject} */
   const goal = {
     schemaVersion: SCHEMA_VERSION,
     taskId: host.taskId,
@@ -327,7 +456,7 @@ function normalizeGoalSpec(input, host) {
     amendments: input.amendments || [],
     constraints: input.constraints || [],
     criteria,
-    limits: { ...DEFAULT_LIMITS, ...(input.limits || {}) },
+    limits: { ...DEFAULT_LIMITS, .../** @type {object} */ (input.limits || {}) },
     createdAt: host.createdAt,
   };
   if (input.trigger !== undefined) goal.trigger = input.trigger;
@@ -339,8 +468,14 @@ function normalizeGoalSpec(input, host) {
 // or summary can rewrite them (design doc section 3: "원문은 어떤 요약에서도
 // 재작성하지 않는다"). Constraints named in supersedesConstraintIds are
 // dropped; everything else, and any newConstraints/newCriteria, is additive.
-function applyAmendment(goal, amendmentInput, host) {
-  validateGoalSpec(goal, "goal");
+/**
+ * @param {unknown} goalInput
+ * @param {unknown} amendmentInput
+ * @param {unknown} host
+ * @returns {GoalSpec}
+ */
+function applyAmendment(goalInput, amendmentInput, host) {
+  const goal = validateGoalSpec(goalInput, "goal");
   assertPlainObject(amendmentInput, "amendmentInput");
   assertNoUnknownKeys(
     amendmentInput,
@@ -352,8 +487,9 @@ function applyAmendment(goal, amendmentInput, host) {
 
   const supersedes = amendmentInput.supersedesConstraintIds || [];
   assertStringArray(supersedes, "amendmentInput.supersedesConstraintIds");
-  const newConstraints = amendmentInput.newConstraints || [];
-  const newCriteria = amendmentInput.newCriteria || [];
+  // Type-only views; validateGoalSpec(nextGoal) below validates every entry.
+  const newConstraints = /** @type {Constraint[]} */ (amendmentInput.newConstraints || []);
+  const newCriteria = /** @type {Criterion[]} */ (amendmentInput.newCriteria || []);
 
   const amendment = {
     id: host.amendmentId,
@@ -365,6 +501,7 @@ function applyAmendment(goal, amendmentInput, host) {
   validateAmendment(amendment, "amendment");
 
   const survivingConstraints = goal.constraints.filter((c) => !supersedes.includes(c.id));
+  /** @type {PlainObject} */
   const nextGoal = {
     schemaVersion: SCHEMA_VERSION,
     taskId: goal.taskId,
@@ -386,6 +523,10 @@ function applyAmendment(goal, amendmentInput, host) {
 // than duplicating evidence content (section 9).
 const HANDOFF_FIELDS = ["objective", "currentState", "verifiedResults", "unresolved", "risks", "suggestedNextAction"];
 
+/**
+ * @param {unknown} handoff
+ * @param {string} label
+ */
 function validateHandoff(handoff, label) {
   assertPlainObject(handoff, label);
   assertNoUnknownKeys(handoff, HANDOFF_FIELDS, label);
@@ -412,8 +553,12 @@ function validateHandoff(handoff, label) {
 // section 6: "Do not duplicate the full handoff into text"). Does not check
 // messageId/conversationId/sender-recipient/parentGoalVersion -- those are
 // envelope-only (host-derived) fields, validated by validateMessageEnvelope.
+/**
+ * @param {PlainObject} payload
+ * @param {string} label
+ */
 function validateMessageContent(payload, label) {
-  if (!MESSAGE_KINDS.includes(payload.kind)) {
+  if (!isOneOf(MESSAGE_KINDS, payload.kind)) {
     throw new ContractError("unknown_enum", `${label}.kind must be one of ${MESSAGE_KINDS.join("|")}`);
   }
   assertString(payload.idempotencyKey, `${label}.idempotencyKey`, { maxChars: MAX_IDEMPOTENCY_KEY_CHARS });
@@ -432,7 +577,7 @@ function validateMessageContent(payload, label) {
     if (!Array.isArray(payload.evidenceRefs) || payload.evidenceRefs.length > MAX_MESSAGE_EVIDENCE_REFS) {
       throw new ContractError("field_too_large", `${label}.evidenceRefs must be an array of at most ${MAX_MESSAGE_EVIDENCE_REFS} entries`);
     }
-    payload.evidenceRefs.forEach((id, i) => assertId(id, `${label}.evidenceRefs[${i}]`));
+    payload.evidenceRefs.forEach((/** @type {unknown} */ id, /** @type {number} */ i) => assertId(id, `${label}.evidenceRefs[${i}]`));
   }
   if (payload.inReplyToMessageId !== undefined) {
     assertId(payload.inReplyToMessageId, `${label}.inReplyToMessageId`);
@@ -460,6 +605,10 @@ const MESSAGE_ENVELOPE_FIELDS = Object.freeze([
 // senderTaskId really own this journal, is recipientTaskId really its
 // accepted child/parent) is the coordinator's job (Task 4), not this
 // module's -- consistent with child_plan_accepted validating shape only.
+/**
+ * @param {unknown} envelope
+ * @param {string} [label]
+ */
 function validateMessageEnvelope(envelope, label = "message") {
   assertPlainObject(envelope, label);
   assertNoUnknownKeys(envelope, MESSAGE_ENVELOPE_FIELDS, label);
@@ -478,6 +627,10 @@ const MESSAGE_TURN_CONSUMED_FIELDS = Object.freeze(["consumedMessageIds", "obser
 
 const JOURNAL_EVENT_FIELDS = ["seq", "eventId", "taskId", "goalVersion", "type", "payload", "at"];
 
+/**
+ * @param {unknown} event
+ * @param {string} [label]
+ */
 function validateJournalEvent(event, label = "event") {
   assertPlainObject(event, label);
   assertNoUnknownKeys(event, JOURNAL_EVENT_FIELDS, label);
@@ -485,7 +638,7 @@ function validateJournalEvent(event, label = "event") {
   assertUuid(event.eventId, `${label}.eventId`);
   assertUuid(event.taskId, `${label}.taskId`);
   assertPositiveInteger(event.goalVersion, `${label}.goalVersion`);
-  if (!EVENT_TYPES.includes(event.type)) {
+  if (!isOneOf(EVENT_TYPES, event.type)) {
     throw new ContractError("unknown_enum", `${label}.type must be one of ${EVENT_TYPES.join("|")}`);
   }
   assertPlainObject(event.payload, `${label}.payload`);
@@ -510,7 +663,7 @@ function validateJournalEvent(event, label = "event") {
     assertPositiveInteger(event.payload.goalVersion, `${label}.payload.goalVersion`);
     assertString(event.payload.reason, `${label}.payload.reason`);
   }
-  if (["routine_step_advanced", "routine_step_denied", "routine_step_failed"].includes(event.type)) {
+  if (isOneOf(["routine_step_advanced", "routine_step_denied", "routine_step_failed"], event.type)) {
     const payload = event.payload;
     const commonFields = ["routineId", "revision", "stepIndex", "stepDigest"];
     const allowedFields = event.type === "routine_step_advanced"
@@ -530,13 +683,13 @@ function validateJournalEvent(event, label = "event") {
       assertId(payload.actionId, `${label}.payload.actionId`);
     }
     if (event.type === "routine_step_denied") {
-      if (!["deny", "quarantine"].includes(payload.decision)) {
+      if (!isOneOf(["deny", "quarantine"], payload.decision)) {
         throw new ContractError("unknown_enum", `${label}.payload.decision must be deny or quarantine`);
       }
       assertStringArray(payload.reasons, `${label}.payload.reasons`, { maxLength: 16, itemMaxChars: 256 });
     }
     if (event.type === "routine_step_failed") {
-      if (!["failed", "cancelled"].includes(payload.status)) {
+      if (!isOneOf(["failed", "cancelled"], payload.status)) {
         throw new ContractError("unknown_enum", `${label}.payload.status must be failed or cancelled`);
       }
       if (payload.errorCode !== undefined) {
@@ -552,7 +705,7 @@ function validateJournalEvent(event, label = "event") {
     assertId(event.payload.planId, `${label}.payload.planId`);
     assertPositiveInteger(event.payload.parentGoalVersion, `${label}.payload.parentGoalVersion`);
     assertPositiveInteger(event.payload.requestedAgentCount, `${label}.payload.requestedAgentCount`);
-    if (!MEMORY_POLICIES.includes(event.payload.memoryPolicy)) {
+    if (!isOneOf(MEMORY_POLICIES, event.payload.memoryPolicy)) {
       throw new ContractError("unknown_enum", `${label}.payload.memoryPolicy must be one of ${MEMORY_POLICIES.join("|")}`);
     }
     assertString(event.payload.actor, `${label}.payload.actor`);
@@ -645,12 +798,20 @@ const MCP_CALL_OUTCOME_FIELDS = ["kind", "requestId", "outcome", "resultDigest"]
 const MCP_CALL_OUTCOMES = Object.freeze(["ok", "tool_error", "not_dispatched", "uncertain_acknowledged"]);
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ */
 function assertSha256Hex(value, label) {
   if (typeof value !== "string" || !SHA256_HEX_RE.test(value)) {
     throw new ContractError("invalid_field", `${label} must be a lowercase SHA-256 digest`);
   }
 }
 
+/**
+ * @param {unknown} proposal
+ * @param {string} [label]
+ */
 function validateMcpProposal(proposal, label = "mcpProposal") {
   assertPlainObject(proposal, label);
   assertNoUnknownKeys(proposal, MCP_PROPOSAL_FIELDS, label);
@@ -671,6 +832,10 @@ function validateMcpProposal(proposal, label = "mcpProposal") {
 
 // Journal notes for MCP calls carry identities and digests only: never the
 // arguments, the connector's raw result, or any credential.
+/**
+ * @param {PlainObject} payload
+ * @param {string} label
+ */
 function validateMcpCallNote(payload, label) {
   if (payload.kind === "mcp_call_started") {
     assertNoUnknownKeys(payload, MCP_CALL_STARTED_FIELDS, label);
@@ -687,7 +852,7 @@ function validateMcpCallNote(payload, label) {
   } else if (payload.kind === "mcp_call_outcome") {
     assertNoUnknownKeys(payload, MCP_CALL_OUTCOME_FIELDS, label);
     assertUuid(payload.requestId, `${label}.requestId`);
-    if (!MCP_CALL_OUTCOMES.includes(payload.outcome)) {
+    if (!isOneOf(MCP_CALL_OUTCOMES, payload.outcome)) {
       throw new ContractError("unknown_enum", `${label}.outcome must be one of ${MCP_CALL_OUTCOMES.join("|")}`);
     }
     if (payload.outcome === "ok" || payload.outcome === "tool_error") assertSha256Hex(payload.resultDigest, `${label}.resultDigest`);
@@ -700,6 +865,10 @@ function validateMcpCallNote(payload, label) {
 
 const CHECKPOINT_FIELDS = ["seq", "taskId", "goalVersion", "payload", "at"];
 
+/**
+ * @param {unknown} envelope
+ * @param {string} [label]
+ */
 function validateCheckpointEnvelope(envelope, label = "checkpoint") {
   assertPlainObject(envelope, label);
   assertNoUnknownKeys(envelope, CHECKPOINT_FIELDS, label);
@@ -730,6 +899,10 @@ const EVIDENCE_FIELDS = [
   "details",
 ];
 
+/**
+ * @param {unknown} evidence
+ * @param {string} [label]
+ */
 function validateEvidence(evidence, label = "evidence") {
   assertPlainObject(evidence, label);
   assertNoUnknownKeys(evidence, EVIDENCE_FIELDS, label);
@@ -737,7 +910,7 @@ function validateEvidence(evidence, label = "evidence") {
   assertUuid(evidence.taskId, `${label}.taskId`);
   assertPositiveInteger(evidence.goalVersion, `${label}.goalVersion`);
   assertId(evidence.criterionId, `${label}.criterionId`);
-  if (!EVIDENCE_KINDS.includes(evidence.kind)) {
+  if (!isOneOf(EVIDENCE_KINDS, evidence.kind)) {
     throw new ContractError("unknown_enum", `${label}.kind must be one of ${EVIDENCE_KINDS.join("|")}`);
   }
   if (evidence.observationId !== undefined && evidence.observationId !== null) {
@@ -750,7 +923,7 @@ function validateEvidence(evidence, label = "evidence") {
     assertString(evidence.artifactHash, `${label}.artifactHash`, { maxChars: 256 });
   }
   assertIsoTimestamp(evidence.at, `${label}.at`);
-  if (!EVIDENCE_VERIFICATION_STATES.includes(evidence.verification)) {
+  if (!isOneOf(EVIDENCE_VERIFICATION_STATES, evidence.verification)) {
     throw new ContractError("unknown_enum", `${label}.verification must be one of ${EVIDENCE_VERIFICATION_STATES.join("|")}`);
   }
   if (evidence.verification === "pending") {
@@ -771,6 +944,10 @@ function validateEvidence(evidence, label = "evidence") {
 // (Task 4), rejecting anything that is not an exact, credential-free
 // HTTP(S) URL -- an entry URL is where the host performs the child's initial
 // navigation itself, never a value dispatched to page/model-controlled code.
+/**
+ * @param {string} urlString
+ * @param {string} [label]
+ */
 function deriveOrigin(urlString, label = "entryUrl") {
   let parsed;
   try {
@@ -787,6 +964,10 @@ function deriveOrigin(urlString, label = "entryUrl") {
   return parsed.origin;
 }
 
+/**
+ * @param {unknown} assignment
+ * @param {string} label
+ */
 function validateChildAssignment(assignment, label) {
   assertPlainObject(assignment, label);
   assertNoUnknownKeys(assignment, ["subgoal", "entryUrl"], label);
@@ -804,8 +985,15 @@ function validateChildAssignment(assignment, label) {
 // this function has no notion of parent/child.
 const ALLOWED_PROPOSAL_MAX_ACTIONS = Object.freeze([MAX_ACTIONS_PER_PROPOSAL, MAX_ACTIONS_PER_PROPOSAL_SHORT]);
 
+/**
+ * @param {unknown} proposal
+ * @param {string} [label]
+ * @param {{ maxActions?: unknown }} [options]
+ */
 function validateProposalEnvelope(proposal, label = "proposal", { maxActions } = {}) {
-  if (maxActions !== undefined && !ALLOWED_PROPOSAL_MAX_ACTIONS.includes(maxActions)) {
+  // The typeof guard only makes explicit what includes() already implied:
+  // the list holds numbers, so no non-number was ever accepted.
+  if (maxActions !== undefined && (typeof maxActions !== "number" || !ALLOWED_PROPOSAL_MAX_ACTIONS.includes(maxActions))) {
     throw new ContractError("invalid_field", `${label} maxActions override must be one of the pre-reviewed bounds`);
   }
   const actionsLimit = maxActions !== undefined ? maxActions : MAX_ACTIONS_PER_PROPOSAL;
@@ -830,11 +1018,11 @@ function validateProposalEnvelope(proposal, label = "proposal", { maxActions } =
   assertPositiveInteger(proposal.goalVersion, `${label}.goalVersion`);
   assertString(proposal.basedOnObservationId, `${label}.basedOnObservationId`, { maxChars: 128 });
   assertStringArray(proposal.criterionIds, `${label}.criterionIds`, { maxLength: MAX_CRITERIA_COUNT });
-  if (!PROPOSAL_KINDS.includes(proposal.kind)) {
+  if (!isOneOf(PROPOSAL_KINDS, proposal.kind)) {
     throw new ContractError("unknown_enum", `${label}.kind must be one of ${PROPOSAL_KINDS.join("|")}`);
   }
 
-  const disallow = (fields) => {
+  const disallow = (/** @type {ReadonlyArray<string>} */ fields) => {
     for (const f of fields) {
       if (proposal[f] !== undefined) throw new ContractError("invalid_shape", `${label} kind=${proposal.kind} must not include "${f}"`);
     }

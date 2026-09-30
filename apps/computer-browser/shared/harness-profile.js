@@ -12,9 +12,16 @@
 
 const { MAX_ACTIONS_PER_PROPOSAL, MAX_ACTIONS_PER_PROPOSAL_SHORT } = require("./harness-contracts");
 
+/** @type {ReadonlyArray<HarnessProfile>} */
 const HARNESS_PROFILES = Object.freeze(["short", "middle", "long"]);
 
+/** @typedef {"short" | "middle" | "long"} HarnessProfile */
+
 class HarnessProfileError extends Error {
+  /**
+   * @param {string} code
+   * @param {string} message
+   */
   constructor(code, message) {
     super(message);
     this.name = "HarnessProfileError";
@@ -22,11 +29,23 @@ class HarnessProfileError extends Error {
   }
 }
 
+/**
+ * @param {unknown} value
+ * @returns {HarnessProfile}
+ */
 function validateHarnessProfile(value) {
-  if (typeof value !== "string" || !HARNESS_PROFILES.includes(value)) {
+  if (typeof value !== "string" || !isHarnessProfile(value)) {
     throw new HarnessProfileError("invalid_harness_profile", "harnessProfile must be one of short|middle|long");
   }
   return value;
+}
+
+/**
+ * @param {string} value
+ * @returns {value is HarnessProfile}
+ */
+function isHarnessProfile(value) {
+  return /** @type {ReadonlyArray<string>} */ (HARNESS_PROFILES).includes(value);
 }
 
 // Deterministic host routing (design doc "Initial automatic selection"):
@@ -36,6 +55,10 @@ function validateHarnessProfile(value) {
 // change execution semantics). Long is not auto-selected until a later
 // phase introduces the signals ("long-running/background research",
 // "requires durable continuation") this module has no way to observe yet.
+/**
+ * @param {{ isRoutine?: boolean }} [options]
+ * @returns {HarnessProfile}
+ */
 function selectHarnessProfile({ isRoutine = false } = {}) {
   return isRoutine ? "short" : "middle";
 }
@@ -46,6 +69,10 @@ function selectHarnessProfile({ isRoutine = false } = {}) {
 // MAX_ACTIONS_PER_PROPOSAL_SHORT's own comment for why this is a fixed
 // second constant rather than an arbitrary number); every other profile
 // keeps today's unchanged batch bound.
+/**
+ * @param {unknown} profile
+ * @returns {number}
+ */
 function maxActionsPerProposal(profile) {
   validateHarnessProfile(profile);
   return profile === "short" ? MAX_ACTIONS_PER_PROPOSAL_SHORT : MAX_ACTIONS_PER_PROPOSAL;

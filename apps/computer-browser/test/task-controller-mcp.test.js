@@ -68,12 +68,20 @@ function makeController(store, overrides = {}) {
 }
 
 async function waitFor(predicate, label = "condition") {
-  for (let i = 0; i < 500; i += 1) {
+  const deadline = performance.now() + 5000;
+  while (performance.now() < deadline) {
     if (predicate()) return;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`timed out waiting for ${label}`);
 }
+
+test("integration waits allow real asynchronous I/O latency rather than a fixed event-loop iteration count", async () => {
+  let ready = false;
+  const timer = setTimeout(() => { ready = true; }, 200);
+  try { await waitFor(() => ready, "delayed I/O"); }
+  finally { clearTimeout(timer); }
+});
 
 // Capture the rejection immediately so a transition that settles it before
 // assert.rejects() attaches is not reported as an unhandled rejection.

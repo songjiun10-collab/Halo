@@ -10,7 +10,13 @@
     "moduleResolution": "Node",
     "ignoreDeprecations": "6.0",
     "types": ["node"],
-    "typeRoots": ["../../frontend/node_modules/@types"]
+    "typeRoots": ["./node_modules/@types"]
   },
-  "include": ["shared/harness-contracts.js"]
+  "include": [
+    "shared/harness-contracts.js",
+    "shared/task-profile-contracts.js",
+    "shared/harness-profile.js",
+    "shared/capability-registry.js",
+    "type-tests/**/*.ts"
+  ]
 }
