@@ -2057,3 +2057,29 @@ test("an import in progress does not block a task that did not opt in to importe
 
   assert.equal(builtWithoutSessions, true);
 });
+
+test("a task is stopped and its browser disposed when imported-session revocation leaves cookies behind", async () => {
+  const jar = [{ domain: ".claude.ai", name: "session", path: "/", secure: true }];
+  const session = {
+    cookies: {
+      get: async () => jar.map((cookie) => ({ ...cookie })),
+      remove: async () => {}, // Simulate Electron reporting success but retaining a cookie.
+    },
+  };
+  let stopCalls = 0;
+  let disposeCalls = 0;
+  const host = makeHost(await mkTempRoot(), { profileImporter: fakeProfileImporter() });
+  host._active.set("task-with-unrevoked-cookie", {
+    importedSession: session,
+    controller: {
+      getSnapshot: () => ({ state: "running" }),
+      stop: async () => { stopCalls += 1; },
+    },
+    browser: { dispose: async () => { disposeCalls += 1; } },
+  });
+
+  await assert.rejects(host._clearActiveSessionCookies(["claude.ai"]), { code: "session_revoke_failed" });
+  assert.equal(stopCalls, 1, "the still-authenticated task must lose automation authority");
+  assert.equal(disposeCalls, 1, "the authenticated page must be torn down");
+  host._active.delete("task-with-unrevoked-cookie");
+});
