@@ -1850,3 +1850,81 @@ test("sequential mode ignores maxParallelTasks", async () => {
   assert.equal(second.snapshot.state, "queued");
   assert.equal(built, 1);
 });
+
+function fakeProfileImporter(overrides = {}) {
+  const calls = [];
+  const optIn = new Set();
+  return {
+    calls,
+    optIn,
+    markTaskOptIn: async (taskId) => { calls.push(["mark", taskId]); optIn.add(taskId); },
+    prepareTask: async (taskId, session) => {
+      calls.push(["prepare", taskId, session.id]);
+      return optIn.has(taskId) ? { injected: 2, failed: 0, domains: ["claude.ai"] } : null;
+    },
+    import: async (input) => { calls.push(["import", input]); return { status: "ok", imported: 2, browser: input.browser }; },
+    list: async () => [{ domain: "claude.ai", cookieCount: 2 }],
+    remove: async (domain) => { calls.push(["remove", domain]); return true; },
+    getAllowlist: async () => ["claude.ai"],
+    setAllowlist: async (domains) => { calls.push(["allowlist", domains]); return domains; },
+    ...overrides,
+  };
+}
+
+test("an opted-in task gets imported sessions injected before its browser exists, and the audit note carries no values", async () => {
+  const storageRoot = await mkTempRoot();
+  const importer = fakeProfileImporter();
+  const order = [];
+  const host = makeHost(storageRoot, {
+    profileImporter: importer,
+    getTaskSession: (taskId) => ({ id: `session-${taskId}` }),
+    makeBrowser: (taskId) => { order.push(["browser", taskId]); return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) }; },
+  });
+  importer.prepareTask = ((original) => async (taskId, session) => { order.push(["prepare", taskId]); return original(taskId, session); })(importer.prepareTask);
+  const { taskId } = await host.createTask({ originalRequest: "use my login" }, { useImportedSessions: true });
+  assert.deepEqual(importer.calls.filter(([k]) => k === "mark"), [["mark", taskId]]);
+  assert.deepEqual(order, [["prepare", taskId], ["browser", taskId]]);
+  assert.deepEqual(importer.calls.find(([k]) => k === "prepare"), ["prepare", taskId, `session-${taskId}`]);
+  const events = await host.getTaskEvents(taskId);
+  const note = events.find((event) => event.payload?.kind === "imported_sessions_injected");
+  assert.deepEqual(note.payload, { kind: "imported_sessions_injected", injected: 2, failed: 0, domains: ["claude.ai"] });
+});
+
+test("tasks that did not opt in never get sessions injected and leave no note", async () => {
+  const storageRoot = await mkTempRoot();
+  const importer = fakeProfileImporter();
+  const host = makeHost(storageRoot, { profileImporter: importer, getTaskSession: () => ({ id: "s" }) });
+  const { taskId } = await host.createTask({ originalRequest: "plain" });
+  assert.deepEqual(importer.calls.filter(([k]) => k === "mark"), []);
+  const events = await host.getTaskEvents(taskId);
+  assert.equal(events.some((event) => event.payload?.kind === "imported_sessions_injected"), false);
+});
+
+test("a failing session injection never blocks the task", async () => {
+  const storageRoot = await mkTempRoot();
+  const importer = fakeProfileImporter({ prepareTask: async () => { throw new Error("cookie store unavailable"); } });
+  const host = makeHost(storageRoot, { profileImporter: importer, getTaskSession: () => ({ id: "s" }) });
+  const result = await host.createTask({ originalRequest: "use my login" }, { useImportedSessions: true });
+  assert.ok(result.taskId);
+});
+
+test("useImportedSessions must be a boolean and requires a configured importer", async () => {
+  const storageRoot = await mkTempRoot();
+  const withImporter = makeHost(storageRoot, { profileImporter: fakeProfileImporter(), getTaskSession: () => ({ id: "s" }) });
+  await assert.rejects(withImporter.createTask({ originalRequest: "x" }, { useImportedSessions: "yes" }), { code: "invalid_selector" });
+  const bare = makeHost(await mkTempRoot());
+  await assert.rejects(bare.createTask({ originalRequest: "x" }, { useImportedSessions: true }), { code: "sessions_unavailable" });
+});
+
+test("session import management is exposed through the host without returning cookie values", async () => {
+  const importer = fakeProfileImporter();
+  const host = makeHost(await mkTempRoot(), { profileImporter: importer, getTaskSession: () => ({ id: "s" }) });
+  assert.deepEqual(await host.importSessions({ browser: "chrome", profile: "Default" }), { status: "ok", imported: 2, browser: "chrome" });
+  assert.deepEqual(await host.listImportedSessions(), [{ domain: "claude.ai", cookieCount: 2 }]);
+  assert.equal(await host.removeImportedSession("claude.ai"), true);
+  assert.deepEqual(await host.getSessionAllowlist(), ["claude.ai"]);
+  assert.deepEqual(await host.setSessionAllowlist(["claude.ai", "example.org"]), ["claude.ai", "example.org"]);
+  const bare = makeHost(await mkTempRoot());
+  await assert.rejects(bare.listImportedSessions(), { code: "sessions_unavailable" });
+  await assert.rejects(bare.importSessions({ browser: "chrome" }), { code: "sessions_unavailable" });
+});

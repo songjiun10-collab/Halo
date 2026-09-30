@@ -86,6 +86,11 @@ const TASK_HOST_METHODS = new Set([
   "verifyWorkGoalCriterion",
   "getWorkGoalRecoveryStatus",
   "repairWorkGoalReservation",
+  "importSessions",
+  "listImportedSessions",
+  "removeImportedSession",
+  "getSessionAllowlist",
+  "setSessionAllowlist",
 ]);
 
 class BackgroundRuntimeService {

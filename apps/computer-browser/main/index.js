@@ -20,6 +20,9 @@ const { resolvePlannerCommand } = require("./harness/planner-command");
 const { HostSettingsStore } = require("./harness/host-settings");
 const { LocalMemoryStore } = require("./harness/local-memory-store");
 const { LocalCredentialVault } = require("./harness/local-credential-vault");
+const { SessionVault } = require("./harness/profile-import/session-vault");
+const { ProfileImporter, SessionConfigStore } = require("./harness/profile-import/profile-importer");
+const { readChromeCookies } = require("./harness/profile-import/chrome-cookie-reader");
 const { sumProcessTreeRssBytes } = require("./harness/process-tree-memory");
 const { BackgroundRuntimeService } = require("./harness/background-runtime-service");
 const { BackgroundRuntimeClient } = require("./harness/background-runtime-client");
@@ -392,6 +395,11 @@ async function createHarnessHost(socketPath, hostWindow) {
   const settings = await settingsStore.load();
   const memoryStore = new LocalMemoryStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
   const credentialVault = new LocalCredentialVault({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
+  const profileImporter = new ProfileImporter({
+    vault: new SessionVault({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage }),
+    config: new SessionConfigStore({ storageRoot: dataRoot }),
+    readers: { chrome: ({ domains, profile }) => readChromeCookies({ domains, profile }) },
+  });
   let taskHost;
   const surfaces = new BrowserSurfaces(hostWindow, { isUserControlled: (taskId) => taskHost.canUseTaskBrowser(taskId) });
   taskHost = new TaskHost({
@@ -409,6 +417,10 @@ async function createHarnessHost(socketPath, hostWindow) {
     executionMode: settings.executionMode,
     settingsStore,
     credentialVault,
+    profileImporter,
+    // Same non-persistent partition the task's views use, so cookies injected
+    // here are what the first navigation sends.
+    getTaskSession: (taskId) => require("electron").session.fromPartition(`halo-task-${taskId}`),
   });
   taskHosts.add(taskHost);
   return taskHost;
