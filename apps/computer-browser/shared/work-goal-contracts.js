@@ -31,6 +31,8 @@ const EVENT_TYPES = Object.freeze([
   "work_goal_progress_recorded",
   "work_goal_blocker_observed",
   "work_goal_continuation_attempted",
+  "work_goal_continuation_enqueued",
+  "work_goal_continuation_resolved",
   "work_goal_paused",
   "work_goal_resumed",
   "work_goal_criterion_verified",
@@ -262,6 +264,15 @@ function validateWorkGoalEvent(event) {
       if (!BLOCKER_PHASES.includes(payload.phase)) fail("unknown_enum", "event.payload.phase is unsupported");
       if (BLOCKER_PHASE_BY_REASON[payload.reasonCode] !== payload.phase) fail("invalid_blocker", "blocker phase does not match its reason code");
       break;
+    case "work_goal_continuation_enqueued":
+      exactObject(payload, "event.payload", ["taskId", "origin"]);
+      contracts.assertUuid(payload.taskId, "event.payload.taskId");
+      if (!ORIGINS.includes(payload.origin)) fail("unknown_enum", "event.payload.origin is unsupported");
+      break;
+    case "work_goal_continuation_resolved":
+      exactObject(payload, "event.payload", ["taskId"]);
+      contracts.assertUuid(payload.taskId, "event.payload.taskId");
+      break;
     case "work_goal_continuation_attempted":
       exactObject(payload, "event.payload", ["taskId", "origin"]);
       contracts.assertUuid(payload.taskId, "event.payload.taskId");
@@ -321,6 +332,9 @@ function replayWorkGoalEvents(events) {
         verifiedCriteria: [],
         verifiedCriteriaByVersion: { [spec.version]: [] },
         blockerStreak: { count: 0, fingerprint: null, pendingTaskId: null },
+        continuationTrackingV2: false,
+        continuationQueue: [],
+        continuationTaskIds: [],
         committedBudget: { maxActions: 0, maxPlannerCalls: 0, maxActiveMs: 0 },
         taskSlotsUsed: 0,
       };
@@ -357,6 +371,24 @@ function reservationFor(state, reservationId, taskId, expectedStatuses, event) {
     fail("reservation_conflict", `${event.type} does not match an outstanding reservation`);
   }
   return reservation;
+}
+
+function resetBlockerStreak(state) {
+  state.blockerStreak = { count: 0, fingerprint: null, pendingTaskId: null };
+  state.continuationQueue = [];
+}
+
+function drainContinuationQueue(state) {
+  while (state.continuationQueue[0]?.outcome) {
+    const { outcome } = state.continuationQueue.shift();
+    if (outcome.kind === "neutral") {
+      state.blockerStreak = { count: 0, fingerprint: null, pendingTaskId: null };
+      continue;
+    }
+    const count = state.blockerStreak.fingerprint === outcome.fingerprint ? state.blockerStreak.count + 1 : 1;
+    state.blockerStreak = { count, fingerprint: outcome.fingerprint, pendingTaskId: null };
+    if (count >= 3) state.status = "blocked";
+  }
 }
 
 function applyWorkGoalEvent(previousState, event, seenEventIds = new Set()) {
@@ -409,7 +441,7 @@ function applyEvent(state, event) {
       state.specsByVersion[payload.spec.version] = payload.spec;
       state.verifiedCriteria = [];
       state.verifiedCriteriaByVersion[payload.spec.version] = [];
-      state.blockerStreak = { count: 0, fingerprint: null, pendingTaskId: null };
+      resetBlockerStreak(state);
       break;
     }
     case "work_goal_task_reserved": {
@@ -481,7 +513,7 @@ function applyEvent(state, event) {
       requireStatus(state, ["active", "blocked"], event);
       validateEvidenceBindings(state, payload.evidenceRefs, event);
       state.progress.push(...payload.evidenceRefs.map((ref) => ({ ...ref, goalVersion: event.goalVersion })));
-      state.blockerStreak = { count: 0, fingerprint: null, pendingTaskId: null };
+      resetBlockerStreak(state);
       if (state.status === "blocked") state.status = "active";
       break;
     case "work_goal_continuation_attempted": {
@@ -494,9 +526,52 @@ function applyEvent(state, event) {
       state.blockerStreak.pendingTaskId = payload.taskId;
       break;
     }
-    case "work_goal_blocker_observed": {
+    case "work_goal_continuation_enqueued": {
       requireStatus(state, ["active"], event);
       const reservationId = state.reservationsByTask[payload.taskId];
+      if (!reservationId || !["linked", "reconciled", "released"].includes(state.reservations[reservationId].status)) {
+        fail("invalid_binding", "continuation Task must be linked before it is enqueued");
+      }
+      // This event starts ordered accounting without changing how any existing
+      // legacy event sequence is replayed. Any legacy streak is ambiguous once
+      // a task may be outstanding concurrently, so conservatively restart it.
+      if (!state.continuationTrackingV2) {
+        state.continuationTrackingV2 = true;
+        state.blockerStreak = { count: 0, fingerprint: null, pendingTaskId: null };
+        state.continuationQueue = [];
+        state.continuationTaskIds = [];
+      }
+      if (state.continuationTaskIds.includes(payload.taskId)) fail("duplicate_continuation", "Task continuation was already enqueued");
+      state.continuationTaskIds.push(payload.taskId);
+      state.continuationQueue.push({ taskId: payload.taskId, outcome: null });
+      break;
+    }
+    case "work_goal_continuation_resolved": {
+      requireStatus(state, ["active", "blocked"], event);
+      if (!state.continuationTrackingV2) fail("invalid_transition", "continuation resolution requires ordered tracking");
+      const reservationId = state.reservationsByTask[payload.taskId];
+      const continuation = state.continuationQueue.find((item) => item.taskId === payload.taskId);
+      if (!reservationId || !["linked", "reconciled", "released"].includes(state.reservations[reservationId].status) ||
+          !continuation || continuation.outcome) {
+        fail("invalid_binding", "neutral continuation result must match an unresolved linked Task");
+      }
+      continuation.outcome = { kind: "neutral" };
+      drainContinuationQueue(state);
+      break;
+    }
+    case "work_goal_blocker_observed": {
+      requireStatus(state, state.continuationTrackingV2 ? ["active", "blocked"] : ["active"], event);
+      const reservationId = state.reservationsByTask[payload.taskId];
+      if (state.continuationTrackingV2) {
+        const continuation = state.continuationQueue.find((item) => item.taskId === payload.taskId);
+        if (!reservationId || !["linked", "reconciled", "released"].includes(state.reservations[reservationId].status) ||
+            !continuation || continuation.outcome) {
+          fail("invalid_binding", "blocker must resolve an unresolved enqueued continuation Task");
+        }
+        continuation.outcome = { kind: "blocker", fingerprint: `${payload.reasonCode}:${payload.phase}` };
+        drainContinuationQueue(state);
+        break;
+      }
       if (!reservationId || !["linked", "reconciled", "released"].includes(state.reservations[reservationId].status) || state.blockerStreak.pendingTaskId !== payload.taskId) {
         fail("invalid_binding", "blocker must resolve the currently pending continuation Task");
       }
@@ -509,12 +584,12 @@ function applyEvent(state, event) {
     case "work_goal_paused":
       requireStatus(state, ["active"], event);
       state.status = "paused";
-      state.blockerStreak = { count: 0, fingerprint: null, pendingTaskId: null };
+      resetBlockerStreak(state);
       break;
     case "work_goal_resumed":
       requireStatus(state, ["paused", "blocked"], event);
       state.status = "active";
-      state.blockerStreak = { count: 0, fingerprint: null, pendingTaskId: null };
+      resetBlockerStreak(state);
       break;
     case "work_goal_criterion_verified": {
       requireStatus(state, ["active", "paused", "blocked"], event);
@@ -530,7 +605,7 @@ function applyEvent(state, event) {
       if (!verifiedForVersion.includes(payload.criterionId)) verifiedForVersion.push(payload.criterionId);
       state.verifiedCriteriaByVersion[event.goalVersion] = verifiedForVersion;
       if (payload.actor === "host") state.progress.push(...payload.evidenceRefs.map((ref) => ({ ...ref, goalVersion: event.goalVersion })));
-      state.blockerStreak = { count: 0, fingerprint: null, pendingTaskId: null };
+      resetBlockerStreak(state);
       if (state.status === "blocked") state.status = "active";
       break;
     }

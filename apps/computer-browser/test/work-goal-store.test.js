@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 
 const { WorkGoalStore } = require("../main/harness/work-goal-store");
 
@@ -126,6 +126,66 @@ test("the project registry lock excludes another writer and close releases it", 
   await first.close();
   await second.load();
   await second.close();
+});
+
+test("load recovers when a reclaimer dies before removing the stale registry lock", async (t) => {
+  const storageRoot = await tempRoot(t);
+  const goalsRoot = path.join(storageRoot, "work-goals");
+  await fsp.mkdir(goalsRoot, { mode: 0o700 });
+  const lockPath = path.join(goalsRoot, "registry.lock");
+  const staleOwner = {
+    pid: 2_000_000_000,
+    token: "00000000-0000-4000-8000-000000000001",
+    acquiredAt: new Date().toISOString(),
+  };
+  await fsp.writeFile(lockPath, JSON.stringify(staleOwner), { mode: 0o600 });
+
+  const workerSource = `
+    const fsp = require("node:fs/promises");
+    const { WorkGoalStore } = require(${JSON.stringify(path.resolve(__dirname, "../main/harness/work-goal-store"))});
+    const lockPath = ${JSON.stringify(lockPath)};
+    const unlink = fsp.unlink;
+    fsp.unlink = async (filePath) => {
+      if (filePath === lockPath) process.kill(process.pid, "SIGKILL");
+      return unlink(filePath);
+    };
+    new WorkGoalStore({ storageRoot: process.argv[1] }).load().then(
+      () => process.exit(2),
+      (error) => { console.error(error); process.exit(3); },
+    );
+  `;
+  const crashed = spawnSync(process.execPath, ["-e", workerSource, storageRoot], { timeout: 5000 });
+  assert.equal(crashed.error, undefined);
+  assert.equal(crashed.signal, "SIGKILL", crashed.stderr.toString());
+  const claimFiles = (await fsp.readdir(goalsRoot)).filter((name) => name.startsWith("registry.lock.reclaim"));
+  assert.equal(claimFiles.length, 1);
+  const reclaimPath = path.join(goalsRoot, claimFiles[0]);
+  assert.equal(JSON.parse(await fsp.readFile(reclaimPath, "utf8")).pid, crashed.pid);
+  assert.equal(JSON.parse(await fsp.readFile(lockPath, "utf8")).token, staleOwner.token);
+
+  const recovered = new WorkGoalStore({ storageRoot });
+  await recovered.load();
+  assert.equal(JSON.parse(await fsp.readFile(lockPath, "utf8")).pid, process.pid);
+  await assert.rejects(() => fsp.stat(reclaimPath), { code: "ENOENT" });
+  await recovered.close();
+});
+
+test("load clears a dead claim left at the legacy fixed reclaim path", async (t) => {
+  const storageRoot = await tempRoot(t);
+  const goalsRoot = path.join(storageRoot, "work-goals");
+  await fsp.mkdir(goalsRoot, { mode: 0o700 });
+  const lockPath = path.join(goalsRoot, "registry.lock");
+  const reclaimPath = `${lockPath}.reclaim`;
+  const staleToken = "00000000-0000-4000-8000-000000000001";
+  await fsp.writeFile(lockPath, JSON.stringify({ pid: 2_000_000_000, token: staleToken }), { mode: 0o600 });
+  await fsp.writeFile(reclaimPath, JSON.stringify({
+    pid: 2_000_000_000, token: "00000000-0000-4000-8000-000000000002", staleToken,
+  }), { mode: 0o600 });
+
+  const recovered = new WorkGoalStore({ storageRoot });
+  await recovered.load();
+  await assert.rejects(() => fsp.stat(reclaimPath), { code: "ENOENT" });
+  await recovered.close();
 });
 
 test("concurrent processes cannot reclaim a fresh registry lock as stale", async (t) => {

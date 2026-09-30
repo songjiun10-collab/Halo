@@ -312,15 +312,18 @@ class TaskHost {
       this._emit(store.taskId, snapshot, { goal: controller.getGoal(), browser: browser.getBrowserSnapshot?.() });
       const binding = store.taskProfile?.workGoalBinding;
       const phase = WORK_GOAL_BLOCKER_PHASE[snapshot.pauseReason];
-      if (binding && snapshot.state === "paused" && phase) {
+      if (binding && snapshot.state === "paused") {
         // Controller pause transitions checkpoint before notifying listeners.
-        // Keep repeated blocker accounting durable and best-effort; this
-        // callback must never interfere with pausing the actual Task.
-        this._withWorkGoalAdmission(() => this._workGoalOrchestrator.observeBlocker(
-          binding.goalId, binding.goalVersion, {
+        // Blocker accounting is durable but best-effort: it never interferes
+        // with pausing the actual Task.
+        const operation = phase
+          ? () => this._workGoalOrchestrator.observeBlocker(binding.goalId, binding.goalVersion, {
             taskId: store.taskId, reasonCode: snapshot.pauseReason, phase, taskStore: store,
-          },
-        )).catch(() => {});
+          })
+          : () => this._workGoalOrchestrator.resolveContinuation(binding.goalId, binding.goalVersion, {
+            taskId: store.taskId, taskStore: store, taskState: "paused",
+          });
+        this._withWorkGoalAdmission(operation).catch(() => {});
       }
       if (snapshot.state === "completed" || snapshot.state === "stopped") this._recordTerminal(store.taskId, snapshot.state);
     });
@@ -793,6 +796,11 @@ class TaskHost {
       if (entry) {
         const binding = entry.store.taskProfile?.workGoalBinding;
         if (binding) {
+          await this._withWorkGoalAdmission(() => this._workGoalOrchestrator.resolveContinuation(
+            binding.goalId, binding.goalVersion, { taskId, taskStore: entry.store, taskState: state },
+          )).catch((error) => {
+            this._emit(taskId, entry.snapshot, { error: error.code || "work_goal_continuation_resolution_failed" });
+          });
           await this._workGoalOrchestrator.reconcileTask(taskId, { taskStore: entry.store }).catch((error) => {
             this._emit(taskId, entry.snapshot, { error: error.code || "work_goal_reconciliation_failed" });
           });

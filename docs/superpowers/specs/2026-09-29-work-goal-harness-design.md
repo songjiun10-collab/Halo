@@ -147,6 +147,8 @@ event set is:
 - `work_goal_progress_recorded`
 - `work_goal_blocker_observed`
 - `work_goal_continuation_attempted`
+- `work_goal_continuation_enqueued`
+- `work_goal_continuation_resolved`
 - `work_goal_paused`
 - `work_goal_resumed`
 - `work_goal_criterion_verified`
@@ -178,6 +180,18 @@ Task ID; `continuation_attempted` stores Task ID and a host-derived origin
 the host-owned actor; `criterion_verified` stores criterion ID and actor;
 `completed` stores the exact set of criteria validated complete by the host.
 Each payload is closed-schema validated by the Work Goal contract module.
+
+New hosts record continuation admission with `continuation_enqueued`, then
+record either a validated `blocker_observed` result or a neutral
+`continuation_resolved` result. Results are buffered and drained in durable
+continuation-admission order, so concurrent Tasks cannot overwrite each
+other's pending blocker state or let later outcomes overtake unresolved earlier
+attempts. A neutral result breaks the consecutive-blocker streak. Progress,
+amendment, and explicit Goal pause/resume reset the pending ordered sequence.
+The legacy `continuation_attempted` event remains readable during recovery;
+the first `continuation_enqueued` event starts ordered tracking and
+conservatively resets any ambiguous legacy streak instead of reinterpreting
+old journal events.
 
 `task_reserved` is idempotent by reservation ID. `task_linked` binds exactly
 one reservation to one Task. `task_reservation_reconciled` records the
@@ -359,7 +373,12 @@ backend responsibilities are:
   and durably create only when no
   nonterminal goal exists;
 - `getActiveWorkGoal()` and `listWorkGoalHistory()` — return validated,
-  bounded summaries and task links, not full unbounded journals;
+  bounded summaries and task links, not full unbounded journals. History uses
+  `listWorkGoalHistory({limit = 50, cursor = null}) -> {items, nextCursor}`;
+  `limit` is an integer from 1 through 100, and `cursor` is a Goal UUID from
+  the preceding page. Ordering is stable by `goalId`; the next cursor is null
+  on the final page. Evidence is revalidated only for returned summaries.
+  Internal recovery retains its separate unbounded journal/history reader.
 - `amendWorkGoal(expectedVersion, patch)` — user-authored optimistic version
   update; reject stale versions;
 - `createTask(...)` — while a project has an active Goal, bind new project

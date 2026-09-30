@@ -124,6 +124,31 @@ test("the third consecutive identical host blocker moves the active Work Goal to
   assert.equal(state.blockerStreak.fingerprint, "planner_error:planner");
 });
 
+test("queued continuation outcomes drain in attempt order and a neutral result breaks the blocker streak", () => {
+  const tasks = [uuid(21), uuid(22), uuid(23)];
+  const events = [created()];
+  let seq = 2;
+  for (let index = 0; index < tasks.length; index += 1) {
+    const taskId = tasks[index];
+    const reservationId = uuid(40 + index);
+    events.push(event("work_goal_task_reserved", {
+      reservationId, taskId, taskGoalVersion: 1,
+      limits: { maxTasks: 1, maxActions: 5, maxPlannerCalls: 2, maxActiveMs: 1000 },
+    }, seq++));
+    events.push(event("work_goal_task_linked", { reservationId, taskId }, seq++));
+    events.push(event("work_goal_continuation_enqueued", { taskId, origin: "user" }, seq++));
+  }
+  // Later tasks can report first, but they cannot overtake the unresolved head.
+  events.push(event("work_goal_blocker_observed", { taskId: tasks[2], reasonCode: "planner_error", phase: "planner" }, seq++));
+  events.push(event("work_goal_blocker_observed", { taskId: tasks[1], reasonCode: "planner_error", phase: "planner" }, seq++));
+  events.push(event("work_goal_continuation_resolved", { taskId: tasks[0] }, seq++));
+
+  const state = replayWorkGoalEvents(events);
+  assert.equal(state.status, "active");
+  assert.equal(state.blockerStreak.count, 2);
+  assert.deepEqual(state.continuationQueue, []);
+});
+
 test("blocker reason and phase are an exact allowlisted pair", () => {
   const events = [
     created(),

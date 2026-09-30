@@ -89,7 +89,7 @@
 - Create: `apps/computer-browser/test/work-goal-orchestrator.test.js`
 
 **Interfaces:**
-- Orchestrator: `startWorkGoal(input: WorkGoalInput)`, `getActiveWorkGoal()`, `listWorkGoalHistory()`, `amendWorkGoal(expectedVersion,nextSpec)`, `recordWorkGoalProgress(goalId,expectedVersion,evidenceRefs)`, `verifyWorkGoalCriterion(goalId,expectedVersion,criterionId)`, `pauseWorkGoal`, `resumeWorkGoal`, `completeWorkGoal`, `archiveWorkGoal`. Host assigns initial UUID/version and actor identity.
+- Orchestrator: `startWorkGoal(input: WorkGoalInput)`, `getActiveWorkGoal()`, `listWorkGoalHistory({limit=50,cursor=null}) -> {items,nextCursor}`, `amendWorkGoal(expectedVersion,nextSpec)`, `recordWorkGoalProgress(goalId,expectedVersion,evidenceRefs)`, `verifyWorkGoalCriterion(goalId,expectedVersion,criterionId)`, `pauseWorkGoal`, `resumeWorkGoal`, `completeWorkGoal`, `archiveWorkGoal`. Host assigns initial UUID/version and actor identity. History page size is capped at 100; recovery uses the separate unbounded internal journal reader.
 - It wraps `WorkGoalStore` and owns lifecycle validation, evidence-reference verification via `TaskStore.readEvents()`/validated TaskStore recovery data, criterion verification, and reservation reconciliation primitives. It does not create or admit Tasks.
 
 - [x] Write real-store orchestrator tests for expected-version amendment, evidence event/task/version/criterion matching, stale user verification, pause/resume/block/archive transitions, completion gating, and reservation usage reconciliation; Task 6 proves renderer cannot forge the actor.

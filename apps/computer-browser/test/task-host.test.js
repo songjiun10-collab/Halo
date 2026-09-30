@@ -681,6 +681,55 @@ test("three matching durable paused continuations block the active Work Goal", a
   assert.equal(active.blockerStreak.count, 3);
 });
 
+test("prequeued continuations preserve their blocker attempts in admission order", async () => {
+  const storageRoot = await mkTempRoot();
+  let releaseFirstPlanner;
+  let signalFirstPlanner;
+  const firstPlannerEntered = new Promise((resolve) => { signalFirstPlanner = resolve; });
+  const firstPlannerGate = new Promise((resolve) => { releaseFirstPlanner = resolve; });
+  let plannerCalls = 0;
+  const host = makeHost(storageRoot, {
+    makePlanner: () => ({ next: async () => {
+      plannerCalls += 1;
+      if (plannerCalls === 1) {
+        signalFirstPlanner();
+        await firstPlannerGate;
+      }
+      throw new Error("simulated planner outage");
+    } }),
+  });
+  const goal = await host.startWorkGoal({
+    objective: "Count consecutive failures even when continuations queue first",
+    successCriteria: [{ id: "review", text: "Review the result", required: true, verification: "user" }],
+    budget: { maxTasks: 3, maxActions: 100000, maxPlannerCalls: 50000, maxActiveMs: 100000000 },
+  });
+
+  const firstCreating = host.createTask({ originalRequest: "attempt 1" });
+  await firstPlannerEntered;
+  const second = await host.createTask({ originalRequest: "attempt 2" });
+  const third = await host.createTask({ originalRequest: "attempt 3" });
+  assert.equal(second.snapshot.state, "queued");
+  assert.equal(third.snapshot.state, "queued");
+
+  releaseFirstPlanner();
+  const first = await firstCreating;
+  assert.equal(first.snapshot.pauseReason, "planner_error");
+
+  for (const taskId of [first.taskId, second.taskId, third.taskId]) {
+    if (taskId !== first.taskId) {
+      const detail = await waitForState(host, taskId, ["paused"]);
+      assert.equal(detail.pauseReason, "planner_error");
+    }
+    await host._withWorkGoalAdmission(() => undefined);
+    await host.stopTask(taskId);
+    await host._queueTransition;
+  }
+
+  const active = await host.getActiveWorkGoal();
+  assert.equal(active.status, "blocked");
+  assert.equal(active.blockerStreak.count, 3);
+});
+
 test("createTask resolves and durably records the profile before browser or planner construction", async () => {
   const storageRoot = await mkTempRoot();
   const observedAtConstruction = [];

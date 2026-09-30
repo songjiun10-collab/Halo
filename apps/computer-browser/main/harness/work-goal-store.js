@@ -119,28 +119,48 @@ async function atomicWrite(dirPath, fileName, contents) {
   }
 }
 
+async function assertNoOtherReclaimer(dirPath, fileName, ownClaimPath = null) {
+  const prefix = `${fileName}.reclaim`;
+  for (const name of await fsp.readdir(dirPath)) {
+    if (name !== prefix && !(name.startsWith(`${prefix}.`) && UUID_RE.test(name.slice(prefix.length + 1)))) continue;
+    const claimPath = path.join(dirPath, name);
+    if (claimPath === ownClaimPath) continue;
+    let claim;
+    try { claim = JSON.parse(await readRegularNoFollow(claimPath)); }
+    catch (error) {
+      if (error.code === "ENOENT") continue;
+      if (error.code === "unsafe_path" || error.code === "unsafe_permissions") throw error;
+      fail("storage_corrupt", `${name} is unreadable or corrupt`);
+    }
+    if (!isPlainObject(claim) || !Number.isSafeInteger(claim.pid) || claim.pid <= 0 ||
+        typeof claim.token !== "string" || !UUID_RE.test(claim.token)) {
+      fail("storage_corrupt", `${name} has an invalid owner`);
+    }
+    if (isPidAlive(claim.pid)) fail("writer_conflict", `Work Goal storage lock ${fileName} is being reclaimed`);
+    // New claim names are never reused, so removing a dead claim cannot erase
+    // another process's newly published claim. The fixed name is legacy only.
+    try { await fsp.unlink(claimPath); await syncDirectory(dirPath); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+}
+
 async function acquireLock(dirPath, fileName) {
   const lockPath = path.join(dirPath, fileName);
-  // Serializes stale-lock replacement. Without this guard two openers can both
-  // observe the same dead owner; the slower opener can then rename a fresh
-  // lock installed by the winner.
-  const reclaimPath = `${lockPath}.reclaim`;
+  // Unique claims serialize stale-lock replacement and can be safely removed
+  // after their owner dies, without reusing a pathname claimed by a new writer.
   const owner = { pid: process.pid, token: crypto.randomUUID(), acquiredAt: new Date().toISOString() };
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    try { await fsp.lstat(reclaimPath); }
-    catch (error) { if (error.code !== "ENOENT") throw error; }
-    if (await fsp.access(reclaimPath).then(() => true, () => false)) {
-      fail("writer_conflict", `Work Goal storage lock ${fileName} is being reclaimed`);
-    }
+    await assertNoOtherReclaimer(dirPath, fileName);
     try {
       await writeExclusiveDurable(lockPath, JSON.stringify(owner));
       await syncDirectory(dirPath);
       // A reclaimer may have started between the preflight and O_EXCL create.
       // It will only remove the exact stale token it inspected; do not proceed
       // if its claim appeared while we were acquiring.
-      if (await fsp.access(reclaimPath).then(() => true, () => false)) {
+      try { await assertNoOtherReclaimer(dirPath, fileName); }
+      catch (error) {
         await releaseLock({ path: lockPath, dirPath, owner });
-        fail("writer_conflict", `Work Goal storage lock ${fileName} is being reclaimed`);
+        throw error;
       }
       return { path: lockPath, dirPath, owner };
     } catch (error) {
@@ -159,12 +179,11 @@ async function acquireLock(dirPath, fileName) {
     }
     if (isPidAlive(existing.pid)) fail("writer_conflict", `Work Goal storage is open by pid ${existing.pid}`);
     const reclaimOwner = { pid: process.pid, token: crypto.randomUUID(), staleToken: existing.token };
-    try { await writeExclusiveDurable(reclaimPath, JSON.stringify(reclaimOwner)); }
-    catch (error) {
-      if (error.code === "EEXIST") fail("writer_conflict", `Work Goal storage lock ${fileName} is being reclaimed`);
-      throw error;
-    }
+    const reclaimPath = `${lockPath}.reclaim.${reclaimOwner.token}`;
+    await atomicWrite(dirPath, path.basename(reclaimPath), JSON.stringify(reclaimOwner));
+    let contested = false;
     try {
+      await assertNoOtherReclaimer(dirPath, fileName, reclaimPath);
       // Re-read under the exclusive reclaim claim. Cooperative acquirers check
       // this claim before creating the canonical lock, so it cannot be a new
       // owner's lock by the time it is removed.
@@ -174,6 +193,9 @@ async function acquireLock(dirPath, fileName) {
       if (confirmed.token !== existing.token || confirmed.pid !== existing.pid) continue;
       await fsp.unlink(lockPath);
       await syncDirectory(dirPath);
+    } catch (error) {
+      if (error.code !== "writer_conflict") throw error;
+      contested = true;
     } finally {
       try {
         const claim = JSON.parse(await readRegularNoFollow(reclaimPath));
@@ -183,6 +205,7 @@ async function acquireLock(dirPath, fileName) {
         }
       } catch (error) { if (error.code !== "ENOENT") throw error; }
     }
+    if (contested) await new Promise((resolve) => setTimeout(resolve, 1 + crypto.randomInt(5)));
   }
   fail("writer_conflict", `could not acquire ${fileName}`);
 }

@@ -381,8 +381,9 @@ class WorkGoalOrchestrator {
       reservation.status !== "reserved")) {
       fail("invalid_binding", "continuation Task is not linked to the current Work Goal version");
     }
-    if (state.blockerStreak.pendingTaskId === payload.taskId) return summary(state);
-    return summary(await this._append(goalId, expectedVersion, "work_goal_continuation_attempted", payload));
+    if (state.continuationTrackingV2 && state.continuationTaskIds.includes(payload.taskId)) return summary(state);
+    if (!state.continuationTrackingV2 && state.blockerStreak.pendingTaskId === payload.taskId) return summary(state);
+    return summary(await this._append(goalId, expectedVersion, "work_goal_continuation_enqueued", payload));
   }
 
   async observeBlocker(goalId, expectedVersion, input) {
@@ -390,8 +391,10 @@ class WorkGoalOrchestrator {
     const { taskId, reasonCode, phase, taskStore } = input;
     const state = this._state(goalId, expectedVersion);
     taskContracts.assertUuid(taskId, "blocker.taskId");
-    if (!BLOCKER_REASONS.includes(reasonCode) || BLOCKER_PHASE_BY_REASON[reasonCode] !== phase ||
-        state.blockerStreak.pendingTaskId !== taskId) {
+    const pending = state.continuationTrackingV2
+      ? state.continuationQueue.some((item) => item.taskId === taskId && !item.outcome)
+      : state.blockerStreak.pendingTaskId === taskId;
+    if (!BLOCKER_REASONS.includes(reasonCode) || BLOCKER_PHASE_BY_REASON[reasonCode] !== phase || !pending) {
       fail("invalid_blocker", "blocker must match the pending Task and a supported reason/phase");
     }
     const reservation = Object.values(state.reservations).find((item) => item.taskId === taskId &&
@@ -408,6 +411,33 @@ class WorkGoalOrchestrator {
     return summary(await this._append(goalId, expectedVersion, "work_goal_blocker_observed", {
       taskId, reasonCode, phase,
     }));
+  }
+
+  async resolveContinuation(goalId, expectedVersion, input) {
+    plainObject(input, "continuation resolution", ["taskId", "taskStore", "taskState"], ["taskId", "taskState"]);
+    const { taskId, taskStore, taskState } = input;
+    const state = this._state(goalId, expectedVersion);
+    taskContracts.assertUuid(taskId, "continuation.taskId");
+    if (!state.continuationTrackingV2) return summary(state);
+    const continuation = state.continuationQueue.find((item) => item.taskId === taskId);
+    if (!continuation || continuation.outcome) return summary(state);
+    if (!(["paused", "completed", "stopped"].includes(taskState))) {
+      fail("invalid_continuation", "neutral continuation resolution requires a durable non-blocking Task state");
+    }
+    const reservation = Object.values(state.reservations).find((item) => item.taskId === taskId &&
+      item.taskGoalVersion === expectedVersion && ["linked", "reconciled", "released"].includes(item.status));
+    if (!reservation) fail("invalid_binding", "continuation Task is not linked to the Work Goal");
+    const material = await this._taskMaterial(taskId, taskStore);
+    this._verifyBinding(state, reservation, material);
+    const checkpointTask = material.checkpoint?.payload?.task;
+    if (!material.checkpoint || material.checkpoint.seq !== material.events.at(-1)?.seq ||
+        checkpointTask?.state !== taskState) {
+      fail("invalid_continuation", "neutral resolution is not backed by a current durable Task checkpoint");
+    }
+    if (taskState === "paused" && BLOCKER_REASONS.includes(checkpointTask.pauseReason)) {
+      fail("invalid_continuation", "a supported blocker must be recorded as a blocker, not resolved neutrally");
+    }
+    return summary(await this._append(goalId, expectedVersion, "work_goal_continuation_resolved", { taskId }));
   }
 
   async _verifiedEvidence(state, goalVersion, ref, cache, options = {}) {
