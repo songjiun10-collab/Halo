@@ -11,7 +11,7 @@ const { EventEmitter } = require("node:events");
 const ENTRY = path.resolve(__dirname, "../main/index.js");
 
 function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcpEnabled = false } = {}) {
-  const calls = { windows: [], hosts: [], services: [], clients: [], ipc: [], errors: [], dockHide: 0, quit: 0 };
+  const calls = { windows: [], hosts: [], services: [], clients: [], ipc: [], errors: [], usage: [], dockHide: 0, quit: 0 };
   class FakeWindow extends EventEmitter {
     constructor(options) {
       super();
@@ -83,7 +83,8 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
       disposeChild(childId) { this.disposedChildren.push(childId); return Promise.resolve(); }
       disposeAll() { return Promise.resolve(); }
     }, makeDualSurfaceBrowser: () => ({}) },
-    "./harness/planner-command": { resolvePlannerCommand: () => ({ command: null, env: {} }) },
+    "./harness/planner-command": { resolvePlannerCommand: () => ({ command: "/test/node", env: {} }) },
+    "./harness/planner-providers": require("../main/harness/planner-providers"),
     "./harness/providers/codex-mcp-adapter": {
       CodexMcpAdapter: class {
         constructor(options) { calls.mcpOptions = options; calls.mcpClosed = 0; }
@@ -97,7 +98,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
       } }) },
     "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } } },
     "./harness/local-memory-store": { LocalMemoryStore: class {} },
-    "./harness/usage-ledger": { UsageLedger: class { async load() { return this; } } },
+    "./harness/usage-ledger": { UsageLedger: class { async load() { return this; } record(...args) { calls.usage.push(args); } } },
     "./harness/local-credential-vault": { LocalCredentialVault: class {} },
     "./harness/profile-import/session-vault": { SessionVault: class {} },
     "./harness/profile-import/profile-importer": { ProfileImporter: class {}, SessionConfigStore: class {} },
@@ -275,4 +276,22 @@ test("two overlapping Quit requests show one decision and detach once", async (t
   assert.equal(calls.clients[0].stopped, 1);
   assert.equal(calls.clients[0].detached, 1);
   assert.equal(calls.quit, 1);
+});
+
+test("planners launch only the pinned allowlisted worker and keep its usage to that provider", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-planner-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { calls } = loadEntrypoint({ serviceMode: true, userData });
+  await flushStartup();
+  const { makePlanner } = calls.hosts[0].options;
+  makePlanner("task-off");
+  assert.deepEqual([calls.plannerOptions.command, calls.plannerOptions.args], [null, []]);
+  makePlanner("task-off", { plannerProvider: "codex" });
+  assert.deepEqual([calls.plannerOptions.command, calls.plannerOptions.args], [null, []]);
+  makePlanner("task-claude", { plannerProvider: "claude_code" });
+  assert.equal(calls.plannerOptions.command, "/test/node");
+  assert.deepEqual(calls.plannerOptions.args, [path.join(path.dirname(ENTRY), "harness/providers/claude-code-worker.js")]);
+  calls.plannerOptions.onUsage({ provider: "codex", inputTokens: 1 });
+  calls.plannerOptions.onUsage({ provider: "claude", inputTokens: 2 });
+  assert.deepEqual(calls.usage, [["task-claude", "claude", { provider: "claude", inputTokens: 2 }]]);
 });

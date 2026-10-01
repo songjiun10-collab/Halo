@@ -8,32 +8,19 @@ const path = require('node:path');
 const { test } = require('node:test');
 
 const packageRoot = path.resolve(__dirname, '..');
-const names = ['harness-contracts', 'task-profile-contracts', 'harness-profile', 'capability-registry'];
+const { sharedNames: names, writeRuntimeFixture } = require('./runtime-fixture');
 
 test('stale runtime artifacts block build, test and launches before downstream work', async t => {
   const temporary = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'halo-runtime-commands-'));
   t.after(() => fs.rm(temporary, { recursive: true, force: true }));
   const browserRoot = path.join(temporary, 'apps/computer-browser');
   const frontendRoot = path.join(temporary, 'frontend');
-  await fs.mkdir(path.join(browserRoot, 'runtime-src/shared'), { recursive: true });
-  await fs.mkdir(path.join(browserRoot, 'shared'));
-  await fs.mkdir(path.join(browserRoot, 'tools'));
+  await fs.mkdir(path.join(browserRoot, 'tools'), { recursive: true });
   await fs.mkdir(path.join(browserRoot, 'test'));
   await fs.mkdir(frontendRoot);
-  await fs.cp(path.join(packageRoot, 'node_modules/typescript'), path.join(browserRoot, 'node_modules/typescript'), { recursive: true });
+  await writeRuntimeFixture(browserRoot);
   await fs.copyFile(path.join(packageRoot, 'tools/build-runtime.js'), path.join(browserRoot, 'tools/build-runtime.js'));
   await fs.copyFile(path.join(packageRoot, 'package.json'), path.join(browserRoot, 'package.json'));
-  const config = {
-    compilerOptions: { strict: true, noEmitOnError: true, allowJs: false, target: 'ES2022', module: 'CommonJS',
-      rootDir: 'runtime-src/shared', newLine: 'lf', types: [], declaration: false, sourceMap: false,
-      incremental: false, importHelpers: false, removeComments: false },
-    files: names.map(name => `runtime-src/shared/${name}.ts`),
-  };
-  await fs.writeFile(path.join(browserRoot, 'tsconfig.runtime.json'), JSON.stringify(config));
-  for (const name of names) {
-    await fs.writeFile(path.join(browserRoot, `runtime-src/shared/${name}.ts`), `export = { value: '${name}' };\n`);
-    await fs.writeFile(path.join(browserRoot, `shared/${name}.js`), `stale ${name}\n`);
-  }
   const initialArtifacts = await Promise.all(names.map(name => fs.readFile(path.join(browserRoot, `shared/${name}.js`))));
   await fs.writeFile(path.join(frontendRoot, 'package.json'), JSON.stringify({
     name: 'downstream-frontend', private: true,

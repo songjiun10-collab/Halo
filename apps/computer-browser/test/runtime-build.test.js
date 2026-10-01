@@ -6,28 +6,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 
-const names = ['harness-contracts', 'task-profile-contracts', 'harness-profile', 'capability-registry'];
-const packageRoot = path.resolve(__dirname, '..');
+const { sharedNames: names, writeRuntimeFixture } = require('./runtime-fixture');
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'halo-runtime-fixture-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  await fs.mkdir(path.join(root, 'runtime-src/shared'), { recursive: true });
-  await fs.mkdir(path.join(root, 'shared'));
-  await fs.mkdir(path.join(root, 'node_modules/typescript'), { recursive: true });
-  // Copy the real compiler, not a fake compiler or symlinked dependency.
-  await fs.cp(path.join(packageRoot, 'node_modules/typescript'), path.join(root, 'node_modules/typescript'), { recursive: true });
-  const config = {
-    compilerOptions: { strict: true, noEmitOnError: true, allowJs: false, target: 'ES2022', module: 'CommonJS',
-      rootDir: 'runtime-src/shared', newLine: 'lf', types: [], declaration: false, sourceMap: false,
-      incremental: false, importHelpers: false, removeComments: false },
-    files: names.map(name => `runtime-src/shared/${name}.ts`),
-  };
-  await fs.writeFile(path.join(root, 'tsconfig.runtime.json'), JSON.stringify(config));
-  for (const name of names) {
-    await fs.writeFile(path.join(root, `runtime-src/shared/${name}.ts`), `const value: string = "${name}";\nexport = { value };\n`);
-    await fs.writeFile(path.join(root, `shared/${name}.js`), `old ${name}\n`);
-  }
+  await writeRuntimeFixture(root);
   return root;
 }
 async function snapshot(root) {
@@ -164,4 +148,38 @@ test('partial publication is detectable and explicit rebuild repairs it', async 
   assert.deepEqual(await snapshot(root), mixed);
   await run({ projectRoot: root, mode: 'write' });
   await run({ projectRoot: root, mode: 'check' });
+});
+
+test('harness cohort publishes beside main harness modules and shares the freshness gate', async t => {
+  const root = await fixture(t);
+  const run = await tool();
+  const shared = await snapshot(root);
+  await run({ projectRoot: root, mode: 'write' });
+  const broker = path.join(root, 'main/harness/generic-mcp-broker.js');
+  assert.match(await fs.readFile(broker, 'utf8'), /^\/\/ Generated from runtime-src\/main\/harness\/generic-mcp-broker\.ts\. Do not edit/);
+  assert.equal(require(broker).value, 'generic-mcp-broker');
+  assert.notDeepEqual(await snapshot(root), shared);
+  await run({ projectRoot: root, mode: 'check' });
+  const worker = path.join(root, 'main/harness/mcp-schema-worker.js');
+  await fs.writeFile(worker, 'hand edited\n');
+  await assert.rejects(run({ projectRoot: root, mode: 'check' }), { code: 'RUNTIME_STALE' });
+  assert.equal(await fs.readFile(worker, 'utf8'), 'hand edited\n');
+  await fs.unlink(worker);
+  await assert.rejects(run({ projectRoot: root, mode: 'check' }), { code: 'RUNTIME_MISSING' });
+});
+
+test('harness cohort configuration cannot redirect its root or file set', async t => {
+  const root = await fixture(t);
+  const before = await snapshot(root);
+  const configPath = path.join(root, 'tsconfig.runtime-harness.json');
+  const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
+  config.compilerOptions.rootDir = 'runtime-src';
+  await fs.writeFile(configPath, JSON.stringify(config));
+  await assert.rejects((await tool())({ projectRoot: root, mode: 'write' }), { code: 'RUNTIME_CONFIG' });
+  assert.deepEqual(await snapshot(root), before);
+  config.compilerOptions.rootDir = 'runtime-src/main/harness';
+  config.files = config.files.slice(1);
+  await fs.writeFile(configPath, JSON.stringify(config));
+  await assert.rejects((await tool())({ projectRoot: root, mode: 'write' }), { code: 'RUNTIME_CONFIG' });
+  assert.equal(await fs.readFile(path.join(root, 'main/harness/generic-mcp-broker.js'), 'utf8'), 'old generic-mcp-broker\n');
 });

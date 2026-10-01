@@ -10,7 +10,7 @@
     "build": "npm run check:runtime && npm --prefix ../../frontend run build",
     "start": "npm run build && electron .",
     "test": "npm run check:runtime && node --test",
-    "typecheck": "tsc -p tsconfig.audit.json && tsc -p tsconfig.runtime.json --noEmit",
+    "typecheck": "tsc -p tsconfig.audit.json && tsc -p tsconfig.runtime.json --noEmit && tsc -p tsconfig.runtime-harness.json --noEmit",
     "test:renderer:e2e": "npm run build && electron integration/phase2-renderer-electron.js"
   },
   "devDependencies": {

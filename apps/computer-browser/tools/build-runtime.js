@@ -8,7 +8,14 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 
-const NAMES = ['harness-contracts', 'task-profile-contracts', 'harness-profile', 'capability-registry'];
+// Each cohort is one compiler project with a fixed root and an exact output set.
+const COHORTS = Object.freeze([
+  Object.freeze({ config: 'tsconfig.runtime.json', source: 'runtime-src/shared', output: 'shared',
+    names: Object.freeze(['harness-contracts', 'task-profile-contracts', 'harness-profile', 'capability-registry']) }),
+  Object.freeze({ config: 'tsconfig.runtime-harness.json', source: 'runtime-src/main/harness', output: 'main/harness',
+    names: Object.freeze(['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker']) }),
+]);
+const ARTIFACTS = COHORTS.flatMap(cohort => cohort.names.map(name => ({ cohort, name })));
 const LOCK = '.runtime-build.lock';
 
 function failure(code, detail) {
@@ -41,14 +48,14 @@ async function readSafe(target) {
   try { return await handle.readFile(); } finally { await handle.close(); }
 }
 async function fingerprint(root) {
-  const paths = ['tsconfig.runtime.json', ...NAMES.map(n => `runtime-src/shared/${n}.ts`)];
+  const paths = COHORTS.flatMap(c => [c.config, ...c.names.map(n => `${c.source}/${n}.ts`)]);
   const hash = crypto.createHash('sha256');
   for (const relative of paths) { hash.update(relative); hash.update(await readSafe(path.join(root, relative))); }
   return hash.digest('hex');
 }
-async function validateConfig(root) {
-  const config = JSON.parse((await readSafe(path.join(root, 'tsconfig.runtime.json'))).toString('utf8'));
-  const expected = NAMES.map(n => `runtime-src/shared/${n}.ts`);
+async function validateConfig(root, cohort) {
+  const config = JSON.parse((await readSafe(path.join(root, cohort.config))).toString('utf8'));
+  const expected = cohort.names.map(n => `${cohort.source}/${n}.ts`);
   const options = config.compilerOptions;
   const permitted = new Set(['strict', 'noEmitOnError', 'allowJs', 'skipLibCheck', 'target', 'module',
     'moduleResolution', 'ignoreDeprecations', 'types', 'typeRoots', 'rootDir', 'newLine', 'removeComments',
@@ -56,7 +63,7 @@ async function validateConfig(root) {
   if (Object.keys(config).some(k => !['compilerOptions', 'files'].includes(k)) || !options ||
       Object.keys(options).some(k => !permitted.has(k)) || JSON.stringify(config.files) !== JSON.stringify(expected) ||
       options.strict !== true || options.noEmitOnError !== true || options.allowJs !== false ||
-      options.target !== 'ES2022' || options.module !== 'CommonJS' || options.rootDir !== 'runtime-src/shared' ||
+      options.target !== 'ES2022' || options.module !== 'CommonJS' || options.rootDir !== cohort.source ||
       options.newLine !== 'lf' || options.removeComments !== false || options.declaration !== false ||
       options.sourceMap !== false || options.incremental !== false || options.importHelpers !== false ||
       (options.typeRoots !== undefined && JSON.stringify(options.typeRoots) !== '["./node_modules/@types"]') ||
@@ -64,13 +71,13 @@ async function validateConfig(root) {
     throw failure('RUNTIME_CONFIG', 'unsupported compiler configuration');
   }
 }
-async function compile(root, temporary) {
+async function compile(root, cohort, temporary) {
   const compiler = path.join(root, 'node_modules/typescript/lib/tsc.js');
   await safePath(compiler, 'file');
   const metadata = JSON.parse((await readSafe(path.join(root, 'node_modules/typescript/package.json'))).toString('utf8'));
   if (metadata.version !== '6.0.2') throw failure('RUNTIME_COMPILER', 'TypeScript 6.0.2 required');
   await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [compiler, '-p', path.join(root, 'tsconfig.runtime.json'), '--outDir', temporary],
+    const child = spawn(process.execPath, [compiler, '-p', path.join(root, cohort.config), '--outDir', temporary],
       { cwd: root, stdio: 'ignore', env: { ...process.env, NODE_OPTIONS: '' } });
     const timer = setTimeout(() => { child.kill(); reject(failure('RUNTIME_COMPILE', 'compiler timeout')); }, 30000);
     child.once('error', () => { clearTimeout(timer); reject(failure('RUNTIME_COMPILE', 'compiler launch failed')); });
@@ -81,12 +88,12 @@ async function runRuntimeBuild({ projectRoot, mode }) {
   if (typeof projectRoot !== 'string' || !['check', 'write'].includes(mode)) throw failure('RUNTIME_ARGUMENT', 'invalid build request');
   const root = path.resolve(projectRoot);
   await safePath(root, 'directory');
-  await safePath(path.join(root, 'shared'), 'directory');
-  const destinations = NAMES.map(n => path.join(root, `shared/${n}.js`));
+  for (const cohort of COHORTS) await safePath(path.join(root, cohort.output), 'directory');
+  const destinations = ARTIFACTS.map(({ cohort, name }) => path.join(root, `${cohort.output}/${name}.js`));
   for (const destination of destinations) await safePath(destination, 'file', true);
   let lockHandle;
   let lockStat;
-  let temporary;
+  const temporaries = [];
   const siblings = new Set();
   try {
     if (mode === 'write') {
@@ -96,17 +103,20 @@ async function runRuntimeBuild({ projectRoot, mode }) {
       await lockHandle.writeFile(JSON.stringify({ pid: process.pid, token: crypto.randomUUID() }));
     }
     const before = await fingerprint(root);
-    await validateConfig(root);
+    for (const cohort of COHORTS) await validateConfig(root, cohort);
     const tempRoot = await fs.realpath(os.tmpdir());
-    temporary = await fs.mkdtemp(path.join(tempRoot, 'halo-runtime-'));
-    await fs.chmod(temporary, 0o700);
-    await compile(root, temporary);
-    if (await fingerprint(root) !== before) throw failure('RUNTIME_CHANGED', 'source/config changed during compilation');
-    const emitted = (await fs.readdir(temporary)).sort();
-    if (JSON.stringify(emitted) !== JSON.stringify(NAMES.map(n => `${n}.js`).sort())) throw failure('RUNTIME_OUTPUT', 'unexpected compiler output set');
     const bytes = [];
-    for (const name of NAMES) {
-      bytes.push(Buffer.concat([Buffer.from(`// Generated from runtime-src/shared/${name}.ts. Do not edit; run npm run build:runtime.\n`), await readSafe(path.join(temporary, `${name}.js`))]));
+    for (const cohort of COHORTS) {
+      const temporary = await fs.mkdtemp(path.join(tempRoot, 'halo-runtime-'));
+      temporaries.push(temporary);
+      await fs.chmod(temporary, 0o700);
+      await compile(root, cohort, temporary);
+      if (await fingerprint(root) !== before) throw failure('RUNTIME_CHANGED', 'source/config changed during compilation');
+      const emitted = (await fs.readdir(temporary)).sort();
+      if (JSON.stringify(emitted) !== JSON.stringify(cohort.names.map(n => `${n}.js`).sort())) throw failure('RUNTIME_OUTPUT', 'unexpected compiler output set');
+      for (const name of cohort.names) {
+        bytes.push(Buffer.concat([Buffer.from(`// Generated from ${cohort.source}/${name}.ts. Do not edit; run npm run build:runtime.\n`), await readSafe(path.join(temporary, `${name}.js`))]));
+      }
     }
     // Validate the whole destination cohort before comparing any bytes: missing wins over stale.
     const states = [];
@@ -139,7 +149,7 @@ async function runRuntimeBuild({ projectRoot, mode }) {
     throw failure('RUNTIME_IO', 'runtime filesystem operation failed');
   } finally {
     for (const sibling of siblings) await fs.unlink(sibling).catch(error => { if (error.code !== 'ENOENT') throw error; });
-    if (temporary) await fs.rm(temporary, { recursive: true, force: true });
+    for (const temporary of temporaries) await fs.rm(temporary, { recursive: true, force: true });
     if (lockHandle) {
       await lockHandle.close();
       const lockPath = path.join(root, LOCK);

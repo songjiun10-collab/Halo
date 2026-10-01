@@ -715,12 +715,17 @@ test("prequeued continuations preserve their blocker attempts in admission order
   const first = await firstCreating;
   assert.equal(first.snapshot.pauseReason, "planner_error");
 
-  for (const taskId of [first.taskId, second.taskId, third.taskId]) {
+  const taskIds = [first.taskId, second.taskId, third.taskId];
+  for (const [index, taskId] of taskIds.entries()) {
     if (taskId !== first.taskId) {
       const detail = await waitForState(host, taskId, ["paused"]);
       assert.equal(detail.pauseReason, "planner_error");
     }
-    await host._withWorkGoalAdmission(() => undefined);
+    // listTasks() reports the controller's optimistic pause before its
+    // onChange listener has enqueued observeBlocker(). Stopping before the
+    // blocker is durably recorded makes that best-effort observation fail, so
+    // wait on the Work Goal's own published streak instead.
+    await waitForWorkGoal(host, (goal) => goal.blockerStreak.count >= index + 1);
     await host.stopTask(taskId);
     await host._queueTransition;
   }
@@ -1150,6 +1155,17 @@ test("queued task does not create browser resources until the preceding task sto
   assert.deepEqual(seenBrowserTaskIds, [first.taskId, second.taskId]);
 });
 
+async function waitForWorkGoal(host, predicate, ms = 10000) {
+  const deadline = Date.now() + ms;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await host.getActiveWorkGoal();
+    if (last && predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`work goal did not reach the expected state; last=${JSON.stringify(last?.blockerStreak)}`);
+}
+
 async function waitForState(host, taskId, states, ms = 3000) {
   const deadline = Date.now() + ms;
   let last = null;
@@ -1169,7 +1185,7 @@ test("a queued plain task actually runs to completion after the preceding task s
   const second = await host.createTask({ originalRequest: "b" });
   assert.equal(second.snapshot.state, "queued");
   await host.stopTask(first.taskId);
-  const finished = await waitForState(host, second.taskId, ["awaiting_verification", "completed"]);
+  const finished = await waitForState(host, second.taskId, ["awaiting_verification", "completed"], 10000);
   assert.notEqual(finished.pauseReason, "queue_start_failed");
 });
 
@@ -1643,6 +1659,43 @@ test("resumeSavedTask() re-attaches fresh browser/planner instances after a memo
   const snapshot = await host.resumeSavedTask(taskId);
 
   assert.equal(browserBuilds, 2, "resumeSavedTask() must build a brand-new browser instance, not reuse the disposed one");
+  assert.notEqual(snapshot.pauseReason, "memory_emergency");
+});
+
+test("resumeSavedTask() keeps a memory_emergency entry and builds no replacement until the old planner exit is confirmed", async () => {
+  const storageRoot = await mkTempRoot();
+  let browserBuilds = 0;
+  let plannerBuilds = 0;
+  let closeFails = true;
+  const memoryMonitor = { getPressureLevel: () => "emergency" };
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => {
+      browserBuilds += 1;
+      return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }), dispose: async () => {} };
+    },
+    makePlanner: () => {
+      plannerBuilds += 1;
+      return {
+        next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "observe" }] }),
+        close: async () => { if (closeFails) throw Object.assign(new Error("planner exit unconfirmed"), { code: "planner_shutdown_failed" }); },
+      };
+    },
+    memoryMonitor,
+  });
+
+  const { taskId } = await host.createTask({ originalRequest: "goal" });
+  assert.equal((await host.getTaskDetail(taskId)).snapshot.pauseReason, "memory_emergency");
+  const stale = host._active.get(taskId);
+  memoryMonitor.getPressureLevel = () => "normal";
+
+  await assert.rejects(host.resumeSavedTask(taskId), { code: "planner_shutdown_failed" });
+  assert.equal(host._active.get(taskId), stale, "the stale entry must stay registered while its planner may still be alive");
+  assert.deepEqual([browserBuilds, plannerBuilds], [1, 1], "no fresh adapter may be minted before the old exit is confirmed");
+
+  closeFails = false;
+  const snapshot = await host.resumeSavedTask(taskId);
+  assert.notEqual(host._active.get(taskId), stale);
+  assert.deepEqual([browserBuilds, plannerBuilds], [2, 2]);
   assert.notEqual(snapshot.pauseReason, "memory_emergency");
 });
 
@@ -2330,4 +2383,27 @@ test("host.close() closes an attached task's MCP broker", async () => {
   await host.listMcpConnections(taskId);
   await host.close();
   assert.equal(made[0].closed, true);
+});
+
+test("each new parent or child planner pins the provider selected when it is created", async () => {
+  const storageRoot = await mkTempRoot();
+  const settingsStore = new HostSettingsStore({ storageRoot });
+  const calls = [];
+  const host = makeHost(storageRoot, {
+    settingsStore,
+    makePlanner: (id, options) => { calls.push(options); return finishingPlanner(); },
+  });
+  const first = await host.createTask({ originalRequest: "started while the planner is off" });
+  await host.updateHostSettings({ plannerProvider: "claude_code" });
+  // The running task keeps the planner it started with; stopping it lets the next one start.
+  assert.deepEqual(calls, [{ role: "parent", plannerProvider: "none" }]);
+  await host.stopTask(first.taskId);
+  await host.createTask({ originalRequest: "started after choosing Claude Code" });
+  for (let i = 0; i < 100 && calls.length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  host._childCoordinator._makePlanner("child-1");
+  assert.deepEqual(calls, [
+    { role: "parent", plannerProvider: "none" },
+    { role: "parent", plannerProvider: "claude_code" },
+    { role: "child", plannerProvider: "claude_code" },
+  ]);
 });

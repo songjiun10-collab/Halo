@@ -80,6 +80,7 @@ class TaskHost {
     maxParallelTasks = 2,
     permissionMode = "browse",
     plannerEffort = "medium",
+    plannerProvider = "none",
     memoryStore,
     settingsStore,
     usageLedger,
@@ -121,6 +122,9 @@ class TaskHost {
     this._setViewport = setViewport;
     this._permissionMode = permissionMode;
     this._plannerEffort = plannerEffort;
+    // Read when each planner is created, so a settings change only affects
+    // tasks and children started afterwards.
+    this._plannerProvider = plannerProvider;
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
     this._settingsStore = settingsStore || null;
@@ -195,11 +199,10 @@ class TaskHost {
       // built lazily.
       getResourceAdmission: () => this._ensureResourceAdmission(),
       makeChildBrowser: this._makeChildBrowser,
-      // Child planners are requested with role:"child"; a makePlanner factory
-      // that (like main/index.js's today) ignores extra arguments still works
-      // unchanged -- the real role-aware factory is Task 5's responsibility.
+      // Child planners are requested with role:"child" and the provider
+      // selected at the moment the child is created.
       makePlanner: this._makePlanner
-        ? (childId) => this._makePlanner(childId, { role: "child" })
+        ? (childId) => this._makePlanner(childId, { role: "child", plannerProvider: this._plannerProvider })
         : null,
       approve: this._approve,
       hostVerifier: this._hostVerifier,
@@ -286,7 +289,7 @@ class TaskHost {
     // controller's loop can possibly run.
     this._childCoordinator.registerStore(store.taskId, store);
     const browser = this._makeBrowser(store.taskId);
-    const planner = routine ? routine.runner : this._makePlanner(store.taskId);
+    const planner = routine ? routine.runner : this._makePlanner(store.taskId, { role: "parent", plannerProvider: this._plannerProvider });
     // Profile selection is a host operation (design doc "Profile selection"):
     // TaskHost is the sole authority that decides harnessProfile, and passes
     // it in rather than letting the controller (or the task's own text)
@@ -1124,8 +1127,12 @@ class TaskHost {
     // resume() outright -- the only way forward is a fresh re-attachment
     // (new browser/planner instances), exactly like recovering from a
     // process restart. Evict the stale entry and fall through to the
-    // "never attached" path below.
+    // "never attached" path below. The controller's own planner close may
+    // have failed, so the old worker's exit is confirmed here first: a
+    // failure propagates and keeps the stale entry, and no replacement
+    // adapter is minted while the previous one may still be running.
     if (entry && entry.controller.getSnapshot().pauseReason === "memory_emergency") {
+      await entry.planner?.close?.();
       this._unsubscribe(entry);
       this._active.delete(taskId);
       this._childCoordinator.unregisterStore(taskId);
@@ -1352,6 +1359,7 @@ class TaskHost {
     this._executionMode = settings.executionMode;
     this._permissionMode = settings.permissionMode;
     this._plannerEffort = settings.plannerEffort;
+    this._plannerProvider = settings.plannerProvider;
     for (const entry of this._active.values()) entry.controller.setPolicySettings(settings);
     return settings;
   }

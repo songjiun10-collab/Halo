@@ -20,6 +20,7 @@ const { makeMcpBrowserObservation } = require("./harness/mcp-browser-observation
 const { MemoryMonitor } = require("./harness/memory-monitor");
 const { AgentViewportHost, makeDualSurfaceBrowser } = require("./harness/agent-viewport-host");
 const { resolvePlannerCommand } = require("./harness/planner-command");
+const { parseOperatorOverride, selectPlannerLaunch } = require("./harness/planner-providers");
 const { HostSettingsStore } = require("./harness/host-settings");
 const { LocalMemoryStore } = require("./harness/local-memory-store");
 const { LocalCredentialVault } = require("./harness/local-credential-vault");
@@ -383,31 +384,31 @@ function makeChildHarnessBrowser(parentTaskId, childId, origin) {
 // process (harness/planner-command.js), and redoing that on every task/
 // context-reset would add back exactly the kind of per-task process-spawn
 // overhead this exists to reduce.
+//
+// Which worker runs is decided per planner (docs/superpowers/specs/
+// 2026-10-01-planner-router-design.md): an operator HALO_PLANNER_* override
+// always wins; otherwise the task's pinned settings plannerProvider selects a
+// host-allowlisted worker; "none" keeps the planner honestly unavailable.
 function makeHarnessPlanner(usageLedger) {
   const { command: plannerCommand, env: plannerEnv } = resolvePlannerCommand();
-  let args = [];
-  let configured = Boolean(process.env.HALO_PLANNER_COMMAND);
-  if (process.env.HALO_PLANNER_ARGS) {
-    try {
-      args = JSON.parse(process.env.HALO_PLANNER_ARGS);
-      configured = Array.isArray(args) && args.length > 0 && args.every((arg) => typeof arg === "string");
-    } catch {
-      configured = false;
-    }
-    if (!configured) {
-      args = [];
-      console.error("[harness] HALO_PLANNER_ARGS must be a non-empty JSON array of worker arguments");
-    }
+  const override = parseOperatorOverride(process.env, plannerCommand);
+  if (override && !override.configured) {
+    console.error("[harness] HALO_PLANNER_ARGS must be a non-empty JSON array of worker arguments");
   }
-  return (taskId, { role = "parent" } = {}) => {
+  return (taskId, { role = "parent", plannerProvider = "none" } = {}) => {
+    const launch = selectPlannerLaunch({ override, providerId: plannerProvider, nodeCommand: plannerCommand });
     return new PlannerStdioAdapter({
       // A Node executable on PATH alone is not a configured agent worker.
-      command: configured ? plannerCommand : null,
-      args,
+      command: launch.command,
+      args: launch.args,
       cwd: REPO_ROOT,
       env: plannerEnv,
       role,
-      onUsage: (usage) => usageLedger.record(taskId, usage.provider, usage),
+      onUsage: (usage) => {
+        // A settings-selected worker may only report usage for its own provider.
+        if (launch.usageProvider && usage.provider !== launch.usageProvider) return;
+        usageLedger.record(taskId, usage.provider, usage);
+      },
       // Host-owned hooks so every planner worker this app ever spawns is
       // counted in the same <1GB aggregate memory budget the Python
       // approver already is (see the memoryMonitor comment above) --
@@ -450,6 +451,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     memoryStore,
     permissionMode: settings.permissionMode,
     plannerEffort: settings.plannerEffort,
+    plannerProvider: settings.plannerProvider,
     executionMode: settings.executionMode,
     settingsStore,
     credentialVault,

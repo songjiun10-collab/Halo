@@ -19,7 +19,19 @@
   줄 → `{requestId, proposal}` 한 줄)을 그대로 따른다. 새 wire 포맷을 만들지
   않았다.
 
-## 활성화 방법 (operator가 직접 환경변수로 설정)
+## 활성화 방법 1 — 호스트 설정 (Planner Router v1)
+
+호스트 설정 `plannerProvider`를 `"claude_code"`로 바꾸면(`updateHostSettings`
+IPC) 그 뒤에 시작하는 작업과 자식 에이전트부터 이 worker가 플래너로 쓰인다.
+기본값은 `"none"`이라 사용자가 고르기 전에는 `claude`를 띄우지 않는다. 선택
+가능한 id와 worker 경로는 `main/harness/planner-providers.js`의 고정 목록뿐이며,
+UI·페이지·모델은 명령이나 경로를 넘길 수 없다. 진행 중인 작업은 시작할 때
+고른 provider를 유지한다. 설계: `docs/superpowers/specs/2026-10-01-planner-router-design.md`.
+
+아래 환경변수 방식이 설정되어 있으면 그쪽이 항상 우선한다. 환경변수 값이
+잘못되면 설정으로 넘어가지 않고 플래너를 꺼 둔다.
+
+## 활성화 방법 2 — operator 환경변수
 
 모델은 고정 인자 `--model opus`로 선택한다. CLI의 사용자 기본 모델에
 의존하지 않으며, 모델 변경으로 도구 비활성화·승인 경계가 달라지지 않는다.

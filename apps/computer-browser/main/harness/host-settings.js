@@ -5,11 +5,12 @@ const fsConstants = require("node:fs").constants;
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { PERMISSION_MODES } = require("./permission-policy");
+const { PLANNER_PROVIDER_IDS } = require("./planner-providers");
 
 const PLANNER_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 const EXECUTION_MODES = Object.freeze(["sequential", "parallel"]);
 const MEMORY_POLICIES = Object.freeze(["budgeted", "user_override"]);
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MAX_AUDIT_RECORDS = 200;
 const DEFAULT_SETTINGS = Object.freeze({
   version: SCHEMA_VERSION,
@@ -17,9 +18,12 @@ const DEFAULT_SETTINGS = Object.freeze({
   permissionMode: "browse",
   plannerEffort: "medium",
   memoryPolicy: "budgeted",
+  plannerProvider: "none",
 });
-const SETTINGS_FIELDS = ["executionMode", "memoryPolicy", "permissionMode", "plannerEffort", "version"];
+const SETTINGS_FIELDS = ["executionMode", "memoryPolicy", "permissionMode", "plannerEffort", "plannerProvider", "version"];
+const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "memoryPolicy", "plannerProvider"];
 const LEGACY_V1_FIELDS = "executionMode,permissionMode,plannerEffort,version";
+const LEGACY_V2_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,version";
 
 class HostSettingsError extends Error {
   constructor(code, message) {
@@ -53,27 +57,33 @@ function validateSettings(value) {
   if (!MEMORY_POLICIES.includes(value.memoryPolicy)) {
     throw new HostSettingsError("invalid_memory_policy", "memoryPolicy is not recognized");
   }
+  // An allowlisted id only; commands and worker paths stay host-owned.
+  if (!PLANNER_PROVIDER_IDS.includes(value.plannerProvider)) {
+    throw new HostSettingsError("invalid_planner_provider", "plannerProvider is not recognized");
+  }
   return {
     version: SCHEMA_VERSION,
     executionMode: value.executionMode,
     permissionMode: value.permissionMode,
     plannerEffort: value.plannerEffort,
     memoryPolicy: value.memoryPolicy,
+    plannerProvider: value.plannerProvider,
   };
 }
 
-// A v1 file predates memoryPolicy entirely. Migrate ONLY a file that matches
-// the old shape exactly -- anything else (corrupt, hand-edited, or from some
-// future schema we don't know about) is rejected rather than guessed at, the
-// same fail-closed stance validateSettings already takes for the current
-// version.
-function migrateFromV1(value) {
-  if (!isPlainObjectLike(value) || value.version !== 1) return null;
+// v1 predates memoryPolicy; v1 and v2 both predate plannerProvider, which
+// starts "none" so an upgrade never begins spending a planner subscription
+// unasked. Migrate ONLY a file that matches its old shape exactly -- anything
+// else (corrupt, hand-edited, or from some future schema we don't know about)
+// is rejected rather than guessed at, the same fail-closed stance
+// validateSettings already takes for the current version.
+function migrateLegacy(value) {
+  if (!isPlainObjectLike(value) || (value.version !== 1 && value.version !== 2)) return null;
   const keys = Object.keys(value).sort().join(",");
-  if (keys !== LEGACY_V1_FIELDS) {
-    throw new HostSettingsError("invalid_settings", "legacy v1 settings file has an unsupported shape");
+  if (keys !== (value.version === 1 ? LEGACY_V1_FIELDS : LEGACY_V2_FIELDS)) {
+    throw new HostSettingsError("invalid_settings", `legacy v${value.version} settings file has an unsupported shape`);
   }
-  return validateSettings({ ...value, version: SCHEMA_VERSION, memoryPolicy: "budgeted" });
+  return validateSettings({ memoryPolicy: "budgeted", ...value, version: SCHEMA_VERSION, plannerProvider: "none" });
 }
 
 class HostSettingsStore {
@@ -119,7 +129,7 @@ class HostSettingsStore {
     await this._ensureDirectory();
     const parsed = await this._readJsonFile(this._file);
     if (parsed === undefined) return { ...DEFAULT_SETTINGS };
-    const migrated = migrateFromV1(parsed);
+    const migrated = migrateLegacy(parsed);
     if (migrated) {
       await this._writeJsonFile(this._file, migrated);
       return migrated;
@@ -132,7 +142,7 @@ class HostSettingsStore {
       if (!isPlainObjectLike(patch)) {
         throw new HostSettingsError("invalid_settings", "settings patch must be an object");
       }
-      const unknown = Object.keys(patch).filter((key) => !["executionMode", "permissionMode", "plannerEffort", "memoryPolicy"].includes(key));
+      const unknown = Object.keys(patch).filter((key) => !PATCH_FIELDS.includes(key));
       if (unknown.length) throw new HostSettingsError("invalid_settings", "settings patch contains unknown fields");
       const current = await this.load();
       const changingMemoryPolicy = Object.prototype.hasOwnProperty.call(patch, "memoryPolicy") && patch.memoryPolicy !== current.memoryPolicy;
