@@ -233,6 +233,8 @@ class TaskController {
     this._goal = store.getGoal();
     this._epoch = 0;
     this._loopRunning = false;
+    this._plannerAborter = null;
+    this._plannerShutdownRequired = false;
     this._listeners = new Set();
     this._lastEmittedSnapshot = null;
     this._pendingCheckpoints = 0;
@@ -539,6 +541,14 @@ class TaskController {
         if (isMcpItem(item)) item.mcp.settle({ allowed: false });
       }
     }
+    if (this._plannerShutdownRequired || this._planner.isTerminating?.()) {
+      // Cancellation invalidates the proposal immediately, but control must
+      // not reopen while its worker is still using the user's model account.
+      // A shutdown failure leaves admission closed and this flag retryable.
+      this._plannerShutdownRequired = true;
+      await this._planner.close?.();
+      this._plannerShutdownRequired = false;
+    }
     await Promise.allSettled([...this._inFlightOps]);
     this._leaveActive();
     this._task = { state: finalState, pauseReason: finalState === "stopped" ? null : pauseReason };
@@ -794,7 +804,7 @@ class TaskController {
   }
 
   async pause(reason = "user") {
-    if (!["running", "awaiting_approval"].includes(this._task.state) && !this._transitionRetryable()) {
+    if (!["running", "awaiting_approval"].includes(this._task.state) && !this._transitionRetryable() && !this._planner.isTerminating?.()) {
       return this.getSnapshot();
     }
     // Close admission and invalidate any in-flight planner/approver
@@ -804,6 +814,7 @@ class TaskController {
     // call must see the closed gate right here, not after that microtask.
     this._admissionOpen = false;
     this._epoch += 1;
+    this._cancelPlanner();
     await this._enqueueTransition(() =>
       this._doTransition({ finalState: "paused", pauseReason: reason, cancelQueue: false, cancelReason: null }),
     );
@@ -816,6 +827,7 @@ class TaskController {
     // forces a transition to stopped regardless of current state.
     this._admissionOpen = false;
     this._epoch += 1;
+    this._cancelPlanner();
     await this._enqueueTransition(() =>
       this._doTransition({ finalState: "stopped", pauseReason: null, cancelQueue: true, cancelReason: "stop" }),
     );
@@ -831,11 +843,12 @@ class TaskController {
   // already-admitted approve()/dispatch to reach its TRUE outcome first,
   // rather than labeling something "cancelled" that already ran.
   async takeOver(reason = "user_takeover") {
-    if (!["running", "awaiting_approval"].includes(this._task.state) && !this._transitionRetryable()) {
+    if (!["running", "awaiting_approval"].includes(this._task.state) && !this._transitionRetryable() && !this._planner.isTerminating?.()) {
       return this.getSnapshot();
     }
     this._admissionOpen = false;
     this._epoch += 1;
+    this._cancelPlanner();
     await this._enqueueTransition(() =>
       this._doTransition({ finalState: "paused", pauseReason: reason, cancelQueue: true, cancelReason: reason }),
     );
@@ -1229,6 +1242,30 @@ class TaskController {
 
   // --- internal loop ---
 
+  _cancelPlanner() {
+    if (!this._plannerAborter) return;
+    this._plannerShutdownRequired = true;
+    this._plannerAborter.abort();
+  }
+
+  async _nextPlanner(context) {
+    const aborter = new AbortController();
+    this._plannerAborter = aborter;
+    let onAbort;
+    const cancelled = new Promise((resolve, reject) => {
+      onAbort = () => reject(new TaskControllerError("aborted", "planner turn was cancelled"));
+      aborter.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      // Fence non-cooperative injected planners too. Their late result has
+      // no execution authority; close() owns actual worker termination.
+      return await Promise.race([this._planner.next(context, { signal: aborter.signal }), cancelled]);
+    } finally {
+      aborter.signal.removeEventListener("abort", onAbort);
+      if (this._plannerAborter === aborter) this._plannerAborter = null;
+    }
+  }
+
   async _runLoop() {
     if (this._loopRunning) return this.getSnapshot();
     this._loopRunning = true;
@@ -1352,8 +1389,13 @@ class TaskController {
         const admittedMessageIds = context.pendingMessages.map((m) => m.messageId);
 
         let proposal;
+        if (this._stopHappenedSince(epoch)) break;
+        // Budget attempted turns, not only answers. Otherwise repeated
+        // cancellation/timeouts could spend model calls without consuming
+        // the host-owned limit; a pause checkpoint preserves this charge.
+        this._budgets.plannerCallsUsed += 1;
         try {
-          proposal = await this._planner.next(context, { signal: undefined });
+          proposal = await this._nextPlanner(context);
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -1368,7 +1410,6 @@ class TaskController {
           await this._pauseWith(routinePause || (error && error.code === "planner_unavailable" ? "planner_unavailable" : "planner_error"));
           break;
         }
-        this._budgets.plannerCallsUsed += 1;
         if (this._stopHappenedSince(epoch)) break;
 
         // Subagent communication protocol Task 4 (Review Focus: "crash/

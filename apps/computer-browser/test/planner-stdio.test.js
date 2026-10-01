@@ -33,9 +33,418 @@ function makeFakeChild() {
   child.stdout.setEncoding = () => {};
   child.stderr = new EventEmitter();
   child.stderr.setEncoding = () => {};
-  child.kill = () => {};
+  child.kill = () => { child.emit("exit", null, "SIGTERM"); return true; };
   return child;
 }
+
+test("retired worker events cannot corrupt a replacement request", async () => {
+  const oldChild = makeFakeChild();
+  const newChild = makeFakeChild();
+  const children = [oldChild, newChild];
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => children.shift() });
+  adapter.warm();
+  oldChild.stdout.emit("data", "unfinished");
+  await adapter.close();
+  const pending = adapter.next(makeContext());
+  const rejection = pending.catch((error) => error);
+  const { requestId } = JSON.parse(newChild.stdin.written[0]);
+  oldChild.stdout.emit("data", "malformed\n");
+  oldChild.emit("exit", 0);
+  newChild.stdout.emit("data", `${JSON.stringify({ requestId, proposal: { ok: true } })}\n`);
+  assert.deepEqual(await rejection, { ok: true });
+  assert.equal(adapter._child, newChild);
+  await adapter.close();
+});
+
+test("oversized complete and incomplete UTF-8 response frames are rejected before parsing", async () => {
+  for (const complete of [true, false]) {
+    const child = makeFakeChild();
+    const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child });
+    const pending = adapter.next(makeContext());
+    const check = assert.rejects(pending, { code: "frame_too_large" });
+    const { requestId } = JSON.parse(child.stdin.written[0]);
+    const line = JSON.stringify({ requestId, proposal: { text: "한".repeat(Math.ceil(MAX_PLANNER_FRAME_BYTES / 3)) } });
+    assert.ok(line.length < MAX_PLANNER_FRAME_BYTES);
+    child.stdout.emit("data", line + (complete ? "\n" : ""));
+    await check;
+    await adapter.close();
+  }
+});
+
+test("stderr diagnostic tail is bounded in UTF-8 bytes", async () => {
+  const child = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child });
+  adapter.warm();
+  child.stderr.emit("data", "한".repeat(4096));
+  const tail = adapter.getStderrTail();
+  assert.ok(Buffer.byteLength(tail, "utf8") <= 4096);
+  assert.ok(!tail.includes("\uFFFD"));
+  await adapter.close();
+});
+
+test("late write errors belong only to their original request", async () => {
+  const child = makeFakeChild();
+  const callbacks = [];
+  child.stdin.write = (data, encoding, callback) => { child.stdin.written.push(data); callbacks.push(callback); };
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child });
+  const first = adapter.next(makeContext());
+  const firstId = JSON.parse(child.stdin.written[0]).requestId;
+  child.stdout.emit("data", `${JSON.stringify({ requestId: firstId, proposal: { first: true } })}\n`);
+  await first;
+  const second = adapter.next(makeContext());
+  const secondId = JSON.parse(child.stdin.written[1]).requestId;
+  callbacks[0](new Error("delayed write error"));
+  child.stdout.emit("data", `${JSON.stringify({ requestId: secondId, proposal: { second: true } })}\n`);
+  assert.deepEqual(await second, { second: true });
+  await adapter.close();
+});
+
+test("oversized partial frame suffix is drained before accepting the next reply", async () => {
+  const child = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child });
+  const first = adapter.next(makeContext());
+  const check = assert.rejects(first, { code: "frame_too_large" });
+  child.stdout.emit("data", "x".repeat(MAX_PLANNER_FRAME_BYTES + 1));
+  await check;
+  assert.equal(adapter._stdoutBuffer, "");
+  const second = adapter.next(makeContext());
+  const requestId = JSON.parse(child.stdin.written[1]).requestId;
+  child.stdout.emit("data", "old suffix");
+  assert.equal(adapter._stdoutBuffer, "");
+  child.stdout.emit("data", `\n${JSON.stringify({ requestId, proposal: { ok: true } })}\n`);
+  assert.deepEqual(await second, { ok: true });
+  await adapter.close();
+});
+
+test("timeout retires the worker and waits for exit before a resumed request", async () => {
+  const oldChild = makeFakeChild();
+  const newChild = makeFakeChild();
+  const signals = [];
+  oldChild.kill = (signal) => { signals.push(signal); return true; };
+  const children = [oldChild, newChild];
+  let starts = 0;
+  const adapter = new PlannerStdioAdapter({ command: "node", timeoutMs: 10, workerExitTimeoutMs: 1000,
+    spawnFn: () => { starts += 1; return children.shift(); } });
+  await assert.rejects(adapter.next(makeContext()), { code: "timeout" });
+  assert.deepEqual(signals, ["SIGTERM"]);
+  const resumed = adapter.next(makeContext({ progress: { completed: ["C1"] } }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(starts, 1, "replacement must not overlap the retired worker");
+  oldChild.emit("exit", null, "SIGTERM");
+  await new Promise((resolve) => setImmediate(resolve));
+  const request = JSON.parse(newChild.stdin.written[0]);
+  assert.deepEqual(request.context.progress, { completed: ["C1"] });
+  newChild.stdout.emit("data", `${JSON.stringify({ requestId: request.requestId, proposal: { ok: true } })}\n`);
+  assert.deepEqual(await resumed, { ok: true });
+  await adapter.close();
+});
+
+test("abort and close share a shutdown barrier that resolves only after exit", async () => {
+  const child = makeFakeChild();
+  let kills = 0;
+  child.kill = () => { kills += 1; return true; };
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child, workerExitTimeoutMs: 1000 });
+  const aborter = new AbortController();
+  const request = adapter.next(makeContext(), { signal: aborter.signal });
+  const aborted = assert.rejects(request, { code: "aborted" });
+  aborter.abort();
+  await aborted;
+  let closed = false;
+  const closing = adapter.close().then(() => { closed = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(kills, 1);
+  assert.equal(closed, false);
+  child.emit("exit", null, "SIGTERM");
+  await closing;
+  assert.equal(closed, true);
+});
+
+test("unconfirmed termination fails closed until a late exit is actually observed", async () => {
+  const oldChild = makeFakeChild();
+  const newChild = makeFakeChild();
+  oldChild.kill = () => false;
+  const children = [oldChild, newChild];
+  let starts = 0;
+  const adapter = new PlannerStdioAdapter({ command: "node", workerExitTimeoutMs: 10,
+    spawnFn: () => { starts += 1; return children.shift(); } });
+  adapter.warm();
+  await assert.rejects(adapter.close(), { code: "worker_termination_timeout" });
+  await assert.rejects(adapter.next(makeContext()), { code: "worker_termination_timeout" });
+  assert.throws(() => adapter.warm(), { code: "worker_termination_timeout" });
+  assert.equal(starts, 1);
+  oldChild.emit("exit", null, "SIGTERM");
+  const resumed = adapter.next(makeContext());
+  const { requestId } = JSON.parse(newChild.stdin.written[0]);
+  newChild.stdout.emit("data", `${JSON.stringify({ requestId, proposal: { ok: true } })}\n`);
+  assert.deepEqual(await resumed, { ok: true });
+  await adapter.close();
+});
+
+test("already aborted requests neither spawn a worker nor spend a model call", async () => {
+  let starts = 0;
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => { starts += 1; return makeFakeChild(); } });
+  const aborter = new AbortController();
+  aborter.abort();
+  await assert.rejects(adapter.next(makeContext(), { signal: aborter.signal }), { code: "aborted" });
+  assert.equal(starts, 0);
+  await adapter.close();
+});
+
+test("real worker cancellation reaps the process before replacement", { timeout: 10000 }, async (t) => {
+  const { spawn } = require("node:child_process");
+  let ready;
+  const initialized = new Promise((resolve) => { ready = resolve; });
+  const workers = [];
+  const adapter = new PlannerStdioAdapter({ command: process.execPath, workerExitTimeoutMs: 4000,
+    spawnFn: (command, args, options) => {
+      const first = workers.length === 0;
+      const program = first ? `
+        setInterval(() => {}, 1000);
+        process.on('SIGTERM', () => setTimeout(() => process.exit(0), 60));
+        process.stderr.write('READY\\n');
+      ` : `
+        require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+          const request = JSON.parse(line);
+          process.stdout.write(JSON.stringify({ requestId: request.requestId, proposal: { ok: true } }) + '\\n');
+        });
+      `;
+      const child = spawn(command, ["-e", program], options);
+      workers.push(child);
+      if (first) child.stderr.once("data", () => ready());
+      return child;
+    } });
+  t.after(async () => {
+    // These are only this test's own disposable workers, never other agents.
+    for (const worker of workers) {
+      if (worker.exitCode === null && worker.signalCode === null) worker.kill("SIGKILL");
+    }
+    await adapter.close();
+  });
+  const aborter = new AbortController();
+  const pending = adapter.next(makeContext(), { signal: aborter.signal });
+  const rejected = assert.rejects(pending, { code: "aborted" });
+  await initialized;
+  aborter.abort();
+  await rejected;
+  const resumed = adapter.next(makeContext());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(workers.length, 1);
+  assert.deepEqual(await resumed, { ok: true });
+  assert.equal(workers.length, 2);
+  assert.equal(workers[0].exitCode, 0, "graceful shutdown must be observed before replacement");
+  await adapter.close();
+  assert.notEqual(workers[1].exitCode ?? workers[1].signalCode, null);
+});
+
+test("live worker error does not masquerade as confirmed exit or release memory accounting", async () => {
+  const child = makeFakeChild();
+  child.pid = 4321;
+  child.kill = () => false;
+  let exits = 0;
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child,
+    workerExitTimeoutMs: 10, onWorkerExit: () => { exits += 1; } });
+  const pending = adapter.next(makeContext());
+  const failure = assert.rejects(pending, { code: "planner_unavailable" });
+  child.emit("error", new Error("signal failed"));
+  await failure;
+  await assert.rejects(adapter.close(), { code: "worker_termination_timeout" });
+  assert.equal(exits, 0);
+  child.emit("exit", null, "SIGTERM");
+  assert.equal(exits, 1);
+  await adapter.close();
+});
+
+test("invalid shutdown deadlines cannot disable bounded termination", () => {
+  for (const workerExitTimeoutMs of [0, -1, Infinity, NaN, 1.5, 60001, "10", null]) {
+    assert.throws(() => new PlannerStdioAdapter({ workerExitTimeoutMs }), { code: "invalid_config" });
+  }
+});
+
+test("stdin stream errors retire the worker without crashing the host", async () => {
+  const child = makeFakeChild();
+  const stdin = new EventEmitter();
+  Object.assign(stdin, child.stdin);
+  child.stdin = stdin;
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child });
+  const pending = adapter.next(makeContext());
+  const result = pending.catch((error) => error);
+  let uncaught;
+  try { stdin.emit("error", new Error("EPIPE")); } catch (error) { uncaught = error; }
+  await adapter.close();
+  assert.equal(uncaught, undefined, "stream failure must not escape the host event loop");
+  assert.equal((await result).code, "transport_write_failed");
+});
+
+test("long task takeover drains its planner before resume without replaying completed work", async (t) => {
+  const fs = require("node:fs/promises");
+  const os = require("node:os");
+  const { TaskStore } = require("../main/harness/task-store");
+  const { TaskController } = require("../main/harness/task-controller");
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-planner-resume-"));
+  const store = await TaskStore.create({ originalRequest: "장기 목표 유지",
+    criteria: [{ id: "C1", text: "observe once", required: true, verification: "host" }] }, { storageRoot });
+  const oldChild = makeFakeChild();
+  const newChild = makeFakeChild();
+  let kills = 0;
+  oldChild.kill = () => { kills += 1; return true; };
+  const children = [oldChild, newChild];
+  const adapter = new PlannerStdioAdapter({ command: "node", timeoutMs: 1000, workerExitTimeoutMs: 1000,
+    spawnFn: () => children.shift() });
+  t.after(async () => {
+    oldChild.emit("exit", null, "SIGTERM");
+    await adapter.close();
+    await store.close();
+    await fs.rm(storageRoot, { recursive: true, force: true });
+  });
+  let entered;
+  const waiting = new Promise((resolve) => { entered = resolve; });
+  let requests = 0;
+  oldChild.stdin.write = (data, encoding, callback) => {
+    oldChild.stdin.written.push(data);
+    callback?.();
+    const { requestId, context } = JSON.parse(data);
+    requests += 1;
+    if (requests === 2) { entered(); return; }
+    oldChild.stdout.emit("data", `${JSON.stringify({ requestId, proposal: {
+      taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id,
+      kind: "actions", criterionIds: ["C1"], actions: [{ type: "observe" }],
+    } })}\n`);
+  };
+  let resumedContext;
+  newChild.stdin.write = (data, encoding, callback) => {
+    newChild.stdin.written.push(data);
+    callback?.();
+    const { requestId, context } = JSON.parse(data);
+    resumedContext = context;
+    newChild.stdout.emit("data", `${JSON.stringify({ requestId, proposal: {
+      taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id,
+      kind: "finish", criterionIds: [], evidenceIds: [],
+    } })}\n`);
+  };
+  let observations = 0;
+  let executions = 0;
+  const controller = new TaskController({ store, planner: adapter, harnessProfile: "long",
+    browser: { observe: async () => ({ id: `obs-${++observations}` }),
+      execute: async () => { executions += 1; return { status: "ok",
+        evidenceCandidate: { kind: "host_check", observationId: "obs-1", artifactHash: "a".repeat(64) } }; } },
+    approve: async () => ({ decision: "allow", reasons: [] }), hostVerifier: () => true });
+  const running = controller.start();
+  await waiting;
+  let released = false;
+  const takeover = controller.takeOver().then(() => { released = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(kills, 1, "user takeover must abort the outstanding planner call");
+  assert.equal(released, false, "takeover cannot release control before worker exit");
+  oldChild.emit("exit", null, "SIGTERM");
+  await takeover;
+  await running;
+  const paused = controller.getSnapshot();
+  assert.equal(paused.state, "paused");
+  assert.equal(paused.budgets.actionsUsed, 1);
+  await controller.resume();
+  assert.equal(controller.getSnapshot().state, "completed", JSON.stringify(controller.getSnapshot()));
+  assert.equal(controller.getGoal().originalRequest, "장기 목표 유지");
+  assert.equal(resumedContext.goal.originalRequest, "장기 목표 유지");
+  assert.equal(controller.getSnapshot().budgets.actionsUsed, 1);
+  assert.equal(executions, 1, "completed action must not be replayed");
+  assert.equal(controller.getSnapshot().budgets.plannerCallsUsed, 3);
+});
+
+test("cancelled planner turns consume durable call budget and cannot be retried past the limit", async (t) => {
+  const fs = require("node:fs/promises");
+  const os = require("node:os");
+  const { TaskStore } = require("../main/harness/task-store");
+  const { TaskController } = require("../main/harness/task-controller");
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-planner-budget-"));
+  const store = await TaskStore.create({ originalRequest: "bounded long task",
+    limits: { maxPlannerCalls: 1 } }, { storageRoot });
+  t.after(async () => { await store.close(); await fs.rm(storageRoot, { recursive: true, force: true }); });
+  let entered;
+  const ready = new Promise((resolve) => { entered = resolve; });
+  let calls = 0;
+  const controller = new TaskController({ store, harnessProfile: "long",
+    planner: { next: () => { calls += 1; entered(); return new Promise(() => {}); }, close: async () => {} },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => { throw new Error("must not dispatch"); } },
+    approve: async () => ({ decision: "deny", reasons: [] }), hostVerifier: () => false });
+  const running = controller.start();
+  await ready;
+  await controller.pause();
+  await running;
+  assert.equal(controller.getSnapshot().budgets.plannerCallsUsed, 1);
+  assert.equal(store.lastCheckpoint.payload.budgets.plannerCallsUsed, 1);
+  await controller.resume();
+  assert.equal(controller.getSnapshot().pauseReason, "budget_exhausted");
+  assert.equal(calls, 1);
+});
+
+test("failed planner shutdown keeps controller admission closed until a successful transition retry", async (t) => {
+  const fs = require("node:fs/promises");
+  const os = require("node:os");
+  const { TaskStore } = require("../main/harness/task-store");
+  const { TaskController } = require("../main/harness/task-controller");
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-planner-gate-"));
+  const store = await TaskStore.create({ originalRequest: "fail closed recovery" }, { storageRoot });
+  t.after(async () => { await store.close(); await fs.rm(storageRoot, { recursive: true, force: true }); });
+  let entered;
+  const ready = new Promise((resolve) => { entered = resolve; });
+  let failClose = true;
+  let calls = 0;
+  const controller = new TaskController({ store, harnessProfile: "long",
+    planner: { next: (context) => {
+      calls += 1;
+      if (calls === 1) { entered(); return new Promise(() => {}); }
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id,
+        kind: "need_user", criterionIds: [], reason: "inspect next step" };
+    }, close: async () => { if (failClose) throw new PlannerTransportError("worker_termination_timeout", "unconfirmed exit"); } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => { throw new Error("must not dispatch"); } },
+    approve: async () => ({ decision: "deny", reasons: [] }), hostVerifier: () => false });
+  const running = controller.start();
+  await ready;
+  await assert.rejects(controller.takeOver(), { code: "worker_termination_timeout" });
+  await running;
+  await assert.rejects(controller.resume(), { code: "admission_closed" });
+  assert.equal(calls, 1);
+  failClose = false;
+  await controller.takeOver();
+  assert.equal(controller.getSnapshot().state, "paused");
+  await controller.resume();
+  assert.equal(calls, 2);
+  assert.equal(controller.getGoal().originalRequest, "fail closed recovery");
+});
+
+for (const transition of ["stop", "pause", "takeOver"]) test(`${transition} after a planner timeout still waits for the previously retired worker`, async (t) => {
+  const fs = require("node:fs/promises");
+  const os = require("node:os");
+  const { TaskStore } = require("../main/harness/task-store");
+  const { TaskController } = require("../main/harness/task-controller");
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-timeout-stop-"));
+  const store = await TaskStore.create({ originalRequest: "confirm timed out worker exit" }, { storageRoot });
+  const child = makeFakeChild();
+  child.kill = () => true;
+  const adapter = new PlannerStdioAdapter({ command: "node", timeoutMs: 10, workerExitTimeoutMs: 1000, spawnFn: () => child });
+  t.after(async () => {
+    child.emit("exit", null, "SIGTERM");
+    await adapter.close();
+    await store.close();
+    await fs.rm(storageRoot, { recursive: true, force: true });
+  });
+  const controller = new TaskController({ store, planner: adapter,
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => { throw new Error("must not dispatch"); } },
+    approve: async () => ({ decision: "deny", reasons: [] }), hostVerifier: () => false });
+  await controller.start();
+  assert.equal(controller.getSnapshot().pauseReason, "planner_error");
+  let closes = 0;
+  const close = adapter.close.bind(adapter);
+  adapter.close = () => { closes += 1; return close(); };
+  let stopped = false;
+  const stopping = controller[transition]().then(() => { stopped = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(closes, 1, `${transition} must drain retirement even after the request already timed out`);
+  assert.equal(stopped, false);
+  child.emit("exit", null, "SIGTERM");
+  await stopping;
+  assert.equal(controller.getSnapshot().state, transition === "stop" ? "stopped" : "paused");
+});
 
 test("with no command configured, next() rejects planner_unavailable instead of fabricating a proposal", async () => {
   const adapter = new PlannerStdioAdapter({});
