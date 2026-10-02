@@ -32,8 +32,10 @@ const DEFAULT_SETTINGS = Object.freeze({
 const SETTINGS_FIELDS = ["executionMode", "mcpProviders", "memoryPolicy", "permissionMode", "plannerEffort", "plannerEffortMode", "plannerProvider", "version"];
 // plannerModel is optional within v5: unset keeps the CLI's default Opus
 // alias, so existing settings files need no migration.
-const OPTIONAL_FIELDS = ["plannerModel"];
-const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel"];
+// plannerFast (opt-in, off when unset) asks the planner CLI for its faster
+// service tier; Claude bills it to account credits.
+const OPTIONAL_FIELDS = ["plannerModel", "plannerFast"];
+const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast"];
 const LEGACY_V1_FIELDS = "executionMode,permissionMode,plannerEffort,version";
 const LEGACY_V2_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,version";
 const LEGACY_V3_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,plannerProvider,version";
@@ -91,6 +93,10 @@ function validateSettings(value) {
   if (hasModel && !knownModel) {
     throw new HostSettingsError("invalid_planner_model", "plannerModel is not allowlisted for this planner provider");
   }
+  const hasFast = Object.prototype.hasOwnProperty.call(value, "plannerFast");
+  if (hasFast && typeof value.plannerFast !== "boolean") {
+    throw new HostSettingsError("invalid_planner_fast", "plannerFast must be a boolean");
+  }
   return {
     version: SCHEMA_VERSION,
     executionMode: value.executionMode,
@@ -101,6 +107,7 @@ function validateSettings(value) {
     plannerProvider: value.plannerProvider,
     mcpProviders: [...mcpProviders],
     ...(hasModel ? { plannerModel: value.plannerModel } : {}),
+    ...(hasFast ? { plannerFast: value.plannerFast } : {}),
   };
 }
 

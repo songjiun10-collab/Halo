@@ -8,9 +8,9 @@ const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
 
 const APP_ROOT = path.resolve(__dirname, "..");
-const HARNESS_NAMES = ["generic-mcp-broker", "mcp-schema-validator", "mcp-schema-worker"];
+const HARNESS_NAMES = ["generic-mcp-broker", "mcp-schema-validator", "mcp-schema-worker", "message-port", "message-mailbox"];
 
-test("harness MCP modules are generated from TypeScript sources", () => {
+test("harness modules are generated from TypeScript sources", () => {
   for (const name of HARNESS_NAMES) {
     assert.ok(fs.existsSync(path.join(APP_ROOT, "runtime-src/main/harness", `${name}.ts`)),
       `missing TypeScript source: runtime-src/main/harness/${name}.ts`);
@@ -30,7 +30,7 @@ test("generated harness modules keep their exact CommonJS export surface", () =>
   assert.deepEqual(Object.keys(error), ["code"]);
 });
 
-test("harness TypeScript sources compile to exactly three CommonJS artifacts", (t) => {
+test("harness TypeScript sources compile to exactly five CommonJS artifacts", (t) => {
   const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "halo-harness-conformance-"));
   fs.chmodSync(outputDirectory, 0o700);
   t.after(() => fs.rmSync(outputDirectory, { recursive: true, force: true }));

@@ -4,6 +4,8 @@ HALO is an experimental AI-safety research project investigating **model-agnosti
 
 The project is intentionally empirical. Claims are limited to explicit threat models and measured assumptions; toy results are not evidence of frontier-model or superintelligence containment.
 
+![HALO agent workspace with agents and a team room](docs/images/halo-agent-home.png)
+
 ## Research workflow
 
 Local gateway development with Docker Compose is described in

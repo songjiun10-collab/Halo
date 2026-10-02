@@ -18,6 +18,8 @@
 // HALO_BENCH_KIND=duration-profile compares the same Browser planner workload
 // under Middle and Long; default kind remains routine-vs-planner. Emits
 // RESULT_JSON:<json>; exits nonzero on any failed iteration.
+// HALO_BENCH_SPANS_PATH=<file> also writes per-iteration stage spans as JSONL
+// (integration/stage-spans.js), fed from the same timing points as `stages`.
 
 const fs = require("node:fs/promises");
 const os = require("node:os");
@@ -31,6 +33,7 @@ const { PlannerStdioAdapter } = require("../main/harness/planner-stdio");
 const { RoutineStore } = require("../main/harness/routine-store");
 const { RoutineRunner } = require("../main/harness/routine-runner");
 const { resolveTaskProfile } = require("../shared/task-profile-router");
+const { createSpanRecorder } = require("./stage-spans");
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const PLANNER_SCRIPT = path.join(APP_ROOT, "fixtures", "scripted-planner-100.js");
@@ -165,12 +168,15 @@ function emptyStages() {
   return Object.fromEntries(STAGE_LABELS.map((label) => [label, { count: 0, totalMs: 0, maxMs: 0 }]));
 }
 
-function timedCall(stages, label, fn) {
+// `note(label, elapsedMs)` is the single sink per iteration: it updates
+// `stages` and, when a span recorder is attached, the span stream, so the two
+// can never measure different things.
+function timedCall(note, label, fn) {
   return async (...args) => {
     const started = performance.now();
     try { return await fn(...args); }
     finally {
-      recordDuration(stages, label, performance.now() - started);
+      note(label, performance.now() - started);
     }
   };
 }
@@ -195,6 +201,7 @@ async function runIteration({
   sampler,
   label = {},
   timeoutMs = 5 * 60 * 1000,
+  spans = null,
 } = {}) {
   if (!MODES.includes(mode)) throw new TypeError(`mode must be one of ${MODES.join("|")}`);
   if (!["review", "allow"].includes(approvalMode)) throw new TypeError("approvalMode must be review|allow");
@@ -203,6 +210,11 @@ async function runIteration({
   const visitedUrls = [];
   const proposalSamples = [];
   const plannerPids = [];
+  const spanIds = () => ({ taskId: `${mode}-${label.sequence ?? 0}`, turnId: proposalSamples.length });
+  const note = (name, elapsedMs) => {
+    recordDuration(stages, name, elapsedMs);
+    spans?.record(name, elapsedMs, spanIds());
+  };
   const record = {
     mode,
     durationProfile,
@@ -239,14 +251,16 @@ async function runIteration({
   sampler?.enter?.({ mode, ...label });
   try {
     browser = await createBrowser();
+    spans?.start();
     const observe = browser.observe.bind(browser);
-    browser.observe = timedCall(stages, "browser_observe", async (...args) => {
+    browser.observe = timedCall(note, "browser_observe", async (...args) => {
       const observation = await observe(...args);
+      spans?.mark("first_observation");
       const url = observation?.url;
       if (url && url !== "about:blank" && visitedUrls.at(-1) !== url) visitedUrls.push(url);
       return observation;
     });
-    browser.execute = timedCall(stages, "browser_execute", browser.execute.bind(browser));
+    browser.execute = timedCall(note, "browser_execute", browser.execute.bind(browser));
 
     const goalInput = JSON.parse(JSON.stringify(scenario.goal));
     let routineMetadata = null;
@@ -266,7 +280,7 @@ async function runIteration({
       routineMetadata,
       ...(durationProfile ? { requestedDurationProfile: durationProfile } : {}),
     });
-    recordDuration(stages, "profile_resolution", performance.now() - profileStarted);
+    note("profile_resolution", performance.now() - profileStarted);
     record.resolvedProfile = { duration: resolvedProfile.duration.id, capability: resolvedProfile.capability.id };
 
     store = await TaskStore.create(goalInput, {
@@ -275,7 +289,7 @@ async function runIteration({
       onTiming: ({ operation, elapsedMs }) => {
         // TaskStore exposes a closed timing vocabulary. Ignore anything else
         // rather than turning arbitrary callback metadata into metric labels.
-        if (Object.hasOwn(stages, operation)) recordDuration(stages, operation, elapsedMs);
+        if (Object.hasOwn(stages, operation)) note(operation, elapsedMs);
       },
     });
 
@@ -303,10 +317,15 @@ async function runIteration({
       next: async (context, options) => {
         const started = performance.now();
         try { return await proposer.next(context, options); }
-        finally { proposalSamples.push(performance.now() - started); }
+        finally {
+          const elapsedMs = performance.now() - started;
+          note("proposal", elapsedMs);
+          proposalSamples.push(elapsedMs);
+          spans?.mark("first_proposal");
+        }
       },
     };
-    const approve = timedCall(stages, "approver_decision", async () => {
+    const approve = timedCall(note, "approver_decision", async () => {
       record.policyChecks += 1;
       return approvalMode === "allow"
         ? { decision: "allow", reasons: [] }
@@ -322,17 +341,29 @@ async function runIteration({
       batchReadOnlyActions: batching !== false,
       harnessProfile: resolvedProfile.duration.id,
       ...routineOptions,
+      ...(spans ? {
+        onTiming: ({ operation, elapsedMs, bytes }) => {
+          if (operation !== "context_build") return;
+          spans.record("context_build", elapsedMs, spanIds());
+          spans.count("contextBytes", bytes);
+        },
+      } : {}),
     });
     const evaluatePolicy = controller._evaluateActionPolicy.bind(controller);
     controller._evaluateActionPolicy = (...args) => {
       const started = performance.now();
       try { return evaluatePolicy(...args); }
-      finally { recordDuration(stages, "action_policy_decision", performance.now() - started); }
+      finally { note("action_policy_decision", performance.now() - started); }
     };
 
     const startedAt = performance.now();
+    // Time from a queued approval being seen until it is answered. The
+    // benchmark answers programmatically, so this is near zero by design; a
+    // human-in-the-loop run would put the person's wait here.
+    let humanWaitMs = 0;
     while (true) {
       const snapshot = controller.getSnapshot();
+      const snapshotAt = performance.now();
       if (snapshot.state === "awaiting_verification" || snapshot.state === "completed") break;
       if (performance.now() - startedAt > timeoutMs) throw new Error(`iteration exceeded ${timeoutMs}ms`);
       if (snapshot.state === "idle") {
@@ -341,8 +372,9 @@ async function runIteration({
         const item = snapshot.approvalQueue[0];
         if (!item) throw new Error("awaiting_approval without a queued item");
         const approvalStarted = performance.now();
+        humanWaitMs += Math.max(0, approvalStarted - snapshotAt);
         try { await controller.approve(item.id); }
-        finally { recordDuration(stages, "approve_call_inclusive", performance.now() - approvalStarted); }
+        finally { note("approve_call_inclusive", performance.now() - approvalStarted); }
         record.approvals += 1;
       } else if (snapshot.state === "running") {
         await delay(2);
@@ -351,6 +383,11 @@ async function runIteration({
       }
     }
     record.runMs = performance.now() - startedAt;
+    if (spans) {
+      spans.phase("wall", record.runMs);
+      spans.phase("human_wait", humanWaitMs);
+      spans.phase("active", Math.max(0, record.runMs - humanWaitMs));
+    }
 
     const finalSnapshot = controller.getSnapshot();
     record.finalState = finalSnapshot.state;
@@ -366,6 +403,14 @@ async function runIteration({
     const expectedActions = scenario.totalActions ?? scenario.steps;
     if (record.actions !== expectedActions) throw new Error(`dispatched ${record.actions} actions, expected ${expectedActions}`);
     record.journalFsyncs = stages.journal_fsync.count;
+    if (spans) {
+      spans.count("actionCount", record.actions);
+      spans.count("plannerCalls", record.proposalCalls);
+      spans.count("journalOps", stages.journal_fsync.count);
+      spans.count("checkpointOps", stages.checkpoint_rename.count);
+      // Dispatches the controller did not charge as an action (a re-dispatch).
+      spans.count("duplicateDispatchCount", Math.max(0, stages.browser_execute.count - record.actions));
+    }
     if (JSON.stringify(visitedUrls) !== JSON.stringify(scenario.expectedUrls)) {
       throw new Error(`visited pages diverged from the shared scenario: ${JSON.stringify(visitedUrls)}`);
     }
@@ -459,11 +504,14 @@ async function runBenchmark({
   makePlanner,
   sampler,
   timeoutMs,
+  spansPath = null,
 } = {}) {
   const schedule = pairedSchedule({ pairs, seed });
   const iterations = [];
+  if (spansPath) await fs.writeFile(spansPath, "", { flag: "w", mode: 0o600 });
   for (const pair of schedule) {
     for (const mode of pair.order) {
+      const spans = spansPath ? createSpanRecorder({ runId: `${mode}-pair${pair.pairIndex}-seq${iterations.length}` }) : null;
       const row = await runIteration({
         mode,
         scenario,
@@ -476,12 +524,14 @@ async function runBenchmark({
         sampler,
         timeoutMs,
         label: { pairIndex: pair.pairIndex, temperature: pair.temperature, sequence: iterations.length },
+        spans,
       });
+      if (spans) await fs.appendFile(spansPath, spans.toJsonl());
       iterations.push(row);
       if (!row.success) throw new Error(`iteration failed (${mode}, pair ${pair.pairIndex}): ${row.error}`);
     }
   }
-  return buildReport({ scenario, schedule, iterations, approvalMode, batching, seed, memory: sampler?.summarize?.() ?? null, extra: { batchCap } });
+  return buildReport({ scenario, schedule, iterations, approvalMode, batching, seed, memory: sampler?.summarize?.() ?? null, extra: { batchCap, ...(spansPath ? { spansPath } : {}) } });
 }
 
 async function runRecoveryProbe({ storageRoot, durationProfile, completedActions = 100, checkpointEvery = 10 } = {}) {
@@ -756,7 +806,7 @@ async function main() {
         recoveryActions: envInt("HALO_BENCH_RECOVERY_ACTIONS", 300, { min: 1, max: 1000 }),
         checkpointEvery: envInt("HALO_BENCH_CHECKPOINT_EVERY", 25, { min: 1, max: 1000 }),
       })
-      : await runBenchmark({ scenario, pairs, seed, approvalMode, batching, batchCap, storageRoot, sampler, createBrowser });
+      : await runBenchmark({ scenario, pairs, seed, approvalMode, batching, batchCap, storageRoot, sampler, createBrowser, spansPath: process.env.HALO_BENCH_SPANS_PATH || null });
     const pageCounts = fixture.requestLog
       .filter((item) => /^\/step\/\d+$/.test(item.path))
       .reduce((map, item) => ({ ...map, [item.path]: (map[item.path] || 0) + 1 }), {});

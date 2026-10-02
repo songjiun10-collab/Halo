@@ -13,7 +13,7 @@ const COHORTS = Object.freeze([
   Object.freeze({ config: 'tsconfig.runtime.json', source: 'runtime-src/shared', output: 'shared',
     names: Object.freeze(['harness-contracts', 'task-profile-contracts', 'harness-profile', 'capability-registry']) }),
   Object.freeze({ config: 'tsconfig.runtime-harness.json', source: 'runtime-src/main/harness', output: 'main/harness',
-    names: Object.freeze(['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker']) }),
+    names: Object.freeze(['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker', 'message-port', 'message-mailbox']) }),
 ]);
 const ARTIFACTS = COHORTS.flatMap(cohort => cohort.names.map(name => ({ cohort, name })));
 const LOCK = '.runtime-build.lock';

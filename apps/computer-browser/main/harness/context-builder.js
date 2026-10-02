@@ -98,7 +98,30 @@ function validTeamBoard(teamBoard) {
   return teamBoard;
 }
 
-function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard }) {
+// P1 (2026-10-02 harness efficiency design, section 5): an opt-in list of
+// host-owned references the planner may read with a context_read action. Only
+// ids, labels, sizes and short summaries travel in the packet; bodies do not.
+const MAX_MANIFEST_CONTEXT_BYTES = 8 * 1024;
+
+function validContextManifest(manifest) {
+  if (manifest === undefined) return undefined;
+  if (!contracts.isPlainObject(manifest) || manifest.version !== 1 || !Array.isArray(manifest.refs) || manifest.refs.length > 128
+    || !manifest.refs.every((r) => contracts.isPlainObject(r) && typeof r.refId === "string" && typeof r.kind === "string"
+      && typeof r.authority === "string" && typeof r.revision === "string" && Number.isInteger(r.byteLength) && typeof r.summary === "string")) {
+    throw new ContextError("invalid_field", "contextManifest must be { version: 1, refs: [{refId, kind, authority, revision, byteLength, summary}] }");
+  }
+  // The catalog may hold 128 refs; the packet shows only the newest that fit
+  // in MAX_MANIFEST_CONTEXT_BYTES and says how many it left out.
+  const kept = [];
+  for (const ref of [...manifest.refs].reverse()) {
+    const candidate = { version: 1, refs: [ref, ...kept], omittedRefs: manifest.refs.length - kept.length - 1 };
+    if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > MAX_MANIFEST_CONTEXT_BYTES) break;
+    kept.unshift(ref);
+  }
+  return { version: 1, refs: kept, omittedRefs: manifest.refs.length - kept.length };
+}
+
+function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest }) {
   contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
 
   if (!contracts.isPlainObject(state)) {
@@ -115,6 +138,7 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
   }
 
   const board = validTeamBoard(teamBoard);
+  const manifest = validContextManifest(contextManifest);
 
   if (navigation !== null && (!contracts.isPlainObject(navigation) || !Array.isArray(navigation.visited) || !Array.isArray(navigation.frontier))) {
     throw new ContextError("invalid_field", "navigation must be null or { visited: [], frontier: [] }");
@@ -143,6 +167,7 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     navigationHistory: navigation === null ? null : { authority: "untrusted_page_derived", visited: navigation.visited, frontier: navigation.frontier },
     pendingMessages: [],
     ...(boundWorkGoal === undefined ? {} : { workGoal: boundWorkGoal }),
+    ...(manifest === undefined ? {} : { contextManifest: manifest }),
   };
 
   const baseSize = Buffer.byteLength(JSON.stringify(basePacket), "utf8");

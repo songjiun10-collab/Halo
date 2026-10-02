@@ -448,8 +448,8 @@ function makeHarnessPlanner(usageLedger) {
   if (override && !override.configured) {
     console.error("[harness] HALO_PLANNER_ARGS must be a non-empty JSON array of worker arguments");
   }
-  return (taskId, { role = "parent", plannerProvider = "none", plannerModel } = {}) => {
-    const launch = selectPlannerLaunch({ override, providerId: plannerProvider, model: plannerModel, nodeCommand: plannerCommand });
+  return (taskId, { role = "parent", plannerProvider = "none", plannerModel, plannerFast = false } = {}) => {
+    const launch = selectPlannerLaunch({ override, providerId: plannerProvider, model: plannerModel, fast: plannerFast, nodeCommand: plannerCommand });
     return new PlannerStdioAdapter({
       // A Node executable on PATH alone is not a configured agent worker.
       command: launch.command,
@@ -507,6 +507,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     plannerEffortMode: settings.plannerEffortMode,
     plannerProvider: settings.plannerProvider,
     plannerModel: settings.plannerModel,
+    plannerFast: settings.plannerFast,
     mcpProviders: settings.mcpProviders,
     makeMcpBroker: makeHarnessMcpBroker,
     executionMode: settings.executionMode,

@@ -25,6 +25,8 @@
   "files": [
     "runtime-src/main/harness/generic-mcp-broker.ts",
     "runtime-src/main/harness/mcp-schema-validator.ts",
-    "runtime-src/main/harness/mcp-schema-worker.ts"
+    "runtime-src/main/harness/mcp-schema-worker.ts",
+    "runtime-src/main/harness/message-port.ts",
+    "runtime-src/main/harness/message-mailbox.ts"
   ]
 }

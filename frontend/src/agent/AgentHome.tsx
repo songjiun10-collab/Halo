@@ -6,6 +6,7 @@ import { AgentForm, TeamForm } from './AgentForms'
 import { AgentDetail } from './AgentDetail'
 import { BackgroundRuntimePanel } from './BackgroundRuntimePanel'
 import { WorkspaceSections } from './WorkspacePanels'
+import { onAgentView, takeAgentView } from './agent-nav'
 
 export type HomeMode = 'task' | 'agent'
 /** Task/Agent switch for the new-task home (Design System-6 glass toggle: tap or drag the thumb). Renders nothing while the preload lacks the roster API. */
@@ -40,7 +41,8 @@ export function AgentHome({ onOpenTask }: { onOpenTask: (taskId: string) => void
 }
 
 function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: string) => void }) {
-  const [v, setV] = useState<View>({ n: 'hub' })
+  const [v, setV] = useState<View>(() => takeAgentView() ?? { n: 'hub' })
+  useEffect(() => onAgentView(() => { const next = takeAgentView(); if (next) setV(next) }), [])
   const [agents, setAgents] = useState<AgentRecord[]>([]), [teams, setTeams] = useState<TeamRecord[]>([]), [convos, setConvos] = useState<UiConversation[]>([])
   const [status, setStatus] = useState<Record<string, RosterStatus>>({}), [loaded, setLoaded] = useState(false), [error, setError] = useState<string | null>(null)
 

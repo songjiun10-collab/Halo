@@ -5,6 +5,7 @@ import { Forward } from './Icons'
 import { HaloMark } from './Logo'
 import type { HostSettings } from '../session/api'
 import { AgentHome, ModeSwitch, type HomeMode } from '../agent/AgentHome'
+import { homeModeFor, onAgentView } from '../agent/agent-nav'
 import { ModelPicker } from './ModelPicker'
 import { saveEffort, type PlannerEffort } from '../session/planner-effort'
 import { saveModel } from '../session/claude-models'
@@ -25,8 +26,10 @@ interface Props {
  * background — with a place to tell the agent what to do next.
  */
 export function HomeScreen({ activeTask, onSelectTab, onSubmit }: Props) {
-  const [mode, setModeState] = useState<HomeMode>(lastMode)
+  // A sidebar agent or team row opens this home in Agent mode.
+  const [mode, setModeState] = useState<HomeMode>(() => (lastMode = homeModeFor(lastMode)))
   const setMode = (next: HomeMode) => { lastMode = next; setModeState(next) }
+  useEffect(() => onAgentView(() => { lastMode = 'agent'; setModeState('agent') }), [])
   const [value, setValue] = useState('')
   const [settings, setSettings] = useState<HostSettings | null>(null)
   const [savingProvider, setSavingProvider] = useState(false)

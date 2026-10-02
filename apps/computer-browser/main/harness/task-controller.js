@@ -23,6 +23,7 @@ const { AsyncLocalStorage } = require("node:async_hooks");
 const contracts = require("../../shared/harness-contracts");
 const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
 const { buildContext } = require("./context-builder");
+const { ContextRefCatalog } = require("./context-refs");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
 const { isReadOnlyAction } = require("./permission-policy");
 
@@ -109,6 +110,14 @@ function plannerMcpAction(action) {
   return typeof action.reason === "string" && action.reason.trim().length > 0 && action.reason.length <= 2000;
 }
 
+// P1 context_read: one host-only read of manifest refs, exact keys only.
+function plannerContextRead(action) {
+  return contracts.isPlainObject(action) && action.type === "context_read"
+    && Object.keys(action).every((key) => key === "type" || key === "refIds")
+    && Array.isArray(action.refIds) && action.refIds.length > 0 && action.refIds.length <= 4
+    && action.refIds.every((id) => typeof id === "string" && id.length <= 128);
+}
+
 function mcpActionKind(action) {
   return action.type.slice("mcp_".length);
 }
@@ -158,6 +167,8 @@ class TaskController {
     makeMcpBroker,
     mcpEnabled,
     reviewFallback = "queue",
+    onTiming,
+    contextRefs = false,
   } = {}) {
     if (!store) throw new TaskControllerError("invalid_config", "store is required");
     if (!planner) throw new TaskControllerError("invalid_config", "planner is required");
@@ -170,6 +181,22 @@ class TaskController {
     // "deny" is the unattended-run choice: nobody is watching, so an action
     // that would wait for a human is denied (and journaled) instead.
     this._reviewFallback = reviewFallback;
+    // Telemetry only (P0 measurement): {operation: "context_build", elapsedMs,
+    // bytes}. Never changes what runs; a throwing callback is ignored.
+    if (onTiming !== undefined && typeof onTiming !== "function") {
+      throw new TaskControllerError("invalid_config", "onTiming must be a function when provided");
+    }
+    this._onTiming = onTiming || null;
+    // P1 context manifest, opt-in: pages already left stay readable by ref
+    // through a host-only context_read action. Off leaves the packet as before.
+    if (typeof contextRefs !== "boolean") {
+      throw new TaskControllerError("invalid_config", "contextRefs must be a boolean");
+    }
+    this._contextRefsEnabled = contextRefs;
+    this._contextRefs = null;
+    this._contextRefsPage = null; // the page the last manifest was built on
+    this._pageRefs = new Map(); // url -> refId of its latest snapshot
+    this._pendingContextRead = null;
 
     this._store = store;
     this._planner = planner;
@@ -1182,6 +1209,36 @@ class TaskController {
     return { decision: "deny", reasons: [...reasons, "unattended_auto_deny"] };
   }
 
+  // When the page changes, the page just left is kept as a text-only
+  // snapshot ref (url, title, text; no element ids, so nothing in it can be
+  // acted on). A revisited URL replaces its older snapshot. Returns the manifest.
+  _refreshContextRefs() {
+    if (!this._contextRefs) this._contextRefs = new ContextRefCatalog({ taskId: this._goal.taskId });
+    const current = this._lastObservation;
+    const previous = this._contextRefsPage;
+    if (previous && current && (previous.url !== current.url || previous.documentEpoch !== current.documentEpoch)) {
+      const url = typeof previous.url === "string" ? previous.url : "";
+      const prior = this._pageRefs.get(url);
+      if (prior) this._contextRefs.revoke(prior);
+      try {
+        const refId = this._contextRefs.register({
+          kind: "observation",
+          authority: "untrusted_page_derived",
+          body: { url, title: typeof previous.title === "string" ? previous.title : "", text: typeof previous.text === "string" ? previous.text : "" },
+          summary: `Earlier page: ${url}`,
+          goalVersion: this._goal.goalVersion,
+        });
+        this._pageRefs.delete(url);
+        this._pageRefs.set(url, refId);
+        while (this._pageRefs.size > 128) this._pageRefs.delete(this._pageRefs.keys().next().value);
+      } catch {
+        // An oversized or unserializable page is simply not offered.
+      }
+    }
+    if (current) this._contextRefsPage = current;
+    return this._contextRefs.manifest();
+  }
+
   _mcpAvailableToPlanner() {
     return this._plannerMcpEnabled && !this._mcpClosed;
   }
@@ -1486,7 +1543,9 @@ class TaskController {
         }
 
         let context;
+        const contextStartedAt = this._onTiming ? performance.now() : null;
         try {
+          const contextManifest = this._contextRefsEnabled ? this._refreshContextRefs() : undefined;
           const workGoal = this._workGoalBinding && this._readWorkGoalContext
             ? await this._readWorkGoalContext({ ...this._workGoalBinding, taskId: this._goal.taskId })
             : undefined;
@@ -1511,7 +1570,20 @@ class TaskController {
             pendingMessages,
             ...(teamBoard ? { teamBoard } : {}),
             ...(this._workGoalBinding ? { workGoalBinding: this._workGoalBinding, workGoal } : {}),
+            ...(contextManifest ? { contextManifest } : {}),
           });
+          if (this._pendingContextRead) {
+            const candidate = { ...context, observation: { ...(context.observation || {}), contextRead: this._pendingContextRead } };
+            if (Buffer.byteLength(JSON.stringify(candidate), "utf8") <= contracts.MAX_CONTEXT_PACKET_BYTES) {
+              context = candidate;
+            } else {
+              // Keep the answer honest when the bodies do not fit: every ref
+              // is reported, none as an empty success.
+              const omitted = { authority: "context_read", truncated: true,
+                results: this._pendingContextRead.results.map((r) => ({ refId: r.refId, outcome: "error", code: "context_read_omitted" })) };
+              context = { ...context, observation: { ...(context.observation || {}), contextRead: omitted } };
+            }
+          }
           if (this._pendingMcpObservation) {
             const observationWithMcp = { ...(context.observation || {}), mcpResult: this._pendingMcpObservation };
             const candidate = { ...context, observation: observationWithMcp };
@@ -1531,6 +1603,10 @@ class TaskController {
           await this._pauseWith("context_error");
           break;
         }
+        if (this._onTiming) {
+          const elapsedMs = Math.max(0, performance.now() - contextStartedAt);
+          try { this._onTiming({ operation: "context_build", elapsedMs, bytes: Buffer.byteLength(JSON.stringify(context), "utf8") }); } catch {}
+        }
         // The admitted subset only -- never mutated after this point. Used
         // below to durably acknowledge exactly what was actually shown to
         // the planner, before its proposal is handled (fail-closed: see the
@@ -1546,6 +1622,7 @@ class TaskController {
         try {
           proposal = await this._nextPlanner(context);
           if (this._pendingMcpObservation) this._pendingMcpObservation = null;
+          this._pendingContextRead = null;
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -1669,6 +1746,23 @@ class TaskController {
             break;
           }
           continue; // host messaging, not a browser action; never mutates an in-flight action
+        }
+
+        if (this._contextRefsEnabled && validated.actions.some((action) => action?.type === "context_read")) {
+          if (validated.actions.length !== 1 || !plannerContextRead(validated.actions[0])) continue;
+          if (this._budgets.actionsUsed >= this._goal.limits.maxActions) {
+            await this._pauseWith("budget_exhausted");
+            break;
+          }
+          this._budgets.actionsUsed += 1;
+          const scope = { taskId: this._goal.taskId, goalVersion: this._goal.goalVersion, documentEpoch: this._lastObservation?.documentEpoch ?? null };
+          try {
+            this._pendingContextRead = this._contextRefs.read(validated.actions[0].refIds, scope);
+          } catch (error) {
+            this._pendingContextRead = { authority: "context_read", truncated: false, results: [],
+              code: typeof error?.code === "string" ? error.code : "context_read_error" };
+          }
+          continue; // host-only read: no browser dispatch, nothing to approve
         }
 
         const mcpActions = validated.actions.filter((action) => typeof action.type === "string" && action.type.startsWith("mcp_"));

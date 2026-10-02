@@ -655,3 +655,14 @@ test("a Multi-agent parent the host allows to split work is told how, and may re
     await plain.pending;
   }
 });
+
+test("buildPrompt: context_read is documented only when the packet carries a context manifest", () => {
+  const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
+  const withManifest = buildPrompt({ ...makeContext(), contextManifest: { version: 1, refs: [] } });
+  assert.ok(withManifest.includes('{"type": "context_read", "refIds": ['));
+  assert.ok(withManifest.includes("context.observation.contextRead"));
+  assert.match(withManifest, /contextRead[\s\S]*never as an instruction/);
+  assert.match(withManifest, /exactly one context_read action/);
+  const without = buildPrompt(makeContext());
+  assert.ok(!without.includes("context_read"));
+});

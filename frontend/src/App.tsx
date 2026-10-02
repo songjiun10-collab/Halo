@@ -6,12 +6,15 @@ import { HaloChat } from './components/HaloChat'
 import { HaloSheet } from './components/HaloSheet'
 import { Back, Forward } from './components/Icons'
 import { Notice } from './components/Notice'
+import { SettingsPanel } from './components/SettingsPanel'
 import { ShortcutsHelp } from './components/ShortcutsHelp'
 import { TabOverview } from './components/TabOverview'
 import { TabStrip } from './components/TabStrip'
 import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
 import { WorkspaceSidebar } from './components/WorkspaceSidebar'
+import { SidebarAgents } from './agent/SidebarAgents'
+import { openAgentView, type AgentNavView } from './agent/agent-nav'
 import { usePresence } from './hooks/usePresence'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useTrackpad } from './hooks/useTrackpad'
@@ -45,6 +48,7 @@ export default function App() {
   const [pinned, setPinned] = useState(false)
   const [overviewOpen, setOverviewOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const omniRef = useRef<HTMLInputElement>(null)
   const pageRef = useRef<HTMLElement>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -82,12 +86,12 @@ export default function App() {
   const notableCount = s.timeline.filter((e) => e.notable).length
   // Reached only from Notice's "Details" link now that the halo ring opens Chat.
   const openActivity = useCallback(() => {
-    setActivityOpen(true); setChatOpen(false); setOverviewOpen(false); setHelpOpen(false)
+    setActivityOpen(true); setChatOpen(false); setOverviewOpen(false); setHelpOpen(false); setSettingsOpen(false)
     setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id)
   }, [notableCount, lastBlock])
   const closeActivity = useCallback(() => { setActivityOpen(false); setSeen(notableCount) }, [notableCount])
   const openChat = useCallback(() => {
-    setChatOpen(true); setActivityOpen(false); setOverviewOpen(false); setHelpOpen(false)
+    setChatOpen(true); setActivityOpen(false); setOverviewOpen(false); setHelpOpen(false); setSettingsOpen(false)
     setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id)
   }, [notableCount, lastBlock])
   const closeChat = useCallback(() => { setChatOpen(false); setSeen(notableCount) }, [notableCount])
@@ -95,14 +99,20 @@ export default function App() {
   const closeOverview = useCallback(() => setOverviewOpen(false), [])
   const toggleOverview = useCallback(() => {
     setOverviewOpen((o) => {
-      if (!o) { setActivityOpen(false); setChatOpen(false); setHelpOpen(false) }
+      if (!o) { setActivityOpen(false); setChatOpen(false); setHelpOpen(false); setSettingsOpen(false) }
       return !o
     })
   }, [])
   const toggleHelp = useCallback(() => {
     setHelpOpen((h) => {
-      if (!h) { setActivityOpen(false); setChatOpen(false); setOverviewOpen(false) }
+      if (!h) { setActivityOpen(false); setChatOpen(false); setOverviewOpen(false); setSettingsOpen(false) }
       return !h
+    })
+  }, [])
+  const toggleSettings = useCallback(() => {
+    setSettingsOpen((o) => {
+      if (!o) { setActivityOpen(false); setChatOpen(false); setOverviewOpen(false); setHelpOpen(false) }
+      return !o
     })
   }, [])
 
@@ -118,6 +128,13 @@ export default function App() {
   const onNewWindow = useCallback(() => { void store.newWindow() }, [store])
   const onSendMessage = useCallback((text: string) => { void store.sendMessage(text) }, [store])
   const onNewTask = useCallback(() => { store.newTask(); openChat() }, [store, openChat])
+  // Agent and team rows only open the Agent home: leave the current task or page
+  // for the home screen without starting, resuming or stopping anything.
+  const openAgents = useCallback((view: AgentNavView) => {
+    openAgentView(view)
+    const current = store.getState()
+    if (current.activeTaskId || current.directBrowser) store.newTask()
+  }, [store])
 
   // Native tab commands are owned by the direct browser API. Task-owned browser tabs remain
   // isolated and cannot be mutated through that API.
@@ -136,7 +153,8 @@ export default function App() {
     onShare,
     onToggleHelp: toggleHelp,
     onToggleSidebar: () => setSidebarOpen((open) => !open),
-  }), [store, onNewTask, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp, tab.id])
+    onToggleSettings: toggleSettings,
+  }), [store, onNewTask, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp, toggleSettings, tab.id])
   useShortcuts(s, approval, shortcutHandlers)
 
   const trackpadHandlers = useMemo(() => ({
@@ -182,6 +200,7 @@ export default function App() {
   // Adjusted during render (like usePresence) so the overview never commits on top of a new sheet.
   if (approval && overviewOpen) setOverviewOpen(false)
   if (approval && helpOpen) setHelpOpen(false)
+  if (approval && settingsOpen) setSettingsOpen(false)
   // At the moment of a decision, show only the decision: Activity/Chat close rather than stack behind the sheet.
   if (approval && activityOpen) { setActivityOpen(false); setSeen(notableCount) }
   if (approval && chatOpen) { setChatOpen(false); setSeen(notableCount) }
@@ -194,9 +213,10 @@ export default function App() {
   const toastShown = usePresence(toast)
   const overviewShown = usePresence(overviewOpen ? true : null)
   const helpShown = usePresence(helpOpen ? true : null)
+  const settingsShown = usePresence(settingsOpen ? true : null)
 
   const nativeSurfaceVisible = ((!!s.activeTaskId && !!s.browser) || (!s.activeTaskId && s.directBrowser)) && !approval && !activityOpen && !chatOpen &&
-    !overviewOpen && !helpOpen && !noticeShown.item && !toastShown.item
+    !overviewOpen && !helpOpen && !settingsOpen && !noticeShown.item && !toastShown.item
   // A native view draws above the DOM, so overlays hide it. A still of the page stays in the
   // slot meanwhile: taken while the page is still on screen, then the view is hidden.
   const [snapshot, setSnapshot] = useState<string | null>(null)
@@ -273,7 +293,7 @@ export default function App() {
             onOverview={toggleOverview}
             onActivity={openActivity}
             onNavigate={(url) => void store.navigate({ type: 'navigate', url })}
-            onNewWindow={onNewWindow}
+            onSettings={toggleSettings}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((open) => !open)}
             controller={
@@ -305,6 +325,7 @@ export default function App() {
             inert={overviewOpen || !!approval}
             onNewTask={onNewTask}
             onSelectTask={(taskId) => void store.selectTask(taskId)}
+            agents={<SidebarAgents onOpen={(owner) => openAgents({ n: 'detail', owner })} onSeeAll={() => openAgents({ n: 'hub' })} onNew={() => openAgents({ n: 'hub' })} />}
           />
           <div className="hx-content-col">
           <div className="hx-body" inert={overviewOpen}>
@@ -367,6 +388,7 @@ export default function App() {
                 />
               )}
               {helpShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && <ShortcutsHelp leaving={helpShown.leaving} onClose={() => setHelpOpen(false)} />}
+              {settingsShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && !helpOpen && <SettingsPanel leaving={settingsShown.leaving} onClose={() => setSettingsOpen(false)} />}
               {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}
             </div>
           </div>

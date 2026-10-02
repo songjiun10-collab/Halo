@@ -34,12 +34,13 @@ const CODEX_DISABLED_FEATURES = Object.freeze([
 const CODEX_ENV_ALLOWLIST = Object.freeze([...ENV_ALLOWLIST, "CODEX_HOME"]);
 
 class CodexPlannerBridge extends ClaudeCodeBridge {
-  constructor({ command = "codex", spawnFn, model } = {}) {
+  constructor({ command = "codex", spawnFn, model, fast = false } = {}) {
     if (!isCodexModel(model)) {
       throw new ClaudeCodeBridgeError("invalid_model", "model is not an allowlisted Codex model");
     }
     super({ command, spawnFn });
     this._model = model;
+    this._fast = fast === true;
     this._workDir = fs.mkdtempSync(path.join(os.tmpdir(), "halo-codex-planner-"));
     fs.chmodSync(this._workDir, 0o700);
     this._cwd = this._workDir;
@@ -57,6 +58,8 @@ class CodexPlannerBridge extends ClaudeCodeBridge {
       "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
       "-s", "read-only", "-C", this._workDir, "-m", this._model,
       "-c", `model_reasoning_effort="${codexEffort(this._model, effort)}"`,
+      // Fast mode: Codex's priority service tier, offered on every allowlisted model.
+      ...(this._fast ? ["-c", 'service_tier="priority"'] : []),
       "-c", 'approval_policy="never"', "-c", 'web_search="disabled"', "-c", "project_doc_max_bytes=0",
       // No --output-schema: Codex's strict structured output rejects the
       // proposal schema's optional fields. The prompt spells out the shape

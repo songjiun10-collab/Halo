@@ -50,7 +50,7 @@ const unavailable = (source) => ({ source, command: null, args: [], usageProvide
 
 // Called once per task (and per child agent): the result is pinned to that
 // planner, so a later settings change only affects tasks started afterwards.
-function selectPlannerLaunch({ override, providerId, model, nodeCommand }) {
+function selectPlannerLaunch({ override, providerId, model, fast = false, nodeCommand }) {
   if (override) {
     // A broken operator override never silently falls back to settings.
     return override.configured
@@ -63,7 +63,8 @@ function selectPlannerLaunch({ override, providerId, model, nodeCommand }) {
   // A pinned model is passed only after re-checking the host allowlist.
   if (model !== undefined && !entry.isModel(model)) return unavailable("invalid_model");
   const modelArgs = model === undefined ? [] : ["--model", model];
-  return { source: "settings", command: nodeCommand, args: [entry.workerPath, ...modelArgs], usageProvider: entry.usageProvider };
+  const fastArgs = fast === true ? ["--fast"] : [];
+  return { source: "settings", command: nodeCommand, args: [entry.workerPath, ...modelArgs, ...fastArgs], usageProvider: entry.usageProvider };
 }
 
 module.exports = { PLANNER_PROVIDER_IDS, PLANNER_PROVIDERS, parseOperatorOverride, selectPlannerLaunch };

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Plus } from './Icons'
 import type { TaskSummary } from '../session/api'
 
@@ -8,6 +9,8 @@ interface Props {
   inert?: boolean
   onNewTask: () => void
   onSelectTask: (taskId: string) => void
+  /** Agents and Teams, listed after the tasks. */
+  agents?: ReactNode
 }
 
 const stateLabel: Record<TaskSummary['state'], string> = {
@@ -40,7 +43,7 @@ function TaskButton({ task, active, onClick }: { task: TaskSummary; active: bool
   )
 }
 
-export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask }: Props) {
+export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, agents }: Props) {
   const active = tasks.filter((task) => task.active || ['running', 'awaiting_approval', 'awaiting_verification', 'paused'].includes(task.state))
   const recent = tasks.filter((task) => !active.includes(task))
   return (
@@ -58,6 +61,7 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
       {recent.length ? recent.map((task) => (
         <TaskButton key={task.taskId} task={task} active={task.taskId === activeTaskId} onClick={() => onSelectTask(task.taskId)} />
       )) : <p className="hx-sidebar__empty">No recent tasks</p>}
+      {agents}
       <div className="hx-sidebar__foot"><span>{tasks.length} saved {tasks.length === 1 ? 'task' : 'tasks'}</span></div>
     </aside>
   )

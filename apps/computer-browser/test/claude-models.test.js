@@ -50,8 +50,8 @@ test("selectPlannerLaunch appends only an allowlisted model to the worker argv",
 });
 
 test("the worker accepts no argv or exactly one allowlisted --model", () => {
-  assert.deepEqual(parseWorkerArgs([]), { model: undefined });
-  assert.deepEqual(parseWorkerArgs(["--model", "claude-haiku-4-5-20251001"]), { model: "claude-haiku-4-5-20251001" });
+  assert.deepEqual(parseWorkerArgs([]), { model: undefined, fast: false });
+  assert.deepEqual(parseWorkerArgs(["--model", "claude-haiku-4-5-20251001"]), { model: "claude-haiku-4-5-20251001", fast: false });
   for (const argv of [["--model"], ["--model", "opus"], ["--model", "claude-opus-5-5", "--tools", "x"], ["--effort", "max"], ["claude-opus-5-5"]]) {
     assert.throws(() => parseWorkerArgs(argv), /model/, argv.join(" "));
   }

@@ -168,6 +168,20 @@ test('harness cohort publishes beside main harness modules and shares the freshn
   await assert.rejects(run({ projectRoot: root, mode: 'check' }), { code: 'RUNTIME_MISSING' });
 });
 
+test('message transport and mailbox are published and protected by the freshness gate', async t => {
+  const root = await fixture(t);
+  const run = await tool();
+  await run({ projectRoot: root, mode: 'write' });
+  for (const name of ['message-port', 'message-mailbox']) {
+    const artifact = path.join(root, `main/harness/${name}.js`);
+    assert.equal(require(artifact).value, name);
+    await fs.writeFile(artifact, 'stale communication artifact\n');
+    await assert.rejects(run({ projectRoot: root, mode: 'check' }), { code: 'RUNTIME_STALE' });
+    assert.equal(await fs.readFile(artifact, 'utf8'), 'stale communication artifact\n');
+    await run({ projectRoot: root, mode: 'write' });
+  }
+});
+
 test('harness cohort configuration cannot redirect its root or file set', async t => {
   const root = await fixture(t);
   const before = await snapshot(root);

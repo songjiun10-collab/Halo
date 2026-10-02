@@ -18,6 +18,7 @@ export const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Mod+Shift+.', label: 'Halo Chat' },
   { keys: 'Mod+Shift+A', label: 'Show all tabs' },
   { keys: 'Mod+N', label: 'New window' },
+  { keys: 'Mod+,', label: 'Settings' },
   { keys: 'Mod+Shift+S', label: 'Share' },
   { keys: 'Esc', label: 'Close the open Halo surface' },
   { keys: 'Shift+/', label: 'This list' },
@@ -38,6 +39,7 @@ interface Handlers {
   onShare: () => void
   onToggleHelp: () => void
   onToggleSidebar: () => void
+  onToggleSettings: () => void
 }
 
 /**
@@ -64,6 +66,7 @@ export function useShortcuts(s: SessionState, approval: unknown, handlers: Handl
       if (e.altKey && e.code === 'ArrowRight') { e.preventDefault(); handlers.onForward(); return }
       if (!mod) return
       if (e.code === 'KeyK' && !e.shiftKey) { e.preventDefault(); handlers.onNewTask(); return }
+      if (e.code === 'Comma' && !e.shiftKey) { e.preventDefault(); handlers.onToggleSettings(); return }
 
       const tab = s.tabs.find((t) => t.id === s.activeTabId) ?? s.tabs[0]
       if (!tab) return

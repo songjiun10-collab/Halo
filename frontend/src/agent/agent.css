@@ -106,3 +106,20 @@
 .hx-badge[data-warn]{background:color-mix(in oklab,var(--destructive,#d9534f) 22%,transparent);color:var(--foreground)}
 .hx-wrap{white-space:pre-wrap;overflow-wrap:anywhere}
 .hx-step{align-items:flex-start}.hx-step .hx-xrow__b{gap:10px}.hx-step__tools{display:flex;flex-direction:column;gap:6px}
+/* ===== Workspace sidebar: Agents / Teams rows (open only; never start or resume a task). Tokens only. ===== */
+.hx-sbr__label{display:flex;align-items:center;justify-content:space-between}
+.hx-sbr__add{width:18px;height:18px;padding:0;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--muted-foreground);font:500 14px/18px var(--font-body);cursor:pointer}.hx-sbr__add:hover{background:var(--hover);color:var(--foreground)}
+.hx-sbr{display:flex;align-items:center;gap:9px;width:100%;min-width:0;padding:6px 8px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--muted-foreground);font-size:12px;text-align:start;cursor:pointer}
+.hx-sbr:hover{background:var(--hover);color:var(--foreground)}.hx-sbr[data-archived]{opacity:.55}
+.hx-sbr__av{display:inline-flex;flex:none}.hx-sbr__n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--foreground)}
+.hx-sbr__stack{display:inline-flex;align-items:center;flex:none;min-width:20px}.hx-sbr__stack>span{display:inline-flex}
+.hx-sbr__st{width:7px;height:7px;border-radius:50%;flex:none;background:color-mix(in oklab,var(--foreground) 28%,transparent)}
+.hx-sbr__st[data-s=working]{background:var(--success);animation:hx-pulse 1.4s ease-in-out infinite}
+.hx-sbr__st[data-s=archived]{background:none;box-shadow:inset 0 0 0 1.5px color-mix(in oklab,var(--foreground) 35%,transparent)}
+.hx-sbr__badge{flex:none;width:7px;height:7px;border-radius:50%;background:var(--primary-fill)}
+.hx-typing{display:inline-flex;gap:2px;flex:none;align-items:center;height:16px}.hx-typing i{width:4px;height:4px;border-radius:50%;background:var(--muted-foreground);animation:hx-typing 1.1s ease-in-out infinite}.hx-typing i:nth-child(2){animation-delay:.15s}.hx-typing i:nth-child(3){animation-delay:.3s}
+@keyframes hx-typing{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-3px);opacity:1}}
+.hx-sbr__all{padding-left:37px;color:var(--muted-foreground)}
+.hx-sidebar[data-open="false"] .hx-sbr{justify-content:center;padding-inline:0}
+.hx-sidebar[data-open="false"] .hx-sbr__n,.hx-sidebar[data-open="false"] .hx-sbr__badge,.hx-sidebar[data-open="false"] .hx-typing,.hx-sidebar[data-open="false"] .hx-sbr__all{display:none}
+@media(prefers-reduced-motion:reduce){.hx-typing i,.hx-sbr__st{animation:none!important}}

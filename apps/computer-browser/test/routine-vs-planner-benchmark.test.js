@@ -309,3 +309,54 @@ test("the scripted planner completes a scroll-heavy scenario under per-action re
   assert.equal(approvals[false], scenario.totalActions, "per-action review queues every action");
   assert.ok(approvals[true] < approvals[false], "one review queue item per batch");
 });
+
+// P0 stage spans: the recorder is fed by the same timing points as `stages`
+// (no second instrumentation), plus the TaskController context_build hook.
+const { createSpanRecorder } = require("../integration/stage-spans");
+
+test("an iteration with a span recorder mirrors every stage count and adds context size, counters and marks", async () => {
+  const scenario = bench.buildScenario({ origin: ORIGIN, steps: STEPS });
+  for (const mode of ["routine", "planner"]) {
+    const spans = createSpanRecorder({ runId: `t-${mode}` });
+    const record = await bench.runIteration({ mode, scenario, approvalMode: "review", storageRoot: await mkTempRoot(), createBrowser: async () => makeChainBrowser(STEPS), spans });
+    assert.equal(record.success, true, record.error);
+    const summary = spans.summary();
+    for (const [label, stage] of Object.entries(record.stages)) {
+      assert.equal(summary.labels[label]?.count ?? 0, stage.count, `${mode}: ${label} is fed from the same timing point`);
+    }
+    assert.equal(summary.labels.proposal.count, record.proposalCalls);
+    assert.ok(summary.labels.context_build.count >= record.proposalCalls, "every proposal is preceded by a context build");
+    assert.ok(summary.counters.contextBytes > 0);
+    assert.equal(summary.counters.actionCount, STEPS);
+    assert.equal(summary.counters.plannerCalls, record.proposalCalls);
+    assert.equal(summary.counters.journalOps, record.stages.journal_fsync.count);
+    assert.equal(summary.counters.checkpointOps, record.stages.checkpoint_rename.count);
+    assert.equal(summary.counters.tokens, null);
+    assert.ok(summary.marks.first_observation >= 0 && summary.marks.first_proposal >= 0);
+    assert.equal(summary.droppedSpans, 0);
+  }
+});
+
+test("runBenchmark writes one JSONL span stream with a summary line per iteration when asked", async () => {
+  const scenario = bench.buildScenario({ origin: ORIGIN, steps: STEPS });
+  const spansPath = path.join(await mkTempRoot(), "spans.jsonl");
+  const report = await bench.runBenchmark({ scenario, pairs: 2, seed: 5, approvalMode: "allow", storageRoot: await mkTempRoot(), createBrowser: async () => makeChainBrowser(STEPS), spansPath });
+  const lines = (await fs.readFile(spansPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  const summaries = lines.filter((line) => line.type === "summary");
+  assert.equal(summaries.length, report.iterations.length);
+  assert.equal(new Set(summaries.map((s) => s.runId)).size, report.iterations.length);
+  assert.ok(lines.filter((line) => line.type === "span").every((span) => summaries.some((s) => s.runId === span.runId)));
+  assert.equal(report.spansPath, spansPath);
+});
+
+test("span summaries split wall time into active and approval wait and count duplicate dispatches", async () => {
+  const scenario = bench.buildScenario({ origin: ORIGIN, steps: STEPS });
+  const spans = createSpanRecorder({ runId: "phases" });
+  const record = await bench.runIteration({ mode: "routine", scenario, approvalMode: "review", storageRoot: await mkTempRoot(), createBrowser: async () => makeChainBrowser(STEPS), spans });
+  assert.equal(record.success, true, record.error);
+  const { phases, counters } = spans.summary();
+  assert.equal(phases.wallMs, record.runMs);
+  assert.ok(phases.humanWaitMs >= 0);
+  assert.ok(Math.abs(phases.activeMs + phases.humanWaitMs - phases.wallMs) < 1e-6);
+  assert.equal(counters.duplicateDispatchCount, 0, "every browser.execute is one budgeted action");
+});

@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode, type Ref } from 'r
 import { currentUrl } from '../session/session'
 import { addressTarget } from '../session/navigation'
 import type { Tab } from '../session/types'
-import { ActivityLog, Back, Forward, Lock, NewWindow, Share, Sidebar, Tabs } from './Icons'
+import { ActivityLog, Back, Forward, Lock, Share, Sidebar, Tabs, Gear } from './Icons'
 
 interface Props {
   tab: Tab
@@ -16,7 +16,7 @@ interface Props {
   onOverview: () => void
   onActivity: () => void
   onNavigate: (url: string) => void
-  onNewWindow: () => void
+  onSettings: () => void
   sidebarOpen: boolean
   onToggleSidebar: () => void
   /** Sits inside the address field: who is driving this tab. */
@@ -25,7 +25,7 @@ interface Props {
   halo: ReactNode
 }
 
-export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onShare, onOverview, onActivity, onNavigate, onNewWindow, sidebarOpen, onToggleSidebar, controller, halo }: Props) {
+export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onShare, onOverview, onActivity, onNavigate, onSettings, sidebarOpen, onToggleSidebar, controller, halo }: Props) {
   const url = currentUrl(tab)
   const addressUrl = url.startsWith('halo://') ? '' : url
   const [address, setAddress] = useState(addressUrl)
@@ -54,7 +54,7 @@ export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onSha
         <button className="hx-icbtn" aria-label="Share" aria-keyshortcuts="Control+Shift+S Meta+Shift+S" title="Share" disabled={url.startsWith('halo://')} onClick={onShare}><Share /></button>
         <button className="hx-icbtn" aria-label="Show all tabs" aria-keyshortcuts="Control+Shift+A Meta+Shift+A" title="Show all tabs" onClick={onOverview}><Tabs /></button>
         <button className="hx-icbtn" aria-label="View task activity" title="View task activity" onClick={onActivity}><ActivityLog /></button>
-        <button className="hx-icbtn" aria-label="New window" aria-keyshortcuts="Control+N Meta+N" title="New window" onClick={onNewWindow}><NewWindow /></button>
+        <button className="hx-icbtn" aria-label="Settings" aria-keyshortcuts="Control+Comma Meta+Comma" title="Settings" onClick={onSettings}><Gear /></button>
       </div>
       {halo}
     </div>

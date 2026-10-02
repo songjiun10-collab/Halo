@@ -49,8 +49,8 @@ test("codex_cli is an allowlisted planner provider that only takes Codex models"
 });
 
 test("the Codex worker accepts no argv or exactly one allowlisted --model", () => {
-  assert.deepEqual(parseCodexWorkerArgs([]), { model: DEFAULT_CODEX_MODEL });
-  assert.deepEqual(parseCodexWorkerArgs(["--model", "gpt-5.6-luna"]), { model: "gpt-5.6-luna" });
+  assert.deepEqual(parseCodexWorkerArgs([]), { model: DEFAULT_CODEX_MODEL, fast: false });
+  assert.deepEqual(parseCodexWorkerArgs(["--model", "gpt-5.6-luna"]), { model: "gpt-5.6-luna", fast: false });
   for (const argv of [["--model", "o3"], ["--model", "gpt-5.5", "-s", "danger-full-access"], ["--dangerously-bypass-approvals-and-sandbox"]]) {
     assert.throws(() => parseCodexWorkerArgs(argv), /model/, argv.join(" "));
   }

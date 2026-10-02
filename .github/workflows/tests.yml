@@ -74,4 +74,4 @@ jobs:
       - name: Typecheck runtime sources and consumers
         run: npm run typecheck
       - name: Test shared contracts and runtime build
-        run: node --test test/harness-contracts.test.js test/task-profile-contracts.test.js test/harness-profile.test.js test/runtime-build.test.js test/runtime-contract-conformance.test.js test/runtime-harness-conformance.test.js test/generic-mcp-broker.test.js test/mcp-schema-validator.test.js
+        run: node --test test/harness-contracts.test.js test/task-profile-contracts.test.js test/harness-profile.test.js test/runtime-build.test.js test/runtime-contract-conformance.test.js test/runtime-harness-conformance.test.js test/generic-mcp-broker.test.js test/mcp-schema-validator.test.js test/message-port.test.js test/message-mailbox.test.js test/message-runtime-conformance.test.js

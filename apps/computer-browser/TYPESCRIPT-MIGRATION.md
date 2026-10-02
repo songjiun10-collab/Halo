@@ -1,7 +1,7 @@
 # Runtime TypeScript migration
 
 The frontend uses TypeScript. The Electron runtime still loads CommonJS JavaScript,
-with four shared contract modules and three MCP broker modules now authored in
+with four shared contract modules, three MCP broker modules and two communication modules authored in
 strict TypeScript and emitted to their existing `.js` paths. This is a scoped
 runtime conversion, not a claim that the whole Electron runtime has migrated.
 
@@ -18,7 +18,7 @@ It checks the TypeScript sources and compile-only type fixtures. The runtime bui
 uses two fixed compiler cohorts, `tsconfig.runtime.json` (`runtime-src/shared` to
 `shared/`) and `tsconfig.runtime-harness.json` (`runtime-src/main/harness` to
 `main/harness/`). Each emits CommonJS JS only into its own private temporary
-directory before the tool checks or explicitly publishes the seven approved outputs.
+directory before the tool checks or explicitly publishes the nine approved outputs.
 
 From this directory:
 
@@ -33,7 +33,7 @@ npm run build            # check generated files, then build frontend
 Only `build:runtime` writes generated JavaScript. It compiles first, validates the
 exact output set of each cohort, rejects symlinked input/output paths, uses a private
 exclusive writer lock, and replaces each file using a sibling temporary file.
-The seven replacements are individually atomic, not a single atomic transaction.
+The nine replacements are individually atomic, not a single atomic transaction.
 If interrupted, `check:runtime` reports stale files; rerun the explicit build to
 repair them. A leftover lock after a crash is not deleted automatically: inspect
 the named lock and remove it manually only after confirming no publisher is active.
@@ -54,6 +54,11 @@ headless Electron end-to-end run.
    `main/harness/providers/` remain JavaScript; the broker types only the
    `boundedUtf8` helper it imports from the Codex adapter.
 3. Migrate controller and scheduler only after concurrent runtime changes settle.
+4. `message-port` and `message-mailbox` are authored under
+   `runtime-src/main/harness/` and emitted to their original CommonJS paths.
+   JSON transport, cancellation, durable message idempotency, conversation quota,
+   and consumed-message acknowledgement semantics are unchanged. Their tests run
+   against the emitted JavaScript, not a runtime TypeScript loader.
 
 Approval, journal formats, cancellation, expiry, and execution-uncertain behavior
 must remain unchanged. Runtime tests and type checks are complementary; neither
@@ -62,7 +67,7 @@ to TypeScript.
 
 ## Ownership and limits
 
-The shared source modules are under `runtime-src/shared/` and the broker sources
+The shared source modules are under `runtime-src/shared/` and the broker/communication sources
 under `runtime-src/main/harness/`; the matching files under `shared/` and
 `main/harness/` are generated outputs. Other `main/harness/*.js` files remain
 hand-written. Edit the TypeScript sources and run
@@ -80,5 +85,6 @@ errors intentionally return bounded codes and point users there for details.
 
 Phase one added strict JSDoc typing to the shared contracts and recorded an initial
 154-diagnostic baseline. Phase two now uses actual TypeScript source for the four
-shared modules, and phase three step one adds the three MCP broker modules;
+shared modules, phase three step one adds the three MCP broker modules, and
+the next isolated cohort adds the two communication modules;
 other runtime modules remain JavaScript.

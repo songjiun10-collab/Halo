@@ -95,6 +95,7 @@ class TaskHost {
     plannerEffortMode = "fixed",
     plannerProvider = "none",
     plannerModel,
+    plannerFast,
     mcpProviders = [],
     memoryStore,
     settingsStore,
@@ -146,6 +147,7 @@ class TaskHost {
     // tasks and children started afterwards.
     this._plannerProvider = plannerProvider;
     this._plannerModel = plannerModel;
+    this._plannerFast = plannerFast === true;
     this._mcpProviders = Array.isArray(mcpProviders) ? [...mcpProviders] : [];
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
@@ -1762,8 +1764,9 @@ class TaskHost {
   // The provider and (when chosen) model a new planner is pinned to. A task
   // pinned to a model (an Agent's choice) runs that model's provider.
   _plannerPin(role, taskModel = null) {
-    if (taskModel) return { role, plannerProvider: providerForModel(taskModel), plannerModel: taskModel };
-    return { role, plannerProvider: this._plannerProvider, ...(this._plannerModel ? { plannerModel: this._plannerModel } : {}) };
+    const fast = this._plannerFast ? { plannerFast: true } : {};
+    if (taskModel) return { role, plannerProvider: providerForModel(taskModel), plannerModel: taskModel, ...fast };
+    return { role, plannerProvider: this._plannerProvider, ...(this._plannerModel ? { plannerModel: this._plannerModel } : {}), ...fast };
   }
 
   async updateHostSettings(patch) {
@@ -1778,6 +1781,7 @@ class TaskHost {
     this._plannerEffortMode = settings.plannerEffortMode;
     this._plannerProvider = settings.plannerProvider;
     this._plannerModel = settings.plannerModel;
+    this._plannerFast = settings.plannerFast === true;
     this._mcpProviders = [...settings.mcpProviders];
     for (const entry of this._active.values()) {
       entry.controller.setPolicySettings({ ...settings, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });

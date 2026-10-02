@@ -66,6 +66,8 @@ export interface HostSettings {
   plannerProvider: 'none' | 'claude_code' | 'codex_cli'
   /** Allowlisted planner model id; unset runs the provider's default model. */
   plannerModel?: string
+  /** Opt-in faster planner tier; unset is off. */
+  plannerFast?: boolean
 }
 export interface HaloBrowserApi {
   getSnapshot: () => Promise<DirectBrowserSnapshot>

@@ -37,13 +37,13 @@ test('toolbar exposes a real address entry form for the active browser surface',
     onOverview: noop,
     onActivity: noop,
     onNavigate: noop,
-    onNewWindow: noop,
     controller: null,
     halo: null,
   }))
   assert.match(html, /aria-label="Address"/)
   assert.match(html, /hx-omni__form/)
   assert.doesNotMatch(html, /Keyboard shortcuts/, 'the toolbar has no shortcuts button; Shift+? still opens the list')
+  assert.doesNotMatch(html, /New window/, 'the toolbar has no new-window button; Mod+N still opens one')
 })
 
 test('chat presents task switching and pending evidence as real controls', () => {

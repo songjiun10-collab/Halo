@@ -8,11 +8,14 @@ const { createWorkerLoop } = require("./claude-code-worker");
 const { CodexPlannerBridge } = require("./codex-planner-bridge");
 const { DEFAULT_CODEX_MODEL, isCodexModel } = require("./codex-models");
 
-// No argv or exactly `--model <allowlisted Codex id>`; anything else is refused.
+// No argv or exactly `--model <allowlisted Codex id>`, optionally followed by
+// `--fast`; anything else is refused.
 function parseCodexWorkerArgs(argv) {
-  if (argv.length === 0) return { model: DEFAULT_CODEX_MODEL };
-  if (argv.length === 2 && argv[0] === "--model" && isCodexModel(argv[1])) return { model: argv[1] };
-  throw new Error("worker accepts only --model <allowlisted Codex model>");
+  const fast = argv.length > 0 && argv[argv.length - 1] === "--fast";
+  const rest = fast ? argv.slice(0, -1) : argv;
+  if (rest.length === 0) return { model: DEFAULT_CODEX_MODEL, fast };
+  if (rest.length === 2 && rest[0] === "--model" && isCodexModel(rest[1])) return { model: rest[1], fast };
+  throw new Error("worker accepts only [--model <allowlisted Codex model>] [--fast]");
 }
 
 // The ChatGPT app ships a newer Codex CLI than a standalone install usually
@@ -26,13 +29,14 @@ function resolveCodexCommand(env = process.env, exists = fs.existsSync) {
 
 function main() {
   let model;
+  let fast;
   try {
-    ({ model } = parseCodexWorkerArgs(process.argv.slice(2)));
+    ({ model, fast } = parseCodexWorkerArgs(process.argv.slice(2)));
   } catch (error) {
     process.stderr.write(`[codex-planner-worker] ${error.message}\n`);
     process.exit(2);
   }
-  const bridge = new CodexPlannerBridge({ command: resolveCodexCommand(), model });
+  const bridge = new CodexPlannerBridge({ command: resolveCodexCommand(), model, fast });
   // Reap the codex child (and remove the temp work dir) before exiting.
   const shutdown = async () => {
     try {

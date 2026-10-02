@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const packageRoot = path.resolve(__dirname, '..');
 const sharedNames = ['harness-contracts', 'task-profile-contracts', 'harness-profile', 'capability-registry'];
-const harnessNames = ['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker'];
+const harnessNames = ['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker', 'message-port', 'message-mailbox'];
 const cohorts = [
   { config: 'tsconfig.runtime.json', source: 'runtime-src/shared', output: 'shared', names: sharedNames },
   { config: 'tsconfig.runtime-harness.json', source: 'runtime-src/main/harness', output: 'main/harness', names: harnessNames },
