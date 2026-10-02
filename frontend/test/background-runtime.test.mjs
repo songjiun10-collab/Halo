@@ -68,3 +68,18 @@ test('malformed runtime state fails closed instead of exposing an unknown state'
   assert.equal(store.getState().service, 'unavailable')
   assert.match(store.getState().error, /invalid background runtime snapshot/i)
 })
+
+test('start at login goes through the host and keeps the reported install state', async () => {
+  const { api, calls } = harness({
+    setBackgroundLaunchAtLogin: async (enabled) => { calls.push(['login', enabled]); return { connection: 'disconnected', service: 'stopped', memoryPolicy: 'budgeted', launchAgentInstalled: enabled } },
+  })
+  const store = new BackgroundRuntimeStore(api)
+  assert.equal(await store.setLaunchAtLogin('yes'), false)
+  assert.equal(await store.setLaunchAtLogin(true), true)
+  assert.deepEqual(calls, [['login', true]])
+  assert.equal(store.getState().launchAgentInstalled, true)
+  const failing = new BackgroundRuntimeStore({ setBackgroundLaunchAtLogin: async () => { throw new Error('launchctl bootstrap failed') } })
+  assert.equal(await failing.setLaunchAtLogin(true), false)
+  assert.match(failing.getState().error, /launchctl/)
+  assert.equal(await new BackgroundRuntimeStore({}).setLaunchAtLogin(true), false)
+})

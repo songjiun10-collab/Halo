@@ -8,6 +8,7 @@ export interface BackgroundRuntimeApi {
   detachBackgroundRuntime(): Promise<void>
   setMemoryPolicy(mode: MemoryPolicy): Promise<BackgroundRuntimeSnapshot>
   stopBackgroundService(): Promise<BackgroundRuntimeSnapshot>
+  setBackgroundLaunchAtLogin(enabled: boolean): Promise<BackgroundRuntimeSnapshot>
   onBackgroundRuntimeEvent(callback: (snapshot: BackgroundRuntimeSnapshot) => void): () => void
 }
 export interface BackgroundRuntimeState { connection: RuntimeConnection; service: RuntimeServiceState; memoryPolicy: MemoryPolicy; launchAgentInstalled?: boolean; error: string | null }
@@ -66,6 +67,12 @@ export class BackgroundRuntimeStore {
   detach = async () => {
     if (!this.api?.detachBackgroundRuntime) return false
     try { await this.api.detachBackgroundRuntime(); this.update({ connection: 'disconnected' }); return true }
+    catch (error) { this.update({ error: error instanceof Error ? error.message : String(error) }); return false }
+  }
+  /** Installs (and starts) or removes the background service's login item. */
+  setLaunchAtLogin = async (enabled: boolean) => {
+    if (!this.api?.setBackgroundLaunchAtLogin || typeof enabled !== 'boolean') return false
+    try { this.apply(await this.api.setBackgroundLaunchAtLogin(enabled)); return true }
     catch (error) { this.update({ error: error instanceof Error ? error.message : String(error) }); return false }
   }
   stopService = async () => {

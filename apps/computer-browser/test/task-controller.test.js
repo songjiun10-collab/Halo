@@ -2725,3 +2725,58 @@ test("batchReadOnlyActions:false restores per-action approval and durability for
   assert.deepEqual(records.filter((r) => r.type === "action_started").map((r) => r.durable), [true, true, true]);
   await store.close();
 });
+
+test("a child's team board reaches its planner context; a failing board read leaves it out without pausing", async () => {
+  for (const [readTeamBoard, expected] of [
+    [async () => ({ authority: "untrusted_sibling_notes", parentTaskId: "11111111-1111-4111-8111-111111111111", entries: [{ from: "Flights", kind: "progress", text: "KE123", at: "2026-10-02T00:00:00.000Z" }] }), ["KE123"]],
+    [async () => { throw new Error("board unreadable"); }, null],
+  ]) {
+    const { store } = await makeStore({ originalRequest: "goal" });
+    let seen;
+    const controller = new TaskController({
+      store,
+      planner: {
+        next: async (context) => {
+          seen = context.teamBoard ? context.teamBoard.entries.map((e) => e.text) : null;
+          return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] };
+        },
+      },
+      browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+      approve: allowApprove(),
+      hostVerifier: () => true,
+      readTeamBoard,
+    });
+    const snapshot = await controller.start();
+    assert.deepEqual(seen, expected);
+    assert.equal(snapshot.state, "awaiting_verification");
+    await store.close();
+  }
+});
+
+test("only a Multi-agent parent with a host child_plan hook is told it may split work, and whether a plan is already running", async () => {
+  const finish = (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] });
+  const running = { requestedAgentCount: 1, activeAgentCount: 1, queuedAgentCount: 0, parentGoalVersion: 1, memoryPolicy: "budgeted",
+    agents: [{ agentId: "a", status: "running", assignedOrigin: "https://a.example", evidenceCount: 0, subgoal: "Flights" }] };
+  const cases = [
+    ["multi_agent", true, async () => null, { enabled: true, maxAgents: 8, active: null }],
+    ["multi_agent", true, async () => running, { enabled: true, maxAgents: 8, active: { agents: [{ subgoal: "Flights", status: "running" }] } }],
+    ["multi_agent", true, async () => { throw new Error("unreadable"); }, undefined],
+    ["multi_agent", false, async () => null, undefined],
+    ["browser", true, async () => null, undefined],
+  ];
+  for (const [profile, hook, readChildPlan, expected] of cases) {
+    const { store } = await makeProfiledStore({ originalRequest: "parent" }, profile);
+    let seen = "unset";
+    const controller = new TaskController({
+      store,
+      planner: { next: async (context) => { seen = context.progress.childPlan; return finish(context); } },
+      browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+      approve: allowApprove(), hostVerifier: () => true,
+      ...(hook ? { onChildPlan: async () => {} } : {}),
+      readChildPlan,
+    });
+    await controller.start();
+    assert.deepEqual(seen, expected, `${profile} hook=${hook}`);
+    await store.close();
+  }
+});

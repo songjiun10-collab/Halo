@@ -5,25 +5,39 @@ const fsConstants = require("node:fs").constants;
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { PERMISSION_MODES } = require("./permission-policy");
-const { PLANNER_PROVIDER_IDS } = require("./planner-providers");
+const { PLANNER_PROVIDER_IDS, PLANNER_PROVIDERS } = require("./planner-providers");
+const { EFFORT_MODES } = require("./planner-effort-policy");
 
-const PLANNER_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+const PLANNER_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const EXECUTION_MODES = Object.freeze(["sequential", "parallel"]);
 const MEMORY_POLICIES = Object.freeze(["budgeted", "user_override"]);
-const SCHEMA_VERSION = 3;
+// Host-owned MCP provider ids; local servers start processes and are never
+// selectable here (docs/superpowers/specs/2026-10-01-routed-mcp-tool-sharing-design.md).
+const MCP_PROVIDER_IDS = Object.freeze(["codex"]);
+// Display labels for the Agent tools picker, in MCP_PROVIDER_IDS order.
+const MCP_PROVIDER_CATALOG = Object.freeze([Object.freeze({ id: "codex", label: "Codex" })]);
+const SCHEMA_VERSION = 5;
 const MAX_AUDIT_RECORDS = 200;
 const DEFAULT_SETTINGS = Object.freeze({
   version: SCHEMA_VERSION,
   executionMode: "sequential",
   permissionMode: "browse",
   plannerEffort: "medium",
+  // Route-based effort only ever lowers cheap routes below plannerEffort.
+  plannerEffortMode: "auto",
   memoryPolicy: "budgeted",
   plannerProvider: "none",
+  mcpProviders: Object.freeze([]),
 });
-const SETTINGS_FIELDS = ["executionMode", "memoryPolicy", "permissionMode", "plannerEffort", "plannerProvider", "version"];
-const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "memoryPolicy", "plannerProvider"];
+const SETTINGS_FIELDS = ["executionMode", "mcpProviders", "memoryPolicy", "permissionMode", "plannerEffort", "plannerEffortMode", "plannerProvider", "version"];
+// plannerModel is optional within v5: unset keeps the CLI's default Opus
+// alias, so existing settings files need no migration.
+const OPTIONAL_FIELDS = ["plannerModel"];
+const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel"];
 const LEGACY_V1_FIELDS = "executionMode,permissionMode,plannerEffort,version";
 const LEGACY_V2_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,version";
+const LEGACY_V3_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,plannerProvider,version";
+const LEGACY_V4_FIELDS = "executionMode,mcpProviders,memoryPolicy,permissionMode,plannerEffort,plannerProvider,version";
 
 class HostSettingsError extends Error {
   constructor(code, message) {
@@ -41,7 +55,7 @@ function validateSettings(value) {
   if (!isPlainObjectLike(value) || value.version !== SCHEMA_VERSION) {
     throw new HostSettingsError("invalid_settings", "settings file has an unsupported shape or version");
   }
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value).filter((key) => !OPTIONAL_FIELDS.includes(key)).sort();
   if (keys.join(",") !== SETTINGS_FIELDS.join(",")) {
     throw new HostSettingsError("invalid_settings", "settings file contains missing or unknown fields");
   }
@@ -50,6 +64,9 @@ function validateSettings(value) {
   }
   if (!PLANNER_EFFORTS.includes(value.plannerEffort)) {
     throw new HostSettingsError("invalid_planner_effort", "plannerEffort is not recognized");
+  }
+  if (!EFFORT_MODES.includes(value.plannerEffortMode)) {
+    throw new HostSettingsError("invalid_planner_effort_mode", "plannerEffortMode is not recognized");
   }
   if (!EXECUTION_MODES.includes(value.executionMode)) {
     throw new HostSettingsError("invalid_execution_mode", "executionMode is not recognized");
@@ -61,30 +78,51 @@ function validateSettings(value) {
   if (!PLANNER_PROVIDER_IDS.includes(value.plannerProvider)) {
     throw new HostSettingsError("invalid_planner_provider", "plannerProvider is not recognized");
   }
+  const mcpProviders = value.mcpProviders;
+  if (!Array.isArray(mcpProviders) || new Set(mcpProviders).size !== mcpProviders.length ||
+      mcpProviders.some((id) => !MCP_PROVIDER_IDS.includes(id))) {
+    throw new HostSettingsError("invalid_mcp_providers", "mcpProviders must be a duplicate-free list of allowlisted ids");
+  }
+  const hasModel = Object.prototype.hasOwnProperty.call(value, "plannerModel");
+  // The model must belong to the selected provider's allowlist; with no
+  // provider it must still belong to one of them.
+  const provider = PLANNER_PROVIDERS[value.plannerProvider];
+  const knownModel = provider ? provider.isModel(value.plannerModel) : Object.values(PLANNER_PROVIDERS).some((p) => p.isModel(value.plannerModel));
+  if (hasModel && !knownModel) {
+    throw new HostSettingsError("invalid_planner_model", "plannerModel is not allowlisted for this planner provider");
+  }
   return {
     version: SCHEMA_VERSION,
     executionMode: value.executionMode,
     permissionMode: value.permissionMode,
     plannerEffort: value.plannerEffort,
+    plannerEffortMode: value.plannerEffortMode,
     memoryPolicy: value.memoryPolicy,
     plannerProvider: value.plannerProvider,
+    mcpProviders: [...mcpProviders],
+    ...(hasModel ? { plannerModel: value.plannerModel } : {}),
   };
 }
 
 // v1 predates memoryPolicy; v1 and v2 both predate plannerProvider, which
 // starts "none" so an upgrade never begins spending a planner subscription
-// unasked. Migrate ONLY a file that matches its old shape exactly -- anything
+// unasked; v1-v3 predate mcpProviders, which likewise starts empty; v1-v4
+// predate plannerEffortMode, which starts "auto" (it can only lower effort). Migrate ONLY a file that matches its old shape exactly -- anything
 // else (corrupt, hand-edited, or from some future schema we don't know about)
 // is rejected rather than guessed at, the same fail-closed stance
 // validateSettings already takes for the current version.
 function migrateLegacy(value) {
-  if (!isPlainObjectLike(value) || (value.version !== 1 && value.version !== 2)) return null;
-  const keys = Object.keys(value).sort().join(",");
-  if (keys !== (value.version === 1 ? LEGACY_V1_FIELDS : LEGACY_V2_FIELDS)) {
+  const legacyFields = isPlainObjectLike(value) ? LEGACY_FIELDS[value.version] : undefined;
+  if (typeof value?.version !== "number" || !legacyFields) return null;
+  if (Object.keys(value).sort().join(",") !== legacyFields) {
     throw new HostSettingsError("invalid_settings", `legacy v${value.version} settings file has an unsupported shape`);
   }
-  return validateSettings({ memoryPolicy: "budgeted", ...value, version: SCHEMA_VERSION, plannerProvider: "none" });
+  return validateSettings({ memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [], plannerEffortMode: "auto", ...value, version: SCHEMA_VERSION });
 }
+
+const LEGACY_FIELDS = Object.freeze(Object.assign(Object.create(null), {
+  1: LEGACY_V1_FIELDS, 2: LEGACY_V2_FIELDS, 3: LEGACY_V3_FIELDS, 4: LEGACY_V4_FIELDS,
+}));
 
 class HostSettingsStore {
   constructor({ storageRoot } = {}) {
@@ -128,7 +166,7 @@ class HostSettingsStore {
   async load() {
     await this._ensureDirectory();
     const parsed = await this._readJsonFile(this._file);
-    if (parsed === undefined) return { ...DEFAULT_SETTINGS };
+    if (parsed === undefined) return { ...DEFAULT_SETTINGS, mcpProviders: [] };
     const migrated = migrateLegacy(parsed);
     if (migrated) {
       await this._writeJsonFile(this._file, migrated);
@@ -224,8 +262,9 @@ class HostSettingsStore {
       await fs.unlink(temporary).catch(() => {});
       throw error;
     }
-    return Array.isArray(value) ? [...value] : { ...value };
+    if (Array.isArray(value)) return [...value];
+    return Array.isArray(value.mcpProviders) ? { ...value, mcpProviders: [...value.mcpProviders] } : { ...value };
   }
 }
 
-module.exports = { DEFAULT_SETTINGS, EXECUTION_MODES, PLANNER_EFFORTS, MEMORY_POLICIES, HostSettingsError, HostSettingsStore, validateSettings };
+module.exports = { DEFAULT_SETTINGS, EXECUTION_MODES, MCP_PROVIDER_IDS, MCP_PROVIDER_CATALOG,PLANNER_EFFORTS, MEMORY_POLICIES, HostSettingsError, HostSettingsStore, validateSettings };

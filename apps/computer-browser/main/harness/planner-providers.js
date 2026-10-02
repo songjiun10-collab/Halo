@@ -8,12 +8,23 @@
 // protocol.
 
 const path = require("node:path");
+const { isClaudeModel } = require("./providers/claude-models");
+const { isCodexModel } = require("./providers/codex-models");
 
 const PLANNER_PROVIDERS = Object.freeze(Object.assign(Object.create(null), {
   claude_code: Object.freeze({
     id: "claude_code",
     workerPath: path.join(__dirname, "providers", "claude-code-worker.js"),
     usageProvider: "claude",
+    isModel: isClaudeModel,
+  }),
+  // Codex CLI as a planner (codex-planner-bridge.js), distinct from the
+  // "codex" MCP tool provider in host-settings.js.
+  codex_cli: Object.freeze({
+    id: "codex_cli",
+    workerPath: path.join(__dirname, "providers", "codex-planner-worker.js"),
+    usageProvider: "codex",
+    isModel: isCodexModel,
   }),
 }));
 const PLANNER_PROVIDER_IDS = Object.freeze(["none", ...Object.keys(PLANNER_PROVIDERS)]);
@@ -39,7 +50,7 @@ const unavailable = (source) => ({ source, command: null, args: [], usageProvide
 
 // Called once per task (and per child agent): the result is pinned to that
 // planner, so a later settings change only affects tasks started afterwards.
-function selectPlannerLaunch({ override, providerId, nodeCommand }) {
+function selectPlannerLaunch({ override, providerId, model, nodeCommand }) {
   if (override) {
     // A broken operator override never silently falls back to settings.
     return override.configured
@@ -49,7 +60,10 @@ function selectPlannerLaunch({ override, providerId, nodeCommand }) {
   if (providerId === undefined || providerId === "none") return unavailable("none");
   const entry = typeof providerId === "string" && Object.hasOwn(PLANNER_PROVIDERS, providerId) ? PLANNER_PROVIDERS[providerId] : null;
   if (!entry) return unavailable("invalid_provider");
-  return { source: "settings", command: nodeCommand, args: [entry.workerPath], usageProvider: entry.usageProvider };
+  // A pinned model is passed only after re-checking the host allowlist.
+  if (model !== undefined && !entry.isModel(model)) return unavailable("invalid_model");
+  const modelArgs = model === undefined ? [] : ["--model", model];
+  return { source: "settings", command: nodeCommand, args: [entry.workerPath, ...modelArgs], usageProvider: entry.usageProvider };
 }
 
 module.exports = { PLANNER_PROVIDER_IDS, PLANNER_PROVIDERS, parseOperatorOverride, selectPlannerLaunch };

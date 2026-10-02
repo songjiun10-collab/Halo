@@ -62,7 +62,105 @@ function validateTrigger(trigger) {
     parseIso(trigger.anchor, "trigger.anchor");
     return { kind: "interval", everyMs: trigger.everyMs, anchor: trigger.anchor };
   }
-  return fail("invalid_trigger", "trigger.kind must be once or interval");
+  if (trigger.kind === "calendar") {
+    checkExactFields(trigger, ["kind", "days", "time", "timeZone"], "trigger");
+    const { days, time, timeZone } = trigger;
+    if (!Array.isArray(days) || days.length === 0 || days.length > 7 ||
+        days.some((day) => !Number.isInteger(day) || day < 1 || day > 7) || new Set(days).size !== days.length) {
+      fail("invalid_days", "trigger.days must be distinct ISO weekdays 1 (Monday) to 7 (Sunday)");
+    }
+    if (typeof time !== "string" || !TIME_RE.test(time)) fail("invalid_time", "trigger.time must be HH:MM in 24-hour form");
+    if (typeof timeZone !== "string" || timeZone.length === 0 || timeZone.length > MAX_TIME_ZONE_CHARS || !isTimeZone(timeZone)) {
+      fail("invalid_time_zone", "trigger.timeZone must be an IANA time zone name");
+    }
+    return { kind: "calendar", days: [...days].sort((a, b) => a - b), time, timeZone };
+  }
+  return fail("invalid_trigger", "trigger.kind must be once, interval or calendar");
+}
+
+// ---- calendar triggers: local wall-clock time in an IANA time zone ----
+
+const TIME_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const MAX_TIME_ZONE_CHARS = 64;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const formatters = new Map();
+
+function formatterFor(timeZone) {
+  let formatter = formatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric",
+    });
+    formatters.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
+function isTimeZone(timeZone) {
+  try {
+    formatterFor(timeZone);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The zone's wall-clock fields at an instant.
+function localParts(ms, timeZone) {
+  const parts = {};
+  for (const { type, value } of formatterFor(timeZone).formatToParts(new Date(ms))) parts[type] = Number(value);
+  return parts;
+}
+
+function offsetMs(ms, timeZone) {
+  const p = localParts(ms, timeZone);
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(ms / 1000) * 1000;
+}
+
+// The instant a local wall-clock time happens. In a DST gap the time does
+// not exist and this lands on the shifted instant; in an overlap it picks
+// the first one. Either way each local day yields exactly one occurrence.
+function zonedToUtc(year, month, day, hour, minute, timeZone) {
+  const guess = Date.UTC(year, month - 1, day, hour, minute);
+  const first = guess - offsetMs(guess, timeZone);
+  const second = guess - offsetMs(first, timeZone);
+  if (second === first) return first;
+  const matches = [first, second].filter((ms) => {
+    const p = localParts(ms, timeZone);
+    return p.hour === hour && p.minute === minute;
+  });
+  // Overlap: both match, take the earlier. Gap: neither matches, take the
+  // later instant so the run is shifted forward, never ahead of the time.
+  return matches.length > 0 ? Math.min(...matches) : Math.max(first, second);
+}
+
+// Calendar occurrences within roughly a week either side of `aroundMs`.
+function calendarOccurrences(trigger, aroundMs) {
+  const [hour, minute] = trigger.time.split(":").map(Number);
+  const today = localParts(aroundMs, trigger.timeZone);
+  const base = Date.UTC(today.year, today.month - 1, today.day);
+  const result = [];
+  for (let offset = -8; offset <= 8; offset += 1) {
+    const date = new Date(base + offset * DAY_MS);
+    const isoDay = date.getUTCDay() === 0 ? 7 : date.getUTCDay();
+    if (!trigger.days.includes(isoDay)) continue;
+    result.push(zonedToUtc(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate(), hour, minute, trigger.timeZone));
+  }
+  return result.sort((a, b) => a - b);
+}
+
+function nextCalendarOccurrence(trigger, afterMs) {
+  return calendarOccurrences(trigger, afterMs).find((ms) => ms > afterMs) ??
+    calendarOccurrences(trigger, afterMs + 7 * DAY_MS).find((ms) => ms > afterMs);
+}
+
+function evaluateCalendar(trigger, createdMs, lastMs, nowMs) {
+  const latestMs = calendarOccurrences(trigger, nowMs).filter((ms) => ms <= nowMs).at(-1);
+  const nextAfter = (ms) => nextCalendarOccurrence(trigger, ms);
+  if (latestMs !== undefined && latestMs >= createdMs && latestMs > lastMs) {
+    return { action: "run", occurrenceAtMs: latestMs, nextRunAtMs: nextAfter(latestMs) };
+  }
+  return { action: "none", nextRunAtMs: nextAfter(Math.max(nowMs, createdMs - 1)) };
 }
 
 function validateRoutineRef(value) {
@@ -138,6 +236,7 @@ function evaluateSchedule(record, nowMs) {
     if (nowMs - atMs > ONCE_GRACE_MS) return { action: "missed", occurrenceAtMs: atMs, nextRunAtMs: null };
     return { action: "run", occurrenceAtMs: atMs, nextRunAtMs: null };
   }
+  if (trigger.kind === "calendar") return evaluateCalendar(trigger, Date.parse(record.createdAt), lastMs, nowMs);
   const anchorMs = Date.parse(trigger.anchor);
   const createdMs = Date.parse(record.createdAt);
   const every = trigger.everyMs;
@@ -159,6 +258,7 @@ module.exports = {
   ScheduleContractError,
   validateScheduleInput,
   validateScheduleRecord,
+  validateTrigger,
   evaluateSchedule,
   occurrenceKey,
 };

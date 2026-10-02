@@ -323,7 +323,11 @@ async function main() {
     await waitFor("criterion confirmation", () => ui.ready('[aria-label="Confirm criterion C1"]'));
     assert.ok([...views.values()].every((view) => !view.getVisible()), "chat must hide native browser content");
     await ui.click('[aria-label="Confirm criterion C1"]');
-    await waitFor("completed after trusted user confirmation", async () => (await taskHost.getTaskDetail(firstId)).snapshot.state === "completed");
+    // Completed controllers are detached and getTaskDetail() intentionally
+    // returns durable metadata without a live snapshot. Read terminal state
+    // through the saved-task summary, which is the public post-completion view.
+    await waitFor("completed after trusted user confirmation", async () =>
+      (await taskHost.listTasks()).find((task) => task.taskId === firstId)?.state === "completed");
     const firstEvents = await taskHost.getTaskEvents(firstId);
     assert.ok(firstEvents.some((event) => event.type === "evidence_recorded" && event.payload.evidence.kind === "user_confirmation"));
     const chatPng = path.join(runRoot, "completed-chat.png");
@@ -379,11 +383,12 @@ async function main() {
     mark("first task selected");
     await waitFor("first task chat selected", () => ui.evaluate(`document.querySelector('.hx-app')?.dataset.activeTaskId === ${JSON.stringify(firstId)}`));
     assert.ok(!(await ui.text('#hx-chat')).includes(amendment), "second task amendment must not appear in first task chat");
-    assert.equal((await taskHost.getTaskDetail(firstId)).goal.goalVersion, 1);
+    assert.equal(firstEvents.find((event) => event.type === "goal_created")?.goalVersion, 1,
+      "the first task's original goal version must remain unchanged after amending another task");
     await ui.click('[aria-label="Close chat"]');
     mark("first task chat closed");
-    await waitFor("selected native task surface", () => views.get(firstId).getVisible());
-    assert.equal(views.get(firstId).webContents.getURL(), `${fixture.url}page3`);
+    await waitFor("completed task surface released", () => [...views.values()].every((view) => !view.getVisible()));
+    assert.equal(views.get(firstId).getVisible(), false, "a completed task must not resurrect its disposed browser surface");
     assert.equal(views.get(secondId).getVisible(), false, "nonselected native task surface must remain hidden");
     await ui.click('.hx-halo');
     await ui.click(`[data-task-id="${secondId}"]`);

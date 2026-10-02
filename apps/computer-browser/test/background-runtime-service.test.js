@@ -367,3 +367,35 @@ test("BackgroundRuntimeClient delivers taskHost.onEvent() updates via onEvent() 
   await client.detach();
   await service.stopService("test done");
 });
+
+test("room calls reach the TaskHost, and roster/room notices reach an attached client", async () => {
+  const rosterListeners = new Set();
+  const roomListeners = new Set();
+  const taskHost = makeFakeTaskHost({
+    onAgentRosterEvent(listener) { rosterListeners.add(listener); return () => rosterListeners.delete(listener); },
+    onRoomEvent(listener) { roomListeners.add(listener); return () => roomListeners.delete(listener); },
+    async postRoomMessage(input) { taskHost.calls.push(["postRoomMessage", input]); return { messageId: "m1" }; },
+    async getRoom(teamId) { return { roomId: teamId, messages: [], round: { active: false } }; },
+    async listRooms() { return []; },
+    async stopRoomRound(teamId) { return { stopped: false, teamId }; },
+  });
+  const { service, socketPath, capability } = await startService(taskHost);
+  const client = new BackgroundRuntimeClient({ socketPath, capability, clientId: "ui-1" });
+  await client.connect();
+  assert.deepEqual(await client.postRoomMessage({ teamId: "t", text: "hi" }), { messageId: "m1" });
+  assert.deepEqual(await client.getRoom("t"), { roomId: "t", messages: [], round: { active: false } });
+  assert.deepEqual(await client.listRooms(), []);
+  assert.deepEqual(await client.stopRoomRound("t"), { stopped: false, teamId: "t" });
+  const roster = [];
+  const rooms = [];
+  client.onAgentRosterEvent((notice) => roster.push(notice));
+  client.onRoomEvent((event) => rooms.push(event));
+  for (const listener of rosterListeners) listener({ kind: "team", id: "t", change: "saved" });
+  for (const listener of roomListeners) listener({ roomId: "t", message: { text: "hi" } });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(roster, [{ kind: "team", id: "t", change: "saved" }]);
+  assert.deepEqual(rooms, [{ roomId: "t", message: { text: "hi" } }]);
+  await client.detach();
+  await service.stopService("test done");
+  assert.equal(roomListeners.size, 0, "the service unsubscribes on stop");
+});

@@ -131,6 +131,44 @@ test("legacy channels still register and dispatch to controlApi unchanged", asyn
   });
 });
 
+test("newWindow opens only through the trusted shell UI bridge", async () => {
+  const ipcMain = makeFakeIpcMain();
+  const win = makeFakeWin();
+  let opened = 0;
+  registerIpc(win, makeFakeControlApi(), { ipcMain, onNewWindow: async () => { opened += 1; return { opened: true }; } });
+
+  assert.deepEqual(await ipcMain._invoke("halo:newWindow", trustedEvent(win)), { opened: true });
+  assert.equal(opened, 1);
+  await assert.rejects(ipcMain._invoke("halo:newWindow", untrustedEvent()), /rejected untrusted sender/);
+  assert.equal(opened, 1, "untrusted content cannot ask the main process to create windows");
+});
+
+test("one process-global IPC handler routes multiple Halo windows to their own browser hosts", async () => {
+  const ipcMain = makeFakeIpcMain();
+  const firstWindow = makeFakeWin();
+  const secondWindow = makeFakeWin();
+  let closeFirst;
+  let closeSecond;
+  firstWindow.on = (_event, handler) => { closeFirst = handler; };
+  secondWindow.on = (_event, handler) => { closeSecond = handler; };
+  let firstOpens = 0;
+  let secondOpens = 0;
+  const firstApi = { ...makeFakeControlApi(), navigate: async (url) => ({ window: "first", url }) };
+  const secondApi = { ...makeFakeControlApi(), navigate: async (url) => ({ window: "second", url }) };
+  registerIpc(firstWindow, firstApi, { ipcMain, onNewWindow: async () => { firstOpens += 1; return { opened: "first" }; } });
+  registerIpc(secondWindow, secondApi, { ipcMain, onNewWindow: async () => { secondOpens += 1; return { opened: "second" }; } });
+
+  assert.deepEqual(await ipcMain._invoke("halo:navigate", trustedEvent(secondWindow), "https://example.com"), { window: "second", url: "https://example.com" });
+  assert.deepEqual(await ipcMain._invoke("halo:newWindow", trustedEvent(firstWindow)), { opened: "first" });
+  closeFirst();
+  assert.ok(ipcMain._has("halo:navigate"), "closing one window must not unregister handlers used by another");
+  assert.deepEqual(await ipcMain._invoke("halo:newWindow", trustedEvent(secondWindow)), { opened: "second" });
+  assert.equal(firstOpens, 1);
+  assert.equal(secondOpens, 1);
+  closeSecond();
+  assert.equal(ipcMain._has("halo:navigate"), false, "closing the final window releases process-global handlers");
+});
+
 test("legacy channels work even from an untrusted sender (unchanged behavior -- not newly gated)", async () => {
   const ipcMain = makeFakeIpcMain();
   const win = makeFakeWin();
@@ -327,4 +365,46 @@ test("removeHandler is called for every registered channel (legacy + harness) on
   closeHandler();
   assert.equal(ipcMain._has("halo:createTask"), false);
   assert.equal(ipcMain._has("halo:navigate"), false);
+});
+
+test("agent roster channels carry the host error code across IPC in the message", async () => {
+  const ipcMain = makeFakeIpcMain();
+  const win = makeFakeWin();
+  const taskHost = makeFakeTaskHost();
+  taskHost.saveAgent = async () => { throw Object.assign(new Error("agent limit reached"), { code: "limit_reached" }); };
+  taskHost.archiveTeam = () => { throw Object.assign(new Error("team is archived"), { code: "archived" }); };
+  taskHost.listAgents = async () => { throw new Error("plain failure"); };
+  taskHost.createTask = async () => { throw Object.assign(new Error("bad task"), { code: "invalid_task" }); };
+  registerIpc(win, makeFakeControlApi(), { ipcMain, taskHost });
+
+  await assert.rejects(ipcMain._invoke("halo:saveAgent", trustedEvent(win), {}), (error) => {
+    assert.equal(error.message, "[limit_reached] agent limit reached");
+    assert.equal(error.code, "limit_reached");
+    return true;
+  });
+  await assert.rejects(ipcMain._invoke("halo:archiveTeam", trustedEvent(win), "t1"), { message: "[archived] team is archived" });
+  await assert.rejects(ipcMain._invoke("halo:listAgents", trustedEvent(win)), { message: "plain failure" });
+  // Channels outside the agent roster keep their existing messages.
+  await assert.rejects(ipcMain._invoke("halo:createTask", trustedEvent(win), {}), { message: "bad task" });
+});
+
+test("room channels dispatch to the TaskHost and room events reach the window", async () => {
+  const ipcMain = makeFakeIpcMain();
+  const win = makeFakeWin();
+  const taskHost = makeFakeTaskHost();
+  let roomListener = null;
+  taskHost.postRoomMessage = async (input) => ({ posted: input });
+  taskHost.getRoom = async (teamId) => ({ roomId: teamId });
+  taskHost.listRooms = async () => [];
+  taskHost.stopRoomRound = async () => { throw Object.assign(new Error("no such room"), { code: "invalid_room" }); };
+  taskHost.onRoomEvent = (listener) => { roomListener = listener; return () => { roomListener = null; }; };
+  registerIpc(win, makeFakeControlApi(), { ipcMain, taskHost });
+
+  assert.deepEqual(await ipcMain._invoke("halo:postRoomMessage", trustedEvent(win), { teamId: "t", text: "hi" }), { posted: { teamId: "t", text: "hi" } });
+  assert.deepEqual(await ipcMain._invoke("halo:getRoom", trustedEvent(win), "t"), { roomId: "t" });
+  assert.deepEqual(await ipcMain._invoke("halo:listRooms", trustedEvent(win)), []);
+  await assert.rejects(ipcMain._invoke("halo:stopRoomRound", trustedEvent(win), "t"), { message: "[invalid_room] no such room" });
+  await assert.rejects(() => Promise.resolve(ipcMain._invoke("halo:postRoomMessage", untrustedEvent(), {})), /untrusted sender/);
+  roomListener({ roomId: "t", message: { text: "hi" } });
+  assert.deepEqual(win._sent.at(-1), { channel: "halo:roomEvent", payload: { roomId: "t", message: { text: "hi" } } });
 });

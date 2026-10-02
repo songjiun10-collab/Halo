@@ -56,6 +56,40 @@ test("retired worker events cannot corrupt a replacement request", async () => {
   await adapter.close();
 });
 
+test("planner stdio preserves the exact mcp_* action proposal envelope", async () => {
+  const child = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child });
+  const action = { type: "mcp_search", query: "calendar" };
+  const pending = adapter.next(makeContext());
+  const { requestId } = JSON.parse(child.stdin.written[0]);
+  const proposal = {
+    taskId: TASK_ID, goalVersion: 1, basedOnObservationId: "obs-1", criterionIds: [],
+    kind: "actions", actions: [action],
+  };
+  child.stdout.emit("data", `${JSON.stringify({ requestId, proposal })}\n`);
+  assert.deepEqual(await pending, proposal);
+  await adapter.close();
+});
+
+test("planner stdio rejects mixed or malformed mcp_* actions", async () => {
+  const invalidProposals = [
+    { kind: "actions", actions: [{ type: "mcp_search", query: "x", extra: true }] },
+    { kind: "actions", actions: [{ type: "mcp_search", query: "x" }, { type: "observe" }] },
+    { kind: "actions", actions: [{ type: "mcp_propose", connectionId: "c", toolName: "t", arguments: {}, reason: "" }] },
+  ];
+  for (const partial of invalidProposals) {
+    const child = makeFakeChild();
+    const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child });
+    const pending = adapter.next(makeContext());
+    const { requestId } = JSON.parse(child.stdin.written[0]);
+    child.stdout.emit("data", `${JSON.stringify({ requestId, proposal: {
+      taskId: TASK_ID, goalVersion: 1, basedOnObservationId: "obs-1", criterionIds: [], ...partial,
+    } })}\n`);
+    await assert.rejects(pending, { code: "invalid_response" });
+    await adapter.close();
+  }
+});
+
 test("oversized complete and incomplete UTF-8 response frames are rejected before parsing", async () => {
   for (const complete of [true, false]) {
     const child = makeFakeChild();

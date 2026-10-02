@@ -84,7 +84,21 @@ function validatedWorkGoalContext(workGoalBinding, workGoal) {
   };
 }
 
-function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal }) {
+// A child's team board (ChildAgentCoordinator.readTeamBoard): siblings'
+// notes, newest kept, within its own byte budget and the packet ceiling,
+// after pending messages (which come from the parent and matter more).
+const MAX_BOARD_CONTEXT_BYTES = 8 * 1024;
+
+function validTeamBoard(teamBoard) {
+  if (teamBoard === undefined || teamBoard === null) return null;
+  if (!contracts.isPlainObject(teamBoard) || !Array.isArray(teamBoard.entries) || typeof teamBoard.parentTaskId !== "string"
+    || !teamBoard.entries.every((e) => contracts.isPlainObject(e) && typeof e.text === "string" && typeof e.from === "string" && typeof e.kind === "string")) {
+    throw new ContextError("invalid_field", "teamBoard must be { parentTaskId, entries: [{from, kind, text, at}] }");
+  }
+  return teamBoard;
+}
+
+function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard }) {
   contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
 
   if (!contracts.isPlainObject(state)) {
@@ -99,6 +113,8 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
   if (!Array.isArray(pendingMessages)) {
     throw new ContextError("invalid_field", "pendingMessages must be an array");
   }
+
+  const board = validTeamBoard(teamBoard);
 
   if (navigation !== null && (!contracts.isPlainObject(navigation) || !Array.isArray(navigation.visited) || !Array.isArray(navigation.frontier))) {
     throw new ContextError("invalid_field", "navigation must be null or { visited: [], frontier: [] }");
@@ -154,7 +170,20 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     messageBytes += candidateBytes;
   }
 
-  return { ...basePacket, pendingMessages: admitted };
+  const packet = { ...basePacket, pendingMessages: admitted };
+  if (!board) return packet;
+  const notes = [];
+  let noteBytes = 0;
+  for (const entry of [...board.entries].reverse()) {
+    const note = { from: entry.from, kind: entry.kind, text: entry.text, ...(typeof entry.at === "string" ? { at: entry.at } : {}) };
+    const bytes = Buffer.byteLength(JSON.stringify(note), "utf8");
+    if (noteBytes + bytes > MAX_BOARD_CONTEXT_BYTES) break;
+    const candidate = { ...packet, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: board.parentTaskId, entries: [note, ...notes] } };
+    if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) break;
+    notes.unshift(note);
+    noteBytes += bytes;
+  }
+  return { ...packet, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: board.parentTaskId, entries: notes } };
 }
 
 module.exports = { ContextError, buildContext };

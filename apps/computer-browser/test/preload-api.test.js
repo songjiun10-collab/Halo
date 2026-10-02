@@ -54,4 +54,37 @@ test("preload exposes the Work Goal API as narrow IPC invoke wrappers", async ()
   }
   assert.equal("ipcRenderer" in exposed, false);
   assert.equal("send" in exposed, false);
+  await exposed.captureSurface();
+  assert.deepEqual(calls.at(-1), ["halo:captureSurface"], "the page snapshot shown under overlays");
+});
+
+test("preload exposes the team room API and its event stream", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "../preload/index.js"), "utf8");
+  const calls = [];
+  const subscriptions = [];
+  let exposed;
+  const ipcRenderer = {
+    invoke: async (channel, ...args) => { calls.push([channel, ...args]); return null; },
+    on(channel, listener) { subscriptions.push([channel, listener]); },
+    removeListener(channel) { subscriptions.push([`-${channel}`]); },
+  };
+  const context = {
+    require: () => ({ contextBridge: { exposeInMainWorld: (_name, api) => { exposed = api; } }, ipcRenderer }),
+    process: { argv: ["--halo-layout={}"] },
+    Buffer,
+    console,
+  };
+  vm.runInNewContext(source, context, { filename: "preload/index.js" });
+  for (const [method, args] of [["listRooms", []], ["getRoom", ["t"]], ["postRoomMessage", [{ teamId: "t", text: "hi" }]], ["stopRoomRound", ["t"]]]) {
+    await exposed[method](...args);
+    assert.deepEqual(calls.at(-1), [`halo:${method}`, ...args]);
+  }
+  const received = [];
+  const off = exposed.onRoomEvent((payload) => received.push(payload));
+  const [channel, listener] = subscriptions.at(-1);
+  assert.equal(channel, "halo:roomEvent");
+  listener({}, { roomId: "t" });
+  assert.deepEqual(received, [{ roomId: "t" }]);
+  off();
+  assert.deepEqual(subscriptions.at(-1), ["-halo:roomEvent"]);
 });

@@ -81,6 +81,50 @@ const NAV_VISITED_MAX = 32;
 const NAV_FRONTIER_MAX = 32;
 const NAV_URL_MAX_CHARS = 512;
 const NAV_NAME_MAX_CHARS = 80;
+const MCP_RESULT_MAX_BYTES = 4096;
+
+function truncateUtf8(text, maxBytes) {
+  const source = Buffer.from(String(text), "utf8");
+  if (source.length <= maxBytes) return { text: source.toString("utf8"), truncated: false };
+  let end = maxBytes;
+  while (end > 0 && (source[end] & 0xc0) === 0x80) end -= 1;
+  return { text: source.subarray(0, end).toString("utf8"), truncated: true };
+}
+
+function plannerMcpAction(action) {
+  if (!contracts.isPlainObject(action) || typeof action.type !== "string" || !action.type.startsWith("mcp_")) return false;
+  const fields = {
+    mcp_search: ["type", "query"],
+    mcp_describe: ["type", "connectionId", "toolName"],
+    mcp_propose: ["type", "connectionId", "toolName", "arguments", "reason"],
+  }[action.type];
+  if (!fields || Object.keys(action).some((key) => !fields.includes(key)) || fields.some((key) => !Object.hasOwn(action, key))) return false;
+  if (action.type === "mcp_search") return typeof action.query === "string" && action.query.trim().length > 0 && Buffer.byteLength(action.query, "utf8") <= 1024;
+  if (typeof action.connectionId !== "string" || !action.connectionId || action.connectionId.length > 256 ||
+      typeof action.toolName !== "string" || !action.toolName || action.toolName.length > 256) return false;
+  if (action.type === "mcp_describe") return true;
+  try {
+    contracts.validateMcpProposal({ connectionId: action.connectionId, toolName: action.toolName, arguments: action.arguments });
+  } catch { return false; }
+  return typeof action.reason === "string" && action.reason.trim().length > 0 && action.reason.length <= 2000;
+}
+
+function mcpActionKind(action) {
+  return action.type.slice("mcp_".length);
+}
+
+function boundedMcpObservation(action, outcome, result = "", extra = {}) {
+  const base = { authority: "untrusted_mcp", action, outcome, truncated: false, ...extra };
+  const json = JSON.stringify({ ...base, result: String(result) });
+  if (Buffer.byteLength(json, "utf8") <= MCP_RESULT_MAX_BYTES) return { ...base, result: String(result) };
+  const overhead = Buffer.byteLength(JSON.stringify({ ...base, result: "" }), "utf8");
+  const bounded = truncateUtf8(result, Math.max(0, MCP_RESULT_MAX_BYTES - overhead - 20));
+  let candidate = { ...base, truncated: true, result: bounded.text };
+  while (Buffer.byteLength(JSON.stringify(candidate), "utf8") > MCP_RESULT_MAX_BYTES && candidate.result.length > 0) {
+    candidate = { ...candidate, result: truncateUtf8(candidate.result, Math.max(0, Buffer.byteLength(candidate.result, "utf8") - 8)).text };
+  }
+  return candidate;
+}
 
 function isMcpItem(item) {
   return item.actionType === contracts.MCP_CALL_ACTION_TYPE && !!item.mcp;
@@ -104,18 +148,28 @@ class TaskController {
     sendMessage,
     listPendingMessages,
     recordMessagesConsumed,
+    readTeamBoard,
+    readChildPlan,
     readWorkGoalContext,
     routineRunner,
     routineRun,
     batchReadOnlyActions = true,
     harnessProfile,
     makeMcpBroker,
+    mcpEnabled,
+    reviewFallback = "queue",
   } = {}) {
     if (!store) throw new TaskControllerError("invalid_config", "store is required");
     if (!planner) throw new TaskControllerError("invalid_config", "planner is required");
     if (!browser) throw new TaskControllerError("invalid_config", "browser is required");
     if (!approve) throw new TaskControllerError("invalid_config", "approve is required");
     if (!hostVerifier) throw new TaskControllerError("invalid_config", "hostVerifier is required");
+    if (reviewFallback !== "queue" && reviewFallback !== "deny") {
+      throw new TaskControllerError("invalid_config", "reviewFallback must be queue or deny");
+    }
+    // "deny" is the unattended-run choice: nobody is watching, so an action
+    // that would wait for a human is denied (and journaled) instead.
+    this._reviewFallback = reviewFallback;
 
     this._store = store;
     this._planner = planner;
@@ -176,6 +230,7 @@ class TaskController {
     this._makeMcpBroker = typeof makeMcpBroker === "function" ? makeMcpBroker : null;
     this._mcpBroker = null;
     this._mcpClosed = false;
+    this._plannerMcpEnabled = typeof mcpEnabled === "boolean" ? mcpEnabled : Boolean(this._makeMcpBroker);
     this._mcpContext = new AsyncLocalStorage();
     this._openMcpCalls = new Set();
     const checkpointedOpenMcp = store.lastCheckpoint?.payload?.mcp?.openCalls;
@@ -211,6 +266,14 @@ class TaskController {
     this._sendMessage = typeof sendMessage === "function" ? sendMessage : null;
     this._listPendingMessages = typeof listPendingMessages === "function" ? listPendingMessages : null;
     this._recordMessagesConsumed = typeof recordMessagesConsumed === "function" ? recordMessagesConsumed : null;
+    // A child's team board (ChildAgentCoordinator.readTeamBoard): advisory
+    // sibling notes, so a failed read only leaves them out of this turn.
+    this._readTeamBoard = typeof readTeamBoard === "function" ? readTeamBoard : null;
+    // A parent's current child plan summary (ChildAgentCoordinator.
+    // getPlanSummary), so its planner is told whether splitting the work is
+    // open or a plan is already running. Read only when this controller can
+    // actually accept a child_plan.
+    this._readChildPlan = typeof readChildPlan === "function" ? readChildPlan : null;
     // The binding is durable TaskStore state. The injected reader is only a
     // host-owned lookup for that exact version; it cannot choose a different
     // Goal for this Task or modify the Task's own GoalSpec.
@@ -268,6 +331,7 @@ class TaskController {
     this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
     this._approvalQueue = [];
     this._lastObservation = null;
+    this._pendingMcpObservation = null;
     // Reusable-across-turns iff the last dispatched action was itself an
     // "observe" (see the reuse gate in the main loop and its assignment in
     // _afterActionDispatched, which is this field's one source of truth).
@@ -363,7 +427,7 @@ class TaskController {
 
   setPolicySettings({ permissionMode, plannerEffort } = {}) {
     const { PERMISSION_MODES } = require("./permission-policy");
-    const allowedEfforts = ["low", "medium", "high", "xhigh", "max"];
+    const allowedEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
     if (permissionMode !== undefined && !PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_permission_mode", "permissionMode is invalid");
     if (plannerEffort !== undefined && !allowedEfforts.includes(plannerEffort)) throw new TaskControllerError("invalid_planner_effort", "plannerEffort is invalid");
     if (permissionMode !== undefined) this._permissionMode = permissionMode;
@@ -1059,7 +1123,7 @@ class TaskController {
     return structuredClone(item.mcp.review);
   }
 
-  async proposeMcpCall(request) {
+  async proposeMcpCall(request, { reason } = {}) {
     let proposal;
     try {
       proposal = contracts.validateMcpProposal(request);
@@ -1071,7 +1135,8 @@ class TaskController {
     if (this._terminal()) {
       throw new TaskControllerError("invalid_state", `cannot call MCP tools in state ${this._task.state}`);
     }
-    const token = { epoch: this._epoch, goalVersion: this._goal.goalVersion, item: null, approvalId: null, release: null };
+    const token = { epoch: this._epoch, goalVersion: this._goal.goalVersion, item: null, approvalId: null, release: null,
+      reason: typeof reason === "string" ? reason.slice(0, 2000) : null };
     try {
       const approval = await this._mcpContext.run(token, () => broker.proposeCall(proposal));
       // approve() admitted this under the then-current epoch; a transition or
@@ -1098,6 +1163,7 @@ class TaskController {
 
   async closeMcp() {
     this._mcpClosed = true;
+    this._plannerMcpEnabled = false;
     for (const item of this._approvalQueue.filter(isMcpItem)) {
       const idx = this._approvalQueue.indexOf(item);
       if (idx !== -1) this._approvalQueue.splice(idx, 1);
@@ -1107,6 +1173,52 @@ class TaskController {
     this._mcpBroker = null;
     this._emit();
     if (broker) await broker.close();
+  }
+
+  async _applyReviewFallback(decision, actionType) {
+    if (decision.decision !== "review" || this._reviewFallback !== "deny") return decision;
+    const reasons = Array.isArray(decision.reasons) ? [...decision.reasons] : [];
+    await this._store.append({ type: "note", payload: { kind: "review_auto_denied", actionType, reasons } });
+    return { decision: "deny", reasons: [...reasons, "unattended_auto_deny"] };
+  }
+
+  _mcpAvailableToPlanner() {
+    return this._plannerMcpEnabled && !this._mcpClosed;
+  }
+
+  async _handlePlannerMcpAction(action, epoch) {
+    const kind = mcpActionKind(action);
+    const active = () => this._task.state === "running" && !this._stopHappenedSince(epoch);
+    try {
+      let value;
+      if (kind === "search") {
+        value = await this.searchMcpTools(action.query);
+      } else if (kind === "describe") {
+        value = await this.describeMcpTool(action.connectionId, action.toolName);
+      } else {
+        try {
+          value = await this.proposeMcpCall(
+            { connectionId: action.connectionId, toolName: action.toolName, arguments: action.arguments },
+            { reason: action.reason },
+          );
+        } catch (error) {
+          if (error?.code === "execution_uncertain") {
+            this._pendingMcpObservation = boundedMcpObservation(kind, "execution_uncertain", "", { code: "execution_uncertain" });
+            return this._pendingMcpObservation;
+          }
+          if (error?.code === "approval_denied") return boundedMcpObservation(kind, "denied", "", { code: "approval_denied" });
+          throw error;
+        }
+      }
+      if (!active()) return null;
+      const serialized = JSON.stringify(value);
+      return boundedMcpObservation(kind, "ok", serialized);
+    } catch (error) {
+      if (error?.code === "mcp_disabled") return boundedMcpObservation(kind, "unavailable", "", { code: "mcp_disabled" });
+      if (error?.code === "approval_denied") return boundedMcpObservation(kind, "denied", "", { code: "approval_denied" });
+      if (error?.code === "execution_uncertain") return boundedMcpObservation(kind, "execution_uncertain", "", { code: "execution_uncertain" });
+      return boundedMcpObservation(kind, "error", "", { code: typeof error?.code === "string" ? error.code.slice(0, 64) : "mcp_error" });
+    }
   }
 
   // Broker callback. Only a review requested from inside proposeMcpCall()
@@ -1138,7 +1250,7 @@ class TaskController {
       };
       const item = {
         id: randomUUID(),
-        summary: `MCP ${target}`,
+        summary: `MCP ${target}${token.reason ? ` — ${token.reason}` : ""}`.slice(0, 2100),
         actionType: contracts.MCP_CALL_ACTION_TYPE,
         createdAt,
         epoch: token.epoch,
@@ -1153,6 +1265,7 @@ class TaskController {
             provider: request.provider,
             server: request.server,
             toolName: request.toolName,
+            reason: token.reason,
             connectorId: request.connectorId ?? null,
             generation: request.generation,
             arguments: structuredClone(request.arguments),
@@ -1354,6 +1467,24 @@ class TaskController {
         }
         if (this._stopHappenedSince(epoch)) break;
 
+        let teamBoard = null;
+        if (this._readTeamBoard) {
+          teamBoard = await Promise.resolve().then(() => this._readTeamBoard()).catch(() => null);
+          if (this._stopHappenedSince(epoch)) break;
+        }
+
+        // Offered only to a Multi-agent parent the host wired for child plans;
+        // an unreadable plan state leaves the offer out of this turn.
+        let childPlan;
+        if (this._onChildPlan && this._readChildPlan && this._store.taskProfile?.capability?.id === "multi_agent") {
+          childPlan = await Promise.resolve().then(() => this._readChildPlan()).then((summary) => ({
+            enabled: true,
+            maxAgents: contracts.MAX_CHILD_ASSIGNMENTS,
+            active: summary ? { agents: summary.agents.map((agent) => ({ subgoal: agent.subgoal ?? "", status: agent.status })) } : null,
+          }), () => undefined);
+          if (this._stopHappenedSince(epoch)) break;
+        }
+
         let context;
         try {
           const workGoal = this._workGoalBinding && this._readWorkGoalContext
@@ -1368,15 +1499,33 @@ class TaskController {
               budgets: { ...this._budgets },
               plannerEffort: this._plannerEffort,
               maxActionsPerProposal: this._maxActionsPerProposal,
+              mcp: { enabled: this._mcpAvailableToPlanner(),
+                actions: ["mcp_search", "mcp_describe", "mcp_propose"] },
               ...(this._harnessProfile === "long" ? { goalPersistence: this._goalPersistenceState() } : {}),
+              ...(childPlan ? { childPlan } : {}),
             },
             navigation: { visited: [...this._navigation.visited], frontier: [...this._navigation.frontier] },
             observation,
             recentEvents: this._store.eventsSinceCheckpoint || [],
             customMemory,
             pendingMessages,
+            ...(teamBoard ? { teamBoard } : {}),
             ...(this._workGoalBinding ? { workGoalBinding: this._workGoalBinding, workGoal } : {}),
           });
+          if (this._pendingMcpObservation) {
+            const observationWithMcp = { ...(context.observation || {}), mcpResult: this._pendingMcpObservation };
+            const candidate = { ...context, observation: observationWithMcp };
+            if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) {
+              const compact = boundedMcpObservation(this._pendingMcpObservation.action, this._pendingMcpObservation.outcome,
+                "", { code: this._pendingMcpObservation.code || "result_omitted", truncated: true });
+              const compactCandidate = { ...context, observation: { ...(context.observation || {}), mcpResult: compact } };
+              if (Buffer.byteLength(JSON.stringify(compactCandidate), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) throw new Error("MCP observation exceeds context budget");
+              this._pendingMcpObservation = compact;
+              context = compactCandidate;
+            } else {
+              context = candidate;
+            }
+          }
         } catch {
           if (this._stopHappenedSince(epoch)) break;
           await this._pauseWith("context_error");
@@ -1396,6 +1545,7 @@ class TaskController {
         this._budgets.plannerCallsUsed += 1;
         try {
           proposal = await this._nextPlanner(context);
+          if (this._pendingMcpObservation) this._pendingMcpObservation = null;
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -1521,6 +1671,19 @@ class TaskController {
           continue; // host messaging, not a browser action; never mutates an in-flight action
         }
 
+        const mcpActions = validated.actions.filter((action) => typeof action.type === "string" && action.type.startsWith("mcp_"));
+        if (mcpActions.length > 0) {
+          if (validated.actions.length !== 1 || mcpActions.length !== 1 || !plannerMcpAction(mcpActions[0])) continue;
+          if (this._budgets.actionsUsed >= this._goal.limits.maxActions) {
+            await this._pauseWith("budget_exhausted");
+            break;
+          }
+          this._budgets.actionsUsed += 1;
+          this._pendingMcpObservation = await this._handlePlannerMcpAction(mcpActions[0], epoch);
+          if (this._task.state !== "running" || this._stopHappenedSince(epoch)) break;
+          continue;
+        }
+
         // kind === "actions"
         const outcome = await this._dispatchActionsBatch(validated, epoch);
         if (outcome === "stop_loop") break;
@@ -1587,6 +1750,7 @@ class TaskController {
         return "stop_loop";
       }
       if (this._stopHappenedSince(epoch)) return "stop_loop";
+      decision = await this._applyReviewFallback(decision, action.type);
 
       if (decision.decision === "review") {
         this._approvalQueue.push({
@@ -1681,6 +1845,7 @@ class TaskController {
       if ((severity[next.decision] ?? 2) > (severity[decision.decision] ?? 2)) decision = next;
       if (next.decision === "review" && !reviewDescriptor) reviewDescriptor = descriptor;
     }
+    decision = await this._applyReviewFallback(decision, actions[0].type);
 
     if (decision.decision === "review") {
       const descriptor = reviewDescriptor ?? this._describeAction(actions[0], randomUUID(), suffix);

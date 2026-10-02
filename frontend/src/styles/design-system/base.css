@@ -1,0 +1,10 @@
+*,*:before,*:after{box-sizing:border-box}
+body{background:var(--backdrop);color:var(--foreground);font:400 14px/1.5 var(--font-body);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;margin:0}
+button{font:inherit;color:inherit}
+h1,h2,h3{text-wrap:balance}
+p{text-wrap:pretty}
+code{font-family:var(--font-mono)}
+.num{font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.hx-sr{clip-path:inset(50%);white-space:nowrap;width:1px;height:1px;position:absolute;overflow:hidden}
+.hx-ic{fill:none;stroke:currentColor;stroke-width:1.5px;stroke-linecap:round;stroke-linejoin:round;flex:none;width:18px;height:18px}

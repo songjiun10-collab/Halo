@@ -28,8 +28,10 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
   }
   FakeWindow.getAllWindows = () => calls.windows.filter((win) => !win.destroyed);
   class FakeTaskHost {
-    constructor(options) { this.options = options; this.closed = 0; calls.hosts.push(this); }
+    constructor(options) { this.options = options; this.closed = 0; this.agentSchedulerStarts = 0; this.routineSchedulerStarts = 0; calls.hosts.push(this); }
     onEvent() { return () => {}; }
+    startAgentScheduler() { this.agentSchedulerStarts++; return Promise.resolve(); }
+    startScheduler() { this.routineSchedulerStarts++; return Promise.resolve(); }
     close() { this.closed++; return Promise.resolve(); }
     onMemorySample() { return Promise.resolve(); }
     canUseTaskBrowser() { return false; }
@@ -50,6 +52,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
   const app = new EventEmitter();
   app.whenReady = () => Promise.resolve();
   app.getPath = () => userData;
+  app.getAppPath = () => "/test/app";
   app.dock = { hide: () => calls.dockHide++ };
   app.getAppMetrics = () => [];
   app.quit = () => calls.quit++;
@@ -91,6 +94,17 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
         async close() { calls.mcpClosed++; }
       }, parseRepositories: () => mcpEnabled ? ["owner/repo"] : [],
     },
+    "./harness/providers/codex-mcp-provider": {
+      CodexMcpProvider: class {
+        constructor(options) { (calls.codexProviders ||= []).push(this); this.options = options; this.closed = 0; }
+        listConnections() { return []; } listTools() { return []; } describeTool() { return null; } call() { return null; }
+        async close() { this.closed++; }
+      },
+    },
+    "./harness/generic-mcp-broker": { GenericMcpBroker: class { constructor(options) { this.options = options; } } },
+    "./harness/shared-mcp-provider": require("../main/harness/shared-mcp-provider"),
+    "./harness/mcp-catalog-cache": require("../main/harness/mcp-catalog-cache"),
+    "./harness/mcp-schema-validator": require("../main/harness/mcp-schema-validator"),
     "./harness/mcp-browser-observation": { makeMcpBrowserObservation: ({ browser }) =>
       new Proxy(browser, { get(target, key) {
         if (key === "dispose") return async () => { calls.connectorDisposed = (calls.connectorDisposed || 0) + 1; };
@@ -108,6 +122,10 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
     "./harness/background-runtime-service": { BackgroundRuntimeService: FakeService },
     "./harness/background-runtime-client": { BackgroundRuntimeClient: FakeClient },
     "./harness/background-runtime-ipc": { prepareSocketDir: async (dir) => { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); return dir; } },
+    "./harness/background-launch-agent": {
+      launchAgentUserId: require("../main/harness/background-launch-agent").launchAgentUserId,
+      createBackgroundLaunchAgent: (options) => { calls.launchAgents = [...(calls.launchAgents ?? []), options]; return { label: "test", isInstalled: async () => false, enable: async () => {}, disable: async () => {} }; },
+    },
   };
   const realRequire = require;
   const context = {
@@ -133,6 +151,10 @@ test("background service mode owns TaskHost without creating a visible UI window
   await flushStartup();
   assert.equal(calls.services.length, 1);
   assert.equal(calls.services[0].options.taskHost, calls.hosts[0]);
+  // Always-on Agents run only in the one service-owned host.
+  assert.equal(calls.hosts[0].agentSchedulerStarts, 1);
+  // Scheduled routines likewise fire only from the service-owned host.
+  assert.equal(calls.hosts[0].routineSchedulerStarts, 1);
   assert.equal(calls.services[0].options.socketRoot, path.join(userData, "background-runtime"));
   assert.equal(calls.services[0].options.socketPath, path.join(userData, "background-runtime", "ipc", "runtime.sock"));
   assert.equal(calls.dockHide, 1);
@@ -174,6 +196,34 @@ test("UI attaches to a running service and closing its window detaches without c
   await flushStartup();
   assert.equal(calls.clients[0].detached, 1);
   assert.equal(calls.services.length, 0);
+});
+
+test("new windows attach independent clients and closing one does not detach another", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-multi-window-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const runtimeDir = path.join(userData, "background-runtime");
+  fs.mkdirSync(runtimeDir, { mode: 0o700 });
+  fs.writeFileSync(path.join(runtimeDir, "capability"), "a".repeat(64), { mode: 0o600 });
+  const { app, calls } = loadEntrypoint({ userData, dialogResponse: 0 });
+  await flushStartup();
+
+  assert.equal(calls.clients.length, 1);
+  await calls.ipc[0][2].onNewWindow();
+  assert.equal(calls.windows.length, 2);
+  assert.equal(calls.clients.length, 2);
+  assert.equal(calls.ipc[1][2].taskHost, calls.clients[1]);
+  assert.equal(calls.hosts.length, 0, "a second UI window must not create a competing TaskHost");
+
+  calls.windows[0].emit("closed");
+  await flushStartup();
+  assert.equal(calls.clients[0].detached, 1);
+  assert.equal(calls.clients[1].detached, 0, "closing one window must leave the other runtime client attached");
+
+  app.emit("before-quit", { preventDefault() {} });
+  await flushStartup();
+  assert.equal(calls.clients[0].detached, 1, "the already-closed window must not be detached twice");
+  assert.equal(calls.clients[1].detached, 1, "quitting detaches the remaining window client");
+  assert.equal(calls.clients[0].stopped + calls.clients[1].stopped, 0, "continue-in-background must not stop the service");
 });
 
 test("enabled MCP child disposal cancels its wrapper and releases the hidden host; quit closes the shared broker", async (t) => {
@@ -294,4 +344,52 @@ test("planners launch only the pinned allowlisted worker and keep its usage to t
   calls.plannerOptions.onUsage({ provider: "codex", inputTokens: 1 });
   calls.plannerOptions.onUsage({ provider: "claude", inputTokens: 2 });
   assert.deepEqual(calls.usage, [["task-claude", "claude", { provider: "claude", inputTokens: 2 }]]);
+});
+
+test("MCP brokers exist only for tasks pinned to an allowlisted provider and share one provider", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-mcp-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { app, calls } = loadEntrypoint({ serviceMode: true, userData });
+  await flushStartup();
+  const { makeMcpBroker } = calls.hosts[0].options;
+  const hooks = { getContext: () => ({}), requestApproval: async () => ({}), journal: { append() {} } };
+  assert.equal(makeMcpBroker("task-off", hooks, { mcpProviders: [] }), null);
+  assert.equal(makeMcpBroker("task-off", hooks), null);
+  assert.equal(makeMcpBroker("task-odd", hooks, { mcpProviders: ["claude"] }), null);
+  assert.equal(calls.codexProviders, undefined, "no Codex app-server is prepared while MCP is off");
+  const first = makeMcpBroker("task-a", hooks, { mcpProviders: ["codex"] });
+  const second = makeMcpBroker("task-b", hooks, { mcpProviders: ["codex"] });
+  assert.equal(calls.codexProviders.length, 1);
+  const [provider] = calls.codexProviders;
+  assert.equal(provider.options.cwd, path.resolve(path.dirname(ENTRY), "..", "..", ".."));
+  assert.equal(typeof provider.options.onWorkerStart, "function");
+  assert.equal(typeof provider.options.onWorkerExit, "function");
+  for (const broker of [first, second]) {
+    assert.equal(broker.options.providers.length, 1);
+    assert.equal(broker.options.getContext, hooks.getContext);
+    assert.equal(typeof broker.options.validateArguments, "function");
+  }
+  assert.notEqual(first.options.providers[0], second.options.providers[0], "each task gets its own lease");
+  app.emit("before-quit", { preventDefault() {} });
+  await flushStartup();
+  assert.equal(provider.closed, 1);
+});
+
+test("UI windows offer start-at-login for the service; the service itself does not", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-login-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const runtimeDir = path.join(userData, "background-runtime");
+  fs.mkdirSync(runtimeDir, { mode: 0o700 });
+  fs.writeFileSync(path.join(runtimeDir, "capability"), "a".repeat(64), { mode: 0o600 });
+  const { calls } = loadEntrypoint({ userData });
+  await flushStartup();
+  assert.equal(calls.launchAgents.length, 1);
+  const options = calls.launchAgents[0];
+  assert.match(options.userId, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+  assert.equal(options.logPath, path.join(runtimeDir, "launch-agent.log"));
+  assert.equal(typeof calls.ipc[0][2].launchAgent?.enable, "function");
+
+  const service = loadEntrypoint({ serviceMode: true, userData: fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-login-svc-")) });
+  await flushStartup();
+  assert.equal(service.calls.launchAgents, undefined);
 });

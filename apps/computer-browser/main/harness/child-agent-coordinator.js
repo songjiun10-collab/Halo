@@ -22,6 +22,22 @@ const { TaskController } = require("./task-controller");
 const { resolveTaskProfile } = require("../../shared/task-profile-router");
 const { validateTaskProfileSelectedPayload } = require("../../shared/task-profile-contracts");
 const { MessageMailbox, MessageMailboxError } = require("./message-mailbox");
+const { TeamBoardStore, BOARD_KINDS, MAX_BOARD_TEXT_CHARS } = require("./team-board-store");
+
+// Team board (see readTeamBoard): newest entries a sibling's context and the
+// renderer's plan summary carry.
+const BOARD_CONTEXT_ENTRIES = 12;
+const BOARD_SUMMARY_ENTRIES = 20;
+
+// A handoff's structured summary as one bounded line of board text.
+function handoffText(handoff) {
+  const parts = [`${handoff.objective}: ${handoff.currentState}`];
+  for (const result of handoff.verifiedResults ?? []) parts.push(`result: ${result.text}`);
+  if (handoff.unresolved?.length) parts.push(`unresolved: ${handoff.unresolved.join("; ")}`);
+  if (handoff.risks?.length) parts.push(`risks: ${handoff.risks.join("; ")}`);
+  if (handoff.suggestedNextAction) parts.push(`next: ${handoff.suggestedNextAction}`);
+  return parts.join(" | ");
+}
 
 class ChildAgentCoordinatorError extends Error {
   constructor(code, message) {
@@ -49,6 +65,13 @@ async function readAllEvents(store) {
 // still makes budgeted admission fail closed rather than reserving nothing.
 const DEFAULT_CHILD_RESERVE_BYTES = 200_000_000;
 
+// A live child's controller state as the renderer's ChildAgentStatus.
+function liveSummaryStatus(state) {
+  if (state === "awaiting_approval") return "waiting_for_review";
+  if (state === "paused") return "paused";
+  return "running";
+}
+
 class ChildAgentCoordinator {
   constructor({
     storageRoot,
@@ -64,6 +87,7 @@ class ChildAgentCoordinator {
     noProgressThreshold,
     plannerEffort,
     reserveBytesPerChild = DEFAULT_CHILD_RESERVE_BYTES,
+    onPlanChange,
   } = {}) {
     if (typeof storageRoot !== "string" || storageRoot.length === 0) {
       throw new ChildAgentCoordinatorError("invalid_config", "storageRoot is required");
@@ -84,8 +108,13 @@ class ChildAgentCoordinator {
     this._now = now;
     this._segmentRotationCalls = segmentRotationCalls;
     this._noProgressThreshold = noProgressThreshold;
+    // A value, or a function resolved as each child starts so a host settings
+    // change reaches children created afterwards.
     this._plannerEffort = plannerEffort;
     this._reserveBytesPerChild = reserveBytesPerChild;
+    // Optional display hook: called with a parentTaskId whenever a child's
+    // summary status may have changed (see getPlanSummary).
+    this._onPlanChange = typeof onPlanChange === "function" ? onPlanChange : null;
     // parentTaskId -> { planId, childIds, assignments, parentGoalVersion,
     //                   memoryPolicy, state: "queued"|"cancelled" }
     // In-memory cache only; always reconstructible from the parent's own
@@ -121,6 +150,7 @@ class ChildAgentCoordinator {
     // conversationId in this V1 scheme is exactly the childId: a child has
     // exactly one parent (Global Constraints: no nested/shared children), so
     // the childId alone already uniquely identifies the relationship.
+    this._board = new TeamBoardStore({ storageRoot });
     this._mailbox = new MessageMailbox({
       getTaskStore: (taskId) => this._activeStores.get(taskId) || this._liveChildren.get(taskId)?.store,
       getConversationTaskIds: (conversationId) => this._relationshipForConversation(conversationId),
@@ -137,6 +167,10 @@ class ChildAgentCoordinator {
 
   unregisterStore(taskId) {
     this._activeStores.delete(taskId);
+  }
+
+  _childPlannerEffort() {
+    return typeof this._plannerEffort === "function" ? this._plannerEffort() : this._plannerEffort;
   }
 
   _relationshipForConversation(conversationId) {
@@ -254,6 +288,7 @@ class ChildAgentCoordinator {
     };
     this._plans.set(parentTaskId, plan);
     for (const childId of childIds) this._childParent.set(childId, parentTaskId);
+    this._notifyPlanChange(parentTaskId);
     // Best-effort: try to admit/start whatever this plan's resources/origin
     // serialization currently allow. A coordinator with no makeChildBrowser/
     // resourceAdmission configured (or one that simply can't admit right
@@ -277,6 +312,48 @@ class ChildAgentCoordinator {
       origin,
       state: this._childState(childId),
     }));
+  }
+
+  // The renderer's ChildPlanSummary (frontend/src/session/child-agents.ts),
+  // built from the same parent-authored plan as listChildren(). null when
+  // there is no plan or it was cancelled. evidenceCount stays 0: this
+  // coordinator never reads a child's own journal for display.
+  async getPlanSummary(parentTaskId) {
+    const plan = await this._resolveActivePlan(parentTaskId);
+    if (!plan || plan.state === "cancelled") return null;
+    const agents = plan.assignments.map(({ childId, origin, subgoal }) => {
+      const terminal = this._terminalChildren.get(childId);
+      return {
+        agentId: childId,
+        status: this._liveChildren.get(childId)?.summaryStatus ?? this._childState(childId),
+        assignedOrigin: origin,
+        evidenceCount: 0,
+        // The parent-authored label, so the UI names a child by its job, not its UUID.
+        ...(typeof subgoal === "string" && subgoal ? { subgoal: subgoal.slice(0, 200) } : {}),
+        ...(terminal?.reason ? { reason: terminal.reason } : {}),
+      };
+    });
+    const count = (status) => agents.filter((agent) => agent.status === status).length;
+    const board = (await this._planBoard(parentTaskId, plan)).slice(-BOARD_SUMMARY_ENTRIES)
+      .map((entry) => ({ entryId: entry.entryId, agentId: entry.childTaskId, kind: entry.kind, text: entry.text, at: entry.at }));
+    return {
+      requestedAgentCount: agents.length,
+      activeAgentCount: count("running") + count("waiting_for_review") + count("paused"),
+      queuedAgentCount: count("queued"),
+      parentGoalVersion: plan.parentGoalVersion,
+      memoryPolicy: plan.memoryPolicy,
+      agents,
+      ...(board.length ? { board } : {}),
+    };
+  }
+
+  _notifyPlanChange(parentTaskId) {
+    if (!this._onPlanChange) return;
+    try {
+      this._onPlanChange(parentTaskId);
+    } catch {
+      // A display observer never affects child lifecycle.
+    }
   }
 
   // "queued" (not yet started), "running" (live controller attached), or a
@@ -325,6 +402,7 @@ class ChildAgentCoordinator {
       payload: { planId: plan.planId, reason },
     });
     this._plans.set(parentTaskId, { ...plan, state: "cancelled" });
+    this._notifyPlanChange(parentTaskId);
   }
 
   // In-memory cache first (this coordinator instance's own bookkeeping is
@@ -455,6 +533,7 @@ class ChildAgentCoordinator {
     const currentGoalVersion = await this._currentParentGoalVersion(parentTaskId);
     if (currentGoalVersion !== null && plan.parentGoalVersion !== null && currentGoalVersion !== plan.parentGoalVersion) {
       this._terminalChildren.set(childId, { outcome: "failed", reason: "stale_goal_version" });
+      this._notifyPlanChange(parentTaskId);
       return { started: false, reason: "stale_goal_version" };
     }
 
@@ -558,7 +637,7 @@ class ChildAgentCoordinator {
         memoryStore: this._memoryStore,
         permissionMode: "observe",
         harnessProfile: childStore.taskProfile?.duration?.id || "middle",
-        plannerEffort: this._plannerEffort,
+        plannerEffort: this._childPlannerEffort(),
         now: this._now,
         segmentRotationCalls: this._segmentRotationCalls,
         noProgressThreshold: this._noProgressThreshold,
@@ -568,11 +647,19 @@ class ChildAgentCoordinator {
         sendMessage: (validated) => this.handleSendMessage(childId, validated),
         listPendingMessages: () => this.listPendingMessages(childId),
         recordMessagesConsumed: (ids, plannerCall) => this.recordMessagesConsumed(childId, ids, plannerCall),
+        readTeamBoard: () => this.readTeamBoard(childId),
       });
 
       live = { controller, browser, planner, store: childStore, leaseId, origin, parentTaskId };
       this._liveChildren.set(childId, live);
+      live.summaryStatus = "running";
+      this._notifyPlanChange(parentTaskId);
       live.unsubscribe = controller.onChange((snapshot) => {
+        const summaryStatus = liveSummaryStatus(snapshot.state);
+        if (summaryStatus !== live.summaryStatus) {
+          live.summaryStatus = summaryStatus;
+          this._notifyPlanChange(parentTaskId);
+        }
         if (snapshot.state === "completed" || snapshot.state === "stopped") {
           live.unsubscribe?.();
           this._retireChild(parentTaskId, childId, snapshot.state).catch(() => {});
@@ -614,6 +701,7 @@ class ChildAgentCoordinator {
         outcome: "failed",
         reason: cleanupComplete ? "child_start_failed" : "child_start_cleanup_failed",
       });
+      this._notifyPlanChange(parentTaskId);
       // startChild() returns the lease only when teardown completed. If a
       // disposer/close failed, keep capacity reserved and surface the
       // original attach error without losing that fail-closed state.
@@ -633,6 +721,7 @@ class ChildAgentCoordinator {
     if (!live) return;
     this._liveChildren.delete(childId);
     this._terminalChildren.set(childId, { outcome: controllerState === "completed" ? "completed" : "stopped" });
+    this._notifyPlanChange(parentTaskId);
     try {
       await live.browser.dispose?.();
     } catch {
@@ -831,11 +920,55 @@ class ChildAgentCoordinator {
           return this._mailbox.send(envelope);
         });
       }
-      return await this._mailbox.send(envelope);
+      const sent = await this._mailbox.send(envelope);
+      if (senderTaskId === childTaskId) await this._postToBoard(parentTaskId, plan, envelope, sent);
+      return sent;
     } catch (err) {
       if (err instanceof MessageMailboxError) throw new ChildAgentCoordinatorError(err.code, err.message);
       throw err;
     }
+  }
+
+  // A child's progress/evidence/handoff to its parent is also posted to the
+  // plan's board, keyed by the message id so a resend is posted once. The
+  // board is advisory: a failed post never fails the message.
+  async _postToBoard(parentTaskId, plan, envelope, sent) {
+    if (!BOARD_KINDS.includes(envelope.kind) || typeof sent?.messageId !== "string") return;
+    const text = (envelope.kind === "handoff" ? handoffText(envelope.handoff) : envelope.text ?? "").trim();
+    if (!text) return;
+    await this._board.post(parentTaskId, {
+      entryId: sent.messageId,
+      parentGoalVersion: plan.parentGoalVersion ?? 1,
+      childTaskId: envelope.childTaskId,
+      kind: envelope.kind,
+      text: text.slice(0, MAX_BOARD_TEXT_CHARS),
+      at: new Date(typeof this._now === "function" ? this._now() : Date.now()).toISOString(),
+    }).catch(() => {});
+  }
+
+  // Board entries of the parent's active plan: its current goal version and
+  // its accepted children only. [] for no or a cancelled plan.
+  async _planBoard(parentTaskId, plan) {
+    if (!plan || plan.state === "cancelled") return [];
+    const version = plan.parentGoalVersion ?? 1;
+    const entries = await this._board.read(parentTaskId).catch(() => []);
+    return entries.filter((entry) => entry.parentGoalVersion === version && plan.childIds.includes(entry.childTaskId));
+  }
+
+  // What a CHILD reads of its siblings' posts, as untrusted notes named by
+  // each sibling's parent-authored subgoal. null for anything not a child of
+  // an active plan (a parent already receives these as messages).
+  async readTeamBoard(childTaskId) {
+    const parentTaskId = this._childParent.get(childTaskId);
+    if (!parentTaskId) return null;
+    const plan = await this._resolveActivePlan(parentTaskId);
+    if (!plan || plan.state === "cancelled") return null;
+    const labels = new Map((plan.assignments ?? []).map((a, i) => [a.childId, (typeof a.subgoal === "string" && a.subgoal ? a.subgoal : `Agent ${i + 1}`).slice(0, 80)]));
+    const entries = (await this._planBoard(parentTaskId, plan))
+      .filter((entry) => entry.childTaskId !== childTaskId)
+      .slice(-BOARD_CONTEXT_ENTRIES)
+      .map((entry) => ({ from: labels.get(entry.childTaskId) ?? "Agent", kind: entry.kind, text: entry.text, at: entry.at }));
+    return { authority: "untrusted_sibling_notes", parentTaskId, entries };
   }
 
   async _withSteerLock(childTaskId, operation) {

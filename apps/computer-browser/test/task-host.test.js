@@ -2407,3 +2407,90 @@ test("each new parent or child planner pins the provider selected when it is cre
     { role: "child", plannerProvider: "claude_code" },
   ]);
 });
+
+test("each task's MCP broker uses the mcpProviders pinned when the task attached", async () => {
+  const storageRoot = await mkTempRoot();
+  const settingsStore = new HostSettingsStore({ storageRoot });
+  const seen = [];
+  const host = makeHost(storageRoot, {
+    settingsStore,
+    makePlanner: mcpPausingPlanner,
+    makeMcpBroker: (taskId, hooks, options) => {
+      seen.push({ taskId, options });
+      return options.mcpProviders.length ? trackingMcpBrokerFactory(fakeMcpProvider(), [])(taskId, hooks) : null;
+    },
+  });
+  const off = await host.createTask({ originalRequest: "MCP off at start" });
+  await host.updateHostSettings({ mcpProviders: ["codex"] });
+  // Enabling MCP later does not reach a task that attached while it was off.
+  await assert.rejects(host.listMcpConnections(off.taskId), { code: "mcp_disabled" });
+  await host.stopTask(off.taskId);
+  const on = await host.createTask({ originalRequest: "MCP on at start" });
+  await waitForState(host, on.taskId, ["paused"], 10000);
+  await host.updateHostSettings({ mcpProviders: [] });
+  assert.equal((await host.listMcpConnections(on.taskId)).length, 1);
+  assert.deepEqual(seen, [
+    { taskId: off.taskId, options: { mcpProviders: [] } },
+    { taskId: on.taskId, options: { mcpProviders: ["codex"] } },
+  ]);
+  // The pinned list is a copy the factory cannot use to change host state.
+  seen[1].options.mcpProviders.push("other");
+  assert.deepEqual((await host.getHostSettings()).mcpProviders, []);
+  await host.close();
+});
+
+test("the planner sees MCP enabled only when Codex was pinned for the task", async () => {
+  const storageRoot = await mkTempRoot();
+  const settingsStore = new HostSettingsStore({ storageRoot });
+  const seen = [];
+  const host = makeHost(storageRoot, {
+    settingsStore,
+    makePlanner: () => ({ next: async (context) => { seen.push(context.progress.mcp.enabled); throw new Error("planner offline"); } }),
+    makeMcpBroker: (taskId, hooks) => trackingMcpBrokerFactory(fakeMcpProvider(), [])(taskId, hooks),
+  });
+  const off = await host.createTask({ originalRequest: "MCP off" });
+  await host.stopTask(off.taskId);
+  await host.updateHostSettings({ mcpProviders: ["codex"] });
+  const on = await host.createTask({ originalRequest: "MCP on" });
+  await waitForState(host, on.taskId, ["paused"], 10000);
+  assert.deepEqual(seen, [false, true]);
+  await host.close();
+});
+
+test("a Multi-agent task's planner is told it may split work, a plain task's is not", async () => {
+  const seenFor = async (selectors) => {
+    const seen = [];
+    const host = makeHost(await mkTempRoot(), {
+      makePlanner: () => ({ next: async (context) => { seen.push(context.progress.childPlan); return finishingPlanner().next(context); } }),
+    });
+    await host.createTask({ originalRequest: "compare two sites" }, selectors);
+    for (let i = 0; i < 100 && seen.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    return seen;
+  };
+  assert.deepEqual(await seenFor({ requestedCapabilityProfile: "multi_agent" }), [{ enabled: true, maxAgents: 8, active: null }]);
+  assert.deepEqual(await seenFor({}), [undefined]);
+});
+
+test("a new planner pins the plannerModel chosen when it is created, and omits it while unset", async () => {
+  const storageRoot = await mkTempRoot();
+  const settingsStore = new HostSettingsStore({ storageRoot });
+  await settingsStore.update({ plannerProvider: "claude_code" }, { actor: "user" });
+  const calls = [];
+  const host = makeHost(storageRoot, {
+    settingsStore,
+    plannerProvider: "claude_code",
+    makePlanner: (id, options) => { calls.push(options); return finishingPlanner(); },
+  });
+  const first = await host.createTask({ originalRequest: "default model" });
+  await host.updateHostSettings({ plannerModel: "claude-sonnet-5-5" });
+  await host.stopTask(first.taskId);
+  await host.createTask({ originalRequest: "sonnet" });
+  for (let i = 0; i < 100 && calls.length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  host._childCoordinator._makePlanner("child-1");
+  assert.deepEqual(calls, [
+    { role: "parent", plannerProvider: "claude_code" },
+    { role: "parent", plannerProvider: "claude_code", plannerModel: "claude-sonnet-5-5" },
+    { role: "child", plannerProvider: "claude_code", plannerModel: "claude-sonnet-5-5" },
+  ]);
+  await host.close();
+});

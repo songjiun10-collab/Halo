@@ -38,3 +38,14 @@ export function syncDirectSurface(
   }
   return api.setBrowserBounds({ x: rect.left, y: rect.top, width: rect.width, height: rect.height, visible: true })
 }
+
+/** A still of the page main is showing, painted in the page slot while an overlay hides the native view. */
+export async function captureSnapshot(api: Partial<Pick<HaloBrowserApi, 'captureSurface'>>): Promise<string | null> {
+  if (typeof api.captureSurface !== 'function') return null
+  try {
+    const url = await api.captureSurface()
+    return typeof url === 'string' && url.startsWith('data:image/jpeg;base64,') ? url : null
+  } catch {
+    return null
+  }
+}

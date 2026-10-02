@@ -30,7 +30,7 @@ export interface TaskSnapshot {
   criteriaStatus: CriterionStatus[]
   approvalQueue: ApprovalRequest[]
 }
-export interface TaskSummary { taskId: string; originalRequest: string; state: TaskState; pauseReason: string | null; active: boolean }
+export interface TaskSummary { taskId: string; originalRequest: string; state: TaskState; pauseReason: string | null; active: boolean; /** 1-based FIFO position while waiting for admission. */ queuePosition?: number }
 export interface TaskDetail { taskId: string; goal: GoalSpec; snapshot?: TaskSnapshot; active: boolean; recoveryReason?: string }
 export interface BrowserSnapshot {
   tabs: { id: string; url: string; title: string; canGoBack: boolean; canGoForward: boolean }[]
@@ -57,11 +57,28 @@ export interface DirectBrowserSnapshot {
   approvalQueue: unknown[]
   timeline: unknown[]
 }
+export interface HostSettings {
+  version: number
+  executionMode: 'sequential' | 'parallel'
+  permissionMode: 'observe' | 'browse' | 'interact' | 'full'
+  plannerEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+  memoryPolicy: 'budgeted' | 'user_override'
+  plannerProvider: 'none' | 'claude_code' | 'codex_cli'
+  /** Allowlisted planner model id; unset runs the provider's default model. */
+  plannerModel?: string
+}
 export interface HaloBrowserApi {
   getSnapshot: () => Promise<DirectBrowserSnapshot>
   navigate: (url: string) => Promise<DirectBrowserSnapshot>
   goBack: () => Promise<DirectBrowserSnapshot>
   goForward: () => Promise<DirectBrowserSnapshot>
+  reload: () => Promise<DirectBrowserSnapshot>
+  newTab: () => Promise<DirectBrowserSnapshot>
+  selectTab: (tabId: string) => Promise<DirectBrowserSnapshot>
+  closeTab: (tabId: string) => Promise<DirectBrowserSnapshot>
+  newWindow: () => Promise<{ opened: boolean }>
+  /** Optional: older hosts lack it. */
+  captureSurface?: () => Promise<string | null>
   setBrowserBounds: (bounds: BrowserViewport) => Promise<unknown>
   onEvent: (callback: (event: { snapshot: DirectBrowserSnapshot }) => void) => () => void
   createTask(input: GoalInput): Promise<{ taskId: string; snapshot: TaskSnapshot; goal: GoalSpec }>
@@ -78,6 +95,8 @@ export interface HaloBrowserApi {
   getTaskEvents(taskId: string, options?: { since?: number }): Promise<JournalEvent[]>
   getTaskBrowser(taskId: string): Promise<BrowserSnapshot>
   getChildPlan(taskId: string): Promise<ChildPlanSummary | null>
+  getHostSettings(): Promise<HostSettings>
+  updateHostSettings(patch: Partial<Omit<HostSettings, 'version'>>): Promise<HostSettings>
   taskBrowserAction(taskId: string, action: BrowserAction): Promise<BrowserSnapshot>
   setTaskViewport(taskId: string | null, viewport: BrowserViewport): Promise<unknown>
   onTaskEvent(callback: (event: TaskEvent) => void): () => void
@@ -86,6 +105,7 @@ export interface HaloBrowserApi {
   detachBackgroundRuntime(): Promise<void>
   setMemoryPolicy(mode: MemoryPolicy): Promise<BackgroundRuntimeSnapshot>
   stopBackgroundService(): Promise<BackgroundRuntimeSnapshot>
+  setBackgroundLaunchAtLogin?(enabled: boolean): Promise<BackgroundRuntimeSnapshot>
   onBackgroundRuntimeEvent(callback: (snapshot: BackgroundRuntimeSnapshot) => void): () => void
 }
 declare global { interface Window { haloBrowser?: HaloBrowserApi } }

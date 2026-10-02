@@ -17,6 +17,11 @@ const { BrowserSurfaces } = require("./harness/browser-surfaces");
 const { PlannerStdioAdapter } = require("./harness/planner-stdio");
 const { CodexMcpAdapter, parseRepositories } = require("./harness/providers/codex-mcp-adapter");
 const { makeMcpBrowserObservation } = require("./harness/mcp-browser-observation");
+const { CodexMcpProvider } = require("./harness/providers/codex-mcp-provider");
+const { GenericMcpBroker } = require("./harness/generic-mcp-broker");
+const { SharedMcpProvider } = require("./harness/shared-mcp-provider");
+const { McpCatalogCache } = require("./harness/mcp-catalog-cache");
+const { validateMcpArguments } = require("./harness/mcp-schema-validator");
 const { MemoryMonitor } = require("./harness/memory-monitor");
 const { AgentViewportHost, makeDualSurfaceBrowser } = require("./harness/agent-viewport-host");
 const { resolvePlannerCommand } = require("./harness/planner-command");
@@ -32,6 +37,7 @@ const { sumProcessTreeRssBytes } = require("./harness/process-tree-memory");
 const { BackgroundRuntimeService } = require("./harness/background-runtime-service");
 const { BackgroundRuntimeClient } = require("./harness/background-runtime-client");
 const { prepareSocketDir } = require("./harness/background-runtime-ipc");
+const { launchAgentUserId, createBackgroundLaunchAgent } = require("./harness/background-launch-agent");
 
 // Real OS-level process-tree RSS lookup for workers Electron does not track
 // (the Python approver and local planner worker, including its CLI child).
@@ -72,6 +78,7 @@ let socketDir = null;
 let memoryPollTimer = null;
 let runtimeService = null;
 let runtimeClient = null;
+const runtimeClients = new Set();
 let runtimeContainer = null;
 let runtimeCapability = null;
 let runtimeCapabilityPath = null;
@@ -104,6 +111,32 @@ const codexMcp = codexMcpRepositories.length ? new CodexMcpAdapter({
   onWorkerExit: ({ pid, creationTime }) => memoryMonitor.unregister(pid, creationTime),
 }) : null;
 
+// Routed MCP tool sharing (docs/superpowers/specs/2026-10-01-routed-mcp-tool-
+// sharing-design.md). Off unless the task was attached with "codex" pinned in
+// mcpProviders. One app-wide Codex app-server, counted in the RSS budget, is
+// prepared lazily on first use and shared by every task through its own
+// lease, so a broker closing never stops another task's provider.
+let sharedCodexMcp = null;
+function makeHarnessMcpBroker(_taskId, hooks, { mcpProviders = [] } = {}) {
+  if (!Array.isArray(mcpProviders) || !mcpProviders.includes("codex")) return null;
+  const canRun = () => memoryMonitor.getPressureLevel() === "normal";
+  sharedCodexMcp ||= new SharedMcpProvider({
+    provider: new CodexMcpProvider({
+      cwd: REPO_ROOT,
+      canRun,
+      onWorkerStart: (identity) => memoryMonitor.registerExternalProcess(identity),
+      onWorkerExit: ({ pid, creationTime }) => memoryMonitor.unregister(pid, creationTime),
+    }),
+    cache: new McpCatalogCache(),
+    canRun,
+  });
+  return new GenericMcpBroker({
+    providers: [sharedCodexMcp.lease()],
+    validateArguments: (schema, args) => validateMcpArguments(schema, args),
+    ...hooks,
+  });
+}
+
 function withConnectorObservation(browser) {
   return codexMcp ? makeMcpBrowserObservation({
     browser, connector: codexMcp,
@@ -132,6 +165,26 @@ function makeSocketDir() {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "halo-browser-approver-")));
   fs.chmodSync(dir, 0o700);
   return dir;
+}
+
+// "Start at login" for the background service (macOS LaunchAgent). The
+// windows only offer it; nothing is installed until the user turns it on.
+let backgroundLaunchAgent;
+function getBackgroundLaunchAgent() {
+  if (backgroundLaunchAgent !== undefined) return backgroundLaunchAgent;
+  backgroundLaunchAgent = null;
+  if (process.platform !== "darwin" || SERVICE_MODE) return backgroundLaunchAgent;
+  try {
+    backgroundLaunchAgent = createBackgroundLaunchAgent({
+      executablePath: process.execPath,
+      appPath: app.isPackaged ? null : app.getAppPath(),
+      userId: launchAgentUserId({ username: os.userInfo().username, uid: process.getuid?.() }),
+      logPath: path.join(runtimePaths().dir, "launch-agent.log"),
+    });
+  } catch (error) {
+    console.error("[harness] start at login is unavailable:", error);
+  }
+  return backgroundLaunchAgent;
 }
 
 function runtimePaths() {
@@ -395,8 +448,8 @@ function makeHarnessPlanner(usageLedger) {
   if (override && !override.configured) {
     console.error("[harness] HALO_PLANNER_ARGS must be a non-empty JSON array of worker arguments");
   }
-  return (taskId, { role = "parent", plannerProvider = "none" } = {}) => {
-    const launch = selectPlannerLaunch({ override, providerId: plannerProvider, nodeCommand: plannerCommand });
+  return (taskId, { role = "parent", plannerProvider = "none", plannerModel } = {}) => {
+    const launch = selectPlannerLaunch({ override, providerId: plannerProvider, model: plannerModel, nodeCommand: plannerCommand });
     return new PlannerStdioAdapter({
       // A Node executable on PATH alone is not a configured agent worker.
       command: launch.command,
@@ -451,7 +504,11 @@ async function createHarnessHost(socketPath, hostWindow) {
     memoryStore,
     permissionMode: settings.permissionMode,
     plannerEffort: settings.plannerEffort,
+    plannerEffortMode: settings.plannerEffortMode,
     plannerProvider: settings.plannerProvider,
+    plannerModel: settings.plannerModel,
+    mcpProviders: settings.mcpProviders,
+    makeMcpBroker: makeHarnessMcpBroker,
     executionMode: settings.executionMode,
     settingsStore,
     credentialVault,
@@ -478,16 +535,35 @@ async function createWindow(socketPath, attachedClient = undefined) {
   });
 
   const controlApi = new ControlApi({ window: win, socketPath });
-  const taskHost = attachedClient === undefined ? await createHarnessHost(socketPath, win) : attachedClient;
+  let taskHost;
+  try {
+    taskHost = attachedClient === undefined ? await createHarnessHost(socketPath, win) : attachedClient;
+  } catch (error) {
+    // Do not leave an empty BrowserWindow behind when its per-window host
+    // could not be constructed (e.g. a failed runtime attach).
+    if (!win.isDestroyed()) win.destroy();
+    throw error;
+  }
   win.once("closed", () => {
+    if (attachedClient) {
+      runtimeClients.delete(attachedClient);
+      if (runtimeClient === attachedClient) runtimeClient = runtimeClients.values().next().value ?? null;
+    }
     const closing = (attachedClient ? attachedClient.detach() : taskHost?.close())?.catch((error) => {
       console.error("[harness] failed to detach or close task resources:", error);
     }).finally(() => { if (attachedClient === undefined) taskHosts.delete(taskHost); });
     if (!closing) return;
     closingTaskHosts.push(closing);
-    if (attachedClient) runtimeClient = null;
   });
-  registerIpc(win, controlApi, { taskHost });
+  registerIpc(win, controlApi, {
+    taskHost,
+    launchAgent: getBackgroundLaunchAgent() ?? undefined,
+    onNewWindow: async () => {
+      const client = await connectRuntimeClient();
+      await createWindow(socketPath, client);
+      return { opened: true };
+    },
+  });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
   win.loadFile(path.join(__dirname, "..", "renderer", "dist", "index.html"));
@@ -512,6 +588,7 @@ async function connectRuntimeClient() {
   try {
     await client.connect();
     runtimeClient = client;
+    runtimeClients.add(client);
     return client;
   } catch (error) {
     console.error("[harness] background runtime is unavailable:", error);
@@ -549,6 +626,10 @@ app.whenReady().then(async () => {
     const taskHost = await createHarnessHost(socketPath, runtimeContainer);
     runtimeService = new BackgroundRuntimeService({ socketPath: paths.socketPath, socketRoot: paths.dir, taskHost });
     const { capability } = await runtimeService.start();
+    // Always-on Agents run only here: per-window hosts share the same storage
+    // and would each start the same occurrence.
+    await taskHost.startAgentScheduler();
+    await taskHost.startScheduler();
     runtimeService.onEvent((event) => {
       if (event === "serviceStopped") app.quit();
     });
@@ -580,7 +661,7 @@ app.on("before-quit", (event) => {
   if (quitDecisionPending) return;
   quitDecisionPending = true;
   (async () => {
-    if (runtimeClient && !SERVICE_MODE) {
+    if (runtimeClients.size > 0 && !SERVICE_MODE) {
       const { response } = await dialog.showMessageBox({
         type: "question",
         title: "Halo background work",
@@ -594,8 +675,10 @@ app.on("before-quit", (event) => {
         quitDecisionPending = false;
         return;
       }
-      if (response === 1) await runtimeClient.stopService("user_quit");
-      await runtimeClient.detach();
+      const clients = [...runtimeClients];
+      if (response === 1) await clients[0]?.stopService("user_quit");
+      await Promise.allSettled(clients.map((client) => client.detach()));
+      runtimeClients.clear();
       runtimeClient = null;
     }
     shutdownStarted = true;
@@ -607,6 +690,7 @@ app.on("before-quit", (event) => {
     }
     await agentViewportHost.disposeAll();
     await codexMcp?.close();
+    await sharedCodexMcp?.close();
     removeOwnRuntimeCapability();
     runtimeContainer?.destroy();
     if (approverProcess) approverProcess.kill();

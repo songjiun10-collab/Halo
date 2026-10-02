@@ -57,6 +57,8 @@ const TASK_HOST_METHODS = new Set([
   "pauseTask",
   "takeOverTask",
   "getTaskEvents",
+  "getChildPlan",
+  "listMcpProviders",
   "getTaskBrowser",
   "taskBrowserAction",
   "setTaskViewport",
@@ -74,6 +76,25 @@ const TASK_HOST_METHODS = new Set([
   "saveRoutine",
   "deleteRoutine",
   "runRoutine",
+  "listAgents",
+  "saveAgent",
+  "archiveAgent",
+  "listTeams",
+  "saveTeam",
+  "archiveTeam",
+  "startAgentTask",
+  "listAgentConversations",
+  "getAgentRoster",
+  "setAgentPinned",
+  "duplicateAgent",
+  "markAgentConversationsRead",
+  "listAgentSchedules",
+  "saveAgentSchedule",
+  "deleteAgentSchedule",
+  "listRooms",
+  "getRoom",
+  "postRoomMessage",
+  "stopRoomRound",
   "startWorkGoal",
   "getActiveWorkGoal",
   "listWorkGoalHistory",
@@ -136,6 +157,18 @@ class BackgroundRuntimeService {
       this._emit("taskEvent", payload);
       this._server.broadcast("taskEvent", payload);
     });
+    if (typeof this._taskHost.onAgentRosterEvent === "function") {
+      this._unsubscribeRoster = this._taskHost.onAgentRosterEvent((notice) => {
+        this._emit("agentRosterEvent", notice);
+        this._server.broadcast("agentRosterEvent", notice);
+      });
+    }
+    if (typeof this._taskHost.onRoomEvent === "function") {
+      this._unsubscribeRoom = this._taskHost.onRoomEvent((event) => {
+        this._emit("roomEvent", event);
+        this._server.broadcast("roomEvent", event);
+      });
+    }
     return { socketPath: this._socketPath, capability: this._capability };
   }
 
@@ -223,6 +256,8 @@ class BackgroundRuntimeService {
     this._emit("serviceNotice", { kind: "service_stopping", reason: reason ?? null });
     this._server?.broadcast("serviceStopping", { reason: reason ?? null });
     this._unsubscribeTaskHost?.();
+    this._unsubscribeRoster?.();
+    this._unsubscribeRoom?.();
     await this._taskHost.close();
     // If this was invoked over the runtime socket, closing it before the
     // dispatcher writes its response turns a successful explicit stop into

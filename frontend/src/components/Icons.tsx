@@ -20,3 +20,4 @@ export const Tabs = () => <Icon><rect x="4" y="4" width="7" height="7" rx="1.5" 
 export const NewWindow = () => <Icon><rect x="3" y="5" width="15" height="13" rx="2" /><path d="M3 9h15" /><path d="M20 3v6M17 6h6" /></Icon>
 export const Keyboard = () => <Icon><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M6.5 10h.01M9.5 10h.01M12.5 10h.01M15.5 10h.01M17.5 10h.01M6.5 13h.01M17.5 13h.01M9 15.5h6" /></Icon>
 export const ActivityLog = () => <Icon><path d="M4 5h16M4 12h16M4 19h16" /><path d="M8 5v.01M8 12v.01M8 19v.01" /></Icon>
+export const Sidebar = () => <Icon><rect x="3.5" y="4" width="17" height="16" rx="2" /><path d="M9 4v16" /></Icon>

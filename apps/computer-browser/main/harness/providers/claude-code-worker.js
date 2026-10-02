@@ -27,6 +27,16 @@
 
 const readline = require("node:readline");
 const { ClaudeCodeBridge } = require("./claude-code-bridge");
+const { isClaudeModel } = require("./claude-models");
+
+// The host launches this worker with either no arguments or exactly
+// `--model <allowlisted id>` (planner-providers.js). Anything else is refused
+// rather than ignored, so argv can never smuggle extra CLI flags.
+function parseWorkerArgs(argv) {
+  if (argv.length === 0) return { model: undefined };
+  if (argv.length === 2 && argv[0] === "--model" && isClaudeModel(argv[1])) return { model: argv[1] };
+  throw new Error("worker accepts only --model <allowlisted Claude model>");
+}
 
 function createWorkerLoop({ stdin, stdout, stderr, bridge }) {
   const rl = readline.createInterface({ input: stdin, terminal: false });
@@ -62,8 +72,16 @@ function createWorkerLoop({ stdin, stdout, stderr, bridge }) {
 }
 
 function main() {
+  let model;
+  try {
+    ({ model } = parseWorkerArgs(process.argv.slice(2)));
+  } catch (error) {
+    process.stderr.write(`[claude-code-worker] ${error.message}\n`);
+    process.exit(2);
+  }
   const bridge = new ClaudeCodeBridge({
     command: process.env.HALO_CLAUDE_CLI_COMMAND || "claude",
+    model,
   });
 
   // If this worker process is killed while a claude CLI call is in flight,
@@ -93,4 +111,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { createWorkerLoop };
+module.exports = { createWorkerLoop, parseWorkerArgs };

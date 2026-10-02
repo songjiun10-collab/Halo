@@ -15,11 +15,11 @@ const {
 const NODE = "/usr/local/bin/node";
 
 test("provider registry is a frozen host allowlist whose workers live inside the app", () => {
-  assert.deepEqual(PLANNER_PROVIDER_IDS, ["none", "claude_code"]);
+  assert.deepEqual(PLANNER_PROVIDER_IDS, ["none", "claude_code", "codex_cli"]);
   assert.ok(Object.isFrozen(PLANNER_PROVIDER_IDS));
   assert.ok(Object.isFrozen(PLANNER_PROVIDERS));
   assert.equal(Object.getPrototypeOf(PLANNER_PROVIDERS), null);
-  assert.deepEqual(Object.keys(PLANNER_PROVIDERS), ["claude_code"]);
+  assert.deepEqual(Object.keys(PLANNER_PROVIDERS), ["claude_code", "codex_cli"]);
   const entry = PLANNER_PROVIDERS.claude_code;
   assert.ok(Object.isFrozen(entry));
   assert.equal(entry.usageProvider, "claude");

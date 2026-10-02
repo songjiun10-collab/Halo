@@ -30,6 +30,18 @@ const { TaskQueue, TaskQueueError } = require("./task-queue");
 const { ResourceAdmission } = require("./resource-admission");
 const { CoordinatorCore } = require("./coordinator-core");
 const { RoutineStore } = require("./routine-store");
+const { AgentStore } = require("./agent-store");
+const { AgentService } = require("./agent-service");
+const { AgentScheduleStore, AgentScheduler } = require("./agent-schedule");
+const { RoomStore } = require("./room-store");
+const { RoomOrchestrator, RoomError } = require("./room-orchestrator");
+const ROOM_PLANNER_IDLE_MS = 60 * 1000;
+const { MCP_PROVIDER_IDS, MCP_PROVIDER_CATALOG } = require("./host-settings");
+const { PLANNER_PROVIDERS } = require("./planner-providers");
+
+// The planner provider whose allowlist holds this model id, or null.
+const providerForModel = (model) => Object.values(PLANNER_PROVIDERS).find((provider) => provider.isModel(model))?.id ?? null;
+const { effortForRoute, routeForProfile } = require("./planner-effort-policy");
 const { RoutineRunner } = require("./routine-runner");
 const { ChildAgentCoordinator } = require("./child-agent-coordinator");
 const { Scheduler } = require("./scheduler");
@@ -41,7 +53,7 @@ const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/ha
 const { resolveTaskProfile } = require("../../shared/task-profile-router");
 const { clearSessionCookies, clearDisallowedSessionCookies } = require("./profile-import/session-injector");
 
-const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone", "useImportedSessions"]);
+const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone", "useImportedSessions", "mcpProviders", "reviewFallback", "plannerModel"]);
 const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
   planner_unavailable: "planner", planner_error: "planner", observation_error: "browser_observation",
   context_error: "context_build", no_progress: "action_progress", budget_exhausted: "budget",
@@ -80,7 +92,10 @@ class TaskHost {
     maxParallelTasks = 2,
     permissionMode = "browse",
     plannerEffort = "medium",
+    plannerEffortMode = "fixed",
     plannerProvider = "none",
+    plannerModel,
+    mcpProviders = [],
     memoryStore,
     settingsStore,
     usageLedger,
@@ -96,6 +111,7 @@ class TaskHost {
     routineReadOnlyBatching = true,
     scheduler: schedulerOptions = {},
     makeMcpBroker,
+    agentStore,
   } = {}) {
     if (!storageRoot) throw new TaskHostError("invalid_config", "storageRoot is required");
     if (typeof makeBrowser !== "function") throw new TaskHostError("invalid_config", "makeBrowser is required");
@@ -122,9 +138,15 @@ class TaskHost {
     this._setViewport = setViewport;
     this._permissionMode = permissionMode;
     this._plannerEffort = plannerEffort;
+    // plannerEffort is the ceiling; "auto" lowers cheap routes (see
+    // planner-effort-policy.js). Validated up front so a bad value fails here.
+    this._plannerEffortMode = plannerEffortMode;
+    effortForRoute({ base: plannerEffort, mode: plannerEffortMode, route: "middle" });
     // Read when each planner is created, so a settings change only affects
     // tasks and children started afterwards.
     this._plannerProvider = plannerProvider;
+    this._plannerModel = plannerModel;
+    this._mcpProviders = Array.isArray(mcpProviders) ? [...mcpProviders] : [];
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
     this._settingsStore = settingsStore || null;
@@ -149,6 +171,40 @@ class TaskHost {
     // lifecycle changes. Do not hold this gate while a Task is running.
     this._workGoalAdmissionChain = Promise.resolve();
     this._routineStore = new RoutineStore({ storageRoot });
+    // Agent roster: role text reaches a task only as goal constraints through
+    // this host's own createTask, so no permission path changes.
+    this._agentStore = agentStore || new AgentStore({ storageRoot: path.join(storageRoot, "agents") });
+    this._agentService = new AgentService({
+      store: this._agentStore,
+      createTask: (goalInput, selectors) => this.createTask(goalInput, selectors),
+      listTasks: () => this.listTasks(),
+    });
+    // Always-on Agents: schedules live beside agents.json. The scheduler is
+    // started explicitly (startAgentScheduler), like the routine scheduler.
+    this._agentScheduleStore = new AgentScheduleStore({ storageRoot: path.join(storageRoot, "agents"), now: schedulerOptions.now });
+    this._agentScheduler = null;
+    // Team chat rooms: one per team, logged beside agents.json. Each turn is
+    // one request to that member's own planner worker (child role, so it can
+    // never propose a child plan), and a proposed task is an ordinary
+    // startAgentTask call.
+    this._roomListeners = new Set();
+    this._roomStore = new RoomStore({ storageRoot: path.join(storageRoot, "agents") });
+    this._rooms = new RoomOrchestrator({
+      store: this._roomStore,
+      getTeam: (teamId) => this._agentStore.getTeam(teamId),
+      getAgent: (agentId) => this._agentStore.getAgent(agentId),
+      requestTurn: (turn) => this._requestRoomTurn(turn),
+      startTask: ({ teamId, request }) => this.startAgentTask({ teamId, request }),
+      getTaskState: async (taskId) => {
+        await this._ensureQueue();
+        return (await this._listTaskSummaries()).find((task) => task.taskId === taskId)?.state ?? null;
+      },
+      emit: (event) => this._emitRoomEvent(event),
+    });
+    // One planner per room, reused across its turns and closed after a
+    // minute without one (or at shutdown). A failed turn drops it.
+    this._roomPlanners = new Map(); // teamId -> { planner, timer }
+    this._roomsRecovered = null;
     if (executionMode !== "sequential" && executionMode !== "parallel") throw new TaskHostError("invalid_config", "executionMode must be sequential or parallel");
     this._executionMode = executionMode;
     if (!Number.isInteger(maxParallelTasks) || maxParallelTasks < 1 || maxParallelTasks > 8) throw new TaskHostError("invalid_config", "maxParallelTasks must be an integer from 1 to 8");
@@ -158,6 +214,7 @@ class TaskHost {
     this._queueReady = null;
     this._queueTransition = Promise.resolve();
     this._listeners = new Set();
+    this._rosterListeners = new Set();
     // taskId -> {store, controller, browser, planner}
     this._active = new Map();
     this._sessionAccessChain = Promise.resolve();
@@ -176,6 +233,12 @@ class TaskHost {
     // ResourceAdmission's stricter constructor requirements.
     this._resourceAdmission = null;
     this._runMemoryPolicies = new Map();
+    // taskId -> {mcpProviders: null (inherit host) | narrowing subset,
+    // reviewFallback: "queue" | "deny"}, journaled as notes so resume keeps it.
+    this._runScopes = new Map();
+    // Tasks recovered from the last session that a new task skipped past in
+    // the FIFO; resuming one re-enqueues it (see _skipRecoveredForNewTask).
+    this._skippedRecovered = new Set();
     // Admission (parallel cap, memory reserve, lease ledger) lives behind the
     // coordinator seam; a lease is required before a task builds resources.
     this._coordinator = new CoordinatorCore({
@@ -202,7 +265,7 @@ class TaskHost {
       // Child planners are requested with role:"child" and the provider
       // selected at the moment the child is created.
       makePlanner: this._makePlanner
-        ? (childId) => this._makePlanner(childId, { role: "child", plannerProvider: this._plannerProvider })
+        ? (childId) => this._makePlanner(childId, this._plannerPin("child"))
         : null,
       approve: this._approve,
       hostVerifier: this._hostVerifier,
@@ -211,8 +274,13 @@ class TaskHost {
       now: this._now,
       segmentRotationCalls: this._segmentRotationCalls,
       noProgressThreshold: this._noProgressThreshold,
-      plannerEffort: this._plannerEffort,
+      plannerEffort: () => effortForRoute({ base: this._plannerEffort, mode: this._plannerEffortMode, route: "child" }),
+      onPlanChange: (parentTaskId) => this._emitChildPlan(parentTaskId),
     });
+  }
+
+  _effortForProfile(taskProfile) {
+    return effortForRoute({ base: this._plannerEffort, mode: this._plannerEffortMode, route: routeForProfile(taskProfile) });
   }
 
   // Task 4: called when a parent's own TaskController proposes a
@@ -228,6 +296,35 @@ class TaskHost {
       memoryPolicy: selected.mode,
       memoryPolicyAuditEventId: selected.auditEventId,
     }));
+  }
+
+  async _getRunScope(taskId, store) {
+    if (this._runScopes.has(taskId)) return this._runScopes.get(taskId);
+    const events = await store.getEvents();
+    const note = (kind) => events.find((event) => event.type === "note" && event.payload?.kind === kind);
+    const scope = { mcpProviders: null, reviewFallback: "queue", plannerModel: null };
+    const mcp = note("mcp_scope_selected");
+    if (mcp) {
+      const providers = mcp.payload.providers;
+      if (!Array.isArray(providers) || providers.some((id) => !MCP_PROVIDER_IDS.includes(id))) {
+        throw new TaskHostError("invalid_mcp_scope", "saved task MCP scope is invalid");
+      }
+      scope.mcpProviders = [...providers];
+    }
+    const fallback = note("review_fallback_selected");
+    if (fallback) {
+      if (fallback.payload.mode !== "queue" && fallback.payload.mode !== "deny") {
+        throw new TaskHostError("invalid_review_fallback", "saved task review fallback is invalid");
+      }
+      scope.reviewFallback = fallback.payload.mode;
+    }
+    const model = note("planner_model_selected");
+    if (model) {
+      if (!providerForModel(model.payload.model)) throw new TaskHostError("invalid_planner_model", "saved task planner model is invalid");
+      scope.plannerModel = model.payload.model;
+    }
+    this._runScopes.set(taskId, scope);
+    return scope;
   }
 
   async _getRunMemoryPolicy(taskId, store) {
@@ -254,6 +351,41 @@ class TaskHost {
   // to read them back.
   async listChildren(parentTaskId) {
     return this._childCoordinator.listChildren(parentTaskId);
+  }
+
+  // The Agent tools picker: every known MCP provider and whether the host
+  // has it on. An Agent can only narrow to enabled ones (task scope is
+  // always intersected with the host set).
+  async listMcpProviders() {
+    this._assertOpen();
+    return MCP_PROVIDER_CATALOG.map(({ id, label }) => ({ id, label, enabled: this._mcpProviders.includes(id) }));
+  }
+
+  // The renderer's ChildPlanSummary for a parent task, or null. A corrupt
+  // parent-child link has no displayable plan; the parent's own pause/
+  // recovery state is what reports it, so selecting the task still works.
+  async getChildPlan(parentTaskId) {
+    this._assertOpen();
+    try {
+      return await this._childCoordinator.getPlanSummary(parentTaskId);
+    } catch (error) {
+      if (error?.code === "corrupt_child_link") return null;
+      throw error;
+    }
+  }
+
+  // Pushes a parent's child plan to UI observers with its current snapshot.
+  // Only for an attached parent: an event always carries a real snapshot.
+  _emitChildPlan(parentTaskId) {
+    const entry = this._active.get(parentTaskId);
+    if (!entry || this._closePromise) return;
+    this.getChildPlan(parentTaskId).then((childPlan) => {
+      const current = this._active.get(parentTaskId);
+      if (!current) return;
+      this._emit(parentTaskId, current.snapshot ?? current.controller.getSnapshot(), { childPlan });
+    }).catch(() => {
+      // Display only; the next selection re-reads the plan.
+    });
   }
 
   _ensureResourceAdmission() {
@@ -289,7 +421,7 @@ class TaskHost {
     // controller's loop can possibly run.
     this._childCoordinator.registerStore(store.taskId, store);
     const browser = this._makeBrowser(store.taskId);
-    const planner = routine ? routine.runner : this._makePlanner(store.taskId, { role: "parent", plannerProvider: this._plannerProvider });
+    const planner = routine ? routine.runner : this._makePlanner(store.taskId, this._plannerPin("parent", this._runScopes.get(store.taskId)?.plannerModel));
     // Profile selection is a host operation (design doc "Profile selection"):
     // TaskHost is the sole authority that decides harnessProfile, and passes
     // it in rather than letting the controller (or the task's own text)
@@ -306,7 +438,8 @@ class TaskHost {
       memoryMonitor: controllerMemoryMonitor,
       memoryStore: this._memoryStore,
       permissionMode: this._permissionMode,
-      plannerEffort: this._plannerEffort,
+      plannerEffort: this._effortForProfile(taskProfile),
+      reviewFallback: this._runScopes.get(store.taskId)?.reviewFallback ?? "queue",
       now: this._now,
       segmentRotationCalls: this._segmentRotationCalls,
       noProgressThreshold: this._noProgressThreshold,
@@ -315,7 +448,24 @@ class TaskHost {
       // never receive onChildPlan, which is exactly what prevents nested
       // child agents.
       onChildPlan: (proposal) => this._onChildPlan(store.taskId, store, proposal),
-      ...(this._makeMcpBroker ? { makeMcpBroker: (hooks) => this._makeMcpBroker(store.taskId, hooks) } : {}),
+      // Lets the parent's planner know whether a plan already runs, so it is
+      // offered a split only when one could be accepted.
+      readChildPlan: () => this._childCoordinator.getPlanSummary(store.taskId),
+      // MCP providers are pinned when the task attaches, like its planner:
+      // a later settings change only affects tasks attached afterwards.
+      // Child controllers never receive this hook (child policy is exactly
+      // observe+scroll).
+      ...(this._makeMcpBroker ? (() => {
+        // An Agent/task scope only narrows: never enables a provider the
+        // host has turned off.
+        const scope = this._runScopes.get(store.taskId)?.mcpProviders ?? null;
+        const mcpProviders = this._mcpProviders.filter((id) => scope === null || scope.includes(id));
+        return {
+          makeMcpBroker: (hooks) => this._makeMcpBroker(store.taskId, hooks, { mcpProviders: [...mcpProviders] }),
+          // The planner is offered mcp_* actions only when a provider was pinned.
+          mcpEnabled: mcpProviders.includes("codex"),
+        };
+      })() : {}),
       sendMessage: (validated) => this._childCoordinator.handleSendMessage(store.taskId, validated),
       listPendingMessages: () => this._childCoordinator.listPendingMessages(store.taskId),
       recordMessagesConsumed: (ids, plannerCall) => this._childCoordinator.recordMessagesConsumed(store.taskId, ids, plannerCall),
@@ -376,6 +526,7 @@ class TaskHost {
   // Only tasks that opted in (durably, at creation) are touched. A failure
   // never blocks the task; the audit note records counts and domains only.
   async _attachPrepared(store, routine = null) {
+    await this._getRunScope(store.taskId, store);
     if (!this._profileImporter || !this._getTaskSession) return this._attach(store, routine);
     let optedIn = false;
     try { optedIn = await this._profileImporter.hasTaskOptIn(store.taskId); }
@@ -481,6 +632,10 @@ class TaskHost {
   }
 
   _emit(taskId, snapshot, detail = {}) {
+    if (snapshot?.state && this._rooms) {
+      void this._recoverRooms();
+      this._rooms.onTaskEvent(taskId, snapshot).catch(() => {});
+    }
     for (const listener of this._listeners) {
       try {
         Promise.resolve(listener(taskId, structuredClone(snapshot), structuredClone(detail))).catch(() => {});
@@ -598,7 +753,11 @@ class TaskHost {
     this._assertOpen();
     if (!isPlainObject(selectors) || Object.keys(selectors).some((key) => !TASK_PROFILE_SELECTOR_FIELDS.includes(key)) ||
         (Object.hasOwn(selectors, "standalone") && typeof selectors.standalone !== "boolean") ||
-        (Object.hasOwn(selectors, "useImportedSessions") && typeof selectors.useImportedSessions !== "boolean")) {
+        (Object.hasOwn(selectors, "useImportedSessions") && typeof selectors.useImportedSessions !== "boolean") ||
+      (Object.hasOwn(selectors, "mcpProviders") && (!Array.isArray(selectors.mcpProviders) ||
+        selectors.mcpProviders.some((id) => !MCP_PROVIDER_IDS.includes(id)) || new Set(selectors.mcpProviders).size !== selectors.mcpProviders.length)) ||
+      (Object.hasOwn(selectors, "reviewFallback") && selectors.reviewFallback !== "queue" && selectors.reviewFallback !== "deny") ||
+      (Object.hasOwn(selectors, "plannerModel") && !providerForModel(selectors.plannerModel))) {
       return Promise.reject(new TaskHostError("invalid_selector", "task profile selectors contain unknown fields"));
     }
     if (selectors.useImportedSessions === true && !(this._profileImporter && this._getTaskSession)) {
@@ -617,7 +776,12 @@ class TaskHost {
     } catch (error) {
       return Promise.reject(new TaskHostError(error.code || "profile_resolution_failed", error.message));
     }
-    return this._createNewTask(stableGoalInput, null, null, resolvedProfile, selectors.standalone === true, selectors.useImportedSessions === true);
+    const runScope = {
+      mcpProviders: Object.hasOwn(selectors, "mcpProviders") ? [...selectors.mcpProviders] : null,
+      reviewFallback: selectors.reviewFallback ?? "queue",
+      plannerModel: selectors.plannerModel ?? null,
+    };
+    return this._createNewTask(stableGoalInput, null, null, resolvedProfile, selectors.standalone === true, selectors.useImportedSessions === true, runScope);
   }
 
   async listRoutines() {
@@ -640,6 +804,160 @@ class TaskHost {
     const result = await this._routineStore.delete(routineId);
     await this.getScheduleStore().disableForRoutine(routineId, "routine_deleted");
     return result;
+  }
+
+  async listAgents() { this._assertOpen(); return this._agentStore.listAgents(); }
+  async listTeams() { this._assertOpen(); return this._agentStore.listTeams(); }
+  async listAgentConversations(input) { this._assertOpen(); return this._agentService.listAgentConversations(input); }
+  async getAgentRoster() { this._assertOpen(); return this._agentService.getAgentRoster(); }
+
+  async saveAgent(input) {
+    this._assertOpen();
+    return this._rosterChange("agent", "saved", await this._agentStore.saveAgent(input));
+  }
+
+  async archiveAgent(agentId) {
+    this._assertOpen();
+    return this._rosterChange("agent", "archived", await this._agentStore.archiveAgent(agentId));
+  }
+
+  async duplicateAgent(agentId) {
+    this._assertOpen();
+    return this._rosterChange("agent", "saved", await this._agentStore.duplicateAgent(agentId));
+  }
+
+  async saveTeam(input) {
+    this._assertOpen();
+    return this._rosterChange("team", "saved", await this._agentStore.saveTeam(input));
+  }
+
+  async archiveTeam(teamId) {
+    this._assertOpen();
+    return this._rosterChange("team", "archived", await this._agentStore.archiveTeam(teamId));
+  }
+
+  async setAgentPinned(input) {
+    this._assertOpen();
+    return this._rosterChange(input.kind, "pinned", await this._agentStore.setPinned(input));
+  }
+
+  async startAgentTask(input) {
+    this._assertOpen();
+    const result = await this._agentService.startAgentTask(input);
+    this._emitRoster(input.agentId !== undefined ? "agent" : "team", input.agentId ?? input.teamId, "conversation_started");
+    return result;
+  }
+
+  async markAgentConversationsRead(input) {
+    this._assertOpen();
+    const result = await this._agentService.markAgentConversationsRead(input);
+    this._emitRoster(input.agentId !== undefined ? "agent" : "team", input.agentId ?? input.teamId, "read");
+    return result;
+  }
+
+  // Content-free change notices so a UI can re-read getAgentRoster() instead
+  // of polling; profile text never travels in the notice itself.
+  onAgentRosterEvent(listener) {
+    if (typeof listener !== "function") throw new TypeError("onAgentRosterEvent requires a listener function");
+    this._rosterListeners.add(listener);
+    return () => this._rosterListeners.delete(listener);
+  }
+
+  _rosterChange(kind, change, record) {
+    this._emitRoster(kind, record.id, change);
+    return record;
+  }
+
+  _emitRoster(kind, id, change) {
+    for (const listener of this._rosterListeners) {
+      try { listener({ kind, id, change }); } catch { /* an observer never affects roster state */ }
+    }
+  }
+
+  // Team chat room. A room is addressed by its team id.
+  async listRooms() {
+    this._assertOpen();
+    await this._recoverRooms();
+    const teams = await this._agentStore.listTeams();
+    return Promise.all(teams.map(async (team) => {
+      const messages = await this._roomStore.read(team.id);
+      return { roomId: team.id, teamId: team.id, name: team.name, archived: team.archived, lastMessage: messages.at(-1) ?? null, active: this._rooms.getRoundState(team.id).active };
+    }));
+  }
+
+  async getRoom(teamId) {
+    this._assertOpen();
+    await this._recoverRooms();
+    const team = await this._agentStore.getTeam(teamId).catch((error) => {
+      if (["not_found", "invalid_id"].includes(error.code)) throw new RoomError("invalid_room", "team does not exist");
+      throw error;
+    });
+    return { roomId: team.id, teamId: team.id, messages: await this._roomStore.read(team.id), round: this._rooms.getRoundState(team.id) };
+  }
+
+  async postRoomMessage(input) {
+    this._assertOpen();
+    await this._recoverRooms();
+    if (!isPlainObject(input) || Object.keys(input).sort().join(",") !== "teamId,text") {
+      throw new RoomError("invalid_message", "postRoomMessage takes exactly {teamId, text}");
+    }
+    return this._rooms.post(input.teamId, input.text);
+  }
+
+  async stopRoomRound(teamId) {
+    this._assertOpen();
+    await this._recoverRooms();
+    return this._rooms.stop(teamId);
+  }
+
+  // {roomId, message} for each new message, {roomId, round} for round state.
+  onRoomEvent(listener) {
+    if (typeof listener !== "function") throw new TypeError("onRoomEvent requires a listener function");
+    this._roomListeners.add(listener);
+    return () => this._roomListeners.delete(listener);
+  }
+
+  _emitRoomEvent(event) {
+    for (const listener of this._roomListeners) {
+      try { listener(structuredClone(event)); } catch { /* an observer never affects the room */ }
+    }
+  }
+
+  // Once per host: restores room-task result notices and clears a round
+  // lock a crashed process left (RoomOrchestrator.recover).
+  _recoverRooms() {
+    if (!this._roomsRecovered) {
+      this._roomsRecovered = this._agentStore.listTeams()
+        .then((teams) => this._rooms.recover(teams.map((team) => team.id)))
+        .catch(() => {});
+    }
+    return this._roomsRecovered;
+  }
+
+  async _requestRoomTurn({ teamId, context, signal }) {
+    let entry = this._roomPlanners.get(teamId);
+    if (entry) clearTimeout(entry.timer);
+    else {
+      entry = { planner: this._makePlanner(`room-${teamId}`, this._plannerPin("child")), timer: null };
+      this._roomPlanners.set(teamId, entry);
+    }
+    try {
+      return await entry.planner.next(context, { signal });
+    } catch (error) {
+      await this._closeRoomPlanner(teamId, entry);
+      throw error;
+    } finally {
+      if (this._roomPlanners.get(teamId) === entry) {
+        entry.timer = setTimeout(() => { void this._closeRoomPlanner(teamId, entry); }, ROOM_PLANNER_IDLE_MS);
+        entry.timer.unref?.();
+      }
+    }
+  }
+
+  async _closeRoomPlanner(teamId, entry) {
+    clearTimeout(entry.timer);
+    if (this._roomPlanners.get(teamId) === entry) this._roomPlanners.delete(teamId);
+    await Promise.resolve(entry.planner.close?.()).catch(() => {});
   }
 
   getScheduleStore() {
@@ -665,6 +983,66 @@ class TaskHost {
       this._schedulerStarting.catch(() => { this._schedulerStarting = null; this._scheduler = null; });
     }
     return this._schedulerStarting;
+  }
+
+  async listAgentSchedules() {
+    this._assertOpen();
+    return this._agentScheduleStore.list();
+  }
+
+  // The owner must exist and be unarchived when the schedule is saved; a
+  // later archive makes the next run fail closed and disables the schedule.
+  async saveAgentSchedule(input) {
+    this._assertOpen();
+    const kind = input?.kind;
+    if (kind === "agent" || kind === "team") {
+      let owner;
+      try { owner = await (kind === "agent" ? this._agentStore.getAgent(input.ownerId) : this._agentStore.getTeam(input.ownerId)); }
+      catch (error) { if (!["not_found", "invalid_id"].includes(error.code)) throw error; }
+      if (!owner || owner.archived) throw new TaskHostError("agent_unavailable", `${kind} is not available for scheduling`);
+    }
+    const saved = await this._agentScheduleStore.save(input);
+    this._emitRoster(saved.kind, saved.ownerId, "schedule_saved");
+    this._agentScheduler?.tick().catch(() => {});
+    return saved;
+  }
+
+  async deleteAgentSchedule(scheduleId) {
+    this._assertOpen();
+    const removed = await this._agentScheduleStore.remove(scheduleId);
+    this._emitRoster(removed.kind, removed.ownerId, "schedule_deleted");
+    return removed;
+  }
+
+  // Starts Agent schedules over this host. Each occurrence goes through the
+  // same createTask queue/admission/approval path as a manual Agent start,
+  // with the schedule's own approval choice and planner-call cap.
+  async startAgentScheduler() {
+    this._assertOpen();
+    if (!this._agentScheduler) {
+      this._agentScheduler = new AgentScheduler({
+        ...this._schedulerOptions,
+        store: this._agentScheduleStore,
+        startTask: (schedule) => this._startScheduledAgentTask(schedule),
+        getTaskState: async (taskId) => {
+          await this._ensureQueue();
+          return (await this._listTaskSummaries()).find((task) => task.taskId === taskId)?.state ?? null;
+        },
+      });
+      await this._agentScheduler.start();
+    }
+    return this._agentScheduler;
+  }
+
+  async _startScheduledAgentTask(schedule) {
+    this._assertOpen();
+    const owner = schedule.kind === "agent" ? { agentId: schedule.ownerId } : { teamId: schedule.ownerId };
+    const result = await this._agentService.startAgentTask({ ...owner, request: schedule.request }, {
+      reviewFallback: schedule.onApproval === "deny" ? "deny" : "queue",
+      maxPlannerCalls: schedule.maxPlannerCalls,
+    });
+    this._emitRoster(schedule.kind, schedule.ownerId, "conversation_started");
+    return result;
   }
 
   async runRoutine(routineId, revision, options = {}) {
@@ -775,7 +1153,8 @@ class TaskHost {
     });
   }
 
-  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null, standalone = false, useImportedSessions = false) {
+  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null, standalone = false, useImportedSessions = false, runScope = null) {
+    const scope = runScope ?? { mcpProviders: null, reviewFallback: "queue", plannerModel: null };
     this._assertOpen();
     if (!resolvedProfile) throw new TaskHostError("profile_required", "new tasks must have a host-resolved profile before storage or admission");
     return this._trackAttachment(async () => {
@@ -851,6 +1230,9 @@ class TaskHost {
             actor: selected.actor,
             selectedAt: selected.at,
           } });
+          if (scope.mcpProviders !== null) await taskStore.append({ type: "note", payload: { kind: "mcp_scope_selected", providers: [...scope.mcpProviders] } });
+          if (scope.reviewFallback !== "queue") await taskStore.append({ type: "note", payload: { kind: "review_fallback_selected", mode: scope.reviewFallback } });
+          if (scope.plannerModel) await taskStore.append({ type: "note", payload: { kind: "planner_model_selected", model: scope.plannerModel } });
           if (this._closePromise) throw new TaskHostError("host_closed", "task host is closing or closed");
           if (binding) {
             await this._workGoalOrchestrator.recordContinuation(binding.goalId, binding.goalVersion, {
@@ -869,6 +1251,7 @@ class TaskHost {
       }
       const { store, workGoalBinding } = created;
       this._runMemoryPolicies.set(store.taskId, { mode: selected.mode, auditEventId: selected.auditEventId });
+      this._runScopes.set(store.taskId, structuredClone(scope));
       // Validate the exact pinned revision while the task is still not
       // enqueued/admitted. A malformed or missing routine must never reserve
       // a browser lease and then strand an active queue entry.
@@ -890,9 +1273,11 @@ class TaskHost {
         }
       } catch (error) {
         this._runMemoryPolicies.delete(store.taskId);
+        this._runScopes.delete(store.taskId);
         await store.close();
         throw error;
       }
+      await this._skipRecoveredForNewTask();
       await this._queue.enqueue(store.taskId);
       const admitted = await this._admitNext();
       if (admitted !== store.taskId) {
@@ -920,6 +1305,19 @@ class TaskHost {
       this._coordinator.recoveredBlocked = this._queue.pendingIds().length > 0;
     })();
     try { await this._queueReady; } catch (error) { this._queueReady = null; throw error; }
+  }
+
+  // Recovered entries wait for a person and block automatic admission. A new
+  // task is that person choosing other work: the recovered ones leave the
+  // FIFO without running (audited skips) and stay saved as paused, so the
+  // new task is not stuck behind them.
+  async _skipRecoveredForNewTask() {
+    if (!this._coordinator.recoveredBlocked) return;
+    for (const taskId of this._queue.pendingIds()) {
+      await this._queue.skip(taskId, { reason: "superseded_by_new_task", actor: "trusted_host" });
+      this._skippedRecovered.add(taskId);
+    }
+    this._coordinator.recoveredBlocked = false;
   }
 
   _admitNext(options = {}) {
@@ -968,6 +1366,7 @@ class TaskHost {
         await this._coordinator.releaseLease(taskId);
       }
       this._runMemoryPolicies.delete(taskId);
+      this._runScopes.delete(taskId);
       if (this._closePromise) return;
       const nextId = await this._admitNext();
       if (nextId) this._startQueued(nextId).catch((error) => this._emit(nextId, { state: "paused", pauseReason: "queue_start_failed", error: error.message }));
@@ -1108,15 +1507,25 @@ class TaskHost {
     this._assertOpen();
     await this._ensureQueue();
     if (!this._active.has(taskId)) {
-      const preflight = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
-      try { await this._resolveRoutineForStore(preflight); }
-      finally { await preflight.close(); }
+      // Gated with listTasks() peeks: both briefly hold this store's writer lock.
+      await this._withStoreGate(async () => {
+        const preflight = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
+        try { await this._resolveRoutineForStore(preflight); }
+        finally { await preflight.close(); }
+      });
     }
     if (this._coordinator.recoveredBlocked) {
       if (this._queue.pendingIds()[0] !== taskId) throw new TaskHostError("queued_behind_other_task", "resume the oldest queued task first");
       const admitted = await this._admitNext({ recoveredHead: true });
       if (admitted !== taskId) throw new TaskHostError("memory_admission_denied", "the queued task is waiting for a measured memory lease");
       this._coordinator.recoveredBlocked = false;
+    }
+    if (this._skippedRecovered.has(taskId) && !this._active.has(taskId)) {
+      // Back through the FIFO so it is admitted (and leased) like any task.
+      this._skippedRecovered.delete(taskId);
+      await this._queue.enqueue(taskId);
+      const admitted = await this._admitNext();
+      if (admitted !== taskId) return { state: "queued", queuePosition: this._queue.pendingIds().indexOf(taskId) + 1 };
     }
     if (this._queue.pendingIds().includes(taskId)) {
       throw new TaskHostError("queued_behind_other_task", "a queued task must wait for its FIFO admission");
@@ -1140,7 +1549,7 @@ class TaskHost {
     }
     if (!entry) {
       const attached = await this._trackAttachment(async () => {
-        const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
+        const store = await this._withStoreGate(() => TaskStore.load(taskId, { storageRoot: this._storageRoot }));
         if (this._closePromise) {
           await store.close();
           throw new TaskHostError("host_closed", "task host is closing or closed");
@@ -1350,6 +1759,13 @@ class TaskHost {
     return this._settingsStore.load();
   }
 
+  // The provider and (when chosen) model a new planner is pinned to. A task
+  // pinned to a model (an Agent's choice) runs that model's provider.
+  _plannerPin(role, taskModel = null) {
+    if (taskModel) return { role, plannerProvider: providerForModel(taskModel), plannerModel: taskModel };
+    return { role, plannerProvider: this._plannerProvider, ...(this._plannerModel ? { plannerModel: this._plannerModel } : {}) };
+  }
+
   async updateHostSettings(patch) {
     this._assertOpen();
     if (!this._settingsStore) throw new TaskHostError("settings_unavailable", "host settings are unavailable");
@@ -1359,8 +1775,13 @@ class TaskHost {
     this._executionMode = settings.executionMode;
     this._permissionMode = settings.permissionMode;
     this._plannerEffort = settings.plannerEffort;
+    this._plannerEffortMode = settings.plannerEffortMode;
     this._plannerProvider = settings.plannerProvider;
-    for (const entry of this._active.values()) entry.controller.setPolicySettings(settings);
+    this._plannerModel = settings.plannerModel;
+    this._mcpProviders = [...settings.mcpProviders];
+    for (const entry of this._active.values()) {
+      entry.controller.setPolicySettings({ ...settings, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
+    }
     return settings;
   }
 
@@ -1427,6 +1848,9 @@ class TaskHost {
       // Stop scheduling first so no new occurrence is launched during shutdown.
       // This never stops or cancels tasks; they are paused below like any other.
       await this._scheduler?.stop();
+      await this._agentScheduler?.stop();
+      await this._rooms.close();
+      await Promise.allSettled([...this._roomPlanners].map(([teamId, entry]) => this._closeRoomPlanner(teamId, entry)));
       // A create/load that started before close() must either attach before
       // this snapshot (so it gets cleaned up below) or observe the closed
       // state after its await, close its store, and reject. Never let a late
@@ -1463,6 +1887,8 @@ class TaskHost {
       }));
       this._active.clear();
       this._listeners.clear();
+      this._rosterListeners.clear();
+      this._roomListeners.clear();
       await Promise.resolve(this._workGoalStore.close?.()).catch((error) => errors.push(error));
       if (errors.length > 0) {
         throw new AggregateError(errors, "one or more task resources failed to close");

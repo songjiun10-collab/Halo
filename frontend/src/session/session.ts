@@ -44,8 +44,10 @@ function derive(s: SessionState): SessionState {
     task: s.goal?.originalRequest ?? s.tasks.find((t) => t.taskId === s.activeTaskId)?.originalRequest ?? '',
     control: head ? 'approval' : state === 'running' ? 'claude' : 'you',
     finished: !state || state === 'completed' || state === 'stopped',
-    tabs: s.browser?.tabs.map((t) => ({ id: t.id, history: [t.url], index: 0, titles: { [t.url]: t.title || t.url }, claude: activity, canGoBack: t.canGoBack, canGoForward: t.canGoForward })) ?? (s.directBrowser ? s.tabs : []),
-    activeTabId: s.browser?.activeTabId ?? (s.directBrowser ? s.activeTabId : ''),
+    tabs: s.activeTaskId
+      ? (s.browser?.tabs.map((t) => ({ id: t.id, history: [t.url], index: 0, titles: { [t.url]: t.title || t.url }, claude: activity, canGoBack: t.canGoBack, canGoForward: t.canGoForward })) ?? [])
+      : s.tabs,
+    activeTabId: s.activeTaskId ? (s.browser?.activeTabId ?? '') : s.activeTabId,
     approval: head && s.activeTaskId ? { taskId: s.activeTaskId, id: head.id, action: head.summary || head.action, request: head.action, createdAt: head.createdAt } : undefined,
     messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text }))] : [],
     timeline: s.journal.map(describeEvent),
@@ -83,14 +85,23 @@ export class SessionStore {
   private revision(taskId: string) { return this.revisions.get(taskId) ?? 0 }
   private failure(error: unknown, taskId?: string, selection = this.selection) {
     if (selection !== this.selection || (taskId && taskId !== this.state.activeTaskId)) return
-    this.update({ error: error instanceof Error ? error.message : String(error) })
+    this.update({ error: this.describeError(error) })
+  }
+  /** Host errors a person can act on get plain copy; anything else keeps the host's message. */
+  private describeError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (/queued_behind_other_task|resume the oldest queued task first/.test(message)) {
+      const head = this.state.tasks.find((task) => task.queuePosition === 1)
+      return head ? `Waiting in line behind “${head.originalRequest}”. Open it to resume it first, or start a new task.` : 'Waiting in line behind an earlier task. Resume it first, or start a new task.'
+    }
+    return message
   }
   clearError = () => this.update({ error: null })
   connect() {
     if (!this.api) return () => {}
     const unsubscribeTask = this.api.onTaskEvent((event) => this.receive(event))
     const unsubscribeDirect = this.api.onEvent((event) => {
-      if (!this.state.activeTaskId) this.applyDirectSnapshot(event.snapshot, this.state.directBrowser || !!event.snapshot.page?.hasPage)
+      if (!this.state.activeTaskId) this.applyDirectSnapshot(event.snapshot, !!event.snapshot.page?.hasPage)
     })
     void this.api.getSnapshot().then((snapshot) => {
       if (!this.state.activeTaskId) this.applyDirectSnapshot(snapshot, !!snapshot.page?.hasPage)
@@ -294,5 +305,36 @@ export class SessionStore {
     try { const browser = await this.api.taskBrowserAction(taskId, action); if (this.current(taskId, selection)) this.update({ browser }); return true }
     catch (error) { this.failure(error, taskId, selection); return false }
     finally { if (this.current(taskId, selection) && token === this.commandToken) this.update({ busy: null }) }
+  }
+
+  /** Browser-tab controls belong to the human's direct browser, never a task-owned surface. */
+  private async directTabCommand(label: string, operation: () => Promise<DirectBrowserSnapshot>, visible?: (snapshot: DirectBrowserSnapshot) => boolean) {
+    if (!this.api || this.state.activeTaskId || this.state.busy) return false
+    const selection = this.selection
+    const token = ++this.commandToken
+    this.update({ busy: label, error: null })
+    try {
+      const snapshot = await operation()
+      if (selection === this.selection && !this.state.activeTaskId) {
+        this.applyDirectSnapshot(snapshot, visible ? visible(snapshot) : !!snapshot.page?.hasPage)
+      }
+      return true
+    } catch (error) { this.failure(error, undefined, selection); return false }
+    finally { if (selection === this.selection && token === this.commandToken) this.update({ busy: null }) }
+  }
+
+  newBrowserTab = () => this.directTabCommand('newTab', () => this.api!.newTab(), () => false)
+  selectBrowserTab = (tabId: string) => {
+    if (tabId === this.state.activeTabId) return Promise.resolve(true)
+    return this.directTabCommand('selectTab', () => this.api!.selectTab(tabId))
+  }
+  closeBrowserTab = (tabId: string) => {
+    if (this.state.tabs.length <= 1) return Promise.resolve(false)
+    return this.directTabCommand('closeTab', () => this.api!.closeTab(tabId))
+  }
+  newWindow = async () => {
+    if (!this.api || this.state.busy) return false
+    try { await this.api.newWindow(); return true }
+    catch (error) { this.failure(error); return false }
   }
 }

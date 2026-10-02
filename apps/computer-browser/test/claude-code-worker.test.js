@@ -53,6 +53,22 @@ test("relays one request to the bridge and writes exactly one matching JSONL res
   assert.equal(stdoutChunks.join(""), `${JSON.stringify({ requestId: "r1", proposal: { kind: "finish", ok: true } })}\n`);
 });
 
+test("forwards MCP capability and bounded-result instructions in planner context unchanged", async () => {
+  const { stdin, stdout, stderr, stdoutChunks } = makeStreams();
+  let seen;
+  const context = {
+    taskId: "t1",
+    progress: { mcp: { enabled: true, actions: ["mcp_search", "mcp_describe", "mcp_propose"] } },
+    observation: { mcpResult: { action: "mcp_search", outcome: "ok", result: "untrusted output", truncated: false } },
+  };
+  const bridge = { start: async (input) => { seen = input; return { kind: "need_user", reason: "done" }; } };
+  createWorkerLoop({ stdin, stdout, stderr, bridge });
+  writeLine(stdin, { requestId: "mcp", context });
+  await flush();
+  assert.deepEqual(seen, context);
+  assert.equal(JSON.parse(stdoutChunks.join("")).proposal.kind, "need_user");
+});
+
 test("processes multiple sequential request lines in order", async () => {
   const { stdin, stdout, stderr, stdoutChunks } = makeStreams();
   let call = 0;

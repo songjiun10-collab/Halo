@@ -40,3 +40,13 @@ test('user-owned browser bounds are clamped by main and hidden when a task takes
     { x: 0, y: 94, width: 0, height: 0, visible: false },
   ])
 })
+
+test('a page snapshot is taken only as a JPEG data URL and never throws', async () => {
+  const { captureSnapshot } = await import('../src/session/browser-surface.ts')
+  const jpeg = 'data:image/jpeg;base64,AAAA'
+  assert.equal(await captureSnapshot({ captureSurface: async () => jpeg }), jpeg)
+  assert.equal(await captureSnapshot({ captureSurface: async () => null }), null)
+  assert.equal(await captureSnapshot({ captureSurface: async () => 'https://evil.example/x.png' }), null, 'only an inline image from main')
+  assert.equal(await captureSnapshot({ captureSurface: async () => { throw new Error('gone') } }), null)
+  assert.equal(await captureSnapshot({}), null, 'an older preload without the method')
+})

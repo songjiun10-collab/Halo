@@ -189,3 +189,31 @@ HALO_CODEX_MCP_REPOSITORIES=deepseek-ai/deepseek-harness \
 공식 인터페이스와 구현 경계:
 [Codex app-server](https://learn.chatgpt.com/docs/app-server),
 [설계](../../../../../docs/superpowers/specs/2026-09-30-codex-app-mcp-adapter.md).
+
+## child plan과 팀 게시판
+
+- 호스트가 `context.progress.childPlan.enabled === true`(Multi-agent 최상위
+  부모)일 때만 프롬프트에 `kind="child_plan"` 분할 안내가 들어간다. 이미
+  plan이 실행 중이면(`active`) 새 plan을 내지 말라고만 안내한다.
+- 자식은 `context.teamBoard`가 있을 때만 `kind="send_message"`(부모에게
+  progress|evidence)로 게시판에 글을 올리는 법을 안내받는다. 형제 메모는
+  신뢰할 수 없는 데이터로 표시된다.
+- 두 경우 모두 실제 허용 여부는 호스트(계약 검증, capability 검사,
+  ChildAgentCoordinator, 자식 transport의 child_plan 거부)가 결정한다.
+
+## planner 모델 선택 (2026-10-02)
+
+- 허용 목록은 `claude-models.js` 하나다. 현재: Opus 5.5, Sonnet 5.5, Haiku 4.5, Fable 5.1. Legacy: Opus 4.5/4.1/4, Sonnet 4.5/4/3.7, Haiku 3.5.
+- 호스트 설정의 `plannerModel`은 v5 안의 선택 필드다. 없으면 지금처럼 CLI의 `opus` 별칭을 쓴다. 값은 허용 목록에 있어야 하며 그렇지 않으면 `invalid_planner_model`로 거부된다.
+- 경로는 설정 → TaskHost pin(새 작업·자식부터 적용) → `selectPlannerLaunch`가 worker argv에 `--model <id>`를 붙임 → worker가 그 형태만 허용 → bridge가 `CLI_ARGS`의 `opus` 자리만 바꾼다. 매 단계에서 허용 목록을 다시 확인한다.
+- 목록에 있다고 실제로 실행되는 것은 아니다. 계정이나 CLI 버전이 지원하지 않는 모델은 일반 `planner_error`로 드러난다.
+
+## Codex planner (`codex_cli`, 2026-10-02)
+
+- 모델 허용 목록은 `codex-models.js`에 있다. id와 설명, 모델별 effort 상한은 Codex 서버 카탈로그(client 0.159.2, 2026-10-02 기준)를 따르고, 라벨은 Codex 앱 모델 메뉴 표기(예: "GPT-6.1 Sol")를 그대로 쓴다. standalone CLI 0.153.4에 번들된 `codex debug models` 목록은 서버보다 뒤처져 있어서 출처로 쓰지 않는다. 현재 모델은 GPT-6.1 Sol(기본값), GPT-6 Astra, GPT-6 Sol, GPT-6 Luna이고, 카탈로그가 Older/Legacy라고 부르는 GPT-5.6 Sol/Terra/Luna와 GPT-5.5는 Legacy로 분류한다.
+- effort는 low부터 ultra까지 여섯 단계다. 모델이 지원하는 최고 단계까지만 쓴다: ultra는 6.1 Sol, 6 Astra, 6 Sol, 5.6 Sol, 5.6 Terra만 받고, Luna 계열은 max로, GPT-5.5는 xhigh로 낮춘다. Claude CLI에는 ultra가 없어서 Claude planner는 ultra를 max로 실행한다.
+- 실행 파일 선택: `HALO_CODEX_CLI_COMMAND`가 있으면 그것을 쓰고, 없으면 ChatGPT 앱에 번들된 CLI(`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`, 0.159.2)를, 그것도 없으면 PATH의 `codex`를 쓴다. 오래된 CLI(0.153.4)로 gpt-6.1-sol을 요청하면 서버가 "not supported when using Codex with a ChatGPT account"로 거부한다.
+- `codex-planner-bridge.js`는 `ClaudeCodeBridge`를 상속한다. 동시 호출 1개, 취소, stdout 상한, fail-closed 종료 처리, proposal 검증은 그대로 공유하고 argv, env, 출력 파싱만 다르다.
+- 실행 방식: `codex exec --json --ephemeral --ignore-user-config --ignore-rules -s read-only`, `approval_policy="never"`, `web_search="disabled"`, `project_doc_max_bytes=0`로 실행하고 shell, exec, plugins, apps, browser·computer use, multi_agent, memories, hooks를 `--disable`로 끈다. 작업 루트는 브리지 전용의 빈 0700 임시 디렉터리이고 close 때 지운다. env는 허용 목록과 `CODEX_HOME`만 넘기며, HALO는 Codex 로그인 정보를 읽지 않는다. 프롬프트는 stdin으로만 보낸다.
+- 확인된 한계(codex-cli 0.153.4 실측): shell은 사라지지만 `apply_patch`와 `request_user_input`은 여전히 노출된다. 파일 쓰기는 read-only sandbox와 approval "never"가 막는다. `--output-schema`는 Codex strict 모드가 optional 필드를 거부해서 쓰지 않으며, 대신 프롬프트와 `validateProposalEnvelope`로 막는다.
+- 실측 결과 gpt-5.5(약 5초)와 gpt-6-astra(약 8초), 그리고 번들 CLI 0.159.2로 실행한 gpt-6.1-sol(약 8초) 모두 low effort에서 유효한 proposal을 반환했고 usage도 기록됐다.

@@ -63,6 +63,16 @@ class BackgroundRuntimeClient {
     return this._ipc.on("taskEvent", (payload) => listener(payload.taskId, payload.snapshot, payload));
   }
 
+  // Content-free roster notices and team room events, re-broadcast by the
+  // service so an attached window sees the same pushes as a local one.
+  onAgentRosterEvent(listener) {
+    return this._ipc.on("agentRosterEvent", listener);
+  }
+
+  onRoomEvent(listener) {
+    return this._ipc.on("roomEvent", listener);
+  }
+
   onServiceNotice(listener) {
     return this._ipc.on("serviceNotice", listener);
   }

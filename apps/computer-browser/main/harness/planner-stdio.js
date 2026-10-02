@@ -44,6 +44,32 @@ class PlannerTransportError extends Error {
   }
 }
 
+function validatePlannerMcpActions(proposal) {
+  if (!contracts.isPlainObject(proposal) || proposal.kind !== "actions" || !Array.isArray(proposal.actions)) return;
+  const mcp = proposal.actions.filter((action) => contracts.isPlainObject(action) && typeof action.type === "string" && action.type.startsWith("mcp_"));
+  if (mcp.length === 0) return;
+  const invalid = () => { throw new PlannerTransportError("invalid_response", "planner MCP actions must be one exact mcp_* action per proposal"); };
+  if (mcp.length !== 1 || proposal.actions.length !== 1) invalid();
+  const action = mcp[0];
+  const allowed = {
+    mcp_search: ["type", "query"],
+    mcp_describe: ["type", "connectionId", "toolName"],
+    mcp_propose: ["type", "connectionId", "toolName", "arguments", "reason"],
+  }[action.type];
+  if (!allowed || Object.keys(action).some((key) => !allowed.includes(key)) || allowed.some((key) => !Object.hasOwn(action, key))) invalid();
+  if (action.type === "mcp_search") {
+    if (typeof action.query !== "string" || action.query.trim().length === 0 || Buffer.byteLength(action.query, "utf8") > 1024) invalid();
+    return;
+  }
+  if (typeof action.connectionId !== "string" || !action.connectionId || action.connectionId.length > 256 ||
+      typeof action.toolName !== "string" || !action.toolName || action.toolName.length > 256) invalid();
+  if (action.type === "mcp_describe") return;
+  try {
+    contracts.validateMcpProposal({ connectionId: action.connectionId, toolName: action.toolName, arguments: action.arguments });
+  } catch { invalid(); }
+  if (typeof action.reason !== "string" || action.reason.trim().length === 0 || action.reason.length > 2000) invalid();
+}
+
 // Only pass through what a plain worker process needs to actually run.
 // Never inherit the full parent environment.
 const ENV_ALLOWLIST = ["PATH", "HOME", "LANG", "TZ", "TMPDIR"];
@@ -275,6 +301,12 @@ class PlannerStdioAdapter {
       // the current request. Keep waiting for the real one (or the timeout).
       return;
     }
+    try {
+      validatePlannerMcpActions(parsed.proposal);
+    } catch (error) {
+      this._failInFlight(error);
+      return;
+    }
     // Multi-agent background runtime plan, Task 3: a child agent's planner
     // must never be able to spawn grandchildren. child_plan is a parent-only
     // proposal kind (see shared/harness-contracts.js); a child-role transport
@@ -378,4 +410,4 @@ class PlannerStdioAdapter {
   }
 }
 
-module.exports = { PlannerStdioAdapter, PlannerTransportError };
+module.exports = { PlannerStdioAdapter, PlannerTransportError, validatePlannerMcpActions };
