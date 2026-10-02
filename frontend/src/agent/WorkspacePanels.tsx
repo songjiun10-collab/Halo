@@ -20,7 +20,7 @@ function LimitEditor({ row, onSave, onCancel }: { row: UsageRow; onSave: (patch:
     <div className="hx-sched__g hx-xcols">
       <label>Token limit<input inputMode="numeric" aria-label={`${row.label} token limit`} placeholder="No limit" value={tokens} onChange={(e) => setTokens(e.target.value)} /></label>
       <label>Cost limit (USD)<input inputMode="decimal" aria-label={`${row.label} cost limit`} placeholder="No limit" value={cost} onChange={(e) => setCost(e.target.value)} /></label></div>
-    <p className="hx-ag__note">New tasks on {row.label} stop being admitted once either limit is reached. Leave a field blank for no limit.</p>
+    <p className="hx-ag__note">This is an alert only: once either limit is reached {row.label} is flagged here, but new tasks are still admitted and still use the planner. Leave a field blank for no limit.</p>
     {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
     <div className="hx-ag__actions"><button type="button" className="hx-agbtn" onClick={onCancel}>Cancel</button>
       <button type="button" className="hx-agbtn hx-agbtn--p" onClick={() => { try { onSave(limitPatch(tokens, cost)) } catch (e) { setErr((e as Error).message) } }}>Save limit</button></div></div>
@@ -149,7 +149,7 @@ export function RoutinePanel({ api, onOpenTask }: { api: WorkspaceApi; onOpenTas
     onSave={(d) => void run(() => api.saveRoutine(routineInput(d))).then(async (ok) => { if (ok) { setEdit(null); await load() } })} />
   return <>
     {list ? <RoutineList routines={list} onNew={() => setEdit(blankRoutine())} onEdit={(r) => setEdit(routineDraft(r))}
-      onDelete={(r) => void run(() => api.deleteRoutine(r.routineId)).then(load)}
+      onDelete={(r) => void run(() => api.deleteRoutine(r.routineId)).then((ok) => { if (ok) return load() })}
       onRun={(r) => void run(async () => { const { taskId } = await api.runRoutine(r.routineId, r.revision); onOpenTask(taskId) })} /> : err ? null : <p className="hx-ag__empty">Loading…</p>}
     {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
   </>

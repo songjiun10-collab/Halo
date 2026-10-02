@@ -31,6 +31,7 @@ const AGENT_COLORS = Object.freeze(["brown", "yellow", "blue", "gray", "red", "g
 // Multi-agent is the team parent's capability, never a single Agent's.
 const AGENT_CAPABILITIES = Object.freeze(["browser", "research", "computer_use"]);
 const MAX_TEAM_MEMBERS = 6;
+const ARCHIVED_HEADROOM = 10;
 const LIMITS = Object.freeze({ name: 64, title: 64, description: 1000, instructions: 2000 });
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -331,7 +332,10 @@ class AgentStore {
   _upsert(records, id, fields, limit, label) {
     const at = this._now();
     if (id === undefined) {
-      if (records.length >= limit) throw new AgentStoreError("limit_reached", `at most ${limit} ${label}s can be saved`);
+      // Archiving frees a slot (the UI counts active records only). A fixed
+      // multiple of the limit still bounds the file, archived records included.
+      if (records.filter((item) => !item.archived).length >= limit) throw new AgentStoreError("limit_reached", `at most ${limit} ${label}s can be active; archive one to make room`);
+      if (records.length >= limit * ARCHIVED_HEADROOM) throw new AgentStoreError("limit_reached", `too many archived ${label}s are stored`);
       const record = { id: randomUUID(), ...fields, generation: 1, createdAt: at, updatedAt: at, archived: false, pinned: false };
       records.push(record);
       return record;

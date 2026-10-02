@@ -399,3 +399,8 @@ test("room calls reach the TaskHost, and roster/room notices reach an attached c
   await service.stopService("test done");
   assert.equal(roomListeners.size, 0, "the service unsubscribes on stop");
 });
+
+test("the usage methods exposed to the UI are proxied through the background runtime", () => {
+  const { TASK_HOST_METHODS } = require("../main/harness/background-runtime-service");
+  for (const method of ["getUsage", "setUsageLimit", "syncUsage"]) assert.ok(TASK_HOST_METHODS.has(method), method);
+});

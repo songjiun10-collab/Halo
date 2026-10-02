@@ -192,9 +192,15 @@ class RoomOrchestrator {
         }
       })
       .then(async () => {
-        const waiting = round.ended === "turns" && !round.controller.signal.aborted && followUps < MAX_FOLLOW_UPS
+        let waiting = round.ended === "turns" && !round.controller.signal.aborted
           ? await this._waitingMessage(teamId, round.lastSeenId).catch(() => null)
           : null;
+        if (waiting && followUps >= MAX_FOLLOW_UPS) {
+          // At the cap a late message would otherwise be left unanswered with
+          // nothing scheduled: say so, and let the next message start a round.
+          await this._append(teamId, { author: "host", kind: "notice", text: "Follow-up limit reached for now; send another message to continue." }).catch(() => {});
+          waiting = null;
+        }
         await Promise.resolve(lock?.release()).catch(() => {});
         return waiting;
       })

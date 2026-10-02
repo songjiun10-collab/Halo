@@ -560,6 +560,12 @@ async function createWindow(socketPath, attachedClient = undefined) {
     launchAgent: getBackgroundLaunchAgent() ?? undefined,
     onNewWindow: async () => {
       const client = await connectRuntimeClient();
+      // Without the shared background runtime a new window would build a second
+      // local TaskHost over the same task, queue and roster storage, with its own
+      // active-task map and write chains. Refuse rather than let two hosts race.
+      if (client === undefined) {
+        throw Object.assign(new Error("a new window needs the background runtime; this window already owns the local task host"), { code: "runtime_required" });
+      }
       await createWindow(socketPath, client);
       return { opened: true };
     },

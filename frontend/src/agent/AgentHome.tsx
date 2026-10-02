@@ -57,6 +57,22 @@ function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: str
   }, [api])
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => api.onAgentRosterEvent(() => { void refresh() }), [api, refresh])
+  // Linked-task transitions reach the UI only as task events, never as roster
+  // notices, so the running/attention/unread dots would go stale. Refresh once
+  // (debounced) when a task's state changes, not on every action it takes.
+  useEffect(() => {
+    if (!api.onTaskEvent) return undefined
+    const seen = new Map<string, string>()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const off = api.onTaskEvent((event) => {
+      const key = `${event.snapshot.state}/${event.snapshot.pauseReason ?? ''}`
+      if (seen.get(event.taskId) === key) return
+      seen.set(event.taskId, key)
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => { timer = null; void refresh() }, 300)
+    })
+    return () => { off(); if (timer) clearTimeout(timer) }
+  }, [api, refresh])
 
   const owners = useMemo(() => Object.fromEntries([...agents, ...teams].map((x) => [x.id, x])), [agents, teams])
   const open = (owner: OwnerRef) => setV({ n: 'detail', owner })

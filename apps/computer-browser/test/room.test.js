@@ -353,3 +353,24 @@ test("a long log is read from its tail across chunk boundaries", async () => {
   assert.equal(messages.length, contracts.MAX_ROOM_MESSAGES);
   assert.deepEqual(messages.map((m) => Number(m.text.split(":")[0])), Array.from({ length: 500 }, (_, i) => i + 120));
 });
+
+test("a message left waiting at the follow-up cap is answered with a notice, and the next message starts a fresh round", async () => {
+  let posts = 0;
+  let h;
+  const speak = async () => {
+    posts += 1;
+    if (posts <= 4) await h.orchestrator.post(TEAM, `again ${posts}`); // lands after the speaker read the transcript
+    return { kind: "say", text: `reply ${posts}` };
+  };
+  h = await harness({ maxTurns: 1, replies: { [A]: [speak, speak, speak, speak, speak], [B]: [speak, speak, speak, speak, speak], [C]: [speak, speak, speak, speak, speak] } });
+  await h.orchestrator.post(TEAM, "start");
+  await h.orchestrator.idle(TEAM);
+  assert.equal(h.calls.length, 4, "the first round plus three follow-ups, then it stops");
+  const messages = await h.store.read(TEAM);
+  assert.equal(messages.filter((m) => m.kind === "notice" && /limit reached/i.test(m.text)).length, 1);
+  assert.equal(h.orchestrator.getRoundState(TEAM).active, false);
+
+  await h.orchestrator.post(TEAM, "continue please");
+  await h.orchestrator.idle(TEAM);
+  assert.ok(h.calls.length > 4, "a new message after the notice runs a new round");
+});

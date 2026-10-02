@@ -54,6 +54,8 @@ export interface AgentApi {
   getAgentRoster(): Promise<AgentRoster>
   setAgentPinned(input: { kind: OwnerKind; id: string; pinned: boolean }): Promise<AgentRecord | TeamRecord>
   onAgentRosterEvent(callback: (notice: RosterNotice) => void): () => void
+  /** Optional: the same preload task stream the session view uses; absent in minimal hosts. */
+  onTaskEvent?(callback: (event: { taskId: string; snapshot: { state: string; pauseReason?: string | null } }) => void): () => void
   listAgentSchedules(): Promise<ScheduleRecord[]>
   saveAgentSchedule(input: ScheduleInput): Promise<ScheduleRecord>
   deleteAgentSchedule(scheduleId: string): Promise<ScheduleRecord>

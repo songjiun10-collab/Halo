@@ -187,3 +187,21 @@ test("returned records are copies", async () => {
   agent.avatar.shape = "mutated";
   assert.equal((await store.getAgent(agent.id)).avatar.shape, AGENT_SHAPES[0]);
 });
+
+test("archiving frees an active slot, while total stored records stay bounded", async () => {
+  const store = new AgentStore({ storageRoot: await tempRoot(), maxAgents: 2, maxTeams: 1 });
+  const a = await store.saveAgent(agentInput());
+  await store.saveAgent(agentInput());
+  await assert.rejects(store.saveAgent(agentInput()), { code: "limit_reached" });
+  await store.archiveAgent(a.id);
+  await store.saveAgent(agentInput());
+  // 3 stored (1 archived, 2 active); keep cycling until the 10x backstop trips.
+  let stored = 3;
+  for (;;) {
+    const active = (await store.snapshot()).agents.filter((x) => !x.archived);
+    await store.archiveAgent(active[0].id);
+    try { await store.saveAgent(agentInput()); stored += 1; } catch (e) { assert.equal(e.code, "limit_reached"); break; }
+    assert.ok(stored <= 20, "total records must stop at maxAgents * 10");
+  }
+  assert.equal(stored, 20);
+});
