@@ -12,6 +12,7 @@ const { test } = require("node:test");
 
 const { CODEX_MODELS, CODEX_MODEL_IDS, DEFAULT_CODEX_MODEL, codexEffort } = require("../main/harness/providers/codex-models");
 const { CodexPlannerBridge, CODEX_DISABLED_FEATURES } = require("../main/harness/providers/codex-planner-bridge");
+const { createScreenshotAttachment } = require("../main/harness/computer-use-contract");
 const { parseCodexWorkerArgs, resolveCodexCommand, BUNDLED_CODEX_CLI } = require("../main/harness/providers/codex-planner-worker");
 const { PLANNER_PROVIDERS, PLANNER_PROVIDER_IDS, selectPlannerLaunch } = require("../main/harness/planner-providers");
 const { validateSettings } = require("../main/harness/host-settings");
@@ -38,7 +39,7 @@ test("the Codex model catalog is a frozen allowlist and effort never exceeds wha
 });
 
 test("codex_cli is an allowlisted planner provider that only takes Codex models", () => {
-  assert.deepEqual(PLANNER_PROVIDER_IDS, ["none", "claude_code", "codex_cli"]);
+  assert.deepEqual(PLANNER_PROVIDER_IDS, ["none", "claude_code", "codex_cli", "antigravity", "cursor", "nvidia", "opencode_cli"]);
   const worker = PLANNER_PROVIDERS.codex_cli.workerPath;
   assert.ok(fs.statSync(worker).isFile());
   assert.equal(PLANNER_PROVIDERS.codex_cli.usageProvider, "codex");
@@ -85,11 +86,11 @@ const CONTEXT = {
 };
 const PROPOSAL = { taskId: CONTEXT.taskId, goalVersion: 1, basedOnObservationId: "obs-1", criterionIds: ["C1"], kind: "actions", actions: [{ type: "observe" }] };
 
-function run(bridge) {
+function run(bridge, context = CONTEXT, options = {}) {
   let captured;
   const child = fakeChild();
   bridge._spawnFn = (command, args, options) => { captured = { command, args, options }; return child; };
-  const pending = bridge.start(CONTEXT);
+  const pending = bridge.start(context, options);
   return { pending, child, get captured() { return captured; } };
 }
 
@@ -132,6 +133,47 @@ test("the bridge runs codex exec locked down, with the prompt on stdin and only 
     if (savedKey === undefined) delete process.env.HALO_APPROVER_KEY; else process.env.HALO_APPROVER_KEY = savedKey;
     await bridge.close();
   }
+});
+
+test("Codex subscription bridge attaches only the host-bound private screenshot through --image", async () => {
+  const obs = { id: "33333333-3333-4333-8333-333333333333", documentEpoch: 4, url: "https://example.test/", title: "", elements: [] };
+  const image = await createScreenshotAttachment({
+    png: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2]),
+    taskId: CONTEXT.taskId,
+    agentId: null,
+    observation: obs,
+    viewport: { width: 1440, height: 900 },
+    capturedAt: 1,
+  });
+  const context = { ...CONTEXT, observation: { ...obs, computerUse: { ...image.binding } } };
+  const proposal = { ...PROPOSAL, basedOnObservationId: obs.id };
+  const bridge = new CodexPlannerBridge({ model: "gpt-5.5" });
+  try {
+    const r = run(bridge, context, { attachments: [{ kind: "image", id: image.attachment.id, path: image.attachment.path }] });
+    for (let attempt = 0; attempt < 20 && !r.captured; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(r.captured, "Codex process should spawn after validating the private screenshot");
+    const imageIndex = r.captured.args.indexOf("--image");
+    assert.ok(imageIndex >= 0);
+    assert.equal(r.captured.args[imageIndex + 1], image.attachment.path);
+    const prompt = r.child.stdin.written.join("");
+    assert.equal(prompt.includes(image.attachment.path), false, "filesystem path must not be inserted into prompt text");
+    r.child.stdout.emit("data", `${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(proposal) } })}\n`);
+    r.child.emit("close", 0);
+    assert.deepEqual(await r.pending, proposal);
+  } finally {
+    await image.attachment.dispose();
+    await bridge.close();
+  }
+});
+
+test("Codex rejects an unsafe or observation-mismatched image before spawning", async () => {
+  const bridge = new CodexPlannerBridge({ model: "gpt-5.5" });
+  let spawns = 0;
+  bridge._spawnFn = () => { spawns += 1; return fakeChild(); };
+  try {
+    await assert.rejects(bridge.start(CONTEXT, { attachments: [{ kind: "image", id: "22222222-2222-4222-8222-222222222222", path: "/tmp/untrusted.png" }] }), { code: "computer_use_provider_unavailable" });
+    assert.equal(spawns, 0);
+  } finally { await bridge.close(); }
 });
 
 test("a Codex turn failure or a non-proposal message is never turned into a proposal", async () => {

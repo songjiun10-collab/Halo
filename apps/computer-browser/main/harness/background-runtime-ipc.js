@@ -254,6 +254,7 @@ class RuntimeIpcServer {
     this._onCall = onCall;
     this._net = netModule || net;
     this._server = null;
+    this._ownsSocket = false;
     this._clients = new Map(); // socket -> { authenticated, clientId, decoder }
   }
 
@@ -261,16 +262,30 @@ class RuntimeIpcServer {
     const socketDir = path.dirname(this._socketPath);
     await prepareSocketDir(socketDir, { socketRoot: this._socketRoot });
     await removeStaleSocket(this._socketPath);
-    await new Promise((resolve, reject) => {
-      this._server = this._net.createServer((socket) => this._handleConnection(socket));
-      const onError = (error) => reject(error);
-      this._server.once("error", onError);
-      this._server.listen(this._socketPath, () => {
-        this._server.removeListener("error", onError);
-        resolve();
+    const server = this._net.createServer((socket) => this._handleConnection(socket));
+    this._server = server;
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = (error) => reject(error);
+        server.once("error", onError);
+        server.listen(this._socketPath, () => {
+          server.removeListener("error", onError);
+          this._ownsSocket = true;
+          resolve();
+        });
       });
-    });
-    await fsp.chmod(this._socketPath, 0o600);
+      await fsp.chmod(this._socketPath, 0o600);
+    } catch (error) {
+      if (this._server === server) this._server = null;
+      if (server.listening) {
+        await new Promise((resolve) => server.close(() => resolve()));
+      }
+      if (this._ownsSocket) {
+        this._ownsSocket = false;
+        await fsp.unlink(this._socketPath).catch(() => {});
+      }
+      throw error;
+    }
   }
 
   _handleConnection(socket) {
@@ -357,11 +372,15 @@ class RuntimeIpcServer {
   async close() {
     for (const socket of this._clients.keys()) socket.destroy();
     this._clients.clear();
-    if (this._server) {
-      await new Promise((resolve) => this._server.close(() => resolve()));
-      this._server = null;
+    const server = this._server;
+    this._server = null;
+    if (server?.listening) {
+      await new Promise((resolve) => server.close(() => resolve()));
     }
-    await fsp.unlink(this._socketPath).catch(() => {});
+    if (this._ownsSocket) {
+      this._ownsSocket = false;
+      await fsp.unlink(this._socketPath).catch(() => {});
+    }
   }
 }
 

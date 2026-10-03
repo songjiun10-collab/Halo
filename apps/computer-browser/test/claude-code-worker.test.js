@@ -91,7 +91,18 @@ test("processes multiple sequential request lines in order", async () => {
   );
 });
 
-test("a bridge rejection writes nothing to stdout and only logs to stderr -- planner-stdio.js has no error frame, so this deliberately lets its own 60s timeout surface the failure as planner_error, exactly like any other broken planner", async () => {
+test("providers without an explicit image route fail closed instead of receiving screenshot paths", async () => {
+  const { stdin, stdout, stderr, stdoutChunks } = makeStreams();
+  let starts = 0;
+  const bridge = { start: async () => { starts += 1; return { kind: "finish" }; } };
+  createWorkerLoop({ stdin, stdout, stderr, bridge });
+  writeLine(stdin, { requestId: "image", context: {}, attachments: [{ kind: "image", id: "22222222-2222-4222-8222-222222222222", path: "/tmp/halo-computer-use-x/observation.png" }] });
+  await flush();
+  assert.equal(starts, 0);
+  assert.deepEqual(JSON.parse(stdoutChunks.join("")), { requestId: "image", error: { code: "computer_use_provider_unavailable" } });
+});
+
+test("a bridge rejection returns a correlated bounded error without leaking CLI diagnostics", async () => {
   const { stdin, stdout, stderr, stdoutChunks, stderrChunks } = makeStreams();
   let call = 0;
   const bridge = {
@@ -106,9 +117,10 @@ test("a bridge rejection writes nothing to stdout and only logs to stderr -- pla
   writeLine(stdin, { requestId: "fail-1", context: {} });
   await flush();
 
-  assert.equal(stdoutChunks.join(""), "");
+  assert.deepEqual(JSON.parse(stdoutChunks.join("")), { requestId: "fail-1", error: { code: "planner_failed" } });
   assert.ok(stderrChunks.join("").includes("fail-1"));
-  assert.ok(stderrChunks.join("").includes("boom"));
+  assert.ok(!stderrChunks.join("").includes("boom"));
+  stdoutChunks.length = 0;
 
   // The loop itself must not crash/hang: a later, successful request on the
   // same (persistent) worker process still gets a real response.

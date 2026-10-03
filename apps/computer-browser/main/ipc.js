@@ -7,9 +7,7 @@ const registries = new WeakMap();
 
 // Exactly the method surface preload exposes as window.haloBrowser. No
 // channel here accepts a raw path/eval/shell string -- every argument is
-// whatever ControlApi's own method signature validates. Unchanged since
-// before the long-horizon harness: no taskId, no trusted-sender gate (this
-// predates that requirement and governs only the single legacy demo task).
+// whatever ControlApi's own method signature validates.
 const LEGACY_METHODS = [
   "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask", "takeOverTask",
   "goBack", "goForward", "reload", "newTab", "selectTab", "closeTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
@@ -32,6 +30,8 @@ const HARNESS_METHODS = {
   "halo:getTaskDetail": "getTaskDetail",
   "halo:taskApprove": "approveTask",
   "halo:taskDeny": "denyTask",
+  "halo:taskLend": "lendTask",
+  "halo:taskRevokeLease": "revokeTaskLease",
   "halo:taskPause": "pauseTask",
   "halo:taskStop": "stopTask",
   "halo:taskTakeOver": "takeOverTask",
@@ -156,15 +156,11 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
 
   // ipcMain is process-global, not window-local. Register each channel once
   // and route it to the BrowserWindow whose trusted main frame invoked it.
-  // Preserve the legacy single-window fallback, but never use it for task or
-  // window-creation capabilities.
-  const findContext = (event, allowSingleLegacyFallback = false) => {
+  const findContext = (event) => {
     for (const candidate of registry.contexts.values()) {
       if (isTrustedSender(event, candidate.win)) return candidate;
     }
-    return allowSingleLegacyFallback && registry.contexts.size === 1
-      ? registry.contexts.values().next().value
-      : null;
+    return null;
   };
   const addHandler = (channel, handler) => {
     if (registry.channels.has(channel)) return;
@@ -175,7 +171,7 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
   for (const method of LEGACY_METHODS) {
     const channel = `halo:${method}`;
     addHandler(channel, (event, ...args) => {
-      const owner = findContext(event, true);
+      const owner = findContext(event);
       if (!owner) return Promise.reject(new Error(`${channel}: no owning HALO window`));
       return owner.controlApi[method](...args);
     });

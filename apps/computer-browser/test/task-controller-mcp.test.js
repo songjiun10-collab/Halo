@@ -248,7 +248,7 @@ test("an approval that goes stale (expiry) before approve() never dispatches", a
   const { store } = await makeStore();
   let clock = Date.now();
   const provider = fakeProvider();
-  const controller = makeController(store, { now: () => clock, makeMcpBroker: brokerFactory(provider) });
+  const controller = makeController(store, { now: () => clock, monotonicNow: () => clock, makeMcpBroker: brokerFactory(provider) });
   const pending = settled(controller.proposeMcpCall(REQUEST));
   const item = await queuedMcp(controller);
   clock += 61_000;

@@ -78,6 +78,8 @@ function makeFakeTaskHost() {
     getTaskDetail: record("getTaskDetail"),
     approveTask: record("approveTask"),
     denyTask: record("denyTask"),
+    lendTask: record("lendTask"),
+    revokeTaskLease: record("revokeTaskLease"),
     pauseTask: record("pauseTask"),
     stopTask: record("stopTask"),
     takeOverTask: record("takeOverTask"),
@@ -169,15 +171,17 @@ test("one process-global IPC handler routes multiple Halo windows to their own b
   assert.equal(ipcMain._has("halo:navigate"), false, "closing the final window releases process-global handlers");
 });
 
-test("legacy channels work even from an untrusted sender (unchanged behavior -- not newly gated)", async () => {
+test("legacy channels reject an untrusted sender instead of falling back to the only window", async () => {
   const ipcMain = makeFakeIpcMain();
   const win = makeFakeWin();
   const controlApi = makeFakeControlApi();
+  let navigations = 0;
+  controlApi.navigate = async (url) => { navigations += 1; return { navigated: url }; };
 
   registerIpc(win, controlApi, { ipcMain });
 
-  const result = await ipcMain._invoke("halo:navigate", untrustedEvent(), "https://example.com");
-  assert.deepEqual(result, { navigated: "https://example.com" });
+  await assert.rejects(() => ipcMain._invoke("halo:navigate", untrustedEvent(), "https://example.com"), /no owning HALO window/);
+  assert.equal(navigations, 0, "an unrelated frame must not reach privileged legacy methods");
 });
 
 test("registerIpc without a taskHost does not register any harness channel", () => {
@@ -201,6 +205,8 @@ test("harness channels dispatch to taskHost for a trusted sender", async () => {
   await ipcMain._invoke("halo:confirmCriterion", trustedEvent(win), "task-1", { criterionId: "c1" });
   await ipcMain._invoke("halo:taskApprove", trustedEvent(win), "task-1", "req-1");
   await ipcMain._invoke("halo:taskDeny", trustedEvent(win), "task-1", "req-1");
+  await ipcMain._invoke("halo:taskLend", trustedEvent(win), "task-1", "req-1", { minutes: 5, uses: 1 });
+  await ipcMain._invoke("halo:taskRevokeLease", trustedEvent(win), "task-1", "lease-1");
   await ipcMain._invoke("halo:taskPause", trustedEvent(win), "task-1");
   await ipcMain._invoke("halo:taskStop", trustedEvent(win), "task-1");
   await ipcMain._invoke("halo:taskTakeOver", trustedEvent(win), "task-1", "user_takeover");
@@ -214,7 +220,7 @@ test("harness channels dispatch to taskHost for a trusted sender", async () => {
 
   assert.deepEqual(
     taskHost.calls.map((c) => c[0]),
-    ["createTask", "amendTask", "confirmCriterion", "approveTask", "denyTask", "pauseTask", "stopTask", "takeOverTask", "resumeSavedTask", "getTaskDetail", "listTasks", "getTaskEvents", "getTaskBrowser", "taskBrowserAction", "setTaskViewport"],
+    ["createTask", "amendTask", "confirmCriterion", "approveTask", "denyTask", "lendTask", "revokeTaskLease", "pauseTask", "stopTask", "takeOverTask", "resumeSavedTask", "getTaskDetail", "listTasks", "getTaskEvents", "getTaskBrowser", "taskBrowserAction", "setTaskViewport"],
   );
 });
 
@@ -313,6 +319,8 @@ test("every harness channel rejects a request from an untrusted (non-main-frame)
     ["halo:getTaskDetail", ["task-1"]],
     ["halo:taskApprove", ["task-1", "req-1"]],
     ["halo:taskDeny", ["task-1", "req-1"]],
+    ["halo:taskLend", ["task-1", "req-1", { minutes: 5, uses: 1 }]],
+    ["halo:taskRevokeLease", ["task-1", "lease-1"]],
     ["halo:taskPause", ["task-1"]],
     ["halo:taskStop", ["task-1"]],
     ["halo:taskTakeOver", ["task-1", "user_takeover"]],

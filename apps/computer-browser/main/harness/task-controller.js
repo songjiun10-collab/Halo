@@ -21,11 +21,14 @@
 const { randomUUID } = require("node:crypto");
 const { AsyncLocalStorage } = require("node:async_hooks");
 const contracts = require("../../shared/harness-contracts");
-const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
+const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal, isQuickProfile } = require("../../shared/harness-profile");
+const { adaptiveEffort } = require("./planner-effort-policy");
 const { buildContext } = require("./context-builder");
 const { ContextRefCatalog } = require("./context-refs");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
 const { isReadOnlyAction } = require("./permission-policy");
+const { evaluateGate, actionTargetOrigin } = require("./action-gate");
+const { LEASE_ACTIONS, lendTerms, createLease, isLeaseLive, LeaseError } = require("./capability-lease");
 
 class TaskControllerError extends Error {
   constructor(code, message) {
@@ -56,6 +59,18 @@ function describeActionTarget(action, lastObservation) {
     const amount = action.amount !== undefined ? String(action.amount) : "?";
     return `${direction} ${amount}`;
   }
+  if (["click", "type", "submit_form"].includes(action.type)) {
+    const element = lastObservation?.elements?.find((el) => el.elementId === action.elementId);
+    if (!element) return `unknown element ${String(action.elementId).slice(0, 32)}`;
+    const identity = `${element.role || "element"} ${JSON.stringify(element.name || "")} [${element.elementId}]`;
+    if (action.type === "type") return `${identity}; replace text with ${JSON.stringify(action.text)}`;
+    const destination = element.formAction ? `${(element.formMethod || "get").toUpperCase()} ${element.formAction}` : element.href;
+    return destination ? `${identity}; ${destination}` : identity;
+  }
+  if (["click_at", "type_at"].includes(action.type)) {
+    const point = `(${Math.round(Number(action.x) * 100)}%, ${Math.round(Number(action.y) * 100)}%)`;
+    return action.type === "type_at" ? `screenshot ${lastObservation?.id || action.observationId} ${point}; insert ${JSON.stringify(action.text)}` : `screenshot ${lastObservation?.id || action.observationId} ${point}`;
+  }
   return null;
 }
 
@@ -75,10 +90,31 @@ function observationKey(observation) {
   }
 }
 
+// Capability adapters are host-validated as part of the durable task profile.
+// Team parents include CUA; child profiles do not, preserving their
+// observe-only boundary while allowing the parent to request human review.
+function hasComputerUseAdapter(taskProfile) {
+  return Array.isArray(taskProfile?.capability?.adapters) &&
+    taskProfile.capability.adapters.some((adapter) => adapter?.capabilityId === "computer_use");
+}
+
+function hasMultiAgentCapability(taskProfile) {
+  return ["multi_agent", "multi_agent_computer_use"].includes(taskProfile?.capability?.id);
+}
+
 // Long-profile goal persistence: total finish proposals the host will reject
 // (criteria still unmet, all machine-verifiable) before pausing for a human.
 const GOAL_MAX_REJECTED_FINISHES = 5;
 const NAV_VISITED_MAX = 32;
+// Consecutive scrolls on one page after which the task pauses as no_progress.
+const PLANNER_RETRYABLE_CODES = ["invalid_proposal", "invalid_proposal_json"];
+const SCROLL_STREAK_LIMIT = 6;
+// Planner turns spent on one page (query and hash ignored) within the recent window.
+const PAGE_LOOP_WINDOW = 12;
+const PAGE_LOOP_LIMIT = 8;
+const ERROR_URLS_KEPT = 5;
+const OBSERVE_STALE_RETRIES = 2;
+const OBSERVE_RETRY_DELAY_MS = 400;
 const NAV_FRONTIER_MAX = 32;
 const NAV_URL_MAX_CHARS = 512;
 const NAV_NAME_MAX_CHARS = 80;
@@ -148,11 +184,14 @@ class TaskController {
     hostVerifier,
     memoryMonitor,
     now,
+    monotonicNow,
     segmentRotationCalls,
     noProgressThreshold,
     memoryStore,
     permissionMode = "browse",
+    observeRetryDelayMs = OBSERVE_RETRY_DELAY_MS,
     plannerEffort = "medium",
+    adaptiveEffort: adaptiveEffortEnabled = false,
     onChildPlan,
     sendMessage,
     listPendingMessages,
@@ -311,16 +350,29 @@ class TaskController {
     const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
     if (!PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_config", "permissionMode is invalid");
     this._permissionMode = permissionMode;
+    this._observeRetryDelayMs = Number.isFinite(observeRetryDelayMs) && observeRetryDelayMs >= 0 ? observeRetryDelayMs : OBSERVE_RETRY_DELAY_MS;
     this._plannerEffort = plannerEffort;
+    this._adaptiveEffort = adaptiveEffortEnabled === true;
+    this._seenUrls = new Set();
+    this._lastActionType = undefined;
+    this._lastActionStatus = undefined;
+    this._easyStreak = 0;
     this._evaluateActionPolicy = evaluateActionPolicy;
     this._browser.setPermissionMode?.(permissionMode);
     this._now = typeof now === "function" ? now : Date.now;
+    this._monotonicNow = typeof monotonicNow === "function"
+      ? monotonicNow
+      : () => Number(process.hrtime.bigint()) / 1_000_000;
     this._segmentRotationCalls =
       typeof segmentRotationCalls === "number" ? segmentRotationCalls : contracts.SEGMENT_ROTATION_CALLS;
     this._noProgressThreshold =
       typeof noProgressThreshold === "number" ? noProgressThreshold : contracts.NO_PROGRESS_REPLAN_THRESHOLD;
 
     this._goal = store.getGoal();
+    // Leases live only as long as this controller: a restarted task starts
+    // with none, which is stricter than replaying them from the journal.
+    this._leases = [];
+    this._browser.setIntentLock?.(this._goal.lock ?? null);
     this._epoch = 0;
     this._loopRunning = false;
     this._plannerAborter = null;
@@ -356,6 +408,9 @@ class TaskController {
     this._segment = { index: 0, callsInSegment: 0 };
     this._criteriaStatus = new Map(); // criterionId -> {status, evidenceId}
     this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
+    this._scrollStreak = { url: null, count: 0 };
+    this._recentPages = [];
+    this._errorUrls = [];
     this._approvalQueue = [];
     this._lastObservation = null;
     this._pendingMcpObservation = null;
@@ -452,6 +507,22 @@ class TaskController {
     return this._harnessProfile;
   }
 
+  // Adaptive thinking (see planner-effort-policy.js adaptiveEffort): only when
+  // the host runs effort mode "auto"; "fixed" always uses the configured effort.
+  _effectivePlannerEffort(pendingMessages, url) {
+    const revisit = typeof url === "string" && this._seenUrls.has(url);
+    if (typeof url === "string") this._seenUrls.add(url);
+    if (!this._adaptiveEffort) return this._plannerEffort;
+    return adaptiveEffort({
+      base: this._plannerEffort,
+      lastActionType: this._lastActionType,
+      lastActionOk: this._lastActionStatus === "ok",
+      revisit,
+      pendingMessages: Boolean(pendingMessages && pendingMessages.length > 0),
+      easyStreak: this._easyStreak,
+    });
+  }
+
   setPolicySettings({ permissionMode, plannerEffort } = {}) {
     const { PERMISSION_MODES } = require("./permission-policy");
     const allowedEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
@@ -463,6 +534,7 @@ class TaskController {
   }
 
   getSnapshot() {
+    this._pruneLeases();
     return {
       state: this._task.state,
       pauseReason: this._task.pauseReason,
@@ -470,8 +542,20 @@ class TaskController {
       budgets: { ...this._budgets },
       segment: { ...this._segment },
       criteriaStatus: [...this._criteriaStatus.entries()].map(([criterionId, v]) => ({ criterionId, ...v })),
-      approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null })),
+      approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor, widen, leaseOffer }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null, widen: !!widen, leaseOffer: leaseOffer ?? null })),
+      leases: this._terminal()
+        ? []
+        : this._leases.filter((l) => isLeaseLive(l, this._monotonicNow())).map(({ id, action, origin, expiresAt, usesLeft }) => ({ id, action, origin, expiresAt, usesLeft })),
     };
+  }
+
+  _pruneLeases(now = this._monotonicNow()) {
+    // Expired/consumed leases are already inert; retaining them forever makes
+    // a long-running task's every gate scan grow with its entire history.
+    // Keep only live leases and revocations whose durable journal append must
+    // still be retried.
+    this._leases = this._leases.filter((lease) =>
+      (lease.revoked && !lease.revocationRecorded) || isLeaseLive(lease, now));
   }
 
   onChange(listener) {
@@ -532,9 +616,24 @@ class TaskController {
     if (typeof this._browser.userNavigate !== "function") {
       throw new TaskControllerError("browser_unavailable", "this task browser does not support user navigation");
     }
+    return this.runUserControlled(() => this._browser.userNavigate(action));
+  }
+
+  // Hold the same admission gate and transition drain for a complete trusted
+  // human-only browser operation (for example vault decrypt + credential fill).
+  // Otherwise resume() could hand the task back to the agent while an earlier
+  // isUserControlled() check is still waiting on asynchronous host work.
+  async runUserControlled(operation) {
+    this._checkAdmission();
+    if (typeof operation !== "function") {
+      throw new TaskControllerError("invalid_operation", "a trusted user-controlled operation is required");
+    }
+    if (!this.isUserControlled()) {
+      throw new TaskControllerError("invalid_state", "take over the task before using its browser");
+    }
     this._admissionOpen = false;
     try {
-      return await this._trackInFlight(Promise.resolve().then(() => this._browser.userNavigate(action)));
+      return await this._trackInFlight(Promise.resolve().then(operation));
     } finally {
       // A concurrent stop/takeover owns the gate until its drain finishes.
       if (this._pendingTransitions === 0) this._admissionOpen = true;
@@ -632,6 +731,11 @@ class TaskController {
         if (isMcpItem(item)) item.mcp.settle({ allowed: false });
       }
     }
+    // Stop and takeOver hand control back to the person: every lent
+    // permission ends with them. Revoked before the drain so an in-flight
+    // loop can no longer spend one (_useLease re-checks after its append).
+    // A plain pause leaves leases to their own time box.
+    if (cancelQueue) await this._revokeAllLeases(finalState === "stopped" ? "task_ended" : "taken_over");
     if (this._plannerShutdownRequired || this._planner.isTerminating?.()) {
       // Cancellation invalidates the proposal immediately, but control must
       // not reopen while its worker is still using the user's model account.
@@ -670,9 +774,9 @@ class TaskController {
   // action_outcome, _afterActionDispatched may still append evidence and
   // checkpoint progress. A transition must wait for that tail too, not just
   // for browser.execute() to finish.
-  async _dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch, { durable = true } = {}) {
+  async _dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch, { durable = true, widenedBy = null } = {}) {
     const op = (async () => {
-      const result = await this._dispatchApproved(descriptor, action, epoch, { durable });
+      const result = await this._dispatchApproved(descriptor, action, epoch, { durable, widenedBy });
       if (this._stopHappenedSince(epoch)) return { stale: true, result };
       if (result.status === "uncertain") {
         await this._pauseWith("execution_uncertain");
@@ -960,6 +1064,9 @@ class TaskController {
     }
     const nextGoal = await this._store.amendGoal(amendmentInput);
     this._goal = nextGoal;
+    this._browser.setIntentLock?.(nextGoal.lock ?? null);
+    // The intent changed, so every lent permission is taken back.
+    await this._revokeAllLeases("goal_amended", { durable: true });
     // A goal amendment invalidates any stale in-flight proposal/approval
     // tied to the old goalVersion (design doc section 7).
     this._epoch += 1;
@@ -1028,6 +1135,7 @@ class TaskController {
         const completion = canComplete(this._goal, this._evidenceForCompletionCheck());
         if (completion.complete) {
           this._task = { state: "completed", pauseReason: null };
+          await this._revokeAllLeases("task_ended");
           await this._checkpoint();
         }
       } else {
@@ -1058,7 +1166,7 @@ class TaskController {
     // goal/epoch, so it must be dropped -- exactly like a deny() -- rather
     // than dispatched against a goal or execution context it no longer
     // corresponds to.
-    if (this._stopHappenedSince(item.epoch) || this._now() >= item.expiresAt) {
+    if (this._stopHappenedSince(item.epoch) || this._monotonicNow() >= item.deadline) {
       this._emit();
       if (wasAwaitingApproval) return this._runLoop();
       return this.getSnapshot();
@@ -1069,7 +1177,13 @@ class TaskController {
       const outcome = await this._runApprovedReadOnlyBatch(item.proposal, item.actions, epoch);
       if (outcome === "stop_loop" || this._stopHappenedSince(epoch)) return this.getSnapshot();
     } else {
-      const dispatched = await this._dispatchApprovedAndApplyTracked(item.proposal, item.descriptor, item.action, epoch);
+      // The user clicked for this very request, so a widened item runs once
+      // even if the lease they just lent were somehow no longer live.
+      const leased = item.useLease ? await this._useLease(this._leases.find((l) => l.id === item.useLease), item.id) : null;
+      // The grant names the origin the user saw, so the browser refuses to
+      // land anywhere else (a re-resolved link or a redirect).
+      const widenedBy = leased ?? (item.widen ? { kind: "user_once", ...(item.targetOrigin ? { origin: item.targetOrigin } : {}) } : null);
+      const dispatched = await this._dispatchApprovedAndApplyTracked(item.proposal, item.descriptor, item.action, epoch, { widenedBy });
       if (dispatched.stale || this._stopHappenedSince(epoch)) return this.getSnapshot();
     }
     if (this._task.state === "running") return this._runLoop();
@@ -1097,6 +1211,131 @@ class TaskController {
     }
     this._emit();
     return this.getSnapshot();
+  }
+
+  // Lend: the user turns one queued request into a short, scoped lease. The
+  // request itself is approved and counts as the lease's first use.
+  async lend(requestId, terms) {
+    this._checkAdmission();
+    // Keep the whole user operation admitted, not only lease_granted. If a
+    // transition closes admission between the durable grant and the request's
+    // final disposition, its request_stale revocation must also land before
+    // the transition checkpoints or closes the TaskStore.
+    return this._trackInFlight(this._lend(requestId, terms));
+  }
+
+  async _lend(requestId, terms) {
+    const item = this._approvalQueue.find((q) => q.id === requestId);
+    // One lease per request: a second, concurrent lend finds it taken.
+    if (!item || isMcpItem(item) || item.actions || !item.leaseOffer || item.lending || item.useLease) {
+      throw new TaskControllerError("lease_unavailable", "this request cannot be lent as a lease");
+    }
+    let parsed;
+    try {
+      if (terms !== null && terms !== undefined && !contracts.isPlainObject(terms)) {
+        throw new LeaseError("invalid_lease_terms", "lease terms must be an object");
+      }
+      parsed = lendTerms(terms ?? undefined);
+    } catch (error) {
+      if (error instanceof LeaseError) throw new TaskControllerError(error.code, error.message);
+      throw new TaskControllerError("invalid_lease_terms", "lease terms are invalid");
+    }
+    const fresh = () => !this._stopHappenedSince(item.epoch) && this._monotonicNow() < item.deadline;
+    // A stale item is dropped by approve(); it never earns a lease.
+    if (!fresh()) return this.approve(requestId);
+    item.lending = true;
+    const lease = createLease({
+      id: randomUUID(),
+      taskId: this._goal.taskId,
+      action: item.leaseOffer.action,
+      origin: item.leaseOffer.origin,
+      now: this._monotonicNow(),
+      wallNow: this._now(),
+      ...parsed,
+    });
+    try {
+      // Tracked so a concurrent transition drains the grant before it checkpoints.
+      await this._trackInFlight(this._store.append({ type: "lease_granted", payload: { leaseId: lease.id, action: lease.action, origin: lease.origin, expiresAt: lease.expiresAt, uses: parsed.uses } }));
+    } catch (error) {
+      item.lending = false;
+      throw error;
+    }
+    this._leases.push(lease);
+    // Anything may have happened while the grant was written: a pause/stop,
+    // the request expiring or leaving the queue. Then the lease goes too.
+    if (!this._admissionOpen || !fresh() || !this._approvalQueue.includes(item)) {
+      await this._revokeLeaseQuietly(lease, "request_stale");
+      if (!this._admissionOpen) throw new TaskControllerError("admission_closed", "a pause/stop/takeOver transition is in progress");
+      if (!this._approvalQueue.includes(item)) return this.getSnapshot();
+      return this.approve(requestId);
+    }
+    item.useLease = lease.id;
+    try {
+      return await this.approve(requestId);
+    } catch (error) {
+      await this._revokeLeaseQuietly(lease, "request_stale");
+      throw error;
+    }
+  }
+
+  async revokeLease(leaseId) {
+    const lease = this._leases.find((l) => l.id === leaseId);
+    if (lease && (!lease.revoked || !lease.revocationRecorded)) {
+      // A user revocation is a durable write just like a lease grant/use.
+      // Register it before yielding so a concurrent stop/takeOver/amend drains
+      // the record before its terminal checkpoint or storage teardown.
+      await this._trackInFlight(this._revokeLease(lease, "user"));
+      this._emit();
+    }
+    return this.getSnapshot();
+  }
+
+  // Marked revoked in memory first, so nothing can spend it while the
+  // record is written.
+  async _revokeLease(lease, reason, { durable = true } = {}) {
+    if (lease.revocationRecorded) return;
+    if (lease.revocationPromise) return lease.revocationPromise;
+    lease.revoked = true;
+    const append = this._store.append({ type: "lease_revoked", payload: { leaseId: lease.id, reason } }, { durable })
+      .then(() => { lease.revocationRecorded = true; });
+    lease.revocationPromise = append;
+    try {
+      await append;
+    } finally {
+      if (lease.revocationPromise === append) lease.revocationPromise = null;
+    }
+  }
+
+  // Cleanup path for a failure already being reported: the lease is dead in
+  // memory either way; a failed record must not mask the original error.
+  async _revokeLeaseQuietly(lease, reason) {
+    try {
+      await this._revokeLease(lease, reason);
+    } catch {
+      lease.revoked = true;
+    }
+  }
+
+  // durable:false by default: callers checkpoint right after, which flushes it.
+  async _revokeAllLeases(reason, { durable = false } = {}) {
+    for (const lease of this._leases.filter((l) => isLeaseLive(l, this._monotonicNow()) || (l.revoked && !l.revocationRecorded))) {
+      await this._revokeLease(lease, reason, { durable });
+    }
+  }
+
+  // The use is reserved synchronously (so two concurrent callers cannot both
+  // spend the last one) and journaled durably BEFORE the action runs: a crash
+  // mid-action can never hand the use back. A lease revoked while the record
+  // was written runs nothing; its use stays spent (fail closed). A dead lease
+  // returns null and runs nothing.
+  async _useLease(lease, requestId) {
+    if (!lease || !isLeaseLive(lease, this._monotonicNow())) return null;
+    lease.usesLeft -= 1;
+    await this._store.append({ type: "lease_used", payload: { leaseId: lease.id, requestId } });
+    // The reservation remains spent, but a lease that expired while its
+    // durable use record was being written no longer authorizes dispatch.
+    if (lease.revoked || this._monotonicNow() >= lease.deadline) return null;
+    return { kind: "lease", leaseId: lease.id, origin: lease.origin };
   }
 
   // --- generic MCP (host-scoped; see docs/superpowers/specs/2026-09-30-generic-mcp-broker-design.md) ---
@@ -1291,6 +1530,7 @@ class TaskController {
     const { signal } = request;
     const target = `${String(request.server).slice(0, 64)}/${String(request.toolName).slice(0, 128)}`;
     const createdAt = this._now();
+    const deadline = this._monotonicNow() + contracts.APPROVAL_EXPIRY_MS;
     return new Promise((resolve) => {
       let settled = false;
       const onAbort = () => {
@@ -1313,6 +1553,7 @@ class TaskController {
         epoch: token.epoch,
         goalVersion: token.goalVersion,
         expiresAt: createdAt + contracts.APPROVAL_EXPIRY_MS,
+        deadline,
         descriptor: { target },
         mcp: {
           token,
@@ -1342,7 +1583,7 @@ class TaskController {
 
   async _approveMcp(item) {
     const { settle, token } = item.mcp;
-    if (this._stopHappenedSince(item.epoch) || this._now() >= item.expiresAt ||
+    if (this._stopHappenedSince(item.epoch) || this._monotonicNow() >= item.deadline ||
         item.goalVersion !== this._goal.goalVersion || this._terminal()) {
       settle({ allowed: false });
       this._emit();
@@ -1418,7 +1659,7 @@ class TaskController {
     this._plannerAborter.abort();
   }
 
-  async _nextPlanner(context) {
+  async _nextPlanner(context, plannerOptions = {}) {
     const aborter = new AbortController();
     this._plannerAborter = aborter;
     let onAbort;
@@ -1429,7 +1670,7 @@ class TaskController {
     try {
       // Fence non-cooperative injected planners too. Their late result has
       // no execution authority; close() owns actual worker termination.
-      return await Promise.race([this._planner.next(context, { signal: aborter.signal }), cancelled]);
+      return await Promise.race([this._planner.next(context, { ...plannerOptions, signal: aborter.signal }), cancelled]);
     } finally {
       aborter.signal.removeEventListener("abort", onAbort);
       if (this._plannerAborter === aborter) this._plannerAborter = null;
@@ -1478,18 +1719,35 @@ class TaskController {
         // stale_document guard trusts -- proves nothing has navigated since.
         // No match (including a fake with no getDocumentEpoch()) means a
         // real re-observe, same as middle/long always do.
-        const reusable = this._harnessProfile === "short" ? this._reusableObservation : null;
+        const reusable = isQuickProfile(this._harnessProfile) ? this._reusableObservation : null;
         if (reusable && typeof this._browser.getDocumentEpoch === "function" &&
             this._browser.getDocumentEpoch() === reusable.documentEpoch) {
           observation = reusable;
         } else {
-          try {
-            observation = await this._browser.observe({
-              signal: undefined,
-              initial: this._budgets.actionsUsed === 0 && this._budgets.plannerCallsUsed === 0,
-            });
-          } catch {
-            if (this._stopHappenedSince(epoch)) break;
+          // A page that is still navigating (a click that redirects, a late
+          // client-side route) fails observe() with stale_document. That is
+          // not a broken page: wait briefly and observe the settled one. Any
+          // other failure, or a page that never settles, still fails closed.
+          let failed = false;
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              observation = await this._browser.observe({
+                signal: undefined,
+                initial: this._budgets.actionsUsed === 0 && this._budgets.plannerCallsUsed === 0,
+              });
+              break;
+            } catch (error) {
+              if (this._stopHappenedSince(epoch)) break;
+              if (error?.code === "stale_document" && attempt < OBSERVE_STALE_RETRIES) {
+                await new Promise((resolve) => setTimeout(resolve, this._observeRetryDelayMs));
+                continue;
+              }
+              failed = true;
+              break;
+            }
+          }
+          if (this._stopHappenedSince(epoch)) break;
+          if (failed) {
             await this._pauseWith("observation_error");
             break;
           }
@@ -1533,16 +1791,40 @@ class TaskController {
         // Offered only to a Multi-agent parent the host wired for child plans;
         // an unreadable plan state leaves the offer out of this turn.
         let childPlan;
-        if (this._onChildPlan && this._readChildPlan && this._store.taskProfile?.capability?.id === "multi_agent") {
+        if (this._onChildPlan && this._readChildPlan && hasMultiAgentCapability(this._store.taskProfile)) {
           childPlan = await Promise.resolve().then(() => this._readChildPlan()).then((summary) => ({
             enabled: true,
             maxAgents: contracts.MAX_CHILD_ASSIGNMENTS,
+            executionModes: Array.isArray(summary?.executionModes) ? summary.executionModes : ["host"],
             active: summary ? { agents: summary.agents.map((agent) => ({ subgoal: agent.subgoal ?? "", status: agent.status })) } : null,
           }), () => undefined);
           if (this._stopHappenedSince(epoch)) break;
         }
 
+        // Staying on one page for most of the recent turns is a loop even if
+        // each turn dispatches a different action (scroll, re-observe, search).
+        {
+          let pageKey = null;
+          try { const u = new URL(observation?.url); pageKey = u.origin + u.pathname; } catch {}
+          if (Number.isInteger(observation?.httpStatus) && typeof observation.url === "string" && !this._errorUrls.includes(observation.url)) {
+            this._errorUrls.push(observation.url);
+            if (this._errorUrls.length > ERROR_URLS_KEPT) this._errorUrls.shift();
+          }
+          this._recentPages.push(pageKey);
+          if (this._recentPages.length > PAGE_LOOP_WINDOW) this._recentPages.shift();
+          const stuckOnOne = pageKey !== null && this._recentPages.filter((k) => k === pageKey).length >= PAGE_LOOP_LIMIT;
+          // Bouncing between two pages for a whole window is the same loop.
+          const bouncing = this._recentPages.length === PAGE_LOOP_WINDOW && !this._recentPages.includes(null)
+            && new Set(this._recentPages).size <= 2;
+          if (stuckOnOne || bouncing) {
+            await this._store.append({ type: "note", payload: { msg: "most recent turns stayed on one page; pausing" } });
+            await this._pauseWith("no_progress");
+            break;
+          }
+        }
+
         let context;
+        let visualCapture = null;
         const contextStartedAt = this._onTiming ? performance.now() : null;
         try {
           const contextManifest = this._contextRefsEnabled ? this._refreshContextRefs() : undefined;
@@ -1550,21 +1832,45 @@ class TaskController {
             ? await this._readWorkGoalContext({ ...this._workGoalBinding, taskId: this._goal.taskId })
             : undefined;
           if (this._stopHappenedSince(epoch)) break;
+          if (hasComputerUseAdapter(this._store.taskProfile)) {
+            if (typeof this._browser.captureComputerUseObservation !== "function") {
+              await this._pauseWith("computer_use_unavailable");
+              break;
+            }
+            try {
+              visualCapture = await this._browser.captureComputerUseObservation(observation);
+              if (!visualCapture?.binding || visualCapture.binding.observationId !== observation.id ||
+                  visualCapture.binding.taskId !== this._goal.taskId || visualCapture.binding.documentEpoch !== observation.documentEpoch ||
+                  !visualCapture.attachment || typeof visualCapture.attachment.path !== "string" || typeof visualCapture.attachment.dispose !== "function") {
+                throw new Error("invalid screenshot attachment binding");
+              }
+            } catch {
+              await this._pauseWith("computer_use_capture_failed");
+              break;
+            }
+          }
+          const plannerObservation = visualCapture
+            ? { ...observation, computerUse: { ...visualCapture.binding } }
+            : observation;
           context = buildContext({
             goal: this._goal,
             state: {
               criteriaStatus: this.getSnapshot().criteriaStatus,
               segment: { ...this._segment },
               budgets: { ...this._budgets },
-              plannerEffort: this._plannerEffort,
+              plannerEffort: this._effectivePlannerEffort(pendingMessages, observation?.url),
+              harnessProfile: this._harnessProfile,
               maxActionsPerProposal: this._maxActionsPerProposal,
+              ...(this._harnessProfile === "fast" ? { fastMode: true } : {}),
+              ...(this._scrollStreak.count >= 3 ? { scrollStreak: this._scrollStreak.count } : {}),
+              ...(this._errorUrls.length > 0 ? { errorUrls: [...this._errorUrls] } : {}),
               mcp: { enabled: this._mcpAvailableToPlanner(),
                 actions: ["mcp_search", "mcp_describe", "mcp_propose"] },
               ...(this._harnessProfile === "long" ? { goalPersistence: this._goalPersistenceState() } : {}),
               ...(childPlan ? { childPlan } : {}),
             },
             navigation: { visited: [...this._navigation.visited], frontier: [...this._navigation.frontier] },
-            observation,
+            observation: plannerObservation,
             recentEvents: this._store.eventsSinceCheckpoint || [],
             customMemory,
             pendingMessages,
@@ -1599,6 +1905,7 @@ class TaskController {
             }
           }
         } catch {
+          await visualCapture?.attachment?.dispose?.().catch(() => {});
           if (this._stopHappenedSince(epoch)) break;
           await this._pauseWith("context_error");
           break;
@@ -1620,7 +1927,15 @@ class TaskController {
         // the host-owned limit; a pause checkpoint preserves this charge.
         this._budgets.plannerCallsUsed += 1;
         try {
-          proposal = await this._nextPlanner(context);
+          try {
+            proposal = await this._nextPlanner(context, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
+          } catch (firstError) {
+            // A malformed proposal is a transient model slip, not a broken
+            // planner: retry the same context once (charged as a call).
+            if (!PLANNER_RETRYABLE_CODES.includes(firstError?.plannerCode) || this._stopHappenedSince(epoch)) throw firstError;
+            this._budgets.plannerCallsUsed += 1;
+            proposal = await this._nextPlanner(context, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
+          }
           if (this._pendingMcpObservation) this._pendingMcpObservation = null;
           this._pendingContextRead = null;
         } catch (error) {
@@ -1634,8 +1949,14 @@ class TaskController {
           // configured planner broke".
           const routinePause = ["routine_step_unresolved", "routine_origin_violation", "routine_cursor_mismatch", "invalid_routine"]
             .includes(error?.code) ? error.code : null;
-          await this._pauseWith(routinePause || (error && error.code === "planner_unavailable" ? "planner_unavailable" : "planner_error"));
+          // The pause reason alone hides why the planner failed; leave the
+          // cause in the process log so a paused task can be diagnosed.
+          try { console.warn(`[task-controller] planner failed task=${this._goal?.taskId ?? "?"} code=${error?.code ?? "none"}: ${String(error?.message ?? error).slice(0, 500)}`); } catch {}
+          await this._pauseWith(routinePause || (error && error.code === "planner_unavailable" ? "planner_unavailable"
+            : error?.code === "computer_use_provider_unavailable" ? "computer_use_provider_unavailable" : "planner_error"));
           break;
+        } finally {
+          await visualCapture?.attachment?.dispose?.().catch(() => {});
         }
         if (this._stopHappenedSince(epoch)) break;
 
@@ -1677,6 +1998,17 @@ class TaskController {
           continue;
         }
 
+        const coordinateActions = validated.kind === "actions"
+          ? validated.actions.filter((action) => action.type === "click_at" || action.type === "type_at")
+          : [];
+        if (coordinateActions.length > 0 && (!hasComputerUseAdapter(this._store.taskProfile) ||
+            coordinateActions.length !== 1 || validated.actions.length !== 1 ||
+            validated.basedOnObservationId !== observation.id || coordinateActions[0].observationId !== observation.id)) {
+          // A coordinate proposal has no authority unless it names the exact
+          // one-use image observation delivered on this turn.
+          continue;
+        }
+
         if (validated.kind === "finish") {
           const completion = canComplete(this._goal, this._evidenceForCompletionCheck());
           if (!completion.complete && this._harnessProfile === "long" && this._onlyHostVerifiable(completion.missingIds)) {
@@ -1695,6 +2027,7 @@ class TaskController {
           this._leaveActive();
           if (completion.complete) {
             this._task = { state: "completed", pauseReason: null };
+            await this._revokeAllLeases("task_ended");
           } else {
             this._task = { state: "awaiting_verification", pauseReason: null };
           }
@@ -1713,7 +2046,7 @@ class TaskController {
         }
 
         if (validated.kind === "child_plan") {
-          if (this._store.taskProfile?.capability?.id !== "multi_agent") {
+          if (!hasMultiAgentCapability(this._store.taskProfile)) {
             await this._pauseWith("child_plan_not_authorized");
             break;
           }
@@ -1824,26 +2157,64 @@ class TaskController {
       const descriptor = this._describeAction(action, requestId);
 
       let decision;
-      const policy = this._evaluateActionPolicy(this._permissionMode, action.type);
-      if (!policy.allowed) {
+      // Lock first (nothing overrides it, and a denied action never reaches
+      // the approver or the browser), then the mode, then any live lease.
+      const targetOrigin = actionTargetOrigin(action, this._lastObservation);
+      const gate = evaluateGate({ lock: this._goal.lock ?? null, mode: this._permissionMode, leases: this._leases, action: action.type, targetOrigin, now: this._monotonicNow() });
+      if (gate.outcome === "lock_denied") {
+        await this._store.append({ type: "note", payload: { kind: "lock_denied", actionType: action.type, reason: gate.reason, ruleIndex: gate.ruleIndex } });
+        if (this._routineRunner) {
+          await this._denyRoutineStep({ decision: "deny", reasons: [gate.reason] });
+          return "stop_loop";
+        }
+        continue;
+      }
+      const policy = gate.policy;
+      // Mode-denied actions may be widened by the user, but never for
+      // unattended runs or for actions this browser cannot perform.
+      const widen = !policy.allowed;
+      if (widen && (this._routineRunner || this._reviewFallback === "deny" ||
+          this._browser.supportsAction?.(action.type) === false || policy.reason === "unsupported_action")) {
         if (this._routineRunner) {
           await this._denyRoutineStep({ decision: "deny", reasons: [policy.reason || "permission_mode_denied"] });
           return "stop_loop";
         }
         continue;
       }
+      // A lease can only stand in for the user, never for the approver: an
+      // action that needs the user (widened, or human-review with a live
+      // lease) is first judged by the approver, and only its allow may be
+      // turned into a lease use.
+      const leasable = !!gate.lease && this._reviewFallback !== "deny";
+      const needsUser = widen || policy.approval === "human";
       try {
-        decision = policy.approval === "bypass"
-          ? { decision: "allow", reasons: ["explicit_full_permission"] }
-          : policy.approval === "human"
-            ? { decision: "review", reasons: ["human_confirmation_required"] }
-            : await this._approve(descriptor);
+        decision = widen || (policy.approval === "human" && leasable)
+          ? await this._approve(descriptor)
+          : policy.approval === "bypass"
+            ? { decision: "allow", reasons: ["explicit_full_permission"] }
+            : policy.approval === "human"
+              ? { decision: "review", reasons: ["human_confirmation_required"] }
+              : await this._approve(descriptor);
       } catch {
         if (this._stopHappenedSince(epoch)) return "stop_loop";
         await this._pauseWith("approver_error");
         return "stop_loop";
       }
       if (this._stopHappenedSince(epoch)) return "stop_loop";
+      // The approver's allow does not lift the mode or the human gate; the
+      // user (or a lease they lent) still decides. Its deny/quarantine/review
+      // is final: no widening or lease ever overrides it.
+      const approverAllowed = needsUser && decision.decision === "allow";
+      if (approverAllowed) {
+        decision = { decision: "review", reasons: [...(Array.isArray(decision.reasons) ? decision.reasons : []), widen ? "permission_mode_denied" : "human_confirmation_required"] };
+      }
+      let widenedBy = null;
+      // The approver may have taken time: re-check the lease at use time. A
+      // lease that died meanwhile leaves the request for the user.
+      if (approverAllowed && leasable) {
+        widenedBy = await this._useLease(gate.lease, requestId);
+        if (widenedBy) decision = { decision: "allow", reasons: ["capability_lease"] };
+      }
       decision = await this._applyReviewFallback(decision, action.type);
 
       if (decision.decision === "review") {
@@ -1860,9 +2231,17 @@ class TaskController {
           epoch,
           goalVersion: this._goal.goalVersion,
           expiresAt: this._now() + contracts.APPROVAL_EXPIRY_MS,
+          deadline: this._monotonicNow() + contracts.APPROVAL_EXPIRY_MS,
           descriptor,
           action,
           proposal,
+          widen,
+          targetOrigin,
+          // Offered only for what this browser can really run: a lease for an
+          // action it cannot perform would only ever fail.
+          leaseOffer: targetOrigin && LEASE_ACTIONS.includes(action.type) && this._browser.supportsAction?.(action.type) === true
+            ? { action: action.type, origin: targetOrigin }
+            : null,
         });
         this._leaveActive();
         this._task = { state: "awaiting_approval", pauseReason: null };
@@ -1879,7 +2258,7 @@ class TaskController {
         continue;
       }
 
-      const dispatched = await this._dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch);
+      const dispatched = await this._dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch, { widenedBy });
       if (dispatched.stale || this._stopHappenedSince(epoch)) return "stop_loop";
       if (this._stopHappenedSince(epoch) || this._task.state !== "running") return "stop_loop";
     }
@@ -1951,6 +2330,7 @@ class TaskController {
         epoch,
         goalVersion: this._goal.goalVersion,
         expiresAt: this._now() + contracts.APPROVAL_EXPIRY_MS,
+        deadline: this._monotonicNow() + contracts.APPROVAL_EXPIRY_MS,
         descriptor,
         action: actions[0],
         actions,
@@ -2000,7 +2380,7 @@ class TaskController {
   // "cancelled" once action_started may already be durable. A concurrent
   // pause/stop/takeOver instead WAITS for this call's true outcome via
   // _dispatchApprovedAndApplyTracked's entry in _inFlightOps.
-  async _dispatchApproved(descriptor, action, epoch, { durable = true } = {}) {
+  async _dispatchApproved(descriptor, action, epoch, { durable = true, widenedBy = null } = {}) {
     if (this._stopHappenedSince(epoch)) {
       return { status: "not_dispatched", actionId: null, action, descriptor };
     }
@@ -2017,7 +2397,7 @@ class TaskController {
       // against a page that has since redirected or navigated act on the
       // wrong document instead of failing closed with stale_document.
       const documentEpoch = this._lastObservation ? this._lastObservation.documentEpoch : null;
-      result = await this._browser.execute(action, { signal: undefined, documentEpoch });
+      result = await this._browser.execute(action, { signal: undefined, documentEpoch, widenedBy });
     } catch {
       // A rejected/timeout response cannot prove that the remote or local
       // browser did not apply the action. Keep action_started open so reload
@@ -2032,6 +2412,9 @@ class TaskController {
     // skipping the budget increment here would let repeated takeover during
     // execution perform more real actions than maxActions allows.
     this._budgets.actionsUsed += 1;
+    this._lastActionType = action.type;
+    this._lastActionStatus = result.status;
+    this._easyStreak = result.status === "ok" && ["navigate", "follow_link"].includes(action.type) ? this._easyStreak + 1 : 0;
     // durable:false: the NEXT action_started's own durable append (same
     // loop, common case) or the checkpoint at whatever pause/stop follows
     // this one (rare case) flushes this write before either commits
@@ -2052,6 +2435,23 @@ class TaskController {
     this._reusableObservation = result.action?.type === "observe" && result.status === "ok" && result.observation
       ? result.observation
       : null;
+
+    // Scrolling the same page again and again is a loop even when each scroll
+    // reveals slightly different text (so the identical-observation key below
+    // never repeats): pause instead of burning the whole time budget on it.
+    if (result.action?.type === "scroll") {
+      const url = this._lastObservation?.url ?? null;
+      this._scrollStreak = url !== null && url === this._scrollStreak.url
+        ? { url, count: this._scrollStreak.count + 1 }
+        : { url, count: 1 };
+      if (this._scrollStreak.count >= SCROLL_STREAK_LIMIT) {
+        await this._store.append({ type: "note", payload: { msg: "repeated scrolling on one page; pausing" } });
+        await this._pauseWith("no_progress");
+        return;
+      }
+    } else {
+      this._scrollStreak = { url: null, count: 0 };
+    }
 
     // No-progress detection: 3 consecutive dispatches of the identical
     // (action, observation) pair with no newly-verified criterion earns one

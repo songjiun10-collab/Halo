@@ -350,6 +350,35 @@ test("close(): resolves immediately when nothing is in flight", async () => {
   await bridge.close();
 });
 
+test("close registers its exit barrier before signalling a synchronously exiting child", async () => {
+  const child = makeFakeChild();
+  child.kill = () => { child.emit("close", null); return true; };
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => child });
+  const pending = bridge.start(makeContext());
+  const rejected = assert.rejects(pending, { code: "cancelled" });
+  let closed = false;
+  const closing = bridge.close({ killTimeoutMs: 5 }).then(() => { closed = true; });
+  await flush(10);
+  const closedBeforeFallback = closed;
+  // Release the old implementation's leaked listener so a red run exits.
+  if (!closed) child.emit("close", null);
+  await closing;
+  await rejected;
+  assert.equal(closedBeforeFallback, true);
+  assert.equal(child.listenerCount("close"), 1);
+});
+
+test("a stdin write failure terminates the CLI and keeps admission closed until reaped", async () => {
+  const child = makeFakeChild();
+  child.stdin.write = (_data, _encoding, callback) => callback(new Error("broken pipe"));
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => child });
+  await assert.rejects(bridge.start(makeContext()), { code: "stdin_write_failed" });
+  assert.equal(child.killed, true);
+  assert.equal(bridge.isBusy(), true);
+  child.emit("close", null);
+  assert.equal(bridge.isBusy(), false);
+});
+
 test("close(): escalates to SIGKILL if the child does not exit within killTimeoutMs, and still waits for the eventual close", async () => {
   const fakeChild = makeFakeChild();
   const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
@@ -551,7 +580,9 @@ test("buildPrompt: MCP actions are documented only when the host enabled them, a
   for (const off of [undefined, { enabled: false }, { enabled: "true" }, { enabled: 1 }, null]) {
     const prompt = await promptFor(off);
     assert.ok(!prompt.includes("mcp_search"), JSON.stringify(off));
-    assert.ok(prompt.includes("use only these four"), JSON.stringify(off));
+    assert.ok(prompt.includes("Browser action shapes"), JSON.stringify(off));
+    assert.ok(prompt.includes('"type": "click"'), JSON.stringify(off));
+    assert.ok(prompt.includes("one interaction"), JSON.stringify(off));
   }
 });
 
@@ -643,6 +674,8 @@ test("a Multi-agent parent the host allows to split work is told how, and may re
   assert.equal(schema.properties.parentGoalVersion?.type, "integer");
   assert.equal(schema.properties.requestedAgentCount?.type, "integer");
   assert.deepEqual(schema.properties.assignments?.items?.required, ["subgoal", "entryUrl"]);
+  assert.deepEqual(schema.properties.assignments?.items?.properties?.execution?.enum, ["host", "docker"]);
+  assert.match(open.prompt, /currently supports only the normal host runtime/);
 
   const busy = await run(makeContext(progress({ enabled: true, maxAgents: 8, active: { agents: [{ subgoal: "Flights", status: "running" }] } })), JSON.stringify(validProposal()));
   assert.match(busy.prompt, /already running/);
@@ -665,4 +698,48 @@ test("buildPrompt: context_read is documented only when the packet carries a con
   assert.match(withManifest, /exactly one context_read action/);
   const without = buildPrompt(makeContext());
   assert.ok(!without.includes("context_read"));
+});
+
+test("the planner prompt does not forbid returning to a visited page the goal needs", () => {
+  const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
+  const prompt = buildPrompt(makeContext()).replace(/\s+/g, " ");
+  assert.doesNotMatch(prompt, /Never revisit a visited page/);
+  assert.match(prompt, /Do not repeat an action that already failed or changed nothing/);
+  assert.match(prompt, /return to a visited page only when the goal needs it/i);
+});
+
+test("the planner prompt says every call already carries a fresh observation, so observe is only for evidence", () => {
+  const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
+  const prompt = buildPrompt(makeContext()).replace(/\s+/g, " ");
+  assert.match(prompt, /already (?:contains|carries) a fresh observation/i);
+  assert.match(prompt, /observe action only to (?:record|gather) evidence/i);
+});
+
+test("buildPrompt: asks for batched actions and discourages returning to read pages", () => {
+  const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
+  const prompt = buildPrompt(makeContext()).replace(/\s+/g, " ");
+  assert.match(prompt, /batch: when you already know several steps/);
+  assert.match(prompt, /Do not navigate back to a page you have already read/);
+});
+
+test("buildPrompt: the fast-mode paragraph appears only when the host sets progress.fastMode", () => {
+  const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
+  const base = makeContext();
+  assert.doesNotMatch(buildPrompt(base), /Fast mode is on/);
+  assert.match(buildPrompt({ ...base, progress: { ...base.progress, fastMode: true } }), /Fast mode is on/);
+});
+
+test("buildPrompt: an HTTP error status on the observation is called out as an error page", () => {
+  const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
+  const base = makeContext();
+  assert.doesNotMatch(buildPrompt(base), /error page/);
+  assert.match(buildPrompt({ ...base, observation: { ...(base.observation || {}), httpStatus: 404 } }), /HTTP 404: it is an error page/);
+});
+
+test("buildPrompt: addresses that already errored are listed as off limits", () => {
+  const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
+  const base = makeContext();
+  assert.doesNotMatch(buildPrompt(base), /never navigate to them again/);
+  const prompt = buildPrompt({ ...base, progress: { ...base.progress, errorUrls: ["https://a.test/gone"] } });
+  assert.match(prompt, /never navigate to them again[\s\S]*- https:\/\/a\.test\/gone/);
 });

@@ -10,7 +10,7 @@
 // selection. This module is pure (no fs/IPC) so it stays independently
 // testable and reusable, matching the pattern of shared/harness-contracts.js.
 const { MAX_ACTIONS_PER_PROPOSAL, MAX_ACTIONS_PER_PROPOSAL_SHORT } = require("./harness-contracts");
-const HARNESS_PROFILES = Object.freeze(["short", "middle", "long"]);
+const HARNESS_PROFILES = Object.freeze(["short", "fast", "middle", "long"]);
 class HarnessProfileError extends Error {
     constructor(code, message) {
         super(message);
@@ -20,9 +20,15 @@ class HarnessProfileError extends Error {
 }
 function validateHarnessProfile(value) {
     if (typeof value !== "string" || !isHarnessProfile(value)) {
-        throw new HarnessProfileError("invalid_harness_profile", "harnessProfile must be one of short|middle|long");
+        throw new HarnessProfileError("invalid_harness_profile", "harnessProfile must be one of short|fast|middle|long");
     }
     return value;
+}
+// "fast" is Short plus speed-only extras (see the planner prompt's fastMode
+// paragraph); everything Short gets structurally -- the wider batch, the
+// reusable observation, the low auto effort, the shortest horizon -- Fast gets too.
+function isQuickProfile(value) {
+    return value === "short" || value === "fast";
 }
 function isHarnessProfile(value) {
     return HARNESS_PROFILES.includes(value);
@@ -45,7 +51,7 @@ function selectHarnessProfile({ isRoutine = false } = {}) {
 // keeps today's unchanged batch bound.
 function maxActionsPerProposal(profile) {
     validateHarnessProfile(profile);
-    return profile === "short" ? MAX_ACTIONS_PER_PROPOSAL_SHORT : MAX_ACTIONS_PER_PROPOSAL;
+    return isQuickProfile(profile) ? MAX_ACTIONS_PER_PROPOSAL_SHORT : MAX_ACTIONS_PER_PROPOSAL;
 }
 module.exports = {
     HARNESS_PROFILES,
@@ -53,4 +59,5 @@ module.exports = {
     validateHarnessProfile,
     selectHarnessProfile,
     maxActionsPerProposal,
+    isQuickProfile,
 };

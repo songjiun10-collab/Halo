@@ -11,7 +11,7 @@ const { EventEmitter } = require("node:events");
 const ENTRY = path.resolve(__dirname, "../main/index.js");
 
 function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcpEnabled = false } = {}) {
-  const calls = { windows: [], hosts: [], services: [], clients: [], ipc: [], errors: [], usage: [], dockHide: 0, quit: 0 };
+  const calls = { windows: [], visibleViews: [], agentEnsureCalls: [], hosts: [], services: [], clients: [], ipc: [], errors: [], usage: [], dockHide: 0, quit: 0 };
   class FakeWindow extends EventEmitter {
     constructor(options) {
       super();
@@ -35,6 +35,17 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
     close() { this.closed++; return Promise.resolve(); }
     onMemorySample() { return Promise.resolve(); }
     canUseTaskBrowser() { return false; }
+  }
+  class FakeWebContentsView {
+    constructor(options) {
+      this.options = options;
+      this.webContents = new EventEmitter();
+      this.webContents.session = new EventEmitter();
+      this.webContents.setWindowOpenHandler = () => {};
+      this.webContents.session.setPermissionRequestHandler = () => {};
+      this.webContents.session.setPermissionCheckHandler = () => {};
+      calls.visibleViews.push(this);
+    }
   }
   class FakeService {
     constructor(options) { this.options = options; this.stopped = 0; calls.services.push(this); }
@@ -65,27 +76,33 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
     return child;
   };
   const map = {
-    electron: { app, BrowserWindow: FakeWindow, WebContentsView: class {}, safeStorage: {}, dialog: { showMessageBox: async () => ({ response: dialogResponse }) } },
+    electron: { app, nativeTheme: { themeSource: "system" }, BrowserWindow: FakeWindow, WebContentsView: FakeWebContentsView, safeStorage: {}, dialog: { showMessageBox: async () => ({ response: dialogResponse }) } },
     child_process: { spawn: approver, execFile: (_cmd, _args, done) => done(null, "") },
     "./control-api": { ControlApi: class { onChange() { return () => {}; } } },
     "./ipc": (...args) => calls.ipc.push(args),
+    "./page-theme": { applyPageTheme: (options) => { calls.pageTheme = options; } },
     "../shared/layout-constants": { HEADER_HEIGHT: 1, FOOTER_HEIGHT: 1, SIDE_PANEL_WIDTH: 1, MOBILE_BREAKPOINT: 1 },
     "./approver-client": { requestDecision() {} },
     "./harness/task-host": { TaskHost: FakeTaskHost },
     "./harness/browser-adapter": { BrowserAdapter: class {} },
-    "./harness/browser-surfaces": { BrowserSurfaces: class { register() {} setViewport() {} } },
+    "./harness/browser-surfaces": { BrowserSurfaces: class { register(taskId, view) { calls.registeredVisible ||= []; calls.registeredVisible.push({ taskId, view }); } setViewport() {} } },
     "./harness/planner-stdio": { PlannerStdioAdapter: class { constructor(options) { calls.plannerOptions = options; } } },
     "./harness/memory-monitor": { MemoryMonitor: class { registerExternalProcess() {} unregister() {} sample() { return Promise.resolve(); } } },
     "./harness/agent-viewport-host": { AgentViewportHost: class {
       constructor() { this.disposedChildren = []; calls.agentViewportHost = this; }
-      ensure() { return {}; }
+      ensure(...args) { calls.agentEnsureCalls.push(args); return {}; }
       ensureChild(...args) {
         this.childArgs = args;
         return { dispose() { throw new Error("child adapter disposed without its host window"); } };
       }
       disposeChild(childId) { this.disposedChildren.push(childId); return Promise.resolve(); }
       disposeAll() { return Promise.resolve(); }
-    }, makeDualSurfaceBrowser: () => ({}) },
+    }, makeDualSurfaceBrowser: () => ({}), agentBrowserPartition: (agentId) => {
+      if (typeof agentId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(agentId)) {
+        const error = new TypeError("invalid Agent profile"); error.code = "invalid_agent_profile"; throw error;
+      }
+        return `persist:halo-agent-${agentId}`;
+    } },
     "./harness/planner-command": { resolvePlannerCommand: () => ({ command: "/test/node", env: {} }) },
     "./harness/planner-providers": require("../main/harness/planner-providers"),
     "./harness/providers/codex-mcp-adapter": {
@@ -163,6 +180,24 @@ test("background service mode owns TaskHost without creating a visible UI window
   const capabilityPath = path.join(userData, "background-runtime", "capability");
   assert.match(fs.readFileSync(capabilityPath, "utf8"), /^[0-9a-f]{64}$/);
   assert.equal(fs.statSync(capabilityPath).mode & 0o777, 0o600);
+});
+
+test("visible and hidden task views receive the same journal-derived Agent partition binding", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-agent-partition-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { calls } = loadEntrypoint({ serviceMode: true, userData });
+  await flushStartup();
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const taskProfile = { agentBrowserProfile: { agentId } };
+  calls.hosts[0].options.makeBrowser("agent-task", taskProfile);
+  assert.equal(calls.visibleViews[0].options.webPreferences.partition, `persist:halo-agent-${agentId}`);
+  assert.equal(calls.agentEnsureCalls[0][0], "agent-task");
+  assert.equal(calls.agentEnsureCalls[0][1].agentId, agentId);
+
+  calls.hosts[0].options.makeBrowser("ordinary-task", null);
+  assert.equal(calls.visibleViews[1].options.webPreferences.partition, "halo-task-ordinary-task");
+  assert.equal(calls.agentEnsureCalls[1][0], "ordinary-task");
+  assert.equal(calls.agentEnsureCalls[1].length, 1);
 });
 
 test("a child browser disposal also releases its service-owned hidden window", async (t) => {
@@ -392,4 +427,13 @@ test("UI windows offer start-at-login for the service; the service itself does n
   const service = loadEntrypoint({ serviceMode: true, userData: fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-login-svc-")) });
   await flushStartup();
   assert.equal(service.calls.launchAgents, undefined);
+});
+
+test("the entrypoint applies the page theme before the app is ready", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-theme-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { calls } = loadEntrypoint({ serviceMode: false, userData });
+  assert.ok(calls.pageTheme, "applied synchronously at load, not after whenReady");
+  assert.ok(calls.pageTheme.nativeTheme && calls.pageTheme.app);
+  await flushStartup();
 });

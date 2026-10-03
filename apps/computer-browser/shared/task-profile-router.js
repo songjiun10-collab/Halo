@@ -10,8 +10,9 @@ const { validateResolvedTaskProfile, validateTaskProfileSelectedPayload } = requ
 const { CAPABILITY_REGISTRY_VERSION, getCapabilityProfile } = require("./capability-registry");
 
 const CLASSIFIER_VERSION = "task-profile-router-v1";
-const HORIZON_RANK = Object.freeze({ short: 0, middle: 1, long: 2 });
+const HORIZON_RANK = Object.freeze({ short: 0, fast: 0, middle: 1, long: 2 });
 const DURATION_RULES = Object.freeze({
+  fast: Object.freeze(["fast mode", "패스트 모드", "패스트모드"]),
   short: Object.freeze(["quick", "brief", "short task", "빠르게", "간단히", "짧게"]),
   long: Object.freeze(["long-running", "long task", "extended task", "장기 작업", "오래 걸리는 작업"]),
 });
@@ -55,6 +56,11 @@ function matchingGroups(text, rules) {
   return matches;
 }
 
+function hasCapabilityIntent(value, capabilityId) {
+  if (typeof value !== "string" || !Object.hasOwn(CAPABILITY_RULES, capabilityId)) return false;
+  return matchingGroups(normalizeText(value), { [capabilityId]: CAPABILITY_RULES[capabilityId] }).length > 0;
+}
+
 function getGoalText(goalInput) {
   if (!isPlainObject(goalInput) || typeof goalInput.originalRequest !== "string" || goalInput.originalRequest.trim().length === 0) {
     fail("invalid_goal", "goalInput.originalRequest must be a non-empty string");
@@ -85,7 +91,7 @@ function validateSelector(value, axis) {
   if (axis === "duration") {
     if (value === "auto") return null;
     try { return validateHarnessProfile(value); }
-    catch { fail("invalid_selector", "requestedDurationProfile must be auto|short|middle|long"); }
+    catch { fail("invalid_selector", "requestedDurationProfile must be auto|short|fast|middle|long"); }
   }
   if (value === null || value === undefined) return null;
   if (typeof value !== "string") fail("invalid_selector", "requestedCapabilityProfile must be a capability ID or null");
@@ -98,7 +104,7 @@ function validateSelector(value, axis) {
 
 function validateParentInputs(parentProfile, parentBinding) {
   if (!parentProfile || !parentBinding) fail("invalid_parent_binding", "child profile resolution requires parentProfile and parentBinding");
-  if (parentProfile.capability?.id !== "multi_agent") {
+  if (!new Set(["multi_agent", "multi_agent_computer_use"]).has(parentProfile.capability?.id)) {
     fail("invalid_parent_profile", "child tasks require a validated Multi-agent parent profile");
   }
   let normalizedParent = parentProfile;
@@ -177,6 +183,8 @@ function resolveTaskProfile({
     durationSelection = { source: "explicit_user_choice" };
   } else {
     const durationMatches = matchingGroups(text, DURATION_RULES);
+    // "fast mode" together with a short-task hint still means fast: it is the stricter ask.
+    if (durationMatches.length === 2 && durationMatches.includes("fast") && durationMatches.includes("short")) durationMatches.splice(durationMatches.indexOf("short"), 1);
     if (durationMatches.length > 1) fail("ambiguous_duration", "task horizon hints conflict; choose a duration profile");
     if (durationMatches.length === 1) {
       durationId = durationMatches[0];
@@ -242,4 +250,5 @@ module.exports = {
   CLASSIFIER_VERSION,
   TaskProfileRouterError,
   resolveTaskProfile,
+  hasCapabilityIntent,
 };

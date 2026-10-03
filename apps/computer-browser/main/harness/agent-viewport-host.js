@@ -31,10 +31,48 @@
 // implement any "show agent page" action.
 
 const { BrowserWindow, WebContentsView } = require("electron");
+const { createHash } = require("node:crypto");
 const { BrowserAdapter } = require("./browser-adapter");
+const { createScreenshotAttachment } = require("./computer-use-contract");
 
 const AGENT_WIDTH = 1440;
 const AGENT_HEIGHT = 900;
+const AGENT_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function agentBrowserPartition(agentId) {
+  if (typeof agentId !== "string" || !AGENT_UUID_RE.test(agentId)) {
+    const error = new TypeError("Agent browser profile owner must be a host-validated UUID");
+    error.code = "invalid_agent_profile";
+    throw error;
+  }
+  return `persist:halo-agent-${agentId}`;
+}
+
+function childBrowserPartition(childId) {
+  if (typeof childId !== "string" || childId.length === 0 || childId.length > 256) {
+    const error = new TypeError("Child browser profile owner must be a non-empty host identity");
+    error.code = "invalid_child_profile";
+    throw error;
+  }
+  // A non-persistent partition keeps sibling/parent cookies and storage
+  // separate without leaving child credentials on disk after app shutdown.
+  // Hash the host identity so it cannot inject Electron partition syntax.
+  const digest = createHash("sha256").update(childId, "utf8").digest("hex");
+  return `halo-child-${digest}`;
+}
+
+function agentOwnerFromOptions(options) {
+  if (options === undefined) return null;
+  if (!options || typeof options !== "object" || Array.isArray(options) || Object.getPrototypeOf(options) !== Object.prototype ||
+      Object.keys(options).some((key) => key !== "agentId")) {
+    const error = new TypeError("Agent viewport options contain unknown fields");
+    error.code = "invalid_agent_profile";
+    throw error;
+  }
+  if (!Object.hasOwn(options, "agentId")) return null;
+  agentBrowserPartition(options.agentId);
+  return options.agentId;
+}
 
 // Mirrors main/index.js's makeHarnessBrowser hardening recipe exactly (deny
 // popups, deny permissions, block non-http(s) navigation, block downloads) --
@@ -56,8 +94,8 @@ class AgentViewportHost {
     this._createView = createView || ((opts) => new WebContentsView(opts));
     this._hosts = new Map(); // taskId -> {host, view, adapter}
     // Task 4 (multi-agent background runtime plan): keyed by childId, always
-    // separate from `_hosts` -- a child's hidden view is never the same
-    // record as its parent's own, even though both may share one partition.
+    // separate from `_hosts` -- a child's hidden view and session partition
+    // are never shared with its parent or a sibling.
     this._childHosts = new Map(); // childId -> {host, view, adapter}
   }
 
@@ -71,7 +109,7 @@ class AgentViewportHost {
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition },
     });
     const view = this._createView({
-      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition },
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition, offscreen: true },
     });
     applyBrowserHardening(view.webContents);
     host.contentView.addChildView(view);
@@ -90,17 +128,25 @@ class AgentViewportHost {
   // Reuse: calling this again for a taskId that already has a hidden view
   // returns the SAME adapter (design doc: "reused only for the same active
   // task"), never a second renderer for that task.
-  ensure(taskId) {
+  ensure(taskId, options = undefined) {
+    const agentId = agentOwnerFromOptions(options);
     const existing = this._hosts.get(taskId);
-    if (existing) return existing.adapter;
-    const partition = `halo-task-${taskId}`;
+    if (existing) {
+      if (existing.agentId !== agentId) {
+        const error = new Error("task browser profile binding changed after view construction");
+        error.code = "agent_profile_binding_changed";
+        throw error;
+      }
+      return existing.adapter;
+    }
+    const partition = agentId ? agentBrowserPartition(agentId) : `halo-task-${taskId}`;
     // show:false + never calling .show()/.focus() anywhere in this class is
     // what keeps this window permanently invisible and non-focus-stealing --
     // Electron does not auto-show or auto-focus a show:false BrowserWindow
     // (verified by Codex's integration/agent-viewport-spike.js, read-only).
     const { host, view } = this._createHiddenViewPair(partition);
     const adapter = new BrowserAdapter({ view });
-    this._hosts.set(taskId, { host, view, adapter });
+    this._hosts.set(taskId, { host, view, adapter, agentId });
     return adapter;
   }
 
@@ -108,24 +154,63 @@ class AgentViewportHost {
     return this._hosts.has(taskId);
   }
 
-  // Task 4 (multi-agent background runtime plan): one hidden view per CHILD
-  // agent -- its own WebContentsView/BrowserAdapter, never shared with the
-  // parent's or a sibling's -- on the SAME session partition as the PARENT
-  // task (`halo-task-${parentTaskId}`, not a partition of the child's own),
-  // so the child inherits the parent's existing login/cookie state rather
-  // than starting a fresh, logged-out session. `assignedOrigin` (the host-
+  async captureComputerUseObservation(taskId, observation) {
+    const entry = this._hosts.get(taskId);
+    if (!entry) {
+      const error = new Error("task-owned agent viewport is unavailable");
+      error.code = "visual_view_unavailable";
+      throw error;
+    }
+    const capture = await entry.adapter.captureScreenshot(observation);
+    if (capture.observationId !== observation?.id || capture.documentEpoch !== observation?.documentEpoch || capture.url !== observation?.url) {
+      const error = new Error("screenshot no longer matches the current observation");
+      error.code = "stale_visual_observation";
+      throw error;
+    }
+    const result = await createScreenshotAttachment({
+      png: capture.png,
+      taskId,
+      agentId: entry.agentId,
+      observation: { id: capture.observationId, documentEpoch: capture.documentEpoch, url: capture.url },
+      viewport: capture.viewport,
+      capturedAt: Date.now(),
+    });
+    try {
+      entry.adapter.authorizeVisualBinding(result.binding);
+      return result;
+    } catch (error) {
+      await result.attachment.dispose();
+      throw error;
+    }
+  }
+
+  // One hidden view per child. Host-executed children preserve the existing
+  // parent session; Docker-selected children receive a child-only in-memory
+  // partition. `assignedOrigin` (the host-
   // derived normalized origin of the child's entryUrl) is passed straight
   // into BrowserAdapter so its redirect/navigate lock is active from
   // construction. permissionMode is always "observe" here, not a parameter
   // -- Global Constraints: child policy is exactly observe+scroll, and this
   // is the one call site that constructs a child's adapter.
-  ensureChild(parentTaskId, childId, { assignedOrigin } = {}) {
+  ensureChild(parentTaskId, childId, { assignedOrigin, execution = "host" } = {}) {
+    if (execution !== "host" && execution !== "docker") {
+      const error = new TypeError("Child execution mode must be host or docker");
+      error.code = "invalid_child_execution";
+      throw error;
+    }
     const existing = this._childHosts.get(childId);
-    if (existing) return existing.adapter;
-    const partition = `halo-task-${parentTaskId}`;
+    if (existing) {
+      if (existing.parentTaskId !== parentTaskId || existing.execution !== execution || existing.assignedOrigin !== assignedOrigin) {
+        const error = new Error("child browser profile binding changed after view construction");
+        error.code = "child_profile_binding_changed";
+        throw error;
+      }
+      return existing.adapter;
+    }
+    const partition = execution === "docker" ? childBrowserPartition(childId) : `halo-task-${parentTaskId}`;
     const { host, view } = this._createHiddenViewPair(partition);
     const adapter = new BrowserAdapter({ view, assignedOrigin, permissionMode: "observe" });
-    this._childHosts.set(childId, { host, view, adapter });
+    this._childHosts.set(childId, { host, view, adapter, parentTaskId, assignedOrigin, execution });
     return adapter;
   }
 
@@ -199,7 +284,7 @@ class AgentViewportHost {
 //     used instead of calling `agentAdapter.dispose()` directly so the
 //     caller can also destroy the hidden BrowserWindow container
 //     (AgentViewportHost.dispose(taskId)), not just the adapter.
-function makeDualSurfaceBrowser({ agentAdapter, visibleAdapter, disposeAgent }) {
+function makeDualSurfaceBrowser({ agentAdapter, visibleAdapter, disposeAgent, captureComputerUseObservation }) {
   if (!agentAdapter || !visibleAdapter) {
     throw new TypeError("makeDualSurfaceBrowser requires agentAdapter and visibleAdapter");
   }
@@ -210,6 +295,16 @@ function makeDualSurfaceBrowser({ agentAdapter, visibleAdapter, disposeAgent }) 
       agentAdapter.setPermissionMode?.(mode);
       visibleAdapter.setPermissionMode?.(mode);
     },
+    // The Intent Lock restricts the agent only: the hidden agent adapter
+    // enforces it on execute() and on page-initiated navigation, while the
+    // user's visible surface (and its redirects) stays unlocked.
+    setIntentLock: (lock) => agentAdapter.setIntentLock?.(lock),
+    // What execute() can really do is the agent adapter's answer. Unknown
+    // (no supportsAction on it) stays undefined rather than a guess.
+    supportsAction: (type) => (typeof agentAdapter.supportsAction === "function" ? agentAdapter.supportsAction(type) : undefined),
+    ...(typeof captureComputerUseObservation === "function"
+      ? { captureComputerUseObservation: (...args) => captureComputerUseObservation(...args) }
+      : {}),
     userNavigate: (...args) => visibleAdapter.userNavigate(...args),
     fillCredential: (...args) => visibleAdapter.fillCredential(...args),
     getBrowserSnapshot: (...args) => visibleAdapter.getBrowserSnapshot(...args),
@@ -231,4 +326,6 @@ module.exports = {
   applyBrowserHardening,
   AGENT_WIDTH,
   AGENT_HEIGHT,
+  agentBrowserPartition,
+  childBrowserPartition,
 };

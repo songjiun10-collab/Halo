@@ -5,7 +5,7 @@
 // TaskController and shared policy/approval/evidence core.
 
 const CAPABILITY_REGISTRY_VERSION = 1;
-const CAPABILITY_IDS = Object.freeze(["browser", "computer_use", "multi_agent", "research", "routine"]);
+const CAPABILITY_IDS = Object.freeze(["browser", "computer_use", "multi_agent", "multi_agent_computer_use", "research", "routine"]);
 
 type CapabilityAdapter = { capabilityId: string, adapterId: string, adapterVersion: number };
 type CapabilityProfile = {
@@ -33,11 +33,12 @@ const REGISTRY: Readonly<Record<string, Readonly<CapabilityProfile>>> = deepFree
   },
   computer_use: {
     id: "computer_use",
-    available: false,
-    reasonCode: "capability_unavailable",
-    reason: "screenshot provenance and coordinate-action verification are not implemented",
-    dependencies: ["computer_use"],
-    adapters: [],
+    available: true,
+    dependencies: ["browser", "computer_use"],
+    adapters: [
+      { capabilityId: "browser", adapterId: "task-owned-viewport-screenshot", adapterVersion: 1 },
+      { capabilityId: "computer_use", adapterId: "codex-subscription-image", adapterVersion: 1 },
+    ],
   },
   multi_agent: {
     id: "multi_agent",
@@ -45,6 +46,16 @@ const REGISTRY: Readonly<Record<string, Readonly<CapabilityProfile>>> = deepFree
     dependencies: ["browser", "multi_agent"],
     adapters: [
       { capabilityId: "browser", adapterId: "planner-browser", adapterVersion: 1 },
+      { capabilityId: "multi_agent", adapterId: "child-agent-coordinator", adapterVersion: 1 },
+    ],
+  },
+  multi_agent_computer_use: {
+    id: "multi_agent_computer_use",
+    available: true,
+    dependencies: ["browser", "computer_use", "multi_agent"],
+    adapters: [
+      { capabilityId: "browser", adapterId: "planner-browser", adapterVersion: 1 },
+      { capabilityId: "computer_use", adapterId: "codex-subscription-image", adapterVersion: 1 },
       { capabilityId: "multi_agent", adapterId: "child-agent-coordinator", adapterVersion: 1 },
     ],
   },

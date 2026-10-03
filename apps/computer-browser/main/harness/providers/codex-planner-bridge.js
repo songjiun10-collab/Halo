@@ -22,6 +22,7 @@ const contracts = require("../../../shared/harness-contracts");
 const { normalizeUsage } = require("../../../shared/usage");
 const { ClaudeCodeBridge, ClaudeCodeBridgeError, ENV_ALLOWLIST, stripCodeFence } = require("./claude-code-bridge");
 const { codexEffort, isCodexModel } = require("./codex-models");
+const { validateScreenshotAttachment } = require("../computer-use-contract");
 
 const CODEX_DISABLED_FEATURES = Object.freeze([
   "shell_tool", "unified_exec", "shell_snapshot", "apps", "plugins", "remote_plugin",
@@ -40,7 +41,11 @@ class CodexPlannerBridge extends ClaudeCodeBridge {
     }
     super({ command, spawnFn });
     this._model = model;
+    this._promptProvider = "codex";
+    this._promptModel = model;
     this._fast = fast === true;
+    this.supportsImageAttachments = true;
+    this._turnImages = [];
     this._workDir = fs.mkdtempSync(path.join(os.tmpdir(), "halo-codex-planner-"));
     fs.chmodSync(this._workDir, 0o700);
     this._cwd = this._workDir;
@@ -64,8 +69,37 @@ class CodexPlannerBridge extends ClaudeCodeBridge {
       // No --output-schema: Codex's strict structured output rejects the
       // proposal schema's optional fields. The prompt spells out the shape
       // and validateProposalEnvelope stays the real gate.
-      ...disables, "-",
+      ...disables,
+      ...this._turnImages.flatMap((attachment) => ["--image", attachment.path]),
+      "-",
     ];
+  }
+
+  async start(context, { signal, attachments } = {}) {
+    const requested = attachments ?? [];
+    if (!Array.isArray(requested) || requested.length > 1) {
+      throw new ClaudeCodeBridgeError("computer_use_provider_unavailable", "Codex image input accepts one private HALO screenshot per turn");
+    }
+    const normalized = [];
+    try {
+      for (const attachment of requested) {
+        const image = await validateScreenshotAttachment(attachment);
+        const binding = context?.observation?.computerUse;
+        if (!binding || binding.taskId !== context.taskId || binding.observationId !== context.observation?.id ||
+            binding.documentEpoch !== context.observation?.documentEpoch || binding.digest !== image.digest) {
+          throw new Error("screenshot is not bound to this planner observation");
+        }
+        normalized.push(image);
+      }
+    } catch {
+      throw new ClaudeCodeBridgeError("computer_use_provider_unavailable", "Codex image attachment is missing, unsafe, or does not match the current observation");
+    }
+    this._turnImages = normalized;
+    try {
+      return await super.start(context, { signal });
+    } finally {
+      this._turnImages = [];
+    }
   }
 
   _events(stdout) {

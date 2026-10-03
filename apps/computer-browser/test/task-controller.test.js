@@ -120,7 +120,17 @@ test("permission mode is enforced by the host: observe denies click and full exp
     });
     await controller.start();
     assert.equal(executions, mode === "full" ? 1 : 0);
-    assert.equal(approvals, mode === "full" ? 0 : 0);
+    // Intent Lock / Capability Lease: in an interactive run a mode-denied
+    // click is still judged by the approver, then waits for the user as a
+    // widened request instead of being silently skipped. It never executes
+    // without that user decision.
+    assert.equal(approvals, mode === "full" ? 0 : 1);
+    if (mode === "observe") {
+      const snapshot = controller.getSnapshot();
+      assert.equal(snapshot.state, "awaiting_approval");
+      assert.equal(snapshot.approvalQueue.length, 1);
+      assert.equal(snapshot.approvalQueue[0].widen, true);
+    }
     await store.close();
   }
 });
@@ -251,7 +261,7 @@ test("does not count time spent in awaiting_approval toward the active-time budg
       actions: [{ type: "observe" }],
     }),
   };
-  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true, now });
+  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true, now, monotonicNow: now });
   await controller.start();
 
   assert.equal(controller.getSnapshot().state, "awaiting_approval");
@@ -577,7 +587,7 @@ test("approve() rejects a queued item once its 60-second approval window has exp
       actions: [{ type: "observe" }],
     }),
   };
-  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true, now });
+  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true, now, monotonicNow: now });
   await controller.start();
   const [item] = controller.getSnapshot().approvalQueue;
 
@@ -2196,7 +2206,7 @@ test("constructor rejects an explicit invalid harnessProfile and accepts an expl
     browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
     approve: allowApprove(),
     hostVerifier: () => true,
-    harnessProfile: "fast",
+    harnessProfile: "turbo",
   }));
   await badStore.close();
 
@@ -2758,8 +2768,8 @@ test("only a Multi-agent parent with a host child_plan hook is told it may split
   const running = { requestedAgentCount: 1, activeAgentCount: 1, queuedAgentCount: 0, parentGoalVersion: 1, memoryPolicy: "budgeted",
     agents: [{ agentId: "a", status: "running", assignedOrigin: "https://a.example", evidenceCount: 0, subgoal: "Flights" }] };
   const cases = [
-    ["multi_agent", true, async () => null, { enabled: true, maxAgents: 8, active: null }],
-    ["multi_agent", true, async () => running, { enabled: true, maxAgents: 8, active: { agents: [{ subgoal: "Flights", status: "running" }] } }],
+    ["multi_agent", true, async () => null, { enabled: true, maxAgents: 8, executionModes: ["host"], active: null }],
+    ["multi_agent", true, async () => running, { enabled: true, maxAgents: 8, executionModes: ["host"], active: { agents: [{ subgoal: "Flights", status: "running" }] } }],
     ["multi_agent", true, async () => { throw new Error("unreadable"); }, undefined],
     ["multi_agent", false, async () => null, undefined],
     ["browser", true, async () => null, undefined],

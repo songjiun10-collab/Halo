@@ -33,6 +33,11 @@ test("unknown inputs fail closed to the user's effort or throw", () => {
 test("routes come from the persisted task profile duration", () => {
   assert.equal(routeForProfile({ duration: { id: "short" } }), "short");
   assert.equal(routeForProfile({ duration: { id: "long" } }), "long");
+  assert.equal(routeForProfile({ duration: { id: "fast" } }), "fast");
+  // fast keeps a medium ceiling in auto mode (low looped on exploratory goals).
+  assert.equal(effortForRoute({ base: "high", mode: "auto", route: "fast" }), "medium");
+  assert.equal(effortForRoute({ base: "low", mode: "auto", route: "fast" }), "low");
+  assert.equal(effortForRoute({ base: "high", mode: "fixed", route: "fast" }), "high");
   // Legacy tasks without a profile are treated as the default horizon.
   assert.equal(routeForProfile(null), "middle");
   assert.equal(routeForProfile(undefined), "middle");

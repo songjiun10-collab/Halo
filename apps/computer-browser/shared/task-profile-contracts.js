@@ -20,7 +20,7 @@ const PROFILE_FIELDS = Object.freeze([
     "schemaVersion", "classifierVersion", "duration", "capability", "parentBinding", "selection",
 ]);
 const SELECTED_PAYLOAD_FIELDS = Object.freeze([
-    "profileSchemaVersion", "classifierVersion", "parentBinding", "duration", "capability", "selection", "workGoalBinding",
+    "profileSchemaVersion", "classifierVersion", "parentBinding", "duration", "capability", "selection", "workGoalBinding", "agentBrowserProfile",
 ]);
 const DURATION_FIELDS = Object.freeze(["id", "harnessProfileVersion", "policySetId"]);
 const SELECTED_DURATION_FIELDS = Object.freeze([...DURATION_FIELDS, "effectiveLimits"]);
@@ -30,6 +30,7 @@ const SELECTION_FIELDS = Object.freeze(["duration", "capability"]);
 const SELECTION_ITEM_FIELDS = Object.freeze(["source", "ruleId"]);
 const PARENT_BINDING_FIELDS = Object.freeze(["parentTaskId", "planId", "parentGoalVersion"]);
 const WORK_GOAL_BINDING_FIELDS = Object.freeze(["goalId", "goalVersion", "reservationId"]);
+const AGENT_BROWSER_PROFILE_FIELDS = Object.freeze(["agentId"]);
 const LIMIT_FIELDS = Object.freeze(["maxActions", "maxPlannerCalls", "maxActiveMs"]);
 /**
  * getCapabilityProfile's own rejection carries code "unknown_capability",
@@ -76,6 +77,12 @@ function validateWorkGoalBinding(value) {
     assertUuid(value.goalId, "workGoalBinding.goalId");
     positiveInteger(value.goalVersion, "workGoalBinding.goalVersion");
     assertUuid(value.reservationId, "workGoalBinding.reservationId");
+    return value;
+}
+function validateAgentBrowserProfileBinding(value) {
+    assertObject(value, "agentBrowserProfile", AGENT_BROWSER_PROFILE_FIELDS);
+    requireFields(value, AGENT_BROWSER_PROFILE_FIELDS, "agentBrowserProfile");
+    assertUuid(value.agentId, "agentBrowserProfile.agentId");
     return value;
 }
 function validateDuration(value, { selected = false } = {}) {
@@ -187,6 +194,13 @@ function validateProfile(value, { selected = false } = {}) {
         if (value.parentBinding)
             throw new ContractError("invalid_profile", "child profiles cannot bind independently to a Work Goal");
     }
+    if (Object.hasOwn(value, "agentBrowserProfile")) {
+        if (!selected)
+            throw new ContractError("unknown_field", "agentBrowserProfile is only valid in the persisted profile event");
+        if (value.parentBinding)
+            throw new ContractError("invalid_profile", "child profiles cannot bind to an Agent browser profile");
+        validateAgentBrowserProfileBinding(value.agentBrowserProfile);
+    }
     validateDuration(value.duration, { selected });
     // Same objects as value.capability / value.selection, typed by validation.
     const capability = validateCapability(value.capability);
@@ -230,5 +244,6 @@ module.exports = {
     validateResolvedTaskProfile,
     validateTaskProfileSelectedPayload,
     validateWorkGoalBinding,
+    validateAgentBrowserProfileBinding,
     validateProfileRequiredGoalCreatedPayload,
 };

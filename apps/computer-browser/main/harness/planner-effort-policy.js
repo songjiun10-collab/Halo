@@ -8,8 +8,10 @@
 
 const PLANNER_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const EFFORT_MODES = Object.freeze(["auto", "fixed"]);
-// Children are observe+scroll helpers; short tasks are quick lookups.
-const AUTO_ROUTE_EFFORT = Object.freeze({ child: "low", short: "low" });
+// Children are observe+scroll helpers; short tasks are quick lookups. Fast
+// tasks stay cheap but keep medium: at low the planner guessed wrong URLs and
+// looped on exploratory goals (measured 0/3 at low vs 1/3 + 1 need_user at medium).
+const AUTO_ROUTE_EFFORT = Object.freeze({ child: "low", short: "low", fast: "medium" });
 
 class PlannerEffortPolicyError extends Error {
   constructor(code, message) {
@@ -21,7 +23,7 @@ class PlannerEffortPolicyError extends Error {
 
 function routeForProfile(taskProfile) {
   const id = taskProfile?.duration?.id;
-  return id === "short" || id === "long" ? id : "middle";
+  return id === "short" ? "short" : id === "fast" ? "fast" : id === "long" ? id : "middle";
 }
 
 function effortForRoute({ base, mode, route }) {
@@ -32,4 +34,20 @@ function effortForRoute({ base, mode, route }) {
   return PLANNER_EFFORTS.indexOf(routeEffort) < PLANNER_EFFORTS.indexOf(base) ? routeEffort : base;
 }
 
-module.exports = { effortForRoute, routeForProfile, EFFORT_MODES, PlannerEffortPolicyError };
+// Adaptive thinking: per planning call, spend less reasoning when the turn is
+// an easy hop and the full configured effort when it is not. The configured
+// effort stays the ceiling. Easy = the last action was a plain navigation
+// that succeeded onto a page not seen before, no user message is waiting, and
+// it is not the first turn; a second consecutive easy hop drops one more level.
+// Anything that suggests trouble (a failed/cancelled action, a revisited page,
+// a click/type, a waiting user) keeps the configured effort.
+const EASY_ACTIONS = Object.freeze(["navigate", "follow_link"]);
+function adaptiveEffort({ base, lastActionType, lastActionOk, revisit, pendingMessages, easyStreak }) {
+  const index = PLANNER_EFFORTS.indexOf(base);
+  if (index <= 0) return base;
+  if (pendingMessages || revisit || !lastActionOk || !EASY_ACTIONS.includes(lastActionType)) return base;
+  const drop = easyStreak >= 2 ? 2 : 1;
+  return PLANNER_EFFORTS[Math.max(0, index - drop)];
+}
+
+module.exports = { adaptiveEffort, effortForRoute, routeForProfile, EFFORT_MODES, PlannerEffortPolicyError };

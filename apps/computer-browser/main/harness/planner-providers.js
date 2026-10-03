@@ -10,6 +10,7 @@
 const path = require("node:path");
 const { isClaudeModel } = require("./providers/claude-models");
 const { isCodexModel } = require("./providers/codex-models");
+const { isNvidiaModel } = require("./providers/nvidia-models");
 
 const PLANNER_PROVIDERS = Object.freeze(Object.assign(Object.create(null), {
   claude_code: Object.freeze({
@@ -26,6 +27,10 @@ const PLANNER_PROVIDERS = Object.freeze(Object.assign(Object.create(null), {
     usageProvider: "codex",
     isModel: isCodexModel,
   }),
+  antigravity: Object.freeze({ id: "antigravity", workerPath: path.join(__dirname, "providers", "antigravity-planner-worker.js"), usageProvider: null, supportsFast: false, isModel: (model) => model === "antigravity-default" }),
+  cursor: Object.freeze({ id: "cursor", workerPath: path.join(__dirname, "providers", "cursor-planner-worker.js"), usageProvider: null, supportsFast: false, isModel: (model) => model === "cursor-auto" }),
+  nvidia: Object.freeze({ id: "nvidia", workerPath: path.join(__dirname, "providers", "nvidia-planner-worker.js"), usageProvider: "nvidia", supportsFast: false, isModel: isNvidiaModel }),
+  opencode_cli: Object.freeze({ id: "opencode_cli", workerPath: path.join(__dirname, "providers", "opencode-planner-worker.js"), usageProvider: null, supportsFast: false, isModel: (model) => model === "opencode-default" }),
 }));
 const PLANNER_PROVIDER_IDS = Object.freeze(["none", ...Object.keys(PLANNER_PROVIDERS)]);
 
@@ -63,8 +68,18 @@ function selectPlannerLaunch({ override, providerId, model, fast = false, nodeCo
   // A pinned model is passed only after re-checking the host allowlist.
   if (model !== undefined && !entry.isModel(model)) return unavailable("invalid_model");
   const modelArgs = model === undefined ? [] : ["--model", model];
-  const fastArgs = fast === true ? ["--fast"] : [];
+  const fastArgs = fast === true && entry.supportsFast !== false ? ["--fast"] : [];
   return { source: "settings", command: nodeCommand, args: [entry.workerPath, ...modelArgs, ...fastArgs], usageProvider: entry.usageProvider };
 }
 
-module.exports = { PLANNER_PROVIDER_IDS, PLANNER_PROVIDERS, parseOperatorOverride, selectPlannerLaunch };
+// Invoked only by the trusted host factory. Operator overrides and other
+// providers do not inherit these keys. This object never enters task context.
+function plannerProviderEnv(launch, env = process.env) {
+  if (launch.source !== "settings") return {};
+  const id = ["antigravity", "cursor", "nvidia"].find((provider) => PLANNER_PROVIDERS[provider].workerPath === launch.args?.[0]);
+  if (!id) return {};
+  const keys = id === "nvidia" ? ["NVIDIA_API_KEY"] : id === "cursor" ? ["CURSOR_API_KEY", "HALO_CURSOR_CLI_COMMAND"] : ["GEMINI_API_KEY", "HALO_ANTIGRAVITY_CLI_COMMAND"];
+  return Object.fromEntries(keys.filter((key) => typeof env[key] === "string" && env[key].length > 0).map((key) => [key, env[key]]));
+}
+
+module.exports = { PLANNER_PROVIDER_IDS, PLANNER_PROVIDERS, parseOperatorOverride, selectPlannerLaunch, plannerProviderEnv };

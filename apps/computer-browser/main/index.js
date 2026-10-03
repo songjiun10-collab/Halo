@@ -1,6 +1,7 @@
 "use strict";
 
-const { app, BrowserWindow, WebContentsView, dialog } = require("electron");
+const { app, BrowserWindow, WebContentsView, dialog, nativeTheme } = require("electron");
+const { applyPageTheme } = require("./page-theme");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -23,9 +24,9 @@ const { SharedMcpProvider } = require("./harness/shared-mcp-provider");
 const { McpCatalogCache } = require("./harness/mcp-catalog-cache");
 const { validateMcpArguments } = require("./harness/mcp-schema-validator");
 const { MemoryMonitor } = require("./harness/memory-monitor");
-const { AgentViewportHost, makeDualSurfaceBrowser } = require("./harness/agent-viewport-host");
+const { AgentViewportHost, makeDualSurfaceBrowser, agentBrowserPartition } = require("./harness/agent-viewport-host");
 const { resolvePlannerCommand } = require("./harness/planner-command");
-const { parseOperatorOverride, selectPlannerLaunch } = require("./harness/planner-providers");
+const { parseOperatorOverride, selectPlannerLaunch, plannerProviderEnv } = require("./harness/planner-providers");
 const { HostSettingsStore } = require("./harness/host-settings");
 const { LocalMemoryStore } = require("./harness/local-memory-store");
 const { LocalCredentialVault } = require("./harness/local-credential-vault");
@@ -376,10 +377,13 @@ function makeHarnessApprove(socketPath) {
 // file -- see agent-viewport-host.js's own doc comment for the exact routing
 // contract and why it is fail-closed for user actions by construction.
 function makeHarnessBrowser(surfaces, agentViewportHost) {
-  return (taskId) => {
+  return (taskId, taskProfile = null) => {
+    const hasAgentBinding = taskProfile !== null && Object.hasOwn(taskProfile, "agentBrowserProfile");
+    const agentId = hasAgentBinding ? taskProfile.agentBrowserProfile?.agentId : null;
+    const partition = hasAgentBinding ? agentBrowserPartition(agentId) : `halo-task-${taskId}`;
     const view = new WebContentsView({ webPreferences: {
       sandbox: true, contextIsolation: true, nodeIntegration: false,
-      partition: `halo-task-${taskId}`,
+      partition,
     } });
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     view.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
@@ -390,13 +394,16 @@ function makeHarnessBrowser(surfaces, agentViewportHost) {
     view.webContents.session.on("will-download", (event) => event.preventDefault());
     surfaces.register(taskId, view);
     const visibleAdapter = new BrowserAdapter({ view });
-    // Same session partition as the visible view above (`halo-task-${taskId}`)
-    // -- design doc's session/cookie boundary section: the agent view must
-    // share the task's existing login/cookie state, not start a fresh one.
-    const agentAdapter = withConnectorObservation(agentViewportHost.ensure(taskId));
+    // Both surfaces receive the same host-journal-bound Agent identity. An
+    // unbound task keeps its own ephemeral task partition. Child agents use
+    // a separate in-memory partition derived from their host-minted child ID.
+    const agentAdapter = withConnectorObservation(hasAgentBinding
+      ? agentViewportHost.ensure(taskId, { agentId })
+      : agentViewportHost.ensure(taskId));
     return makeDualSurfaceBrowser({
       agentAdapter,
       visibleAdapter,
+      captureComputerUseObservation: (observation) => agentViewportHost.captureComputerUseObservation(taskId, observation),
       disposeAgent: async () => {
         try { if (codexMcp) await agentAdapter.dispose?.(); }
         finally { await agentViewportHost.dispose(taskId); }
@@ -405,8 +412,8 @@ function makeHarnessBrowser(surfaces, agentViewportHost) {
   };
 }
 
-function makeChildHarnessBrowser(parentTaskId, childId, origin) {
-  const adapter = withConnectorObservation(agentViewportHost.ensureChild(parentTaskId, childId, { assignedOrigin: origin }));
+function makeChildHarnessBrowser(parentTaskId, childId, origin, execution = "host") {
+  const adapter = withConnectorObservation(agentViewportHost.ensureChild(parentTaskId, childId, { assignedOrigin: origin, execution }));
   // ChildAgentCoordinator disposes the browser it received. A bare adapter
   // would destroy the WebContents but leave AgentViewportHost's hidden
   // BrowserWindow and childId registry alive across completed children.
@@ -455,7 +462,7 @@ function makeHarnessPlanner(usageLedger) {
       command: launch.command,
       args: launch.args,
       cwd: REPO_ROOT,
-      env: plannerEnv,
+      env: { ...plannerEnv, ...plannerProviderEnv(launch) },
       role,
       onUsage: (usage) => {
         // A settings-selected worker may only report usage for its own provider.
@@ -615,6 +622,8 @@ function startMemoryPolling() {
   }, 5000);
   memoryMonitor.sample().catch(() => {});
 }
+
+applyPageTheme({ app, nativeTheme, env: process.env });
 
 app.whenReady().then(async () => {
   socketDir = makeSocketDir();

@@ -5,7 +5,7 @@
 // returns bounded non-negative numbers or null. Nothing here holds prompt or
 // page text.
 
-const PROVIDERS = ["claude", "codex"];
+const PROVIDERS = ["claude", "codex", "nvidia"];
 const MAX_COUNT = 1e12;
 const MAX_COST_USD = 1e6;
 

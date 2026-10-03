@@ -22,6 +22,7 @@ const { TaskController } = require("../main/harness/task-controller");
 const { HostSettingsStore } = require("../main/harness/host-settings");
 const { RoutineStore } = require("../main/harness/routine-store");
 const { RoutineRunner } = require("../main/harness/routine-runner");
+const { WorkGoalStore } = require("../main/harness/work-goal-store");
 
 const hostsToClose = new Set();
 const SHUTDOWN_DEADLOCK_TIMEOUT_MS = 5000;
@@ -862,6 +863,50 @@ test("resumeSavedTask() attaches a never-seen-before saved task and resumes it i
   assert.notEqual(snapshot.state, "paused", "a cleanly recovered task must resume, not stay paused, on resumeSavedTask()");
 });
 
+test("resumeSavedTask() retains a journal store when attachment cleanup cannot close it", async () => {
+  const storageRoot = await mkTempRoot();
+  const created = await TaskStore.create({ originalRequest: "retry failed resume cleanup" }, { storageRoot });
+  const taskId = created.taskId;
+  await created.close();
+  const host = makeHost(storageRoot, {
+    makePlanner: () => { throw Object.assign(new Error("planner startup failed"), { code: "planner_start_failed" }); },
+  });
+
+  const originalLoad = TaskStore.load;
+  let plannerStarted = false;
+  let closeFailed = false;
+  let attachedStore;
+  host._makePlanner = () => {
+    plannerStarted = true;
+    throw Object.assign(new Error("planner startup failed"), { code: "planner_start_failed" });
+  };
+  TaskStore.load = async (...args) => {
+    const store = await originalLoad.apply(TaskStore, args);
+    attachedStore = store;
+    const close = store.close.bind(store);
+    store.close = async () => {
+      if (plannerStarted && !closeFailed) {
+        closeFailed = true;
+        throw new Error("injected transient journal close failure");
+      }
+      return close();
+    };
+    return store;
+  };
+
+  try {
+    await assert.rejects(host.resumeSavedTask(taskId), { code: "task_attach_cleanup_failed" });
+    assert.equal(host._unattachedStoreClosures.get(taskId)?.store, attachedStore, "failed close must remain host-owned");
+    assert.equal(host._active.has(taskId), false);
+    await host.close();
+    assert.equal(host._unattachedStoreClosures.has(taskId), false, "shutdown must retry and release the writer lock");
+    const reopened = await TaskStore.load(taskId, { storageRoot });
+    await reopened.close();
+  } finally {
+    TaskStore.load = originalLoad;
+  }
+});
+
 test("resumeSavedTask() on an execution_uncertain task requires confirmed:true (propagated through)", async () => {
   const storageRoot = await mkTempRoot();
   const created = await TaskStore.create({ originalRequest: "dangling" }, { storageRoot });
@@ -949,6 +994,74 @@ test("close() durably pauses active work and closes each owned resource", async 
   await reopened.close();
 });
 
+test("close() keeps failed resource ownership and can retry cleanup", async () => {
+  const storageRoot = await mkTempRoot();
+  let disposeCalls = 0;
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => ({
+      observe: async () => ({ id: "obs" }),
+      execute: async () => ({ status: "ok" }),
+      dispose: async () => {
+        disposeCalls += 1;
+        if (disposeCalls === 1) throw new Error("transient browser dispose failure");
+      },
+    }),
+  });
+  const { taskId } = await host.createTask({ originalRequest: "retry shutdown cleanup" });
+
+  await assert.rejects(host.close(), AggregateError);
+  assert.equal(host._active.has(taskId), true, "failed cleanup must retain resource ownership");
+  await assert.rejects(host.listTasks(), { code: "host_closed" }, "failed close must still reject new work");
+
+  await host.close();
+
+  assert.equal(disposeCalls, 2);
+  assert.equal(host._active.has(taskId), false);
+});
+
+test("close() preserves browser ownership when durable takeover fails", async () => {
+  const storageRoot = await mkTempRoot();
+  let disposeCalls = 0;
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => ({
+      observe: async () => ({ id: "obs" }),
+      execute: async () => ({ status: "ok" }),
+      dispose: async () => { disposeCalls += 1; },
+    }),
+    makePlanner: () => ({
+      next: async (context) => ({
+        taskId: context.taskId,
+        goalVersion: context.goalVersion,
+        basedOnObservationId: "obs",
+        criterionIds: [],
+        kind: "actions",
+        actions: [{ type: "observe" }],
+      }),
+    }),
+    approve: async () => ({ decision: "review", reasons: [] }),
+  });
+  const { taskId } = await host.createTask({ originalRequest: "retain browser until pause is durable" });
+  const entry = host._active.get(taskId);
+  assert.equal(entry.controller.getSnapshot().state, "awaiting_approval");
+  const realTakeOver = entry.controller.takeOver.bind(entry.controller);
+  let takeOverCalls = 0;
+  entry.controller.takeOver = async (...args) => {
+    takeOverCalls += 1;
+    if (takeOverCalls === 1) throw new Error("transient durable takeover failure");
+    return realTakeOver(...args);
+  };
+
+  await assert.rejects(host.close(), AggregateError);
+  assert.equal(host._active.get(taskId), entry, "task and browser ownership must remain attached");
+  assert.equal(disposeCalls, 0, "browser must remain live until takeover is durable");
+
+  await host.close();
+
+  assert.equal(takeOverCalls, 2);
+  assert.equal(disposeCalls, 1);
+  assert.equal(host._active.has(taskId), false);
+});
+
 test("close() drains a pending createTask before it can attach unowned resources", async () => {
   const storageRoot = await mkTempRoot();
   const originalCreate = TaskStore.create;
@@ -975,6 +1088,11 @@ test("close() drains a pending createTask before it can attach unowned resources
       return finishingPlanner();
     },
   });
+  await host.startWorkGoal({
+    objective: "Do not reserve budget for a create cancelled by shutdown",
+    successCriteria: [{ id: "verify", text: "Verify task creation", required: true, verification: "user" }],
+    budget: { maxTasks: 2, maxActions: 100, maxPlannerCalls: 50, maxActiveMs: 120000 },
+  });
 
   try {
     const creating = host.createTask({ originalRequest: "creation racing shutdown" });
@@ -986,6 +1104,54 @@ test("close() drains a pending createTask before it can attach unowned resources
     await closing;
     assert.deepEqual(resourcesCreated, [], "shutdown must prevent post-close BrowserView/planner attachment");
 
+    const reopened = await TaskStore.load(createdStore.taskId, { storageRoot });
+    assert.equal(reopened.lastCheckpoint.payload.task.state, "stopped", "an aborted create must be durably terminal, not recovered as orphan work");
+    const recoveredGoals = new WorkGoalStore({ storageRoot });
+    await recoveredGoals.load();
+    const reservations = Object.values(recoveredGoals.getActive().reservations);
+    assert.equal(reservations.length, 1, "the race reaches the durable reservation boundary before shutdown aborts it");
+    assert.ok(reservations.every((item) => item.status === "released"), "shutdown must release any reservation created before cancellation");
+    await recoveredGoals.close();
+    await reopened.close();
+  } finally {
+    TaskStore.create = originalCreate;
+    releaseCreate();
+  }
+});
+
+test("shutdown retries a TaskStore close failure during cancelled creation", async () => {
+  const storageRoot = await mkTempRoot();
+  const originalCreate = TaskStore.create;
+  let releaseCreate;
+  let signalCreateStarted;
+  const createStarted = new Promise((resolve) => { signalCreateStarted = resolve; });
+  const createGate = new Promise((resolve) => { releaseCreate = resolve; });
+  let createdStore;
+  let closeCalls = 0;
+  TaskStore.create = async (...args) => {
+    signalCreateStarted();
+    await createGate;
+    createdStore = await originalCreate(...args);
+    const originalClose = createdStore.close.bind(createdStore);
+    createdStore.close = async () => {
+      closeCalls += 1;
+      if (closeCalls === 1) throw new Error("injected transient TaskStore close failure");
+      return originalClose();
+    };
+    return createdStore;
+  };
+  const host = makeHost(storageRoot);
+
+  try {
+    const creating = host.createTask({ originalRequest: "cancel and retry store close" });
+    await createStarted;
+    const closing = host.close();
+    releaseCreate();
+
+    await assert.rejects(creating, { code: "task_creation_rollback_failed" });
+    await closing;
+    assert.equal(closeCalls, 2, "host shutdown retries closing the retained unstarted store");
+    assert.equal(host._unattachedStoreClosures.has(createdStore.taskId), false);
     const reopened = await TaskStore.load(createdStore.taskId, { storageRoot });
     await reopened.close();
   } finally {
@@ -1189,6 +1355,42 @@ test("a queued plain task actually runs to completion after the preceding task s
   assert.notEqual(finished.pauseReason, "queue_start_failed");
 });
 
+test("a queued task can be explicitly resumed after its first runtime attachment fails", async () => {
+  const storageRoot = await mkTempRoot();
+  let targetTaskId = null;
+  let failTargetAttach = true;
+  const host = makeHost(storageRoot, {
+    makePlanner: (taskId) => {
+      if (taskId === targetTaskId && failTargetAttach) {
+        failTargetAttach = false;
+        throw Object.assign(new Error("transient planner startup failure"), { code: "planner_start_failed" });
+      }
+      return finishingPlanner();
+    },
+  });
+  const first = await host.createTask({ originalRequest: "hold the queue slot" });
+  const queued = await host.createTask({ originalRequest: "retry after attach failure" });
+  targetTaskId = queued.taskId;
+  const startQueued = host._startQueued.bind(host);
+  let queuedStart;
+  host._startQueued = (taskId, ...args) => {
+    const operation = startQueued(taskId, ...args);
+    if (taskId === queued.taskId) queuedStart = operation;
+    return operation;
+  };
+  await host.stopTask(first.taskId);
+  await host._queueTransition;
+  assert.ok(queuedStart, "releasing the first task's slot must start the queued loader");
+  await assert.rejects(queuedStart, { code: "planner_start_failed" });
+  assert.equal(host._active.has(queued.taskId), false, "failed startup must not leave a half-attached controller");
+  assert.equal(host._queuedStores.has(queued.taskId), false, "failed queued loader must release its store lock before retry");
+  assert.equal(host._queuedStartPromises.has(queued.taskId), false, "failed queued loader must settle before retry");
+  assert.ok(host._queue.activeIds().includes(queued.taskId), "retain explicit admission so the saved task can be retried");
+
+  const resumed = await host.resumeSavedTask(queued.taskId);
+  assert.ok(["awaiting_verification", "completed"].includes(resumed.state), `explicit retry should run the admitted task, got ${resumed.state}`);
+});
+
 test("a queued task still starts while listTasks() is polled without pause (peek/attach lock race)", async () => {
   for (let round = 0; round < 8; round += 1) {
     const storageRoot = await mkTempRoot();
@@ -1271,7 +1473,7 @@ test("createTask() rejects an invalid duration profile selector", async () => {
   const storageRoot = await mkTempRoot();
   const host = makeHost(storageRoot);
   await assert.rejects(
-    () => host.createTask({ originalRequest: "bad profile" }, { requestedDurationProfile: "fast" }),
+    () => host.createTask({ originalRequest: "bad profile" }, { requestedDurationProfile: "turbo" }),
     (error) => error.code === "invalid_selector",
   );
 });
@@ -1350,6 +1552,45 @@ test("credential filling is a trusted, user-controlled, exact-origin path and ne
   assert.equal(JSON.stringify(autofillEvent).includes("secret-value"), false);
 });
 
+test("task resume cannot race an in-progress credential vault read and autofill", async () => {
+  const storageRoot = await mkTempRoot();
+  let signalVaultEntered;
+  let releaseVault;
+  const vaultEntered = new Promise((resolve) => { signalVaultEntered = resolve; });
+  const vaultGate = new Promise((resolve) => { releaseVault = resolve; });
+  const host = makeHost(storageRoot, {
+    makePlanner: () => pausingPlanner(),
+    credentialVault: {
+      fill: async (args) => {
+        signalVaultEntered();
+        await vaultGate;
+        await args.fillCredential({ username: "alice", password: "secret" });
+        return { status: "ok" };
+      },
+    },
+    makeBrowser: () => ({
+      observe: async () => ({ id: "obs" }),
+      execute: async () => ({ status: "ok" }),
+      getBrowserSnapshot: () => ({ tabs: [{ id: "page", url: "https://login.example.test/" }], activeTabId: "page" }),
+      fillCredential: async () => ({ status: "ok", usernameFilled: true, passwordFilled: true }),
+    }),
+  });
+  const { taskId } = await host.createTask({ originalRequest: "login" });
+  assert.equal((await host.getTaskDetail(taskId)).snapshot.pauseReason, "need_user");
+
+  const filling = host.fillCredential(taskId, "credential-1");
+  await vaultEntered;
+  await assert.rejects(() => host.resumeSavedTask(taskId), { code: "admission_closed" });
+  let stopFinished = false;
+  const stopping = host.stopTask(taskId).then(() => { stopFinished = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopFinished, false, "stop must drain the credential fill before returning control or tearing down the task");
+  releaseVault();
+  assert.deepEqual(await filling, { status: "ok" });
+  await stopping;
+  assert.equal(stopFinished, true);
+});
+
 test("parallel queue mode opens a second slot only with a measured reservation and fresh memory admission", async () => {
   const storageRoot = await mkTempRoot();
   const built = [];
@@ -1398,6 +1639,113 @@ test("the first top-level task acquires the shared memory lease before browser o
   assert.equal(task.snapshot.state, "awaiting_verification");
   assert.deepEqual(built, ["browser", "planner"]);
   assert.deepEqual(host._resourceAdmission.getSnapshot().leases.map((lease) => lease.ownerId), [task.taskId]);
+});
+
+test("a failed initial planner attachment disposes the browser and durably releases task admission", async () => {
+  const storageRoot = await mkTempRoot();
+  let taskId;
+  let browserDisposals = 0;
+  const host = makeHost(storageRoot, {
+    parallelTaskReserveBytes: 220_000_000,
+    memoryMonitor: { getPressureLevel: () => "normal", canAdmitTask: () => ({ allowed: true }) },
+    makeBrowser: (id) => {
+      taskId = id;
+      return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }), dispose: async () => { browserDisposals += 1; } };
+    },
+    makePlanner: () => { throw Object.assign(new Error("planner factory failed"), { code: "planner_factory_failed" }); },
+  });
+
+  await assert.rejects(host.createTask({ originalRequest: "recover failed attachment" }), { code: "planner_factory_failed" });
+
+  assert.equal(browserDisposals, 1, "browser allocated before planner failure must be torn down");
+  assert.deepEqual(host._queue.activeIds(), [], "failed creation must not strand the only queue slot");
+  assert.deepEqual(host._resourceAdmission.getSnapshot().leases, [], "failed creation must release its memory reservation");
+  assert.equal(host._childCoordinator._activeStores.has(taskId), false, "failed creation must unregister the child-message store");
+  const recovered = await TaskStore.load(taskId, { storageRoot });
+  assert.equal(recovered.lastCheckpoint.payload.task.state, "stopped", "the durable task record must not look runnable after failed creation");
+  assert.equal(recovered.lastCheckpoint.payload.task.pauseReason, "attachment_failed");
+  await recovered.close();
+});
+
+test("closing during failed attachment does not admit the next queued task", async () => {
+  const storageRoot = await mkTempRoot();
+  const built = [];
+  let failedTaskId = null;
+  let signalDispose;
+  const disposeStarted = new Promise((resolve) => { signalDispose = resolve; });
+  let releaseDispose;
+  const disposeGate = new Promise((resolve) => { releaseDispose = resolve; });
+  const host = makeHost(storageRoot, {
+    executionMode: "parallel",
+    maxParallelTasks: 2,
+    parallelTaskReserveBytes: 220_000_000,
+    memoryMonitor: { getPressureLevel: () => "normal", canAdmitTask: () => ({ allowed: true }) },
+    makeBrowser: (taskId) => {
+      built.push(taskId);
+      if (built.length === 2) {
+        failedTaskId = taskId;
+        return {
+          observe: async () => ({ id: "obs" }),
+          execute: async () => ({ status: "ok" }),
+          dispose: async () => { signalDispose(); await disposeGate; },
+        };
+      }
+      return { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }), dispose: async () => {} };
+    },
+    makePlanner: (taskId) => {
+      if (taskId === failedTaskId) throw Object.assign(new Error("transient planner startup failure"), { code: "planner_start_failed" });
+      return finishingPlanner();
+    },
+  });
+  await host.createTask({ originalRequest: "occupy first slot" });
+  const failingCreate = host.createTask({ originalRequest: "fail in second slot" });
+  await disposeStarted;
+  const queued = await host.createTask({ originalRequest: "must remain queued through shutdown" });
+  assert.equal(queued.snapshot.state, "queued");
+
+  const closing = host.close();
+  releaseDispose();
+  await assert.rejects(failingCreate, { code: "planner_start_failed" });
+  await closing;
+
+  assert.ok(host._queue.pendingIds().includes(queued.taskId), "shutdown must preserve queued work without starting it");
+  assert.equal(host._queue.activeIds().includes(queued.taskId), false);
+  assert.equal(built.includes(queued.taskId), false, "no BrowserView may be created after shutdown starts");
+  assert.equal(host._resourceAdmission.getSnapshot().leases.length, 0);
+});
+
+test("partial attachment cleanup failure remains host-owned and is retried during close", async () => {
+  const storageRoot = await mkTempRoot();
+  let taskId;
+  let browserDisposals = 0;
+  const host = makeHost(storageRoot, {
+    parallelTaskReserveBytes: 220_000_000,
+    memoryMonitor: { getPressureLevel: () => "normal", canAdmitTask: () => ({ allowed: true }) },
+    makeBrowser: (id) => {
+      taskId = id;
+      return {
+        observe: async () => ({ id: "obs" }),
+        execute: async () => ({ status: "ok" }),
+        dispose: async () => {
+          browserDisposals += 1;
+          if (browserDisposals === 1) throw new Error("transient partial teardown failure");
+        },
+      };
+    },
+    makePlanner: () => { throw Object.assign(new Error("planner factory failed"), { code: "planner_factory_failed" }); },
+  });
+
+  await assert.rejects(host.createTask({ originalRequest: "retain failed cleanup ownership" }), { code: "attachment_cleanup_failed" });
+  assert.equal(host._attachmentCleanupFailures.has(taskId), true);
+  assert.equal(host._resourceAdmission.getSnapshot().leases.length, 1, "keep the reservation while the browser may still be alive");
+  await host.close();
+
+  assert.equal(browserDisposals, 2, "shutdown retries only the failed browser cleanup");
+  assert.equal(host._resourceAdmission.getSnapshot().leases.length, 0);
+  assert.equal(host._childCoordinator._activeStores.has(taskId), false);
+  assert.equal(host._attachmentCleanupFailures.has(taskId), false);
+  const recovered = await TaskStore.load(taskId, { storageRoot });
+  await recovered.close();
 });
 
 test("a denied first top-level lease keeps its FIFO head queued without constructing resources", async () => {
@@ -1731,6 +2079,122 @@ test("listChildren() returns [] for a task with no child plan, and reflects an a
   assert.equal(children[0].origin, "https://child.example");
 });
 
+test("resumeSavedTask() re-admits queued children from a durable plan after the host restarts", async () => {
+  const storageRoot = await mkTempRoot();
+  const parentHost = makeHost(storageRoot);
+  const parent = await parentHost.createTask(
+    { originalRequest: "resume the accepted child plan" },
+    { requestedCapabilityProfile: "multi_agent" },
+  );
+  await waitForState(parentHost, parent.taskId, ["awaiting_verification"], 10000);
+  await parentHost.pauseTask(parent.taskId, "prepare_for_restart");
+  const { store } = parentHost._require(parent.taskId);
+  const accepted = await parentHost._childCoordinator.acceptParentPlan(
+    parent.taskId,
+    {
+      taskId: parent.taskId,
+      goalVersion: 1,
+      basedOnObservationId: "obs",
+      criterionIds: [],
+      kind: "child_plan",
+      parentGoalVersion: 1,
+      requestedAgentCount: 1,
+      assignments: [{ subgoal: "continue durable work", entryUrl: "https://child.example/start" }],
+    },
+    { parentStore: store, memoryPolicy: "user_override" },
+  );
+  assert.equal((await parentHost.listChildren(parent.taskId))[0].state, "queued");
+  await parentHost.close();
+
+  let childBrowserBuilds = 0;
+  const resumedHost = makeHost(storageRoot, {
+    memoryMonitor: {
+      getPressureLevel: () => "normal",
+      canAdmitTask: () => ({ allowed: true }),
+    },
+    makeChildBrowser: () => {
+      childBrowserBuilds += 1;
+      return {
+        userNavigate: async () => ({ status: "ok" }),
+        observe: async () => ({ id: "child-obs" }),
+        execute: async () => ({ status: "ok" }),
+        dispose: async () => {},
+      };
+    },
+    makePlanner: () => ({ next: () => new Promise(() => {}), close: async () => {} }),
+    hostVerifier: () => true,
+    approve: async () => ({ decision: "allow", reasons: [] }),
+  });
+
+  await resumedHost.resumeSavedTask(parent.taskId);
+  let child = null;
+  for (let i = 0; i < 100; i += 1) {
+    child = (await resumedHost.listChildren(parent.taskId)).find((item) => item.childId === accepted.childIds[0] && item.state === "running");
+    if (child) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(child.childId, accepted.childIds[0]);
+  assert.equal(childBrowserBuilds, 1, "recovery must attach exactly one child view");
+  await resumedHost.close();
+  assert.equal(resumedHost._childCoordinator._liveChildren.size, 0, "host shutdown must detach child controllers and browser views");
+  assert.equal(resumedHost._resourceAdmission.getSnapshot().leases.length, 0, "shutdown must return child and parent leases");
+});
+
+test("host shutdown waits for a child attach already navigating before detaching its resources", async () => {
+  const storageRoot = await mkTempRoot();
+  let signalNavigation;
+  const navigationStarted = new Promise((resolve) => { signalNavigation = resolve; });
+  let releaseNavigation;
+  const navigationGate = new Promise((resolve) => { releaseNavigation = resolve; });
+  let childDisposed = false;
+  const host = makeHost(storageRoot, {
+    memoryMonitor: {
+      getPressureLevel: () => "normal",
+      canAdmitTask: () => ({ allowed: true }),
+    },
+    makeChildBrowser: () => ({
+      userNavigate: async () => { signalNavigation(); await navigationGate; return { status: "ok" }; },
+      observe: async () => ({ id: "child-obs" }),
+      execute: async () => ({ status: "ok" }),
+      dispose: async () => { childDisposed = true; },
+    }),
+    makePlanner: () => finishingPlanner(),
+    hostVerifier: () => true,
+  });
+  const parent = await host.createTask(
+    { originalRequest: "close while a child is starting" },
+    { requestedCapabilityProfile: "multi_agent" },
+  );
+  await waitForState(host, parent.taskId, ["awaiting_verification"], 10000);
+  await host.pauseTask(parent.taskId, "prepare_shutdown_race");
+  const { store } = host._require(parent.taskId);
+  await host._childCoordinator.acceptParentPlan(
+    parent.taskId,
+    {
+      taskId: parent.taskId,
+      goalVersion: 1,
+      basedOnObservationId: "obs",
+      criterionIds: [],
+      kind: "child_plan",
+      parentGoalVersion: 1,
+      requestedAgentCount: 1,
+      assignments: [{ subgoal: "start in background", entryUrl: "https://child.example/start" }],
+    },
+    { parentStore: store, memoryPolicy: "user_override" },
+  );
+  await navigationStarted;
+
+  let closeSettled = false;
+  const closing = host.close().finally(() => { closeSettled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(closeSettled, false, "shutdown must account for a child attach that has not entered the live map yet");
+  releaseNavigation();
+  await closing;
+  assert.equal(childDisposed, true, "the child view created by the in-flight attach must be disposed");
+  assert.equal(host._childCoordinator._liveChildren.size, 0);
+  assert.equal(host._resourceAdmission.getSnapshot().leases.length, 0);
+});
+
 test("a child's taskId is absent from listTasks() and rejected by resumeSavedTask()", async () => {
   const storageRoot = await mkTempRoot();
   const host = makeHost(storageRoot);
@@ -1870,6 +2334,55 @@ test("maxParallelTasks:3 admits three tasks at once, queues the fourth, and admi
   assert.equal(built[3], tasks[3].taskId);
 });
 
+test("parallel admission does not reuse a slot until the previous task browser teardown finishes", async () => {
+  const storageRoot = await mkTempRoot();
+  let signalFirstDispose;
+  const firstDisposeStarted = new Promise((resolve) => { signalFirstDispose = resolve; });
+  let releaseFirstDispose;
+  const firstDisposeGate = new Promise((resolve) => { releaseFirstDispose = resolve; });
+  let browserCount = 0;
+  let firstStop;
+  const host = makeHost(storageRoot, {
+    executionMode: "parallel",
+    maxParallelTasks: 1,
+    parallelTaskReserveBytes: 100_000_000,
+    memoryMonitor: { getPressureLevel: () => "normal", canAdmitTask: () => ({ allowed: true }) },
+    makeBrowser: () => {
+      browserCount += 1;
+      const isFirst = browserCount === 1;
+      return {
+        observe: async () => ({ id: "obs" }),
+        execute: async () => ({ status: "ok" }),
+        dispose: async () => {
+          if (isFirst) {
+            signalFirstDispose();
+            await firstDisposeGate;
+          }
+        },
+      };
+    },
+  });
+
+  try {
+    const first = await host.createTask({ originalRequest: "first" });
+    firstStop = host.stopTask(first.taskId);
+    await firstDisposeStarted;
+
+    const second = await host.createTask({ originalRequest: "second" });
+    assert.equal(second.snapshot.state, "queued", "the next task must stay queued until browser teardown releases the slot");
+    assert.equal(browserCount, 1, "no second browser may be constructed while the first is still disposing");
+
+    releaseFirstDispose();
+    await firstStop;
+    const resumed = await waitForState(host, second.taskId, ["awaiting_verification", "completed"]);
+    assert.notEqual(resumed.pauseReason, "queue_start_failed");
+    assert.equal(browserCount, 2);
+  } finally {
+    releaseFirstDispose();
+    if (firstStop) await firstStop.catch(() => {});
+  }
+});
+
 test("maxParallelTasks:3 does not override memory admission: with room for two, the third stays queued and builds nothing", async () => {
   const storageRoot = await mkTempRoot();
   let built = 0;
@@ -1946,6 +2459,36 @@ test("an opted-in task gets imported sessions injected before its browser exists
   const events = await host.getTaskEvents(taskId);
   const note = events.find((event) => event.payload?.kind === "imported_sessions_injected");
   assert.deepEqual(note.payload, { kind: "imported_sessions_injected", injected: 2, failed: 0, domains: ["claude.ai"] });
+});
+
+test("imported sessions are never injected into a persistent Agent profile", async () => {
+  const storageRoot = await mkTempRoot();
+  const importer = fakeProfileImporter();
+  const agentId = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
+  const { resolveTaskProfile } = require("../shared/task-profile-router");
+  const goalInput = { originalRequest: "use my isolated Agent login" };
+  const store = await TaskStore.create(goalInput, {
+    storageRoot,
+    resolvedProfile: resolveTaskProfile({ goalInput }),
+    agentBrowserProfileBinding: { agentId },
+  });
+  await store.append({ type: "note", payload: {
+    kind: "memory_policy_selected", mode: "budgeted", auditEventId: null, actor: "test", selectedAt: new Date().toISOString(),
+  } });
+  importer.optIn.add(store.taskId);
+  let sessionLookups = 0;
+  const host = makeHost(storageRoot, {
+    profileImporter: importer,
+    getTaskSession: () => { sessionLookups += 1; return { id: "agent-profile-session" }; },
+  });
+  await host._getRunMemoryPolicy(store.taskId, store);
+
+  await host._attachPrepared(store);
+
+  assert.equal(sessionLookups, 0);
+  assert.equal(importer.calls.some(([kind]) => kind === "prepare"), false);
+  const events = await host.getTaskEvents(store.taskId);
+  assert.ok(events.some((event) => event.payload?.kind === "imported_sessions_injection_failed" && event.payload.errorCode === "agent_profile_import_conflict"));
 });
 
 test("tasks that did not opt in never get sessions injected and leave no note", async () => {
@@ -2362,7 +2905,6 @@ test("MCP is a separate host-enabled scope: host methods reach only that task's 
   assert.equal(provider.calls.length, 1);
 
   await host.stopTask(taskId);
-  for (let i = 0; i < 500 && !made[0].closed; i += 1) await new Promise((resolve) => setImmediate(resolve));
   assert.equal(made[0].closed, true, "task cleanup closes its MCP broker");
 });
 
@@ -2467,7 +3009,7 @@ test("a Multi-agent task's planner is told it may split work, a plain task's is 
     for (let i = 0; i < 100 && seen.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     return seen;
   };
-  assert.deepEqual(await seenFor({ requestedCapabilityProfile: "multi_agent" }), [{ enabled: true, maxAgents: 8, active: null }]);
+  assert.deepEqual(await seenFor({ requestedCapabilityProfile: "multi_agent" }), [{ enabled: true, maxAgents: 8, executionModes: ["host"], active: null }]);
   assert.deepEqual(await seenFor({}), [undefined]);
 });
 
@@ -2493,4 +3035,17 @@ test("a new planner pins the plannerModel chosen when it is created, and omits i
     { role: "child", plannerProvider: "claude_code", plannerModel: "claude-sonnet-5-5" },
   ]);
   await host.close();
+});
+
+test("a fast-profile task pins its planner to the provider's fast tier; other profiles follow the global setting", async () => {
+  const pins = [];
+  const host = makeHost(await mkTempRoot(), { makePlanner: (taskId, pin) => { pins.push(pin); return finishingPlanner(); } });
+  const waitForPins = async (count) => { for (let i = 0; i < 100 && pins.length < count; i += 1) await new Promise((resolve) => setTimeout(resolve, 10)); };
+  const first = await host.createTask({ originalRequest: "check a price" }, { requestedDurationProfile: "fast" });
+  await waitForPins(1);
+  await host.stopTask(first.taskId);
+  await host.createTask({ originalRequest: "check a price" }, { requestedDurationProfile: "short" });
+  await waitForPins(2);
+  assert.equal(pins[0].plannerFast, true);
+  assert.equal(pins[1].plannerFast, undefined);
 });

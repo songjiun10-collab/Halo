@@ -17,11 +17,11 @@ async function setup() {
   const created = [];
   const service = new AgentService({
     store,
-    createTask: async (goalInput, selectors) => {
+    createTask: async (goalInput, selectors, ownerBinding) => {
       const taskId = TASK_IDS[created.length];
       // The host must still be able to normalize the goal it receives.
       normalizeGoalSpec(structuredClone(goalInput), { taskId, goalVersion: 1, createdAt: new Date().toISOString() });
-      created.push({ goalInput, selectors });
+      created.push({ goalInput, selectors, ownerBinding });
       return { taskId, snapshot: { state: "running" } };
     },
     listTasks: async () => created.map((_, index) => ({ taskId: TASK_IDS[index], originalRequest: `r${index}`, state: "running", createdAt: "2026-10-01T00:00:00.000Z" })),
@@ -52,6 +52,28 @@ test("an agent task uses the agent capability and carries its role only as goal 
   assert.deepEqual(links.map(({ taskId, generation }) => ({ taskId, generation })), [{ taskId: TASK_IDS[0], generation: 1 }]);
 });
 
+test("an individual Computer Use Agent starts with the image-capable task profile", async () => {
+  const { store, service, created } = await setup();
+  const saved = await agent(store, { capabilityId: "computer_use" });
+  await service.startAgentTask({ agentId: saved.id, request: "확인" });
+  assert.equal(created[0].selectors.requestedCapabilityProfile, "computer_use");
+});
+
+test("only a directly started Agent with persistence enabled passes a host owner binding", async () => {
+  const { store, service, created } = await setup();
+  const enabled = await agent(store, { persistentBrowser: true });
+  await service.startAgentTask({ agentId: enabled.id, request: "persist this profile" });
+  assert.deepEqual(created[0].ownerBinding, { agentId: enabled.id });
+
+  const disabled = await agent(store, { name: "Ephemeral" });
+  await service.startAgentTask({ agentId: disabled.id, request: "temporary profile" });
+  assert.equal(created[1].ownerBinding, undefined);
+
+  const team = await store.saveTeam({ name: "Team", title: "", description: "", avatar, memberAgentIds: [enabled.id, disabled.id] });
+  await service.startAgentTask({ teamId: team.id, request: "team work" });
+  assert.equal(created[2].ownerBinding, undefined);
+});
+
 test("a team task starts a multi_agent parent that splits work by member role", async () => {
   const { store, service, created } = await setup();
   const a = await agent(store, { name: "Researcher", instructions: "자료 조사" });
@@ -60,12 +82,35 @@ test("a team task starts a multi_agent parent that splits work by member role", 
   await service.startAgentTask({ teamId: team.id, request: "블로그 글 기획" });
   const [{ goalInput, selectors }] = created;
   assert.deepEqual(selectors, { requestedCapabilityProfile: "multi_agent" });
+  const { getCapabilityProfile } = require("../shared/capability-registry");
+  assert.equal(getCapabilityProfile(selectors.requestedCapabilityProfile).adapters.some((item) => item.capabilityId === "computer_use"), false,
+    "ordinary team conversations keep the existing planner/provider path");
   const texts = goalInput.constraints.map((constraint) => constraint.text);
   assert.ok(texts.some((value) => value.includes("자식 작업")));
   assert.ok(texts.some((value) => value.includes("Researcher") && value.includes("자료 조사")));
   assert.ok(texts.some((value) => value.includes("Writer") && value.includes("초안 작성")));
   assert.ok(goalInput.constraints.every((constraint) => constraint.text.length <= 512));
   assert.equal((await store.listLinks({ kind: "team", ownerId: team.id }))[0].generation, team.generation);
+});
+
+test("a group-chat task explicitly requesting computer use selects the guarded composite profile", async () => {
+  const { store, service, created } = await setup();
+  const a = await agent(store, { name: "Vision", capabilityId: "computer_use" });
+  const team = await store.saveTeam({ name: "Visual Team", title: "", description: "", avatar, memberAgentIds: [a.id] });
+  await service.startAgentTask({ teamId: team.id, request: "팀으로 MDN을 검토하고 컴퓨터 유즈로 버튼을 확인해 줘" });
+  const [{ selectors }] = created;
+  assert.equal(selectors.requestedCapabilityProfile, "multi_agent_computer_use");
+  const { getCapabilityProfile } = require("../shared/capability-registry");
+  assert.ok(getCapabilityProfile(selectors.requestedCapabilityProfile).adapters.some((item) => item.capabilityId === "computer_use"));
+});
+
+test("a Computer Use Agent in a group equips the parent with CUA even when the prompt is implicit", async () => {
+  const { store, service, created } = await setup();
+  const a = await agent(store, { name: "Vision", capabilityId: "computer_use" });
+  const b = await agent(store, { name: "Writer" });
+  const team = await store.saveTeam({ name: "Visual Team", title: "", description: "", avatar, memberAgentIds: [a.id, b.id] });
+  await service.startAgentTask({ teamId: team.id, request: "MDN 페이지를 확인해 줘" });
+  assert.equal(created[0].selectors.requestedCapabilityProfile, "multi_agent_computer_use");
 });
 
 test("archived agents, teams, or members refuse to start and create nothing", async () => {

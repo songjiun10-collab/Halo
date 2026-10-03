@@ -10,6 +10,43 @@ const { MAX_PLANNER_FRAME_BYTES, ContractError, validateProposalEnvelope } = req
 
 const TASK_ID = "11111111-1111-1111-1111-111111111111";
 
+test("real stdio failure returns before the 60s deadline and reaps its worker", { timeout: 5000 }, async () => {
+  const adapter = new PlannerStdioAdapter({ command: process.execPath, args: [path.resolve(__dirname, "../fixtures/planner-failure-worker.cjs")], timeoutMs: 60_000 });
+  try {
+    await assert.rejects(adapter.next(makeContext()), { code: "planner_failed", plannerCode: "cli_error" });
+    assert.ok(!adapter.getStderrTail().includes("synthetic-private-detail"));
+  } finally { await adapter.close(); }
+  assert.equal(adapter.isTerminating(), false);
+  assert.equal(adapter._child, null);
+});
+
+test("a matching worker failure rejects immediately, retires the worker, and ignores stale errors", async () => {
+  const child = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", timeoutMs: 60_000, spawnFn: () => child });
+  const pending = adapter.next(makeContext());
+  const check = assert.rejects(pending, { code: "planner_failed", plannerCode: "cli_error" });
+  const { requestId } = JSON.parse(child.stdin.written[0]);
+  child.stdout.emit("data", JSON.stringify({ requestId: "old", error: { code: "cli_error" } }) + "\n");
+  assert.ok(adapter._inFlight);
+  child.stdout.emit("data", JSON.stringify({ requestId, error: { code: "cli_error" } }) + "\n");
+  await check;
+  assert.equal(adapter._child, null);
+  await adapter.close();
+});
+
+test("ambiguous or unbounded worker errors are never accepted as proposals", async () => {
+  for (const extra of [ { error: { code: "cli_error", message: "secret" } }, { error: { code: "unknown" } }, { error: { code: "cli_error" }, proposal: { ok: true } } ]) {
+    const child = makeFakeChild();
+    const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child });
+    const pending = adapter.next(makeContext());
+    const check = assert.rejects(pending, { code: "invalid_response" });
+    const { requestId } = JSON.parse(child.stdin.written[0]);
+    child.stdout.emit("data", JSON.stringify({ requestId, ...extra }) + "\n");
+    await check;
+    await adapter.close();
+  }
+});
+
 function makeContext(overrides = {}) {
   return {
     taskId: TASK_ID,
@@ -535,6 +572,32 @@ test("warm() starts the configured worker early and next() reuses that child", a
 
   assert.deepEqual(await pending, { ok: true });
   assert.equal(spawnCount, 1);
+  await adapter.close();
+});
+
+test("planner image attachments travel out-of-band from context and are bounded to one host path", async () => {
+  const child = makeFakeChild();
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => child });
+  const attachment = { kind: "image", id: "22222222-2222-4222-8222-222222222222", path: "/tmp/halo-computer-use-id/observation.png" };
+  const pending = adapter.next(makeContext(), { attachments: [attachment] });
+  const frame = JSON.parse(child.stdin.written[0]);
+  assert.deepEqual(frame.attachments, [attachment]);
+  assert.equal(Object.hasOwn(frame.context, "attachments"), false);
+  assert.equal(JSON.stringify(frame.context).includes(attachment.path), false);
+  child.stdout.emit("data", `${JSON.stringify({ requestId: frame.requestId, proposal: { ok: true } })}\n`);
+  assert.deepEqual(await pending, { ok: true });
+  await adapter.close();
+});
+
+test("malformed, caller-expanded, or multiple image attachments are rejected before worker spawn", async () => {
+  let spawns = 0;
+  const adapter = new PlannerStdioAdapter({ command: "node", spawnFn: () => { spawns += 1; return makeFakeChild(); } });
+  for (const attachments of [
+    [{ kind: "image", id: "not-a-uuid", path: "/tmp/a.png" }],
+    [{ kind: "image", id: "22222222-2222-4222-8222-222222222222", path: "relative.png" }],
+    Array.from({ length: 2 }, (_, i) => ({ kind: "image", id: `22222222-2222-4222-8222-22222222222${i}`, path: `/tmp/${i}.png` })),
+  ]) await assert.rejects(adapter.next(makeContext(), { attachments }), { code: "invalid_attachment" });
+  assert.equal(spawns, 0);
   await adapter.close();
 });
 

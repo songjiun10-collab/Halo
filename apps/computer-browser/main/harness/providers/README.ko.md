@@ -16,8 +16,10 @@
   단독 테스트한다.
 - `claude-code-worker.js` — `PlannerStdioAdapter`가 실제로 spawn하는 진입점.
   `planner-stdio.js`가 이미 쓰는 JSONL 프로토콜(`{requestId, context}` 한
-  줄 → `{requestId, proposal}` 한 줄)을 그대로 따른다. 새 wire 포맷을 만들지
-  않았다.
+  줄 → `{requestId, proposal}` 한 줄)을 따른다. 실패하면
+  `{requestId, error: {code}}`를 즉시 반환하고 호스트는 작업을 일시정지한다.
+  오류 코드는 고정 목록으로 제한하며 원문 진단 메시지는 전달하지 않는다.
+  자세한 내용은 [실패·종료 계약](../../../contracts/PLANNER-FAILURES.md)을 참고한다.
 
 ## 활성화 방법 1 — 호스트 설정 (Planner Router v1)
 

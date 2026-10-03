@@ -14,12 +14,22 @@ const {
 
 const NODE = "/usr/local/bin/node";
 
+test("only the selected built-in external worker receives its own API credential", () => {
+  const { plannerProviderEnv } = require("../main/harness/planner-providers");
+  const env = { GEMINI_API_KEY: "test-google", CURSOR_API_KEY: "test-cursor", HALO_APPROVER_KEY: "never", HALO_CURSOR_CLI_COMMAND: "/opt/cursor-agent" };
+  const launch = (providerId) => selectPlannerLaunch({ providerId, nodeCommand: NODE });
+  assert.deepEqual(plannerProviderEnv(launch("antigravity"), env), { GEMINI_API_KEY: "test-google" });
+  assert.deepEqual(plannerProviderEnv(launch("cursor"), env), { CURSOR_API_KEY: "test-cursor", HALO_CURSOR_CLI_COMMAND: "/opt/cursor-agent" });
+  assert.deepEqual(plannerProviderEnv(launch("claude_code"), env), {});
+  assert.deepEqual(plannerProviderEnv({ ...launch("cursor"), source: "operator" }, env), {});
+});
+
 test("provider registry is a frozen host allowlist whose workers live inside the app", () => {
-  assert.deepEqual(PLANNER_PROVIDER_IDS, ["none", "claude_code", "codex_cli"]);
+  assert.deepEqual(PLANNER_PROVIDER_IDS, ["none", "claude_code", "codex_cli", "antigravity", "cursor", "nvidia", "opencode_cli"]);
   assert.ok(Object.isFrozen(PLANNER_PROVIDER_IDS));
   assert.ok(Object.isFrozen(PLANNER_PROVIDERS));
   assert.equal(Object.getPrototypeOf(PLANNER_PROVIDERS), null);
-  assert.deepEqual(Object.keys(PLANNER_PROVIDERS), ["claude_code", "codex_cli"]);
+  assert.deepEqual(Object.keys(PLANNER_PROVIDERS), ["claude_code", "codex_cli", "antigravity", "cursor", "nvidia", "opencode_cli"]);
   const entry = PLANNER_PROVIDERS.claude_code;
   assert.ok(Object.isFrozen(entry));
   assert.equal(entry.usageProvider, "claude");

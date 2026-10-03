@@ -13,6 +13,9 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { TaskHost } = require("../main/harness/task-host");
+const { AgentStore, AGENT_SHAPES, AGENT_COLORS } = require("../main/harness/agent-store");
+const { TaskStore } = require("../main/harness/task-store");
+const { resolveTaskProfile } = require("../shared/task-profile-router");
 
 const hosts = new Set();
 test.afterEach(async () => { await Promise.all([...hosts].map((host) => host.close())); hosts.clear(); });
@@ -25,9 +28,10 @@ function plannerOf(kind) {
   };
 }
 
-function makeHost(storageRoot, kind, created = []) {
+function makeHost(storageRoot, kind, created = [], agentStore = undefined) {
   const host = new TaskHost({
     storageRoot,
+    ...(agentStore ? { agentStore } : {}),
     makeBrowser: () => ({ observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) }),
     makePlanner: (taskId) => { created.push(taskId); return plannerOf(kind); },
     hostVerifier: () => true,
@@ -91,4 +95,41 @@ test("listing tasks while one is resumed never collides on its writer lock", asy
   const results = await Promise.allSettled([host.listTasks(), host.resumeSavedTask(only.taskId), host.listTasks(), host.listTasks()]);
   const conflicts = results.filter((r) => r.status === "rejected" && r.reason?.code === "writer_conflict");
   assert.deepEqual(conflicts, []);
+});
+
+test("recovery refuses a persisted Agent profile task when its owner has since opted out", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-agent-profile-recovery-"));
+  const agentStore = new AgentStore({ storageRoot: path.join(storageRoot, "agents") });
+  const agent = await agentStore.saveAgent({
+    name: "Persistent", title: "", description: "", avatar: { shape: AGENT_SHAPES[0], color: AGENT_COLORS[0] },
+    instructions: "", capabilityId: "browser", persistentBrowser: true,
+  });
+  const goal = { originalRequest: "resume a persisted Agent task" };
+  const task = await TaskStore.create(goal, {
+    storageRoot,
+    resolvedProfile: resolveTaskProfile({ goalInput: goal }),
+    agentBrowserProfileBinding: { agentId: agent.id },
+  });
+  const taskId = task.taskId;
+  await task.close();
+  await agentStore.saveAgent({
+    id: agent.id, name: agent.name, title: agent.title, description: agent.description, avatar: agent.avatar,
+    instructions: agent.instructions, capabilityId: agent.capabilityId, persistentBrowser: false,
+  });
+  const after = makeHost(storageRoot, "finish", [], agentStore);
+  await assert.rejects(after.resumeSavedTask(taskId), { code: "agent_profile_unavailable" });
+});
+
+test("recovery refuses a persisted Agent profile task when its owner record is missing", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-agent-profile-missing-"));
+  const goal = { originalRequest: "resume with missing Agent" };
+  const task = await TaskStore.create(goal, {
+    storageRoot,
+    resolvedProfile: resolveTaskProfile({ goalInput: goal }),
+    agentBrowserProfileBinding: { agentId: "11111111-1111-4111-8111-111111111111" },
+  });
+  const taskId = task.taskId;
+  await task.close();
+  const host = makeHost(storageRoot, "finish");
+  await assert.rejects(host.resumeSavedTask(taskId), { code: "agent_profile_unavailable" });
 });

@@ -10,6 +10,7 @@
 
 const { AgentStoreError } = require("./agent-store");
 const { DEFAULT_LIMITS } = require("../../shared/harness-contracts");
+const { hasCapabilityIntent } = require("../../shared/task-profile-router");
 
 const CONSTRAINT_CHARS = 512;
 const START_FIELDS = ["agentId", "teamId", "request"];
@@ -122,7 +123,7 @@ class AgentService {
   // {reviewFallback: "queue"|"deny", maxPlannerCalls} from a saved schedule.
   async startAgentTask(input, unattended = null) {
     const { kind, ownerId } = target(input, { requireRequest: true });
-    const plan = kind === "agent" ? await this._agentPlan(ownerId) : await this._teamPlan(ownerId);
+    const plan = kind === "agent" ? await this._agentPlan(ownerId) : await this._teamPlan(ownerId, input.request);
     const constraints = plan.constraints.map((textValue, index) => ({ id: `agent-role-${index + 1}`, text: textValue }));
     const result = await this._createTask(
       {
@@ -136,6 +137,7 @@ class AgentService {
         ...(plan.model ? { plannerModel: plan.model } : {}),
         ...(unattended ? { reviewFallback: unattended.reviewFallback } : {}),
       },
+      kind === "agent" && plan.persistentBrowser ? { agentId: ownerId } : undefined,
     );
     // Display grouping only. A crash before this write leaves a normal task
     // that simply does not appear in the Agent's conversation list.
@@ -195,11 +197,12 @@ class AgentService {
       // A team parent plans with the host model; only a single Agent pins one.
       model: agent.model ?? null,
       generation: agent.generation,
+      persistentBrowser: agent.persistentBrowser === true,
       constraints: chunks(compact(agent.instructions), CONSTRAINT_CHARS),
     };
   }
 
-  async _teamPlan(teamId) {
+  async _teamPlan(teamId, request) {
     const team = await this._load(this._store.getTeam, teamId);
     if (team.archived) throw new AgentServiceError("agent_unavailable", "archived teams cannot start tasks");
     const members = [];
@@ -213,7 +216,9 @@ class AgentService {
     // A team narrows only when every member does: the union of their subsets.
     const scoped = members.every((member) => Array.isArray(member.mcpProviders));
     return {
-      capabilityId: "multi_agent",
+      capabilityId: hasCapabilityIntent(request, "computer_use") || members.some((member) => member.capabilityId === "computer_use")
+        ? "multi_agent_computer_use"
+        : "multi_agent",
       mcpProviders: scoped ? [...new Set(members.flatMap((member) => member.mcpProviders))] : null,
       generation: team.generation,
       constraints: [

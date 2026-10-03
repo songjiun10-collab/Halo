@@ -19,6 +19,8 @@
 const contracts = require("../../shared/harness-contracts");
 const workGoalContracts = require("../../shared/work-goal-contracts");
 const { validateWorkGoalBinding } = require("../../shared/task-profile-contracts");
+const { selectBuiltinPlaybooks } = require("./skill-library");
+const { derivePlannerAdaptation } = require("./planner-adaptation");
 
 const WORK_GOAL_CONTEXT_FIELDS = Object.freeze([
   "goalId", "goalVersion", "objective", "successCriteria", "verifiedCriterionIds", "remainingBudget",
@@ -147,6 +149,7 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
   const { modelSummary, ...trustedProgress } = state;
   const boundedRecentEvents = recentEvents.slice(-contracts.MAX_RECENT_EVENTS_IN_CONTEXT);
   const boundWorkGoal = validatedWorkGoalContext(workGoalBinding, workGoal);
+  const builtinPlaybooks = selectBuiltinPlaybooks(goal);
 
   const basePacket = {
     taskId: goal.taskId,
@@ -162,6 +165,7 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     observation: observation === undefined ? null : observation,
     untrustedSummary: modelSummary === undefined ? null : { text: modelSummary, authority: "untrusted_summary" },
     userMemory: { authority: "untrusted_user_memory", entries: customMemory },
+    ...(builtinPlaybooks === undefined ? {} : { haloPlaybooks: builtinPlaybooks }),
     // Host-recorded, but every URL/name originated in a page the browser
     // loaded, so it is data to consider, never an instruction.
     navigationHistory: navigation === null ? null : { authority: "untrusted_page_derived", visited: navigation.visited, frontier: navigation.frontier },
@@ -196,7 +200,15 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
   }
 
   const packet = { ...basePacket, pendingMessages: admitted };
-  if (!board) return packet;
+  // Optional style metadata gets space only after goal, observations, and
+  // incoming messages. Personalization must never turn a fitting task into a
+  // context_error or displace communication that the planner needs to consume.
+  const adapt = (input) => {
+    const plannerAdaptation = derivePlannerAdaptation({ goal, state: trustedProgress, observation, customMemory });
+    const candidate = { ...input, plannerAdaptation };
+    return Buffer.byteLength(JSON.stringify(candidate), "utf8") <= contracts.MAX_CONTEXT_PACKET_BYTES ? candidate : input;
+  };
+  if (!board) return adapt(packet);
   const notes = [];
   let noteBytes = 0;
   for (const entry of [...board.entries].reverse()) {
@@ -208,7 +220,7 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     notes.unshift(note);
     noteBytes += bytes;
   }
-  return { ...packet, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: board.parentTaskId, entries: notes } };
+  return adapt({ ...packet, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: board.parentTaskId, entries: notes } });
 }
 
 module.exports = { ContextError, buildContext };

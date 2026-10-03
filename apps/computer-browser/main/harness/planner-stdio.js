@@ -20,8 +20,10 @@
 
 const { spawn: nodeSpawn } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
+const path = require("node:path");
 const contracts = require("../../shared/harness-contracts");
 const { normalizeUsage } = require("../../shared/usage");
+const { FAILURE_CODES } = require("./planner-failure");
 
 const STDERR_TAIL_MAX_BYTES = 4096;
 // Allow the shipped worker's graceful shutdown to reap its model CLI first
@@ -92,6 +94,21 @@ function buildWorkerEnv(extraEnv) {
 }
 
 const PLANNER_ROLES = ["parent", "child"];
+
+function normalizePlannerAttachments(attachments) {
+  if (attachments === undefined) return [];
+  if (!Array.isArray(attachments) || attachments.length > 1) {
+    throw new PlannerTransportError("invalid_attachment", "at most one host image attachment is supported per planner turn");
+  }
+  return attachments.map((attachment) => {
+    if (!contracts.isPlainObject(attachment) || Object.keys(attachment).length !== 3 ||
+        attachment.kind !== "image" || typeof attachment.id !== "string" || !contracts.UUID_RE.test(attachment.id) ||
+        typeof attachment.path !== "string" || !path.isAbsolute(attachment.path) || attachment.path.length > 4096) {
+      throw new PlannerTransportError("invalid_attachment", "planner attachment must be a host-owned image id and absolute path");
+    }
+    return { kind: "image", id: attachment.id, path: attachment.path };
+  });
+}
 
 class PlannerStdioAdapter {
   constructor({ command, args = [], cwd, env, timeoutMs, workerExitTimeoutMs = WORKER_EXIT_TIMEOUT_MS, spawnFn, onWorkerStart, onWorkerExit, onUsage, role = "parent" } = {}) {
@@ -301,6 +318,16 @@ class PlannerStdioAdapter {
       // the current request. Keep waiting for the real one (or the timeout).
       return;
     }
+    if (Object.hasOwn(parsed, "error")) {
+      const valid = Object.keys(parsed).length === 2 && contracts.isPlainObject(parsed.error)
+        && Object.keys(parsed.error).length === 1 && FAILURE_CODES.includes(parsed.error.code);
+      const error = new PlannerTransportError(valid ? "planner_failed" : "invalid_response",
+        valid ? `planner failed (${parsed.error.code})` : "invalid planner failure envelope");
+      if (valid) error.plannerCode = parsed.error.code;
+      this._failInFlight(error);
+      this._retireWorker();
+      return;
+    }
     try {
       validatePlannerMcpActions(parsed.proposal);
     } catch (error) {
@@ -359,7 +386,7 @@ class PlannerStdioAdapter {
     if (inFlight) inFlight.reject(err);
   }
 
-  async next(context, { signal } = {}) {
+  async next(context, { signal, attachments } = {}) {
     if (signal?.aborted) throw new PlannerTransportError("aborted", "planner request was aborted");
     if (this._retirement) {
       await this._waitForRetirement(this._retirement);
@@ -368,12 +395,13 @@ class PlannerStdioAdapter {
     if (this._inFlight) {
       throw new PlannerTransportError("transport_busy", "only one planner request may be in flight at a time");
     }
-    const child = this._ensureChild();
     const requestId = randomUUID();
-    const line = `${JSON.stringify({ requestId, context })}\n`;
+    const imageAttachments = normalizePlannerAttachments(attachments);
+    const line = `${JSON.stringify({ requestId, context, ...(imageAttachments.length ? { attachments: imageAttachments } : {}) })}\n`;
     if (Buffer.byteLength(line, "utf8") > contracts.MAX_PLANNER_FRAME_BYTES) {
       throw new PlannerTransportError("frame_too_large", "outgoing planner request exceeds the frame limit");
     }
+    const child = this._ensureChild();
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -410,4 +438,4 @@ class PlannerStdioAdapter {
   }
 }
 
-module.exports = { PlannerStdioAdapter, PlannerTransportError, validatePlannerMcpActions };
+module.exports = { PlannerStdioAdapter, PlannerTransportError, validatePlannerMcpActions, normalizePlannerAttachments };

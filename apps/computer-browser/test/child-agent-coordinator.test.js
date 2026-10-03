@@ -18,9 +18,9 @@ async function mkTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "halo-child-coordinator-"));
 }
 
-async function createMultiAgentParent(storageRoot) {
+async function createMultiAgentParent(storageRoot, capability = "multi_agent") {
   const goalInput = { originalRequest: "parent goal" };
-  const resolvedProfile = resolveTaskProfile({ goalInput, requestedCapabilityProfile: "multi_agent" });
+  const resolvedProfile = resolveTaskProfile({ goalInput, requestedCapabilityProfile: capability });
   return TaskStore.create(goalInput, { storageRoot, resolvedProfile });
 }
 
@@ -40,6 +40,23 @@ function makeChildPlanProposal(parentTaskId, overrides = {}) {
     ...overrides,
   };
 }
+
+test("computer-use team profile still accepts child plans while each child stays browser-only", async () => {
+  const storageRoot = await mkTempRoot();
+  const parent = await createMultiAgentParent(storageRoot, "multi_agent_computer_use");
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const result = await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId, {
+    requestedAgentCount: 1,
+    assignments: [{ subgoal: "inspect", entryUrl: "https://a.example/start" }],
+  }), { parentStore: parent, memoryPolicy: "budgeted" });
+  const child = await TaskStore.loadChild(result.childIds[0], { storageRoot, parentTaskId: parent.taskId });
+  assert.equal(parent.taskProfile.capability.id, "multi_agent_computer_use");
+  assert.equal(child.taskProfile.capability.id, "browser");
+  assert.equal(child.taskProfile.capability.adapters.some((adapter) => adapter.capabilityId === "computer_use"), false);
+  await child.close();
+  await coordinator.cancelPlan(parent.taskId, "test cleanup", { parentStore: parent });
+  await parent.close();
+});
 
 test("acceptParentPlan() mints one child TaskStore per assignment and records ONE child_plan_accepted event before returning", async () => {
   const storageRoot = await mkTempRoot();
@@ -71,7 +88,25 @@ test("acceptParentPlan() mints one child TaskStore per assignment and records ON
   assert.equal(accepted.length, 1);
   assert.equal(accepted[0].payload.planId, result.planId);
   assert.equal(accepted[0].payload.assignments.length, 2);
+  assert.deepEqual(accepted[0].payload.assignments.map((a) => a.execution), ["host", "host"]);
   assert.equal(accepted[0].payload.memoryPolicyAuditEventId, null);
+  await parent.close();
+});
+
+test("a parent cannot have a Docker-selected child silently downgraded when the isolated runtime is unavailable", async () => {
+  const storageRoot = await mkTempRoot();
+  const parent = await createMultiAgentParent(storageRoot);
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const proposal = makeChildPlanProposal(parent.taskId, {
+    requestedAgentCount: 1,
+    assignments: [{ subgoal: "inspect untrusted page", entryUrl: "https://a.example/start", execution: "docker" }],
+  });
+  await assert.rejects(
+    coordinator.acceptParentPlan(parent.taskId, proposal, { parentStore: parent, memoryPolicy: "budgeted" }),
+    (error) => error.code === "isolation_unavailable",
+  );
+  assert.equal((await parent.getEvents()).some((event) => event.type === "child_plan_accepted"), false);
+  await assert.rejects(fs.access(path.join(storageRoot, "tasks", parent.taskId, "children")));
   await parent.close();
 });
 
@@ -813,12 +848,110 @@ test("cancelPlan() stops a live child's controller and releases its resource lea
 
   await coordinator.cancelPlan(parent.taskId, "user cancelled", { parentStore: parent });
 
-  // cancelPlan() records child_plan_cancelled BEFORE scheduleAdmission's own
-  // best-effort retry loop could ever start the still-queued sibling, so the
-  // plan is simply gone -- listChildren() returns [] for a cancelled plan.
+  // Cancellation closes plan admission before draining resources, so the
+  // queued sibling cannot start in the gap before child_plan_cancelled lands.
+  // The cancelled plan is then hidden from listChildren().
   assert.deepEqual(await coordinator.listChildren(parent.taskId), []);
   assert.ok(disposedChildIds.includes(childIds[0]), "the live child's view must be torn down, not leaked");
+  assert.equal(coordinator._liveChildren.size, 0, "cancelled plans must not admit a queued sibling during retirement");
 
+  await parent.close();
+});
+
+test("cancelPlan() waits for a live child's asynchronous view teardown before recording cancellation", async () => {
+  const storageRoot = await mkTempRoot();
+  const parent = await createMultiAgentParent(storageRoot);
+  const resourceAdmission = makeAlwaysAdmittingResourceAdmission();
+  let beginDispose;
+  const disposeStarted = new Promise((resolve) => { beginDispose = resolve; });
+  let finishDispose;
+  const disposeGate = new Promise((resolve) => { finishDispose = resolve; });
+  const coordinator = new ChildAgentCoordinator({
+    storageRoot,
+    getResourceAdmission: () => resourceAdmission,
+    makeChildBrowser: (parentTaskId, childId, origin) => {
+      const browser = new BrowserAdapter({ view: { webContents: makeFakeChildWebContents(childId) }, assignedOrigin: origin });
+      const realDispose = browser.dispose.bind(browser);
+      browser.dispose = async () => {
+        beginDispose();
+        await disposeGate;
+        return realDispose();
+      };
+      return browser;
+    },
+    makePlanner: () => finishingChildPlanner(),
+    approve: async () => ({ decision: "allow", reasons: [] }),
+    hostVerifier: () => true,
+  });
+  await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId, {
+    assignments: [{ subgoal: "child", entryUrl: "https://shared.example/one" }],
+    requestedAgentCount: 1,
+  }), { parentStore: parent, memoryPolicy: "user_override" });
+  const child = await waitFor(async () => (await coordinator.listChildren(parent.taskId)).find((item) => item.state === "running"));
+  const live = coordinator._liveChildren.get(child.childId);
+  const stopping = live.controller.stop();
+  await disposeStarted;
+
+  let cancelSettled = false;
+  const cancellation = coordinator.cancelPlan(parent.taskId, "user cancelled", { parentStore: parent })
+    .finally(() => { cancelSettled = true; });
+  await Promise.resolve();
+  assert.equal(cancelSettled, false, "cancellation must remain pending while owned browser teardown is blocked");
+  assert.equal((await parent.getEvents()).some((event) => event.type === "child_plan_cancelled"), false,
+    "the durable cancellation must not precede child resource teardown");
+
+  finishDispose();
+  await stopping;
+  await cancellation;
+  assert.equal((await parent.getEvents()).filter((event) => event.type === "child_plan_cancelled").length, 1);
+  await parent.close();
+});
+
+test("child retirement retains resource ownership and is retryable after browser teardown fails", async () => {
+  const storageRoot = await mkTempRoot();
+  const parent = await createMultiAgentParent(storageRoot);
+  const resourceAdmission = makeAlwaysAdmittingResourceAdmission();
+  let disposeCalls = 0;
+  let plannerCloseCalls = 0;
+  const coordinator = new ChildAgentCoordinator({
+    storageRoot,
+    getResourceAdmission: () => resourceAdmission,
+    makeChildBrowser: (_parentTaskId, childId, origin) => {
+      const browser = new BrowserAdapter({ view: { webContents: makeFakeChildWebContents(childId) }, assignedOrigin: origin });
+      browser.dispose = async () => {
+        disposeCalls += 1;
+        if (disposeCalls === 1) throw new Error("injected first browser teardown failure");
+      };
+      return browser;
+    },
+    makePlanner: () => ({
+      ...finishingChildPlanner(),
+      close: async () => { plannerCloseCalls += 1; },
+    }),
+    approve: async () => ({ decision: "allow", reasons: [] }),
+    hostVerifier: () => true,
+  });
+  const { childIds } = await coordinator.acceptParentPlan(parent.taskId, makeChildPlanProposal(parent.taskId, {
+    assignments: [{ subgoal: "owned child", entryUrl: "https://shared.example/one" }],
+    requestedAgentCount: 1,
+  }), { parentStore: parent, memoryPolicy: "user_override" });
+  const child = await waitFor(async () => (await coordinator.listChildren(parent.taskId)).find((item) => item.state === "running"));
+  await assert.rejects(
+    coordinator.cancelPlan(parent.taskId, "first cleanup attempt", { parentStore: parent }),
+    /child resource retirement failed/,
+  );
+
+  assert.equal(disposeCalls, 1);
+  assert.equal(plannerCloseCalls, 1, "planner cleanup is attempted even when browser cleanup fails");
+  assert.equal(resourceAdmission.getSnapshot().leases.length, 1, "the child lease remains reserved while any child resource may still be live");
+  assert.equal(coordinator._retiringChildren.has(childIds[0]), true, "failed retirement remains available for retry");
+  assert.deepEqual(coordinator._terminalChildren.get(childIds[0]), { outcome: "failed", reason: "child_retirement_failed" });
+
+  await coordinator.cancelPlan(parent.taskId, "retry child cleanup", { parentStore: parent });
+  assert.equal(disposeCalls, 2);
+  assert.equal(plannerCloseCalls, 1);
+  assert.equal(resourceAdmission.getSnapshot().leases.length, 0);
+  assert.equal(coordinator._retiringChildren.has(childIds[0]), false);
   await parent.close();
 });
 
@@ -938,6 +1071,42 @@ test("child attach rollback: resume failure removes live registration and tears 
   assert.equal(admission.released, true);
   assert.equal(coordinator._liveChildren.has(childId), false);
   assert.equal((await coordinator.listChildren(parent.taskId))[0].state, "failed");
+  await parent.close();
+});
+
+test("child start cleanup failure retains failed teardown for cancelPlan retry before returning its lease", async () => {
+  const storageRoot = await mkTempRoot();
+  const { parent, childId } = await createQueuedChildPlan(storageRoot);
+  const cleanupState = { browserDisposed: false };
+  const admission = makeRecordingAdmission({ storageRoot, parentTaskId: parent.taskId, childId, cleanupState });
+  let disposeCalls = 0;
+  const coordinator = new ChildAgentCoordinator({
+    storageRoot,
+    getResourceAdmission: () => admission,
+    makeChildBrowser: () => ({
+      userNavigate: async () => ({ status: "ok" }),
+      dispose: async () => {
+        disposeCalls += 1;
+        if (disposeCalls === 1) throw new Error("injected browser dispose failure");
+        cleanupState.browserDisposed = true;
+      },
+    }),
+    makePlanner: () => { throw new Error("planner startup failed"); },
+  });
+
+  await assert.rejects(coordinator.scheduleAdmission(parent.taskId), /planner startup failed/);
+  assert.equal(disposeCalls, 1);
+  assert.equal(admission.released, false, "lease stays reserved while the browser may still be live");
+  assert.equal(coordinator._failedStartLeases.has(childId), true);
+  assert.equal((await parent.getEvents()).some((event) => event.type === "child_plan_cancelled"), false);
+
+  await coordinator.cancelPlan(parent.taskId, "cancel failed start", { parentStore: parent });
+  assert.equal(disposeCalls, 2, "cancel retries the actual failed disposer");
+  assert.equal(cleanupState.browserDisposed, true);
+  assert.equal(cleanupState.storeReopenedBeforeLeaseRelease, true);
+  assert.equal(admission.released, true);
+  assert.equal(coordinator._failedStartLeases.has(childId), false);
+  assert.equal((await parent.getEvents()).filter((event) => event.type === "child_plan_cancelled").length, 1);
   await parent.close();
 });
 

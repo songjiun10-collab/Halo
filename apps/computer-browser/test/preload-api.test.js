@@ -27,6 +27,8 @@ test("preload exposes the Work Goal API as narrow IPC invoke wrappers", async ()
   vm.runInNewContext(source, context, { filename: "preload/index.js" });
 
   const methods = [
+    ["taskLend", "halo:taskLend", ["task-1", "req-1", { minutes: 5, uses: 1 }]],
+    ["taskRevokeLease", "halo:taskRevokeLease", ["task-1", "lease-1"]],
     ["startWorkGoal", "halo:startWorkGoal", [{ objective: "goal" }]],
     ["getActiveWorkGoal", "halo:getActiveWorkGoal", []],
     ["listWorkGoalHistory", "halo:listWorkGoalHistory", [{ limit: 2, cursor: null }]],

@@ -47,6 +47,7 @@ test("getPlanSummary is null without a plan and matches the renderer contract wi
       queuedAgentCount: 2,
       parentGoalVersion: 1,
       memoryPolicy: "budgeted",
+      executionModes: ["host"],
       agents: [
         { agentId: childIds[0], status: "queued", assignedOrigin: "https://a.example", evidenceCount: 0, subgoal: "a" },
         { agentId: childIds[1], status: "queued", assignedOrigin: "https://b.example", evidenceCount: 0, subgoal: "b" },

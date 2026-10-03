@@ -15,7 +15,8 @@ const MODULE_NAMES = ["harness-contracts", "task-profile-contracts", "harness-pr
 // interface from either the TS source or the generated modules under test.
 const EXPORT_KEYS = {
   "harness-contracts": [
-    "SCHEMA_VERSION", "UUID_RE", "ID_RE", "MAX_ORIGINAL_REQUEST_BYTES",
+    "SCHEMA_VERSION", "CHILD_EXECUTION_MODES", "LOCK_ACTIONS", "makeIntentLock", "validateIntentLock", "lockDigest",
+    "evaluateLock", "normalizeLockOrigin", "UUID_RE", "ID_RE", "MAX_ORIGINAL_REQUEST_BYTES",
     "MAX_AMENDMENT_TEXT_BYTES", "MAX_CRITERIA_COUNT", "MAX_CRITERION_TEXT_CHARS",
     "MAX_CONSTRAINT_TEXT_CHARS", "MAX_EVENT_BYTES", "MAX_CHECKPOINT_BYTES",
     "MAX_TASK_STORE_BYTES", "MAX_CONTEXT_PACKET_BYTES", "MAX_RECENT_EVENTS_IN_CONTEXT",
@@ -40,11 +41,11 @@ const EXPORT_KEYS = {
   "task-profile-contracts": [
     "PROFILE_SCHEMA_VERSION", "SOURCE_IDS", "validateResolvedTaskProfile",
     "validateTaskProfileSelectedPayload", "validateWorkGoalBinding",
-    "validateProfileRequiredGoalCreatedPayload",
+    "validateAgentBrowserProfileBinding", "validateProfileRequiredGoalCreatedPayload",
   ],
   "harness-profile": [
     "HARNESS_PROFILES", "HarnessProfileError", "validateHarnessProfile",
-    "selectHarnessProfile", "maxActionsPerProposal",
+    "selectHarnessProfile", "maxActionsPerProposal", "isQuickProfile",
   ],
   "capability-registry": ["CAPABILITY_IDS", "CAPABILITY_REGISTRY_VERSION", "getCapabilityProfile"],
 };

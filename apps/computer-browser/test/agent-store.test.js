@@ -51,10 +51,28 @@ test("agent fields are validated strictly", async () => {
 
 test("only capabilities the registry currently offers can be saved", async () => {
   const store = new AgentStore({ storageRoot: await tempRoot() });
-  for (const capabilityId of ["research", "computer_use"]) {
+  for (const capabilityId of ["research"]) {
     await assert.rejects(store.saveAgent(agentInput({ capabilityId })), { code: "capability_unavailable" });
   }
   assert.equal((await store.saveAgent(agentInput({ capabilityId: "browser" }))).capabilityId, "browser");
+  assert.equal((await store.saveAgent(agentInput({ capabilityId: "computer_use" }))).capabilityId, "computer_use");
+});
+
+test("persistent browser preference defaults off, only accepts booleans, and duplicates default off", async () => {
+  const store = new AgentStore({ storageRoot: await tempRoot() });
+  const created = await store.saveAgent(agentInput());
+  assert.equal(created.persistentBrowser, false);
+
+  const enabled = await store.saveAgent({ ...agentInput(), id: created.id, persistentBrowser: true });
+  assert.equal(enabled.persistentBrowser, true);
+  assert.equal(enabled.generation, created.generation + 1);
+
+  const preserved = await store.saveAgent({ ...agentInput({ name: "Updated" }), id: created.id });
+  assert.equal(preserved.persistentBrowser, true, "omitting the field on edit preserves the saved preference");
+  await assert.rejects(store.saveAgent({ ...agentInput(), id: created.id, persistentBrowser: "yes" }), { code: "invalid_agent" });
+
+  const duplicate = await store.duplicateAgent(created.id);
+  assert.equal(duplicate.persistentBrowser, false);
 });
 
 test("teams hold 1..6 distinct, existing, unarchived members", async () => {
@@ -178,7 +196,23 @@ test("a schema v1 file is upgraded in memory with default prefs", async () => {
   assert.equal((await store.listLinks({ kind: "agent", ownerId: v1Agent.id }))[0].seenState, null);
   await store.setPinned({ kind: "agent", id: v1Agent.id, pinned: true });
   assert.equal((await store.getAgent(v1Agent.id)).mcpProviders, null);
-  assert.equal(JSON.parse(await fs.readFile(path.join(root, "agents.json"), "utf8")).schemaVersion, 3);
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, "agents.json"), "utf8")).schemaVersion, 4);
+});
+
+test("schema v3 records without persistentBrowser upgrade with persistence disabled", async () => {
+  const root = await tempRoot();
+  const at = "2026-10-01T00:00:00.000Z";
+  const schemaV3Agent = {
+    id: "11111111-1111-4111-8111-111111111111", ...agentInput(), title: "", mcpProviders: null, model: null,
+    generation: 1, createdAt: at, updatedAt: at, archived: false, pinned: false,
+  };
+  await fs.writeFile(path.join(root, "agents.json"), JSON.stringify({ schemaVersion: 3, agents: [schemaV3Agent], teams: [], links: [] }), { mode: 0o600 });
+  const store = new AgentStore({ storageRoot: root });
+  assert.equal((await store.getAgent(schemaV3Agent.id)).persistentBrowser, false);
+  await store.setPinned({ kind: "agent", id: schemaV3Agent.id, pinned: true });
+  const persisted = JSON.parse(await fs.readFile(path.join(root, "agents.json"), "utf8"));
+  assert.equal(persisted.schemaVersion, 4);
+  assert.equal(persisted.agents[0].persistentBrowser, false);
 });
 
 test("returned records are copies", async () => {

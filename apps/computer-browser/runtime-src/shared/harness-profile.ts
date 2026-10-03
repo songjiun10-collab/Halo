@@ -12,9 +12,9 @@
 
 const { MAX_ACTIONS_PER_PROPOSAL, MAX_ACTIONS_PER_PROPOSAL_SHORT } = require("./harness-contracts") as typeof import("./harness-contracts");
 
-const HARNESS_PROFILES: ReadonlyArray<HarnessProfile> = Object.freeze(["short", "middle", "long"]);
+const HARNESS_PROFILES: ReadonlyArray<HarnessProfile> = Object.freeze(["short", "fast", "middle", "long"]);
 
-type HarnessProfile = "short" | "middle" | "long";
+type HarnessProfile = "short" | "fast" | "middle" | "long";
 
 class HarnessProfileError extends Error {
   // Type-only: `declare` emits no class field, so own keys stay [name, code].
@@ -29,9 +29,16 @@ class HarnessProfileError extends Error {
 
 function validateHarnessProfile(value: unknown): HarnessProfile {
   if (typeof value !== "string" || !isHarnessProfile(value)) {
-    throw new HarnessProfileError("invalid_harness_profile", "harnessProfile must be one of short|middle|long");
+    throw new HarnessProfileError("invalid_harness_profile", "harnessProfile must be one of short|fast|middle|long");
   }
   return value;
+}
+
+// "fast" is Short plus speed-only extras (see the planner prompt's fastMode
+// paragraph); everything Short gets structurally -- the wider batch, the
+// reusable observation, the low auto effort, the shortest horizon -- Fast gets too.
+function isQuickProfile(value: unknown): boolean {
+  return value === "short" || value === "fast";
 }
 
 function isHarnessProfile(value: string): value is HarnessProfile {
@@ -57,7 +64,7 @@ function selectHarnessProfile({ isRoutine = false }: { isRoutine?: boolean } = {
 // keeps today's unchanged batch bound.
 function maxActionsPerProposal(profile: unknown): number {
   validateHarnessProfile(profile);
-  return profile === "short" ? MAX_ACTIONS_PER_PROPOSAL_SHORT : MAX_ACTIONS_PER_PROPOSAL;
+  return isQuickProfile(profile) ? MAX_ACTIONS_PER_PROPOSAL_SHORT : MAX_ACTIONS_PER_PROPOSAL;
 }
 
 export = {
@@ -66,4 +73,5 @@ export = {
   validateHarnessProfile,
   selectHarnessProfile,
   maxActionsPerProposal,
+  isQuickProfile,
 };

@@ -12,6 +12,8 @@
 
 const SCHEMA_VERSION = 1;
 
+const { createHash } = require("node:crypto") as typeof import("node:crypto");
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
@@ -74,6 +76,9 @@ const EVENT_TYPES = Object.freeze([
   "routine_step_advanced",
   "routine_step_denied",
   "routine_step_failed",
+  "lease_granted",
+  "lease_used",
+  "lease_revoked",
 ]);
 
 const VERIFICATION_KINDS = Object.freeze(["host", "user"]);
@@ -90,6 +95,7 @@ const EVIDENCE_VERIFICATION_STATES = Object.freeze(["pending", "verified", "reje
 
 const PROPOSAL_KINDS = Object.freeze(["actions", "replan", "finish", "need_user", "child_plan", "send_message"]);
 const CHILD_PLAN_FIELDS = Object.freeze(["parentGoalVersion", "requestedAgentCount", "assignments"]);
+const CHILD_EXECUTION_MODES = Object.freeze(["host", "docker"]);
 const SEND_MESSAGE_FIELDS = Object.freeze([
   "recipientTaskId",
   "messageKind",
@@ -101,7 +107,8 @@ const SEND_MESSAGE_FIELDS = Object.freeze([
 ]);
 
 // Multi-agent background runtime plan, Task 3: a parent-only proposal kind
-// that spawns isolated child browser agents. Kept intentionally small so a
+// that spawns child browser agents, with Docker isolation selected per child
+// only when the host advertises that runtime. Kept intentionally small so a
 // maximally-sized child_plan_accepted journal event (Task 3 persists one
 // assignment-for-assignment copy of this into the parent journal) still fits
 // MAX_EVENT_BYTES -- this is a defense-in-depth SHAPE bound against a
@@ -273,6 +280,97 @@ function validateLimits(limits: unknown, label: string) {
   assertPositiveInteger(limits.maxActiveMs, `${label}.maxActiveMs`);
 }
 
+const LOCK_ACTIONS = Object.freeze(["navigate", "follow_link", "click", "type", "click_at", "type_at", "submit_form"] as const);
+type LockAction = (typeof LOCK_ACTIONS)[number];
+type LockRule =
+  | { kind: "deny_action"; action: LockAction }
+  | { kind: "allow_origins" | "deny_origins"; origins: string[] };
+interface IntentLock { rules: LockRule[]; digest: string }
+const MAX_LOCK_RULES = 8;
+const MAX_LOCK_ORIGINS = 20;
+const ORIGIN_RULE_ACTIONS: ReadonlySet<string> = new Set(LOCK_ACTIONS);
+
+function normalizeLockOrigin(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2048) {
+    throw new ContractError("invalid_field", "lock origin must be a non-empty string");
+  }
+  let url: URL;
+  try { url = new URL(value); } catch { throw new ContractError("invalid_field", "lock origin is not a URL"); }
+  if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) {
+    throw new ContractError("invalid_field", "lock origin must be http(s) without credentials");
+  }
+  return url.origin;
+}
+
+function canonicalLockRule(rule: unknown, label: string): LockRule {
+  assertPlainObject(rule, label);
+  const r = rule as Record<string, unknown>;
+  if (r.kind === "deny_action") {
+    assertNoUnknownKeys(r, ["kind", "action"], label);
+    if (!isOneOf(LOCK_ACTIONS, r.action)) {
+      throw new ContractError("unknown_enum", `${label}.action must be one of ${LOCK_ACTIONS.join("|")}`);
+    }
+    return { kind: "deny_action", action: r.action as LockAction };
+  }
+  if (r.kind === "allow_origins" || r.kind === "deny_origins") {
+    assertNoUnknownKeys(r, ["kind", "origins"], label);
+    if (!Array.isArray(r.origins) || r.origins.length === 0 || r.origins.length > MAX_LOCK_ORIGINS) {
+      throw new ContractError("invalid_field", `${label}.origins must hold 1-${MAX_LOCK_ORIGINS} origins`);
+    }
+    const origins = [...new Set(r.origins.map((o) => normalizeLockOrigin(o)))].sort();
+    return { kind: r.kind, origins };
+  }
+  throw new ContractError("unknown_enum", `${label}.kind must be deny_action|allow_origins|deny_origins`);
+}
+
+function canonicalLockRules(rules: unknown, label: string): LockRule[] {
+  if (!Array.isArray(rules)) throw new ContractError("invalid_field", `${label} must be an array`);
+  if (rules.length > MAX_LOCK_RULES) throw new ContractError("field_too_large", `${label} exceeds ${MAX_LOCK_RULES} entries`);
+  return rules.map((rule, i) => canonicalLockRule(rule, `${label}[${i}]`));
+}
+
+function lockDigest(rules: LockRule[]): string {
+  return createHash("sha256").update(JSON.stringify(rules)).digest("hex");
+}
+
+function makeIntentLock(input: unknown): IntentLock {
+  assertPlainObject(input, "lockInput");
+  assertNoUnknownKeys(input as Record<string, unknown>, ["rules"], "lockInput");
+  const rules = canonicalLockRules((input as Record<string, unknown>).rules, "lockInput.rules");
+  return { rules, digest: lockDigest(rules) };
+}
+
+// Re-reads a stored lock. The rules must already be canonical and the digest
+// must match: a goal file edited on disk is corrupt, never silently re-hashed.
+function validateIntentLock(lock: unknown, label: string): IntentLock {
+  assertPlainObject(lock, label);
+  const l = lock as Record<string, unknown>;
+  assertNoUnknownKeys(l, ["rules", "digest"], label);
+  const rules = canonicalLockRules(l.rules, `${label}.rules`);
+  if (typeof l.digest !== "string" || JSON.stringify(rules) !== JSON.stringify(l.rules) || lockDigest(rules) !== l.digest) {
+    throw new ContractError("storage_corrupt", `${label} does not match its digest`);
+  }
+  return lock as unknown as IntentLock;
+}
+
+type LockVerdict = { allowed: true } | { allowed: false; reason: "lock_action_denied" | "lock_origin_denied"; ruleIndex: number };
+
+/** Pure lock check. targetOrigin undefined = the caller checks origin elsewhere; null = unknown origin. */
+function evaluateLock(lock: IntentLock | null | undefined, q: { action: string; targetOrigin?: string | null }): LockVerdict {
+  if (!lock) return { allowed: true };
+  for (let i = 0; i < lock.rules.length; i += 1) {
+    const rule = lock.rules[i];
+    if (rule.kind === "deny_action") {
+      if (rule.action === q.action) return { allowed: false, reason: "lock_action_denied", ruleIndex: i };
+      continue;
+    }
+    if (q.targetOrigin === undefined || !ORIGIN_RULE_ACTIONS.has(q.action)) continue;
+    const listed = q.targetOrigin !== null && rule.origins.includes(q.targetOrigin);
+    if (rule.kind === "allow_origins" ? !listed : listed) return { allowed: false, reason: "lock_origin_denied", ruleIndex: i };
+  }
+  return { allowed: true };
+}
+
 type Constraint = { id: string, text: string, sourceMessageId?: string | null };
 type Criterion = { id: string, text: string, required: boolean, verification: string, sourceMessageId?: string | null };
 type Amendment = { id: string, text: string, at: string, supersedesConstraintIds: string[], authority: string };
@@ -289,6 +387,7 @@ type GoalSpec = {
   limits: Limits,
   createdAt: string,
   trigger?: GoalTrigger,
+  lock?: IntentLock,
 };
 
 const GOAL_SPEC_FIELDS = [
@@ -302,6 +401,7 @@ const GOAL_SPEC_FIELDS = [
   "limits",
   "createdAt",
   "trigger",
+  "lock",
 ];
 
 // Scheduled-occurrence key. Lives on the goal (not the routineRun checkpoint)
@@ -339,6 +439,7 @@ function validateGoalSpec(goal: unknown, label: string = "goal"): GoalSpec {
   validateLimits(goal.limits, `${label}.limits`);
   assertIsoTimestamp(goal.createdAt, `${label}.createdAt`);
   if (goal.trigger !== undefined) validateGoalTrigger(goal.trigger, `${label}.trigger`);
+  if (goal.lock !== undefined) validateIntentLock(goal.lock, `${label}.lock`);
   return (goal as GoalSpec);
 }
 
@@ -349,7 +450,7 @@ function validateGoalSpec(goal: unknown, label: string = "goal"): GoalSpec {
 // forge its own taskId or backdate creation.
 function normalizeGoalSpec(input: unknown, host: unknown): GoalSpec {
   assertPlainObject(input, "goalInput");
-  assertNoUnknownKeys(input, ["originalRequest", "constraints", "criteria", "limits", "amendments", "trigger"], "goalInput");
+  assertNoUnknownKeys(input, ["originalRequest", "constraints", "criteria", "limits", "amendments", "trigger", "lock"], "goalInput");
   assertPlainObject(host, "host");
   assertNoUnknownKeys(host, ["taskId", "goalVersion", "createdAt"], "host");
 
@@ -369,6 +470,7 @@ function normalizeGoalSpec(input: unknown, host: unknown): GoalSpec {
     createdAt: host.createdAt,
   };
   if (input.trigger !== undefined) goal.trigger = input.trigger;
+  if (input.lock !== undefined) goal.lock = makeIntentLock(input.lock);
   return validateGoalSpec(goal, "goal");
 }
 
@@ -382,7 +484,7 @@ function applyAmendment(goalInput: unknown, amendmentInput: unknown, host: unkno
   assertPlainObject(amendmentInput, "amendmentInput");
   assertNoUnknownKeys(
     amendmentInput,
-    ["text", "supersedesConstraintIds", "newConstraints", "newCriteria"],
+    ["text", "supersedesConstraintIds", "newConstraints", "newCriteria", "lock"],
     "amendmentInput",
   );
   assertPlainObject(host, "host");
@@ -416,6 +518,12 @@ function applyAmendment(goalInput: unknown, amendmentInput: unknown, host: unkno
     createdAt: goal.createdAt,
   };
   if (goal.trigger !== undefined) nextGoal.trigger = goal.trigger;
+  const lockInput = (amendmentInput as Record<string, unknown>).lock;
+  if (lockInput === undefined) {
+    if (goal.lock !== undefined) nextGoal.lock = goal.lock;
+  } else if (lockInput !== null) {
+    nextGoal.lock = makeIntentLock(lockInput);
+  }
   return validateGoalSpec(nextGoal, "goal");
 }
 
@@ -531,6 +639,28 @@ function validateJournalEvent(event: unknown, label: string = "event") {
   if (event.type === "action_started" || event.type === "action_outcome") {
     assertId(event.payload.actionId, `${label}.payload.actionId`);
   }
+  if (event.type === "lease_granted") {
+    const p = event.payload;
+    assertNoUnknownKeys(p, ["leaseId", "action", "origin", "expiresAt", "uses"], `${label}.payload`);
+    assertUuid(p.leaseId, `${label}.payload.leaseId`);
+    if (!isOneOf(LOCK_ACTIONS, p.action)) throw new ContractError("unknown_enum", `${label}.payload.action is not leasable`);
+    if (typeof p.origin !== "string" || normalizeLockOrigin(p.origin) !== p.origin) throw new ContractError("invalid_field", `${label}.payload.origin must be a bare origin`);
+    assertPositiveInteger(p.expiresAt, `${label}.payload.expiresAt`);
+    assertPositiveInteger(p.uses, `${label}.payload.uses`);
+    if (p.uses > 3) throw new ContractError("invalid_field", `${label}.payload.uses exceeds 3`);
+  }
+  if (event.type === "lease_used") {
+    const p = event.payload;
+    assertNoUnknownKeys(p, ["leaseId", "requestId"], `${label}.payload`);
+    assertUuid(p.leaseId, `${label}.payload.leaseId`);
+    assertUuid(p.requestId, `${label}.payload.requestId`);
+  }
+  if (event.type === "lease_revoked") {
+    const p = event.payload;
+    assertNoUnknownKeys(p, ["leaseId", "reason"], `${label}.payload`);
+    assertUuid(p.leaseId, `${label}.payload.leaseId`);
+    if (!isOneOf(["user", "goal_amended", "request_stale", "task_ended", "taken_over"], p.reason)) throw new ContractError("unknown_enum", `${label}.payload.reason must be user|goal_amended|request_stale|task_ended|taken_over`);
+  }
   if (event.type === "goal_created") {
     (require("./task-profile-contracts") as typeof import("./task-profile-contracts")).validateProfileRequiredGoalCreatedPayload(event.payload);
   }
@@ -599,11 +729,16 @@ function validateJournalEvent(event: unknown, label: string = "event") {
       throw new ContractError("invalid_field", `${label}.payload.assignments must match requestedAgentCount`);
     }
     event.payload.assignments.forEach((a, i) => {
-      assertPlainObject(a, `${label}.payload.assignments[${i}]`);
-      assertUuid(a.childId, `${label}.payload.assignments[${i}].childId`);
-      assertString(a.subgoal, `${label}.payload.assignments[${i}].subgoal`, { maxBytes: MAX_CHILD_SUBGOAL_BYTES });
-      assertString(a.entryUrl, `${label}.payload.assignments[${i}].entryUrl`, { maxChars: MAX_ENTRY_URL_CHARS });
-      assertString(a.origin, `${label}.payload.assignments[${i}].origin`);
+      const itemLabel = `${label}.payload.assignments[${i}]`;
+      assertPlainObject(a, itemLabel);
+      assertNoUnknownKeys(a, ["childId", "subgoal", "entryUrl", "origin", "execution"], itemLabel);
+      assertUuid(a.childId, `${itemLabel}.childId`);
+      assertString(a.subgoal, `${itemLabel}.subgoal`, { maxBytes: MAX_CHILD_SUBGOAL_BYTES });
+      assertString(a.entryUrl, `${itemLabel}.entryUrl`, { maxChars: MAX_ENTRY_URL_CHARS });
+      assertString(a.origin, `${itemLabel}.origin`);
+      if (a.execution !== undefined && !isOneOf(CHILD_EXECUTION_MODES, a.execution)) {
+        throw new ContractError("unknown_enum", `${itemLabel}.execution must be one of ${CHILD_EXECUTION_MODES.join("|")}`);
+      }
     });
   }
   if (event.type === "child_plan_cancelled") {
@@ -828,11 +963,14 @@ function deriveOrigin(urlString: string, label: string = "entryUrl") {
 
 function validateChildAssignment(assignment: unknown, label: string) {
   assertPlainObject(assignment, label);
-  assertNoUnknownKeys(assignment, ["subgoal", "entryUrl"], label);
+  assertNoUnknownKeys(assignment, ["subgoal", "entryUrl", "execution"], label);
   assertString(assignment.subgoal, `${label}.subgoal`, { maxBytes: MAX_CHILD_SUBGOAL_BYTES });
   assertString(assignment.entryUrl, `${label}.entryUrl`, { maxChars: MAX_ENTRY_URL_CHARS });
+  if (assignment.execution !== undefined && !isOneOf(CHILD_EXECUTION_MODES, assignment.execution)) {
+    throw new ContractError("unknown_enum", `${label}.execution must be one of ${CHILD_EXECUTION_MODES.join("|")}`);
+  }
   deriveOrigin(assignment.entryUrl, `${label}.entryUrl`);
-  return assignment;
+  return { ...assignment, execution: assignment.execution ?? "host" };
 }
 
 // Proposal is the Planner->host wire message (section 6). Only the envelope
@@ -931,6 +1069,13 @@ function validateProposalEnvelope(proposal: unknown, label: string = "proposal",
 
 export = {
   SCHEMA_VERSION,
+  CHILD_EXECUTION_MODES,
+  LOCK_ACTIONS,
+  makeIntentLock,
+  validateIntentLock,
+  lockDigest,
+  evaluateLock,
+  normalizeLockOrigin,
   UUID_RE,
   ID_RE,
   MAX_ORIGINAL_REQUEST_BYTES,

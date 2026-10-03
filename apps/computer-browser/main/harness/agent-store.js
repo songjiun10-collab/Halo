@@ -14,16 +14,16 @@ const { getCapabilityProfile } = require("../../shared/capability-registry");
 const { MCP_PROVIDER_IDS } = require("./host-settings");
 const { PLANNER_PROVIDERS } = require("./planner-providers");
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const STORE_FIELDS = ["schemaVersion", "agents", "teams", "links"];
-const AGENT_FIELDS = ["id", "name", "title", "description", "avatar", "instructions", "capabilityId", "mcpProviders", "model", "generation", "createdAt", "updatedAt", "archived", "pinned"];
+const AGENT_FIELDS = ["id", "name", "title", "description", "avatar", "instructions", "capabilityId", "mcpProviders", "model", "persistentBrowser", "generation", "createdAt", "updatedAt", "archived", "pinned"];
 // model is optional on stored records: ones saved before it existed inherit.
 const AGENT_REQUIRED_FIELDS = AGENT_FIELDS.filter((key) => key !== "model");
 const TEAM_FIELDS = ["id", "name", "title", "description", "avatar", "memberAgentIds", "generation", "createdAt", "updatedAt", "archived", "pinned"];
 const LINK_FIELDS = ["taskId", "kind", "ownerId", "generation", "createdAt", "seenState"];
 // Task states as reported by TaskHost summaries; only used for read markers.
 const TASK_STATES = ["idle", "running", "awaiting_approval", "awaiting_verification", "paused", "stopped", "completed"];
-const AGENT_INPUT_FIELDS = ["id", "name", "title", "description", "avatar", "instructions", "capabilityId", "mcpProviders", "model"];
+const AGENT_INPUT_FIELDS = ["id", "name", "title", "description", "avatar", "instructions", "capabilityId", "mcpProviders", "model", "persistentBrowser"];
 const TEAM_INPUT_FIELDS = ["id", "name", "title", "description", "avatar", "memberAgentIds"];
 
 const AGENT_SHAPES = Object.freeze(["circle", "square", "bag", "star", "drop", "cloud", "triangle", "hex"]);
@@ -101,6 +101,7 @@ function validateAgentRecord(value, label) {
   if (!AGENT_CAPABILITIES.includes(value.capabilityId)) throw new AgentStoreError("invalid_store", `${label}.capabilityId is unknown`);
   mcpSubset(value.mcpProviders, "invalid_store", `${label}.mcpProviders`);
   if (Object.hasOwn(value, "model")) plannerModel(value.model, "invalid_store", `${label}.model`);
+  if (typeof value.persistentBrowser !== "boolean") throw new AgentStoreError("invalid_store", `${label}.persistentBrowser must be boolean`);
   stamp(value, label);
 }
 
@@ -154,14 +155,14 @@ function validateLink(value, code, label) {
 // v1 had no display prefs and v2 no MCP subset; fill their defaults before
 // strict validation.
 function upgrade(value) {
-  if (!isPlainObject(value) || (value.schemaVersion !== 1 && value.schemaVersion !== 2)) return value;
+  if (!isPlainObject(value) || ![1, 2, 3].includes(value.schemaVersion)) return value;
   const fill = (records, defaults) => (Array.isArray(records)
     ? records.map((record) => (isPlainObject(record) ? { ...defaults, ...record } : record))
     : records);
   return {
     ...value,
     schemaVersion: SCHEMA_VERSION,
-    agents: fill(value.agents, { pinned: false, mcpProviders: null }),
+    agents: fill(value.agents, { pinned: false, mcpProviders: null, persistentBrowser: false }),
     teams: fill(value.teams, { pinned: false }),
     links: fill(value.links, { seenState: null }),
   };
@@ -228,6 +229,10 @@ class AgentStore {
       else if (input.id === undefined) fields.mcpProviders = null;
       if (Object.hasOwn(input, "model")) fields.model = plannerModel(input.model, "invalid_agent", "agent.model");
       else if (input.id === undefined) fields.model = null;
+      if (Object.hasOwn(input, "persistentBrowser")) {
+        if (typeof input.persistentBrowser !== "boolean") throw new AgentStoreError("invalid_agent", "agent.persistentBrowser must be boolean");
+        fields.persistentBrowser = input.persistentBrowser;
+      } else if (input.id === undefined) fields.persistentBrowser = false;
       return this._upsert(state.agents, input.id, fields, this._limits.maxAgents, "agent");
     });
   }
@@ -292,6 +297,7 @@ class AgentStore {
         capabilityId: source.capabilityId,
         mcpProviders: source.mcpProviders === null ? null : [...source.mcpProviders],
         model: source.model ?? null,
+        persistentBrowser: false,
       };
       return this._upsert(state.agents, undefined, fields, this._limits.maxAgents, "agent");
     });
