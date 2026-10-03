@@ -17,10 +17,11 @@ export const EXECUTION_OPTIONS: readonly { value: HostSettings['executionMode'];
 ]
 
 /** Where fast mode takes effect for the planner the settings select. */
-export function fastModeSupport(settings: HostSettings | null): 'no_planner' | 'codex' | 'claude_opus' | 'claude_other' {
+export function fastModeSupport(settings: HostSettings | null): 'no_planner' | 'codex' | 'claude_opus' | 'claude_other' | 'unsupported' {
   const model = activeModel(settings)
   if (!model) return 'no_planner'
   if (model.provider === 'codex_cli') return 'codex'
+  if (model.provider === 'antigravity' || model.provider === 'cursor' || model.provider === 'nvidia' || model.provider === 'opencode_cli') return 'unsupported'
   return CLAUDE_MODELS.some((m) => m.id === model.id && m.family === 'opus') ? 'claude_opus' : 'claude_other'
 }
 

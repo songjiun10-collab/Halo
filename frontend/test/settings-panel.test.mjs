@@ -38,7 +38,7 @@ test('the settings view shows every runtime setting with its current value', () 
   const html = renderToStaticMarkup(React.createElement(SettingsView, { settings: { ...base, plannerFast: true }, saving: false, error: null, onChange: () => {} }))
   assert.match(html, /role="dialog"[^>]*aria-label="Settings"/)
   for (const label of ['Observe', 'Browse', 'Interact', 'Full']) assert.match(html, new RegExp(`>${label}<`))
-  assert.match(html, /value="browse"[^>]*checked=""|checked=""[^>]*value="browse"/)
+  assert.match(html, /aria-checked="true"[^>]*>(?:(?!<\/button>)[\s\S])*>Browse</, 'the current permission is the checked card')
   assert.match(html, /Skips approval/, 'full mode warns that it bypasses approval')
   assert.match(html, />One at a time</)
   assert.match(html, />In parallel</)
@@ -47,6 +47,33 @@ test('the settings view shows every runtime setting with its current value', () 
   assert.match(html, /<option[^>]*value="gpt-6.1-sol"/)
   assert.match(html, /role="switch"[^>]*aria-checked="true"[^>]*aria-label="Fast mode"|aria-label="Fast mode"[^>]*role="switch"[^>]*aria-checked="true"|role="switch"[^>]*aria-label="Fast mode"[^>]*aria-checked="true"/)
   assert.match(html, /credits/, 'Claude fast mode cost is stated')
+})
+
+test('settings is a full panel with a back header, labelled sections and selectable cards', () => {
+  const html = renderToStaticMarkup(React.createElement(SettingsView, { settings: base, saving: false, error: null, onChange: () => {}, onClose: () => {} }))
+  assert.match(html, /class="hx-settings"/, 'a full panel, not the floating activity card')
+  assert.match(html, /class="hx-settings__head"[\s\S]*aria-label="Close settings"[\s\S]*<h2>Settings<\/h2>/)
+  for (const label of ['Planner', 'What the agent may do', 'Running tasks']) assert.match(html, new RegExp(`class="hx-settings__label"[^>]*>${label}<`))
+  assert.match(html, /class="hx-perm"[^>]*data-selected=""[^>]*aria-checked="true"[^>]*>[\s\S]*?Browse/, 'the selected permission is a card')
+  assert.match(html, /role="radiogroup"[^>]*aria-label="Permission mode"/)
+  assert.match(html, /data-provider="claude_code"[\s\S]*Claude[\s\S]*data-provider="codex_cli"[\s\S]*Codex/)
+  assert.match(html, /aria-label="Use Claude"[^>]*aria-checked="true"|aria-checked="true"[^>]*aria-label="Use Claude"/)
+  assert.doesNotMatch(html, /type="password"/i, 'settings never collects provider keys')
+})
+
+test('turning a provider row on picks its default model, and off turns the planner off', () => {
+  const patches = []
+  const view = SettingsView({ settings: base, saving: false, error: null, onChange: (p) => patches.push(p), onClose: () => {} })
+  const find = (node, label) => {
+    if (!node || typeof node !== 'object') return null
+    if (Array.isArray(node)) { for (const n of node) { const hit = find(n, label); if (hit) return hit } return null }
+    if (node.props?.['aria-label'] === label) return node
+    if (typeof node.type === 'function') return find(node.type(node.props), label)
+    return find(node.props?.children, label)
+  }
+  find(view, 'Use Codex').props.onClick()
+  find(view, 'Use Claude').props.onClick()
+  assert.deepEqual(patches, [{ plannerProvider: 'codex_cli', plannerModel: 'gpt-6.1-sol' }, { plannerProvider: 'none' }])
 })
 
 test('fast mode is off and explained when the model cannot use it', () => {

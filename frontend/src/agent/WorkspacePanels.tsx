@@ -32,7 +32,7 @@ export function UsageView({ usage, busy, onSync, onSaveLimit, editing: initialEd
     {usageRows(usage).map((r) => {
       const limits = [r.limit.tokens !== null ? `${formatTokens(r.limit.tokens)} tokens` : null, r.limit.costUsd !== null ? formatUsd(r.limit.costUsd) : null].filter(Boolean).join(' · ')
       return <div key={r.provider} className="hx-xrow hx-gl hx-usage"><div className="hx-xrow__b">
-        <b>{r.label} <span className="hx-usage__n">{formatTokens(r.tokens)} tokens · {formatUsd(r.costUsd)}</span>{r.exceeded ? <i className="hx-badge" data-warn="">Limit reached</i> : null}</b>
+        <b>{r.label} <span className="hx-usage__n">{formatTokens(r.tokens)} tokens · {r.provider === 'nvidia' ? 'Cost not reported' : formatUsd(r.costUsd)}</span>{r.exceeded ? <i className="hx-badge" data-warn="">Limit reached</i> : null}</b>
         <small>{r.basis === 'imported' ? `From the ${r.label} CLI${r.sessions ? ` · ${r.sessions} sessions` : ''}` : 'Counted by HALO tasks'}{limits ? ` · limit ${limits}` : ' · no limit'}</small>
         {r.usedRatio !== null ? <Meter value={r.usedRatio * 100} label={`${r.label} limit used`} /> : null}
         {r.windows.map((w) => <div className="hx-usage__w" key={w.label}><span>{w.label}</span><Meter value={w.usedPercent} label={`${r.label} ${w.label}`} /><span>{Math.round(w.usedPercent)}%{w.resetsAt ? ` · resets ${when(w.resetsAt)}` : ''}</span></div>)}

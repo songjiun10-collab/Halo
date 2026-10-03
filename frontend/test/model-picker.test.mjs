@@ -17,6 +17,29 @@ test.after(() => vite.close())
 
 const settings = { version: 5, executionMode: 'sequential', permissionMode: 'browse', plannerEffort: 'medium', memoryPolicy: 'budgeted', plannerProvider: 'claude_code' }
 
+test('NVIDIA models match the host catalog and save the NVIDIA provider', async () => {
+  const { NVIDIA_MODELS } = await vite.ssrLoadModule('/src/session/claude-models.ts')
+  const host = createRequire(import.meta.url)('../../apps/computer-browser/main/harness/providers/nvidia-models.js')
+  assert.deepEqual(NVIDIA_MODELS, host.NVIDIA_MODELS)
+  let saved
+  await saveModel({ updateHostSettings: async (patch) => { saved = patch; return patch } }, 'moonshotai/kimi-k3')
+  assert.deepEqual(saved, { plannerProvider: 'nvidia', plannerModel: 'moonshotai/kimi-k3' })
+  const html = renderToStaticMarkup(React.createElement(ModelPicker, { settings, onSelectModel: () => {}, onEffort: () => {}, defaultOpen: true, defaultView: 'models' }))
+  assert.match(html, /DeepSeek V4 Flash/)
+  assert.match(html, /Kimi K3/)
+})
+
+test('external planner options are visible and save their own provider rather than Claude', async () => {
+  const html = renderToStaticMarkup(React.createElement(ModelPicker, { settings, onSelectModel: () => {}, onEffort: () => {}, defaultOpen: true, defaultView: 'models' }))
+  assert.match(html, /Antigravity default/)
+  assert.match(html, /Cursor Auto/)
+  const calls = []
+  const api = { updateHostSettings: async (patch) => { calls.push(patch); return { ...settings, ...patch } } }
+  await saveModel(api, 'antigravity-default')
+  await saveModel(api, 'cursor-auto')
+  assert.deepEqual(calls, [{ plannerProvider: 'antigravity', plannerModel: 'antigravity-default' }, { plannerProvider: 'cursor', plannerModel: 'cursor-auto' }])
+})
+
 test('the picker lists exactly the host model allowlist', () => {
   assert.deepEqual(CLAUDE_MODELS.map(({ id, label, family, legacy }) => ({ id, label, family, legacy })), host.CLAUDE_MODELS.map((m) => ({ ...m })))
   assert.equal(DEFAULT_CLAUDE_MODEL, host.DEFAULT_CLAUDE_MODEL)

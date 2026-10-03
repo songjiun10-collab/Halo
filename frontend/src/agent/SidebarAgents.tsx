@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getAgentApi, getRoomApi, type AgentRecord, type AgentRoster, type OwnerKind, type OwnerRef, type RoomSummary } from './agent-api'
-import { Avatar } from './AgentUi'
+import { Avatar, modelBrand, type AgentBrand } from './AgentUi'
 
 /**
  * Agents and Teams under the workspace sidebar's task list. A row only opens the
@@ -9,7 +9,7 @@ import { Avatar } from './AgentUi'
 export const SIDEBAR_MAX = 5
 
 export type SidebarState = 'working' | 'idle' | 'archived'
-export interface SidebarRow { kind: OwnerKind; id: string; name: string; avatar: AgentRecord['avatar']; state: SidebarState; unread: boolean; replying: string | null; members: AgentRecord[] }
+export interface SidebarRow { kind: OwnerKind; id: string; name: string; avatar: AgentRecord['avatar']; brand?: AgentBrand; state: SidebarState; unread: boolean; replying: string | null; members: AgentRecord[] }
 export interface SidebarRows { agents: SidebarRow[]; teams: SidebarRow[] }
 
 /** `speakers` maps a room id to the member id whose turn it is in a live round. */
@@ -20,7 +20,7 @@ export function sidebarRows(roster: AgentRoster, rooms: RoomSummary[], speakers:
   const state = (archived: boolean, busy: boolean): SidebarState => archived ? 'archived' : busy ? 'working' : 'idle'
   return {
     agents: order(roster.agents).map((a) => ({
-      kind: 'agent', id: a.id, name: a.name, avatar: a.avatar, state: state(a.archived, a.status.running > 0),
+      kind: 'agent', id: a.id, name: a.name, avatar: a.avatar, brand: modelBrand(a.model), state: state(a.archived, a.status.running > 0),
       unread: a.status.hasUnread, replying: null, members: [],
     })),
     teams: order(roster.teams).map((t) => {
@@ -39,8 +39,8 @@ function Row({ row, onOpen }: { row: SidebarRow; onOpen: () => void }) {
   return (
     <button type="button" className="hx-sbr" data-owner={`${row.kind}:${row.id}`} data-archived={row.state === 'archived' || undefined} title={row.name} onClick={onOpen}>
       {row.kind === 'team'
-        ? <span className="hx-sbr__stack">{row.members.slice(0, 3).map((a, i) => <span key={a.id} style={{ marginLeft: i ? -7 : 0, zIndex: 5 - i }}><Avatar avatar={a.avatar} size={16} ring /></span>)}</span>
-        : <span className="hx-sbr__av"><Avatar avatar={row.avatar} size={20} /></span>}
+        ? <span className="hx-sbr__stack">{row.members.slice(0, 3).map((a, i) => <span key={a.id} style={{ zIndex: 5 - i }}><Avatar avatar={a.avatar} size={20} ring brand={modelBrand(a.model)} /></span>)}</span>
+        : <span className="hx-sbr__av"><Avatar avatar={row.avatar} size={20} brand={row.brand} /></span>}
       <span className="hx-sbr__n">{row.name}</span>
       {row.replying ? <span className="hx-typing" role="status" aria-label={`${row.replying} is replying`}><i /><i /><i /></span> : null}
       {row.unread && row.state !== 'archived' ? <span className="hx-sbr__badge" aria-label="Unread" /> : null}

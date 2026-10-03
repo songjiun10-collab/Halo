@@ -1,5 +1,5 @@
 import { getDomain } from 'tldts'
-import type { BrowserAction, DirectBrowserSnapshot, HaloBrowserApi, JournalEvent, TaskEvent, TaskSnapshot } from './api'
+import type { BrowserAction, DirectBrowserSnapshot, HaloBrowserApi, IntentLockInput, JournalEvent, TaskEvent, TaskSnapshot } from './api'
 import type { Approval, Control, PendingCriterion, SessionState, Tab, TabActivity, TimelineEvent } from './types'
 import { summarizeChildPlan } from './child-agents.ts'
 
@@ -48,7 +48,7 @@ function derive(s: SessionState): SessionState {
       ? (s.browser?.tabs.map((t) => ({ id: t.id, history: [t.url], index: 0, titles: { [t.url]: t.title || t.url }, claude: activity, canGoBack: t.canGoBack, canGoForward: t.canGoForward })) ?? [])
       : s.tabs,
     activeTabId: s.activeTaskId ? (s.browser?.activeTabId ?? '') : s.activeTabId,
-    approval: head && s.activeTaskId ? { taskId: s.activeTaskId, id: head.id, action: head.summary || head.action, request: head.action, createdAt: head.createdAt } : undefined,
+    approval: head && s.activeTaskId ? { taskId: s.activeTaskId, id: head.id, action: head.summary || head.action, request: head.action, createdAt: head.createdAt, widen: !!head.widen, leaseOffer: head.leaseOffer ?? null } : undefined,
     messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text }))] : [],
     timeline: s.journal.map(describeEvent),
   }
@@ -245,7 +245,7 @@ export class SessionStore {
     } catch (error) { this.failure(error, taskId, selection); return false }
     finally { if (this.current(taskId, selection) && token === this.commandToken) this.update({ busy: null }) }
   }
-  async sendMessage(text: string) {
+  async sendMessage(text: string, lock?: IntentLockInput) {
     if (!this.api || this.state.busy || !text.trim()) return false
     if (new TextEncoder().encode(text).length > 16384) { this.update({ error: 'The request must be 16 KB or less.' }); return false }
     const taskId = this.state.activeTaskId
@@ -255,7 +255,7 @@ export class SessionStore {
     this.pendingCreate = { text, selection, known: new Set(this.state.tasks.map((task) => task.taskId)) }
     this.update({ busy: 'create', error: null })
     try {
-      const result = await this.api.createTask({ originalRequest: text })
+      const result = await this.api.createTask(lock ? { originalRequest: text, lock } : { originalRequest: text })
       if (selection !== this.selection) return true
       if (!this.state.activeTaskId) this.update({ activeTaskId: result.taskId, goal: result.goal, snapshot: result.snapshot })
       if (this.state.activeTaskId === result.taskId) await this.refresh(result.taskId, selection)
@@ -263,6 +263,15 @@ export class SessionStore {
       return true
     } catch (error) { this.failure(error, undefined, selection); return false }
     finally { if (selection === this.selection && token === this.commandToken) { this.pendingCreate = null; this.update({ busy: null }) } }
+  }
+  lend(approval: Approval, terms: { minutes: number; uses: number }) {
+    if (approval.taskId !== this.state.activeTaskId || approval.id !== this.state.approval?.id || !approval.leaseOffer) return Promise.resolve(false)
+    return this.runCommand('approve', () => this.api!.taskLend(approval.taskId, approval.id, terms))
+  }
+  revokeLease(leaseId: string) {
+    const taskId = this.state.activeTaskId
+    if (!taskId) return Promise.resolve(false)
+    return this.runCommand('approve', () => this.api!.taskRevokeLease(taskId, leaseId))
   }
   decideApproval(kind: 'approve' | 'deny', approval: Approval) {
     if (approval.taskId !== this.state.activeTaskId || approval.id !== this.state.approval?.id) return Promise.resolve(false)

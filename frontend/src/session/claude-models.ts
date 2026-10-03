@@ -1,7 +1,7 @@
 import type { HaloBrowserApi, HostSettings } from './api'
 
 export interface ClaudeModel { id: string; label: string; family: 'opus' | 'sonnet' | 'haiku' | 'fable'; legacy: boolean }
-export interface PlannerModel { id: string; label: string; legacy: boolean; provider: 'claude_code' | 'codex_cli'; description?: string }
+export interface PlannerModel { id: string; label: string; legacy: boolean; provider: 'claude_code' | 'codex_cli' | 'antigravity' | 'cursor' | 'nvidia' | 'opencode_cli'; description?: string }
 
 /** Mirror of the host allowlist (apps/computer-browser/main/harness/providers/claude-models.js); the host re-validates every id. */
 export const CLAUDE_MODELS: readonly ClaudeModel[] = [
@@ -29,11 +29,22 @@ export const CODEX_MODELS: readonly { id: string; label: string; legacy: boolean
   { id: 'gpt-5.5', label: 'GPT-5.5', legacy: true, description: 'Legacy coding model.' },
 ]
 export const DEFAULT_CODEX_MODEL = 'gpt-6.1-sol'
+export const NVIDIA_MODELS = [
+  { id: 'deepseek-ai/deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+  { id: 'deepseek-ai/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+  { id: 'moonshotai/kimi-k3', label: 'Kimi K3' },
+  { id: 'nvidia/nemotron-3-super-120b-a12b', label: 'Nemotron 3 Super' },
+] as const
+export const DEFAULT_NVIDIA_MODEL = NVIDIA_MODELS[0].id
 
 /** Every selectable planner model, tagged with the provider that runs it. */
 export const PLANNER_MODELS: readonly PlannerModel[] = [
+  ...NVIDIA_MODELS.map((m) => ({ ...m, legacy: false, provider: 'nvidia' as const })),
   ...CLAUDE_MODELS.map((m) => ({ id: m.id, label: m.label, legacy: m.legacy, provider: 'claude_code' as const })),
   ...CODEX_MODELS.map((m) => ({ ...m, provider: 'codex_cli' as const })),
+  { id: 'antigravity-default', label: 'Antigravity default', legacy: false, provider: 'antigravity', description: 'Isolated agy CLI. Requires GEMINI_API_KEY; desktop login is not inherited.' },
+  { id: 'cursor-auto', label: 'Cursor Auto', legacy: false, provider: 'cursor', description: 'Isolated Cursor CLI. Requires CURSOR_API_KEY; desktop login is not inherited.' },
+  { id: 'opencode-default', label: 'OpenCode default', legacy: false, provider: 'opencode_cli', description: 'Uses the model and provider already selected in OpenCode.' },
 ]
 
 /** What an unset plannerModel runs (the CLI's latest Opus). */
@@ -42,8 +53,9 @@ export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5'
 /** The model the selected planner runs, or null while no planner is selected. */
 export function activeModel(settings: HostSettings | null): PlannerModel | null {
   const provider = settings?.plannerProvider
-  if (provider !== 'claude_code' && provider !== 'codex_cli') return null
-  const id = settings?.plannerModel ?? (provider === 'claude_code' ? DEFAULT_CLAUDE_MODEL : DEFAULT_CODEX_MODEL)
+  if (!provider || provider === 'none') return null
+  const defaults = { claude_code: DEFAULT_CLAUDE_MODEL, codex_cli: DEFAULT_CODEX_MODEL, antigravity: 'antigravity-default', cursor: 'cursor-auto', nvidia: DEFAULT_NVIDIA_MODEL, opencode_cli: 'opencode-default' }
+  const id = settings?.plannerModel ?? defaults[provider]
   return PLANNER_MODELS.find((m) => m.id === id && m.provider === provider) ?? null
 }
 

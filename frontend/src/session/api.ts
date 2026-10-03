@@ -5,6 +5,10 @@ import type { ChildPlanSummary } from './child-agents'
 export type TaskState = 'idle' | 'running' | 'awaiting_approval' | 'awaiting_verification' | 'paused' | 'stopped' | 'completed'
 export interface GoalCriterion { id: string; text: string; required: boolean; verification: 'host' | 'user'; sourceMessageId?: string }
 export interface GoalConstraint { id: string; text: string; sourceMessageId?: string }
+export type LockRule = { kind: 'deny_action'; action: 'navigate' | 'follow_link' | 'click' | 'type' | 'submit_form' } | { kind: 'allow_origins' | 'deny_origins'; origins: string[] }
+export interface IntentLockInput { rules: LockRule[] }
+export interface LeaseOffer { action: string; origin: string }
+export interface LeaseView { id: string; action: string; origin: string; expiresAt: number; usesLeft: number }
 export interface GoalSpec {
   schemaVersion: number
   taskId: string
@@ -15,13 +19,15 @@ export interface GoalSpec {
   criteria: GoalCriterion[]
   limits: { maxActions: number; maxPlannerCalls: number; maxActiveMs: number }
   createdAt: string
+  lock?: { rules: LockRule[]; digest: string }
 }
-export interface GoalInput { originalRequest: string; constraints?: GoalConstraint[]; criteria?: GoalCriterion[]; limits?: Partial<GoalSpec['limits']> }
+export interface GoalInput { lock?: IntentLockInput; originalRequest: string; constraints?: GoalConstraint[]; criteria?: GoalCriterion[]; limits?: Partial<GoalSpec['limits']> }
 export interface AmendmentInput { text: string; supersedesConstraintIds: string[]; newConstraints: GoalConstraint[]; newCriteria: GoalCriterion[] }
 export interface CriterionStatus { criterionId: string; status: 'pending' | 'verified' | 'rejected'; evidenceId: string; goalVersion: number }
 export interface CriterionConfirmation { criterionId: string; goalVersion: number; evidenceId: string; outcome: 'verified' | 'rejected' }
-export interface ApprovalRequest { id: string; summary: string; action: string; createdAt: string }
+export interface ApprovalRequest { id: string; summary: string; action: string; createdAt: string; widen?: boolean; leaseOffer?: LeaseOffer | null }
 export interface TaskSnapshot {
+  leases?: LeaseView[]
   state: TaskState
   pauseReason: string | null
   goalVersion: number
@@ -63,7 +69,7 @@ export interface HostSettings {
   permissionMode: 'observe' | 'browse' | 'interact' | 'full'
   plannerEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
   memoryPolicy: 'budgeted' | 'user_override'
-  plannerProvider: 'none' | 'claude_code' | 'codex_cli'
+  plannerProvider: 'none' | 'claude_code' | 'codex_cli' | 'antigravity' | 'cursor' | 'nvidia' | 'opencode_cli'
   /** Allowlisted planner model id; unset runs the provider's default model. */
   plannerModel?: string
   /** Opt-in faster planner tier; unset is off. */
@@ -91,6 +97,8 @@ export interface HaloBrowserApi {
   confirmCriterion(taskId: string, input: CriterionConfirmation): Promise<TaskSnapshot>
   taskApprove(taskId: string, approvalId: string): Promise<TaskSnapshot>
   taskDeny(taskId: string, approvalId: string): Promise<TaskSnapshot>
+  taskLend(taskId: string, requestId: string, terms: { minutes: number; uses: number }): Promise<TaskSnapshot>
+  taskRevokeLease(taskId: string, leaseId: string): Promise<TaskSnapshot>
   taskPause(taskId: string): Promise<TaskSnapshot>
   taskStop(taskId: string): Promise<TaskSnapshot>
   taskTakeOver(taskId: string): Promise<TaskSnapshot>

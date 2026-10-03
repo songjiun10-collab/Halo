@@ -115,6 +115,8 @@ code { font-family: var(--font-mono); }
   background: var(--halo-glass-chrome); border-bottom: 1px solid var(--halo-glass-border);
 }
 .hx-nav { display: flex; gap: 2px; }
+/* The lead group (sidebar, back, forward) is a flexible spacer that centres the address pill; it must never shrink below its buttons, or a narrow window slides them under the pill. */
+.hx-toolbar > .hx-nav--lead { min-width: fit-content; }
 /* The address pill: a touch more glass than the bar it sits in. No glow, ever — only the
    border's opacity lifts on hover/focus, like light catching an edge. */
 .hx-omni {
@@ -129,6 +131,12 @@ code { font-family: var(--font-mono); }
   .hx-omni:hover { border-color: rgba(255, 255, 255, 0.13); }
 }
 .hx-toolbar:focus-within .hx-omni { border-color: rgba(255, 255, 255, 0.18); }
+/* Light theme: the white hairlines would vanish, so the same three steps use ink instead. */
+:root[data-theme="light"] .hx-omni { border-color: rgba(0, 0, 0, 0.1); }
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="light"] .hx-omni:hover { border-color: rgba(0, 0, 0, 0.16); }
+}
+:root[data-theme="light"] .hx-toolbar:focus-within .hx-omni { border-color: rgba(0, 0, 0, 0.24); }
 .hx-omni__lock { display: inline-grid; }
 .hx-omni__lock .hx-ic { width: 15px; height: 15px; }
 .hx-omni__form { display: flex; flex: 1; min-width: 0; }
@@ -618,20 +626,20 @@ kbd {
 .hx-effort__dot { z-index: 1; }
 .hx-effort:not([data-level="ultra"]) .hx-effort__dot:not([data-ahead]) { background: rgba(255,255,255,.75); }
 
-/* Settings: host runtime settings, one overlay. */
+/* Settings: host runtime settings, a full panel over the page (layout in design-system/components.css). */
 .hx-settings__host { display: contents; }
-.hx-settings { width: min(380px, calc(100% - 24px)); }
-.hx-settings__group { margin: 0 0 12px; padding: 0; border: 0; display: grid; gap: 8px; }
-.hx-settings__group legend { margin-bottom: 6px; color: var(--muted-foreground); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-.hx-settings__row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
+.hx-settings { transition: opacity var(--enter) var(--ease-out); }
+.hx-settings[data-leaving] { opacity: 0; pointer-events: none; transition-duration: var(--exit); }
+.hx-settings:focus { outline: none; }
+.hx-settings__group { margin: 12px 0 0; padding: 0; border: 0; display: grid; gap: 10px; }
+.hx-settings__row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); font-size: 13px; }
 .hx-settings__row--stack { flex-direction: column; align-items: stretch; }
-.hx-settings__row select { max-width: 200px; height: 28px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--well); color: var(--foreground); font: inherit; }
-.hx-settings__choice { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; }
-.hx-settings__choice:hover { background: var(--hover); }
-.hx-settings__choice input { margin-top: 3px; accent-color: var(--brand); }
-.hx-settings__choice span { display: grid; gap: 2px; }
-.hx-settings__choice small { color: var(--muted-foreground); font-size: 11px; }
-.hx-settings__choice[data-warn] small { color: var(--warning); }
+.hx-settings__row select { max-width: 220px; height: 30px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--well); color: var(--foreground); font: inherit; }
+.hx-model-row .hx-model-row__body { display: grid; gap: 2px; }
+.hx-perm { color: var(--foreground); font: inherit; }
+.hx-perm:hover:not(:disabled) { border-color: var(--border-strong); }
+.hx-perm:disabled { cursor: default; opacity: .6; }
+.hx-perm[data-warn] .hx-perm__desc { color: var(--warning); }
 .hx-settings__hint { margin: 0; color: var(--muted-foreground); font-size: 11px; }
 .hx-settings__error { margin: 0; color: var(--danger); font-size: 12px; }
 .hx-switch { position: relative; width: 34px; height: 20px; flex: none; padding: 0; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--well); cursor: pointer; }
@@ -639,3 +647,18 @@ kbd {
 .hx-switch[aria-checked="true"] { background: var(--brand); border-color: var(--brand); }
 .hx-switch[aria-checked="true"] span { transform: translateX(14px); background: #fff; }
 .hx-switch:disabled { opacity: .4; cursor: default; }
+
+/* Intent lock chips and lent capabilities. */
+.hx-lockchips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.hx-lockchips__label { color: var(--muted-foreground); font-size: 11px; }
+.hx-lockchip { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-2); color: var(--muted-foreground); font: inherit; font-size: 12px; cursor: pointer; }
+.hx-lockchip[aria-pressed="true"] { border-color: var(--brand); color: var(--foreground); background: color-mix(in oklab, var(--brand), transparent 88%); }
+.hx-sheet__widen { margin: 0 0 8px; color: var(--warning); font-size: 12px; }
+.hx-sheet__lend { display: grid; gap: 6px; margin: 0 0 10px; font-size: 12px; }
+.hx-sheet__lend-summary { margin: 0; font-family: var(--font-mono); color: var(--muted-foreground); }
+.hx-leases { display: flex; gap: 6px; }
+.hx-lease { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); color: var(--foreground); font: inherit; font-size: 11.5px; cursor: pointer; }
+.hx-lease__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brand); }
+@media (prefers-reduced-motion: no-preference) { .hx-lease__dot { animation: hx-lease-blink 1.6s ease-in-out infinite; } }
+@keyframes hx-lease-blink { 50% { opacity: .35; } }
+.hx-sheet__actions { flex-wrap: wrap; }

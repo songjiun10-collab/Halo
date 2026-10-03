@@ -1,6 +1,6 @@
 /** Host APIs for usage, custom memory and saved routines (preload `HARNESS_METHODS`). The host re-validates every input. */
 
-export type UsageProvider = 'claude' | 'codex'
+export type UsageProvider = 'claude' | 'codex' | 'nvidia'
 export interface UsageTotals { calls?: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number; costUsd: number; durationMs?: number }
 export interface PlanWindow { usedPercent: number; resetsAt?: string | number | null; windowMinutes?: number }
 export interface SubscriptionSnapshot { provider: UsageProvider; windows: Record<string, PlanWindow | null>; asOf?: number }
@@ -38,7 +38,7 @@ export const canMemory = (api: unknown) => has(api, ['listMemories', 'saveMemory
 export const canRoutines = (api: unknown) => has(api, ['listRoutines', 'saveRoutine', 'deleteRoutine', 'runRoutine'])
 
 export const MEMORY_LIMIT = 100
-export const PROVIDER_LABEL: Record<UsageProvider, string> = { claude: 'Claude', codex: 'Codex' }
+export const PROVIDER_LABEL: Record<UsageProvider, string> = { claude: 'Claude', codex: 'Codex', nvidia: 'NVIDIA' }
 const WINDOW_LABEL: Record<string, string> = { session: 'Current session', week: 'This week', weekSonnet: 'This week · Sonnet', weekOpus: 'This week · Opus' }
 
 export interface UsageRow { provider: UsageProvider; label: string; basis: 'imported' | 'harness'; sessions?: number; tokens: number; costUsd: number; windows: { label: string; usedPercent: number; resetsAt: string | null }[]; limit: UsageLimitStatus['limit']; exceeded: boolean; usedRatio: number | null }
@@ -59,7 +59,7 @@ function resetText(v: PlanWindow['resetsAt']) {
 
 /** One row per provider. The CLI-imported totals win over HALO's own counts, matching how the host checks limits. */
 export function usageRows(u: UsageSummary): UsageRow[] {
-  return (['claude', 'codex'] as const).map((p) => {
+  return (['claude', 'codex', 'nvidia'] as const).map((p) => {
     const imported = u.imported?.[p]
     const used = imported ?? u.byProvider?.[p] ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0 }
     const status = u.limits?.[p] ?? { limit: { tokens: null, costUsd: null }, exceeded: false, basis: 'harness' as const }

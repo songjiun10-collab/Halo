@@ -51,7 +51,7 @@ export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onSha
         {controller}
       </div>
       <div className="hx-nav">
-        <button className="hx-icbtn" aria-label="Share" aria-keyshortcuts="Control+Shift+S Meta+Shift+S" title="Share" disabled={url.startsWith('halo://')} onClick={onShare}><Share /></button>
+        <button className="hx-icbtn" aria-label="Share" aria-keyshortcuts="Control+Shift+S Meta+Shift+S" title="Share" aria-disabled={url.startsWith('halo://') || undefined} onClick={onShare}><Share /></button>
         <button className="hx-icbtn" aria-label="Show all tabs" aria-keyshortcuts="Control+Shift+A Meta+Shift+A" title="Show all tabs" onClick={onOverview}><Tabs /></button>
         <button className="hx-icbtn" aria-label="View task activity" title="View task activity" onClick={onActivity}><ActivityLog /></button>
         <button className="hx-icbtn" aria-label="Settings" aria-keyshortcuts="Control+Comma Meta+Comma" title="Settings" onClick={onSettings}><Gear /></button>

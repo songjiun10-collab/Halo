@@ -21,6 +21,8 @@ import { useTrackpad } from './hooks/useTrackpad'
 import { captureSnapshot, syncDirectSurface, syncNativeSurface } from './session/browser-surface'
 import { AGENT, canNavigate, currentUrl, NEW_TAB_URL, pendingCriteria, SessionStore } from './session/session'
 import { tabTitle } from './session/pages'
+import type { IntentLockInput } from './session/api'
+import { LeaseChip } from './components/LeaseChip'
 import type { SessionState, Tab, TimelineEvent } from './session/types'
 
 const NOTICE_MS = 6000
@@ -118,6 +120,7 @@ export default function App() {
 
   const onShare = useCallback(async () => {
     const url = currentUrl(tab)
+    if (url.startsWith('halo://')) { setToast('Open a web page to share it'); return }
     try {
       if (navigator.share) await navigator.share({ title: tabTitle(tab), url })
       else { await navigator.clipboard.writeText(url); setToast('Link copied') }
@@ -126,11 +129,20 @@ export default function App() {
     }
   }, [tab])
   const onNewWindow = useCallback(() => { void store.newWindow() }, [store])
-  const onSendMessage = useCallback((text: string) => { void store.sendMessage(text) }, [store])
+  const leases = s.snapshot?.leases ?? []
+  const [leaseNow, setLeaseNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!leases.length) return
+    setLeaseNow(Date.now())
+    const timer = window.setInterval(() => setLeaseNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [leases.length])
+  const onSendMessage = useCallback((text: string, lock?: IntentLockInput) => { void store.sendMessage(text, lock) }, [store])
   const onNewTask = useCallback(() => { store.newTask(); openChat() }, [store, openChat])
   // Agent and team rows only open the Agent home: leave the current task or page
   // for the home screen without starting, resuming or stopping anything.
   const openAgents = useCallback((view: AgentNavView) => {
+    setSettingsOpen(false)
     openAgentView(view)
     const current = store.getState()
     if (current.activeTaskId || current.directBrowser) store.newTask()
@@ -297,13 +309,16 @@ export default function App() {
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((open) => !open)}
             controller={
-              <ControllerChip
-                control={s.control}
-                finished={s.finished}
-                recoveryReason={s.recoveryReason}
-                onTakeOver={() => void store.control('takeOver')}
-                onResume={() => void store.control('resume', s.recoveryReason === 'execution_uncertain')}
-              />
+              <>
+                <ControllerChip
+                  control={s.control}
+                  finished={s.finished}
+                  recoveryReason={s.recoveryReason}
+                  onTakeOver={() => void store.control('takeOver')}
+                  onResume={() => void store.control('resume', s.recoveryReason === 'execution_uncertain')}
+                />
+                <LeaseChip leases={leases} now={leaseNow} agent={AGENT} onRevoke={(id) => void store.revokeLease(id)} />
+              </>
             }
               halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
             />
@@ -368,6 +383,7 @@ export default function App() {
                   onApprove={() => void store.decideApproval('approve', sheet.item!)}
                   onDeny={() => void store.decideApproval('deny', sheet.item!)}
                   onTakeOver={() => void store.control('takeOver')}
+                  onLend={(terms) => void store.lend(sheet.item!, terms)}
                 />
               )}
               {noticeShown.item && !activityOpen && !chatOpen && !approval && <Notice event={noticeShown.item} leaving={noticeShown.leaving} blocked={!!approval} onOpen={openActivity} />}
@@ -388,9 +404,9 @@ export default function App() {
                 />
               )}
               {helpShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && <ShortcutsHelp leaving={helpShown.leaving} onClose={() => setHelpOpen(false)} />}
-              {settingsShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && !helpOpen && <SettingsPanel leaving={settingsShown.leaving} onClose={() => setSettingsOpen(false)} />}
               {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}
             </div>
+            {settingsShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && !helpOpen && <SettingsPanel leaving={settingsShown.leaving} onClose={() => setSettingsOpen(false)} />}
           </div>
           </div>
         </div>

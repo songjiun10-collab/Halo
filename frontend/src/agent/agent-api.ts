@@ -4,7 +4,7 @@
  * and preload/index.js). Every call shape here is the host's, not the design
  * hand-off's assumption; see docs/superpowers/specs/2026-10-01-agent-roster-and-teams-design.md.
  */
-import type { TaskSummary } from '../session/api'
+import type { HostSettings, TaskSummary } from '../session/api'
 import type { ChildPlanSummary } from '../session/child-agents'
 
 export type AvatarShape = 'circle' | 'square' | 'bag' | 'star' | 'drop' | 'cloud' | 'triangle' | 'hex'
@@ -14,9 +14,9 @@ export interface Avatar { shape: AvatarShape; color: AvatarColor }
 export type AgentCapability = 'browser' | 'research' | 'computer_use'
 
 interface Stamp { generation: number; createdAt: string; updatedAt: string; archived: boolean; pinned: boolean }
-export interface AgentRecord extends Stamp { id: string; name: string; title: string; description: string; avatar: Avatar; instructions: string; capabilityId: AgentCapability; mcpProviders: string[] | null; model?: string | null }
+export interface AgentRecord extends Stamp { id: string; name: string; title: string; description: string; avatar: Avatar; instructions: string; capabilityId: AgentCapability; mcpProviders: string[] | null; model?: string | null; persistentBrowser: boolean }
 export interface TeamRecord extends Stamp { id: string; name: string; title: string; description: string; avatar: Avatar; memberAgentIds: string[] }
-export interface AgentInput { id?: string; name: string; title: string; description: string; avatar: Avatar; instructions: string; capabilityId: AgentCapability; mcpProviders?: string[] | null; model?: string | null }
+export interface AgentInput { id?: string; name: string; title: string; description: string; avatar: Avatar; instructions: string; capabilityId: AgentCapability; mcpProviders?: string[] | null; model?: string | null; persistentBrowser?: boolean }
 export interface TeamInput { id?: string; name: string; title: string; description: string; avatar: Avatar; memberAgentIds: string[] }
 
 export type OwnerKind = 'agent' | 'team'
@@ -41,6 +41,7 @@ export interface ScheduleInput { id?: string; kind: OwnerKind; ownerId: string; 
 export interface ScheduleRecord extends ScheduleInput { id: string; disabledReason: string | null; armedAt: string; createdAt: string; updatedAt: string; lastOccurrenceAt: string | null; lastTaskId: string | null; lastError: string | null; consecutiveFailures: number; skippedCount: number }
 
 export interface AgentApi {
+  getHostSettings?(): Promise<HostSettings>
   listAgents(): Promise<AgentRecord[]>
   saveAgent(input: AgentInput): Promise<AgentRecord>
   archiveAgent(agentId: string): Promise<AgentRecord>
@@ -114,18 +115,21 @@ export const listConversations = (api: AgentApi, owner: OwnerRef) => api.listAge
 export const markRead = (api: AgentApi, owner: OwnerRef) => api.markAgentConversationsRead(ownerArg(owner))
 export const setPinned = (api: AgentApi, owner: OwnerRef, pinned: boolean) => api.setAgentPinned({ kind: owner.kind, id: owner.id, pinned })
 
-export interface AgentFields { name: string; title: string; description: string; instructions: string; avatar: Avatar; model?: string | null }
-/** An edit keeps the agent's own capability and, by omission, its saved MCP subset and model. */
+export interface AgentFields { name: string; title: string; description: string; instructions: string; avatar: Avatar; model?: string | null; capabilityId?: AgentCapability }
+/** Capability is user-selectable; omitted fields keep the agent's saved capability. */
 export function agentInput(existing: AgentRecord | undefined, fields: AgentFields): AgentInput {
   return {
     ...(existing ? { id: existing.id } : {}),
     name: fields.name.trim(), title: fields.title.trim(), description: fields.description.trim(),
     avatar: { shape: fields.avatar.shape, color: fields.avatar.color }, instructions: fields.instructions,
-    capabilityId: existing?.capabilityId ?? 'browser',
+    capabilityId: fields.capabilityId ?? existing?.capabilityId ?? 'browser',
     // null runs the host's planner setting; an id pins this agent's tasks to it.
     ...(fields.model !== undefined ? { model: fields.model } : {}),
   }
 }
+/** Only the explicit browser-profile control should write this preference. */
+export const savePersistentBrowser = (api: AgentApi, agent: AgentRecord, persistentBrowser: boolean) =>
+  api.saveAgent({ ...agentInput(agent, agent), persistentBrowser })
 /** MCP scope is stored on the agent: null inherits the host set, an array narrows it. */
 export const saveMcpScope = (api: AgentApi, agent: AgentRecord, mcpProviders: string[] | null) =>
   api.saveAgent({ ...agentInput(agent, agent), mcpProviders })
@@ -183,6 +187,7 @@ const ERR: Record<string, string> = {
   team_member_unavailable: 'A team member is archived. Replace them before starting.', invalid_start: 'Describe the task before starting.',
   invalid_schedule: 'Check the schedule. A field is missing or out of range.',
   invalid_room: 'This team room no longer exists.', invalid_message: 'Write a message of up to 2000 characters.',
+  agent_profile_revocation_failed: 'Profile access is off, but an active task could not be stopped. Check the task before enabling this profile again.',
   usage_unavailable: 'Usage tracking is not available in this window.', invalid_limit: 'A limit must be a positive number, or blank for no limit.',
   memory_unavailable: 'Memory is not available in this window.', invalid_memory_entry: 'Write a memory of up to 4 KB.', memory_limit: 'Memory is full: 100 entries. Delete one to make room.',
   routine_deleted: 'This routine was deleted.', origin_not_allowed: 'Every step must stay on the routine’s sites.', definition_too_large: 'This routine is too large. Remove some steps.',

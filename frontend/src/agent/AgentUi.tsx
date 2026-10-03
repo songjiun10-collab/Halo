@@ -1,9 +1,12 @@
 import type { ReactNode } from 'react'
 import type { Avatar as AvatarT, AvatarColor, AvatarShape, AgentRecord } from './agent-api'
 import { ago, statusLabel, type UiConversation } from './normalize'
+import { PLANNER_MODELS } from '../session/claude-models'
 
 export const SHAPES: AvatarShape[] = ['circle', 'square', 'bag', 'star', 'drop', 'cloud', 'triangle', 'hex']
 export const COLORS: Record<AvatarColor, string> = { brown: 'oklch(.5 .07 55)', yellow: 'oklch(.84 .15 95)', blue: 'oklch(.66 .15 250)', gray: 'oklch(.64 .02 150)', red: 'oklch(.64 .19 25)', green: 'oklch(.7 .14 155)', purple: 'oklch(.64 .16 305)', orange: 'oklch(.73 .17 55)' }
+export type AgentBrand = 'claude_code' | 'codex_cli' | 'antigravity' | 'cursor' | 'nvidia'
+export const modelBrand = (model: string | null | undefined): AgentBrand | undefined => PLANNER_MODELS.find((m) => m.id === model)?.provider
 
 const AG_INK = '#1d1a17', AG_BLUSH = '#ff8fa3'
 const agEye = (x: number, y: number, k: string) => k === 'wink' ? <path d={`M${x - 3.4} ${y}q3.4 -3.6 6.8 0`} fill="none" stroke={AG_INK} strokeWidth="2.4" strokeLinecap="round" /> : k === 'happy' ? <path d={`M${x - 3.4} ${y + 1.2}q3.4 -4.4 6.8 0`} fill="none" stroke={AG_INK} strokeWidth="2.4" strokeLinecap="round" /> : <g><ellipse cx={x} cy={y} rx="3" ry="3.6" fill={AG_INK} /><circle cx={x + 1} cy={y - 1.3} r="1.1" fill="#fff" /></g>
@@ -29,10 +32,45 @@ export function Shape({ shape, color, size = 24 }: { shape: AvatarShape; color: 
 export function OrchestratorMark({ size = 36 }: { size?: number }) {
   return <svg viewBox="0 0 80 80" width={size} height={size} aria-hidden="true"><circle cx="40" cy="46" r="25" fill="oklch(.66 .15 250)" /><ellipse cx="40" cy="17" rx="15" ry="4.8" fill="none" stroke="oklch(.84 .15 95)" strokeWidth="4.2" transform="rotate(-6 40 17)" />{agFace(40, 44, { gap: 9 })}</svg>
 }
-export function Avatar({ avatar, size = 44, ring }: { avatar: AvatarT; size?: number; ring?: boolean }) {
+export function Avatar({ avatar, size = 44, ring, brand }: { avatar: AvatarT; size?: number; ring?: boolean; brand?: AgentBrand }) {
   const c = COLORS[avatar.color] ?? COLORS.gray
-  return <span className="hx-av" style={{ width: size, height: size, background: `color-mix(in oklab, ${c} 24%, transparent)`, boxShadow: ring ? '0 0 0 2px var(--backdrop)' : 'none' }}><Shape shape={avatar.shape} color={avatar.color} size={size * 0.82} /></span>
+  const icon = brand === 'codex_cli' ? 'codex' : brand === 'claude_code' ? 'claude' : null
+  return <span className="hx-av" data-brand={brand} style={{ width: size, height: size, background: `color-mix(in oklab, ${c} 24%, transparent)`, boxShadow: ring ? '0 0 0 2px var(--backdrop)' : undefined }}><Shape shape={avatar.shape} color={avatar.color} size={size * 0.82} />{icon ? <img className="hx-av__brand" src={`./assets/model-icons/${icon}.png`} alt="" /> : null}</span>
 }
+
+export type AgentCharacterState = 'idle' | 'working' | 'attention' | 'result'
+const CHARACTER_COPY: Record<AgentCharacterState, string> = { idle: 'Idle', working: 'Working', attention: 'Needs you', result: 'New result' }
+
+/** Explicitly credits the project whose interaction pattern informed this feature. */
+export function AgentDeskCredit() {
+  return <a className="hx-desk__credit" href="https://github.com/rullerzhou-afk/clawd-on-desk" target="_blank" rel="noreferrer">State-animation inspiration: Clawd on Desk</a>
+}
+
+/** Original Halo desk character; brand only selects an abstract color/silhouette, never upstream character art. */
+export function AgentCharacter({ brand, state, size = 34 }: { brand?: AgentBrand; state: AgentCharacterState; size?: number }) {
+  const provider = brand ?? 'halo'
+  const brandName = brand ? ({ claude_code: 'Claude Code', codex_cli: 'Codex CLI', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA' })[brand] : 'Halo'
+  return <span className="hx-agent-character" data-brand={provider} data-state={state} style={{ width: size, height: size }} role="img" aria-label={`${brandName} · ${CHARACTER_COPY[state]}`}>
+    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true">
+      {brand === 'claude_code' ? <>
+        <path d="M13 17 9 10l9 3q6-4 12 0l9-3-4 9v14q0 5-5 5H18q-5 0-5-5z" fill="currentColor" />
+        <circle cx="19" cy="23" r="2" className="hx-agent-character__eye" /><circle cx="29" cy="23" r="2" className="hx-agent-character__eye" />
+        <path d="M20 29q4 4 8 0" className="hx-agent-character__face" />
+      </> : brand === 'codex_cli' ? <>
+        <path d="M16 9h16l7 7v17l-7 7H16l-7-7V16z" fill="currentColor" />
+        <path d="M19 21h1v3h-1zm9 0h1v3h-1z" className="hx-agent-character__eye" />
+        <path d="M20 30h8" className="hx-agent-character__face" />
+        <path d="M7 18h4M37 30h4" className="hx-agent-character__detail" />
+      </> : <>
+        <circle cx="24" cy="25" r="15" fill="currentColor" />
+        <ellipse cx="24" cy="8" rx="10" ry="3" className="hx-agent-character__halo" />
+        <circle cx="19" cy="24" r="2" className="hx-agent-character__eye" /><circle cx="29" cy="24" r="2" className="hx-agent-character__eye" />
+        <path d="M20 30q4 4 8 0" className="hx-agent-character__face" />
+      </>}
+    </svg>
+  </span>
+}
+
 export const Ic = ({ d, s = 15 }: { d: string; s?: number }) => <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
 
 export function Stack({ ids, agents }: { ids: string[]; agents: AgentRecord[] }) {

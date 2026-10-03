@@ -13,15 +13,16 @@ const norm = await vite.ssrLoadModule('/src/agent/normalize.ts')
 const { ModeSwitch } = await vite.ssrLoadModule('/src/agent/AgentHome.tsx')
 const { ChildPlanPanel } = await vite.ssrLoadModule('/src/agent/ChildPlanPanel.tsx')
 const { RuntimeStatus } = await vite.ssrLoadModule('/src/agent/BackgroundRuntimePanel.tsx')
-const { ScheduleEditor } = await vite.ssrLoadModule('/src/agent/AgentSettings.tsx')
+const { ScheduleEditor, PersistentBrowserSetting } = await vite.ssrLoadModule('/src/agent/AgentSettings.tsx')
 const room = await vite.ssrLoadModule('/src/agent/Room.tsx')
+const { AgentCharacter, AgentDeskCredit } = await vite.ssrLoadModule('/src/agent/AgentUi.tsx')
 const BO = '33333333-3333-4333-8333-333333333333'
 test.after(() => vite.close())
 
 const AGENT = '11111111-1111-4111-8111-111111111111'
 const TEAM = '22222222-2222-4222-8222-222222222222'
 const TASK = '33333333-3333-4333-8333-333333333333'
-const agent = { id: AGENT, name: 'Scout', title: 'Research', description: '', avatar: { shape: 'star', color: 'blue' }, instructions: 'Be brief', capabilityId: 'browser', mcpProviders: null, generation: 2, createdAt: 'a', updatedAt: 'b', archived: false, pinned: false }
+const agent = { id: AGENT, name: 'Scout', title: 'Research', description: '', avatar: { shape: 'star', color: 'blue' }, instructions: 'Be brief', capabilityId: 'browser', mcpProviders: null, persistentBrowser: true, generation: 2, createdAt: 'a', updatedAt: 'b', archived: false, pinned: false }
 
 function recorder() {
   const calls = []
@@ -57,6 +58,28 @@ test('an edited agent keeps its own capability and never sends bookkeeping field
   const input = api.agentInput({ ...agent, capabilityId: 'research' }, { name: ' Scout 2 ', title: 'R', description: 'd', instructions: 'i', avatar: agent.avatar })
   assert.deepEqual(input, { id: AGENT, name: 'Scout 2', title: 'R', description: 'd', avatar: agent.avatar, instructions: 'i', capabilityId: 'research' })
   assert.equal(api.agentInput(undefined, { name: 'New', title: '', description: '', instructions: '', avatar: agent.avatar }).capabilityId, 'browser')
+  assert.equal(Object.hasOwn(input, 'persistentBrowser'), false, 'stale generic edits cannot re-enable a profile that changed in another window')
+})
+
+test('Computer Use can be selected in the Agent editor and persists through agentInput', async () => {
+  const { AgentForm } = await vite.ssrLoadModule('/src/agent/AgentForms.tsx')
+  const html = renderToStaticMarkup(React.createElement(AgentForm, { api: {}, agent: { ...agent, capabilityId: 'computer_use' }, onBack: () => {}, onSaved: () => {} }))
+  assert.match(html, /aria-label="Agent capability"/)
+  assert.match(html, /Computer Use · screenshot-based/)
+  assert.match(html, /Team tasks use the parent review queue for CUA/)
+  const input = api.agentInput(undefined, { name: 'Vision', title: '', description: '', instructions: '', avatar: agent.avatar, capabilityId: 'computer_use' })
+  assert.equal(input.capabilityId, 'computer_use')
+})
+
+test('persistent browser profile is explicit, confirmed by the UI, and sent only by its dedicated save action', async () => {
+  const html = renderToStaticMarkup(React.createElement(PersistentBrowserSetting, { api: {}, agent, onSaved: () => {} }))
+  assert.match(html, /Keep this Agent&#x27;s browser profile/)
+  assert.match(html, /shares its site data across its tasks on this device/)
+  assert.doesNotMatch(html, /Confirm/, 'the save affordance appears only after the user requests a change')
+  const { calls, api: fake } = recorder()
+  await api.savePersistentBrowser(fake, agent, false)
+  assert.equal(calls[0][0], 'saveAgent')
+  assert.equal(calls[0][1].persistentBrowser, false)
 })
 
 test('error text prefers a known code and otherwise strips the IPC prefix', () => {
@@ -99,6 +122,32 @@ test('roster status becomes one dot per owner', () => {
 
 test('the mode switch stays hidden without the agent API', () => {
   assert.equal(renderToStaticMarkup(React.createElement(ModeSwitch, { mode: 'task', onChange: () => {} })), '')
+})
+
+test('the desk character uses a distinct Halo-owned shape for each supported agent brand', () => {
+  const claude = renderToStaticMarkup(React.createElement(AgentCharacter, { brand: 'claude_code', state: 'working' }))
+  const codex = renderToStaticMarkup(React.createElement(AgentCharacter, { brand: 'codex_cli', state: 'working' }))
+  const halo = renderToStaticMarkup(React.createElement(AgentCharacter, { brand: undefined, state: 'idle' }))
+  assert.match(claude, /data-brand="claude_code"/)
+  assert.match(codex, /data-brand="codex_cli"/)
+  assert.match(halo, /data-brand="halo"/)
+  assert.notEqual(claude.match(/<path[^>]*d="([^"]+)/)?.[1], codex.match(/<path[^>]*d="([^"]+)/)?.[1])
+})
+
+test('the desk character exposes the live roster state to assistive technology', () => {
+  const attention = renderToStaticMarkup(React.createElement(AgentCharacter, { brand: 'claude_code', state: 'attention' }))
+  const result = renderToStaticMarkup(React.createElement(AgentCharacter, { brand: 'codex_cli', state: 'result' }))
+  assert.match(attention, /aria-label="Claude Code · Needs you"/)
+  assert.match(attention, /data-state="attention"/)
+  assert.match(result, /aria-label="Codex CLI · New result"/)
+  assert.match(result, /data-state="result"/)
+})
+
+test('the desk credits Clawd on Desk as interaction inspiration without implying shared artwork', () => {
+  const html = renderToStaticMarkup(React.createElement(AgentDeskCredit))
+  assert.match(html, /href="https:\/\/github\.com\/rullerzhou-afk\/clawd-on-desk"/)
+  assert.match(html, /State-animation inspiration: Clawd on Desk/)
+  assert.match(html, /rel="noreferrer"/)
 })
 
 test('the child plan panel lists host statuses read-only', () => {

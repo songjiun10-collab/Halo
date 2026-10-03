@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { DAY_NAMES, LIM, blankSchedule, errText, fromLocalInput, saveMcpScope, scheduleInput, scheduleLabel, schedulesFor, switchTrigger, toLocalInput, triggerProblem, type AgentApi, type AgentRecord, type McpProvider, type OwnerRef, type ScheduleInput, type ScheduleRecord, type ScheduleTrigger } from './agent-api'
+import { DAY_NAMES, LIM, blankSchedule, errText, fromLocalInput, saveMcpScope, savePersistentBrowser, scheduleInput, scheduleLabel, schedulesFor, switchTrigger, toLocalInput, triggerProblem, type AgentApi, type AgentRecord, type McpProvider, type OwnerRef, type ScheduleInput, type ScheduleRecord, type ScheduleTrigger } from './agent-api'
 import { Ic } from './AgentUi'
 import { useBackgroundRuntime } from './BackgroundRuntimePanel'
 
@@ -21,6 +21,37 @@ export function McpScope({ api, agent, onSaved }: { api: AgentApi; agent: AgentR
         <i className="hx-tick">{on ? <Ic d="M5 12.5l4.5 4.5L19 7" s={13} /> : null}</i><span className="hx-xitem__t"><b>{m.label}</b><small>{m.enabled ? (on ? 'Allowed for this agent' : 'Not used by this agent') : 'Turned off for this workspace'}</small></span></button></li> })}</ul>
     {agent.mcpProviders !== null ? <button type="button" className="hx-link" onClick={() => void save(null)}>Use the workspace setting</button> : null}
     <p className="hx-ag__note">An agent can only narrow what the workspace allows. A team uses its members' tools combined.</p>
+    {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
+  </div>
+}
+
+/** A profile is opt-in per saved Agent; confirmation makes the shared-login boundary explicit. */
+export function PersistentBrowserSetting({ api, agent, onSaved }: { api: AgentApi; agent: AgentRecord; onSaved: () => void }) {
+  const [pending, setPending] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const save = async () => {
+    if (pending === null) return
+    setBusy(true); setErr(null)
+    try {
+      await savePersistentBrowser(api, agent, pending)
+      setPending(null)
+      onSaved()
+    } catch (error) { setErr(errText(error)); onSaved() }
+    finally { setBusy(false) }
+  }
+  const enabled = agent.persistentBrowser === true
+  return <div className="hx-ag__form" style={{ width: '100%' }}>
+    <button type="button" className="hx-xitem hx-gl" aria-pressed={enabled} disabled={busy} onClick={() => { setErr(null); setPending(!enabled) }}>
+      <i className="hx-tick">{enabled ? <Ic d="M5 12.5l4.5 4.5L19 7" s={13} /> : null}</i>
+      <span className="hx-xitem__t"><b>Keep this Agent's browser profile</b><small>{enabled ? 'On · this Agent shares its site data across its tasks on this device' : 'Off · each task uses an isolated temporary browser session'}</small></span>
+    </button>
+    {pending !== null ? <div className="hx-xrow hx-gl" role="group" aria-label="Confirm browser profile change">
+      <div className="hx-xrow__b"><b>{pending ? 'Enable a persistent browser profile?' : 'Turn off the persistent browser profile?'}</b>
+        <small>{pending ? 'Tasks from this Agent will share cookies and site storage on this device. Other Agents and ordinary tasks stay isolated.' : 'Active tasks using this profile will stop. The saved profile data is kept; turning it on later restores access.'}</small></div>
+      <button type="button" className="hx-agbtn" disabled={busy} onClick={() => setPending(null)}>Cancel</button>
+      <button type="button" className="hx-agbtn hx-agbtn--p" disabled={busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Confirm'}</button>
+    </div> : null}
     {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
   </div>
 }

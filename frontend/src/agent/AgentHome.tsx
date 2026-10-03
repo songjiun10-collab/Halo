@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
 import { LIM, errText, getAgentApi, listConversations, markRead, type AgentApi, type AgentRecord, type OwnerRef, type RosterStatus, type TeamRecord } from './agent-api'
 import { rosterDot, toUi, type UiConversation } from './normalize'
-import { Avatar, ConvoList, Ic, Stack } from './AgentUi'
+import { AgentCharacter, AgentDeskCredit, Avatar, ConvoList, Ic, modelBrand, Stack } from './AgentUi'
 import { AgentForm, TeamForm } from './AgentForms'
 import { AgentDetail } from './AgentDetail'
 import { BackgroundRuntimePanel } from './BackgroundRuntimePanel'
 import { WorkspaceSections } from './WorkspacePanels'
 import { onAgentView, takeAgentView } from './agent-nav'
+import { activeModel } from '../session/claude-models'
+import type { AgentBrand } from './AgentUi'
 
 export type HomeMode = 'task' | 'agent'
 /** Task/Agent switch for the new-task home (Design System-6 glass toggle: tap or drag the thumb). Renders nothing while the preload lacks the roster API. */
@@ -43,8 +45,14 @@ export function AgentHome({ onOpenTask }: { onOpenTask: (taskId: string) => void
 function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: string) => void }) {
   const [v, setV] = useState<View>(() => takeAgentView() ?? { n: 'hub' })
   useEffect(() => onAgentView(() => { const next = takeAgentView(); if (next) setV(next) }), [])
+  // Each view starts at its top (the page scroller is shared with the previous view).
+  const rootRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => { rootRef.current?.closest('.hx-site')?.scrollTo({ top: 0 }) }, [v])
   const [agents, setAgents] = useState<AgentRecord[]>([]), [teams, setTeams] = useState<TeamRecord[]>([]), [convos, setConvos] = useState<UiConversation[]>([])
   const [status, setStatus] = useState<Record<string, RosterStatus>>({}), [loaded, setLoaded] = useState(false), [error, setError] = useState<string | null>(null)
+  const [defaultBrand, setDefaultBrand] = useState<AgentBrand | undefined>()
+
+  useEffect(() => { void api.getHostSettings?.().then((settings) => { setDefaultBrand(activeModel(settings)?.provider) }).catch(() => {}) }, [api])
 
   const refresh = useCallback(async () => {
     try {
@@ -83,22 +91,44 @@ function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: str
   const hub = async () => { await refresh(); setV({ n: 'hub' }) }
 
   let body
-  if (v.n === 'agentForm') body = <AgentForm api={api} agent={v.agent} onBack={() => setV(v.agent ? { n: 'detail', owner: { kind: 'agent', id: v.agent.id } } : { n: 'hub' })} onSaved={async (a) => { await refresh(); open({ kind: 'agent', id: a.id }) }} />
+  if (v.n === 'agentForm') body = <AgentForm api={api} agent={v.agent} defaultBrand={defaultBrand} onBack={() => setV(v.agent ? { n: 'detail', owner: { kind: 'agent', id: v.agent.id } } : { n: 'hub' })} onSaved={async (a) => { await refresh(); open({ kind: 'agent', id: a.id }) }} />
   else if (v.n === 'teamForm') body = <TeamForm api={api} team={v.team} agents={agents} onBack={() => setV(v.team ? { n: 'detail', owner: { kind: 'team', id: v.team.id } } : { n: 'hub' })} onSaved={async (t) => { await refresh(); open({ kind: 'team', id: t.id }) }} />
   else if (v.n === 'detail' && find(v.owner)) {
     const owner = v.owner, it = find(owner)!
-    body = <AgentDetail api={api} owner={owner} item={it} agents={agents} convos={convos.filter((c) => c.ownerId === it.id && c.kind === owner.kind)}
+    body = <AgentDetail api={api} owner={owner} item={it} agents={agents} defaultBrand={defaultBrand} convos={convos.filter((c) => c.ownerId === it.id && c.kind === owner.kind)}
       onBack={hub} onEdit={() => setV(owner.kind === 'team' ? { n: 'teamForm', team: it as TeamRecord } : { n: 'agentForm', agent: it as AgentRecord })} onChanged={refresh}
       onDuplicated={async (a) => { await refresh(); open({ kind: 'agent', id: a.id }) }} onOpenTask={openTask} />
   } else {
     const nA = agents.filter((a) => !a.archived).length, nT = teams.filter((t) => !t.archived).length
     const dot = (id: string) => rosterDot(status[id])
+    const deskRows = [...agents.filter((a) => !a.archived).map((item) => ({ item, kind: 'agent' as const })), ...teams.filter((t) => !t.archived).map((item) => ({ item, kind: 'team' as const }))]
+      .map(({ item, kind }) => ({ item, kind, status: status[item.id] }))
+      .filter((row) => !!row.status && (row.status.running > 0 || row.status.awaitingUser > 0 || row.status.hasUnread))
+      .sort((a, b) => Number(b.status!.awaitingUser > 0) - Number(a.status!.awaitingUser > 0) || Number(b.status!.running > 0) - Number(a.status!.running > 0))
+    const deskTotals = deskRows.reduce((sum, row) => ({ running: sum.running + row.status!.running, awaiting: sum.awaiting + row.status!.awaitingUser, unread: sum.unread + Number(row.status!.hasUnread) }), { running: 0, awaiting: 0, unread: 0 })
     body = <div className="hx-ag__hub"><header className="hx-ag__hh"><h2>Agents</h2><p>Named agents with their own role. Teams run several of them under one parent task.</p></header>
       {error ? <p className="hx-ag__err" role="alert">{error}</p> : null}
+      <section className="hx-desk" aria-labelledby="hx-desk-title">
+        <header className="hx-desk__head"><div><h3 id="hx-desk-title">Desk</h3><p>Live work across your agents and teams</p><AgentDeskCredit /></div><span className="hx-desk__live"><i />{loaded ? 'LIVE' : 'SYNCING'}</span></header>
+        <div className="hx-desk__totals" aria-label="Agent activity summary">
+          <div><b>{deskTotals.running}</b><span>Running</span></div><div data-attention={deskTotals.awaiting > 0 || undefined}><b>{deskTotals.awaiting}</b><span>Needs you</span></div><div><b>{deskTotals.unread}</b><span>Unread</span></div>
+        </div>
+        {deskRows.length ? <ul className="hx-desk__rows">{deskRows.slice(0, 6).map(({ item, kind, status: rowStatus }) => {
+          const recent = rowStatus!.lastConversation
+          const attention = rowStatus!.awaitingUser > 0
+          const label = attention ? 'Needs you' : rowStatus!.running > 0 ? 'Working' : 'Unread'
+          const characterState = attention ? 'attention' : rowStatus!.running > 0 ? 'working' : 'result'
+          const brand = 'model' in item ? modelBrand(item.model) ?? defaultBrand : undefined
+          return <li key={`${kind}:${item.id}`}><button type="button" disabled={!recent?.taskId} onClick={() => recent?.taskId && openTask(recent.taskId, { kind, id: item.id })}>
+            <Avatar avatar={item.avatar} size={34} brand={brand} /><AgentCharacter brand={brand} state={characterState} /><span className="hx-desk__copy"><b>{item.name}</b><small>{recent?.originalRequest || (kind === 'team' ? 'Team activity' : 'Agent activity')}</small></span>
+            <span className="hx-desk__state" data-attention={attention || undefined} data-working={!attention && rowStatus!.running > 0 || undefined}>{label}</span>
+          </button></li>
+        })}</ul> : <p className="hx-desk__empty"><AgentCharacter brand={defaultBrand} state="idle" size={46} /><span>No active work or unread results.</span></p>}
+      </section>
       <h3 className="hx-ag__h">My agents <small>{nA}/{LIM.agents}</small></h3>
       <div className="hx-ag__grid">{agents.map((a) => <button type="button" key={a.id} className="hx-acard hx-gl" data-archived={a.archived || undefined} onClick={() => open({ kind: 'agent', id: a.id })}>
           {a.archived ? null : <i className="hx-dot" data-s={dot(a.id)} title={dot(a.id)} />}{a.pinned ? <span className="hx-pin" aria-label="Pinned"><Ic d="M12 17v5M8 3h8l-1 6 3 4H6l3-4z" s={13} /></span> : null}
-          <Avatar avatar={a.avatar} size={48} /><b>{a.name}</b><span>{a.title || 'No title'}</span>{a.archived ? <i className="hx-badge">Archived</i> : null}</button>)}
+          <Avatar avatar={a.avatar} size={48} brand={modelBrand(a.model) ?? (a.model == null ? defaultBrand : undefined)} /><b>{a.name}</b><span>{a.title || 'No title'}</span>{a.archived ? <i className="hx-badge">Archived</i> : null}</button>)}
         <button type="button" className="hx-acard hx-acard--new" disabled={agents.length >= LIM.agents} onClick={() => setV({ n: 'agentForm' })}><span className="hx-plus">+</span><b>New agent</b>{agents.length >= LIM.agents ? <span>Limit reached</span> : null}</button></div>
       <h3 className="hx-ag__h">Teams <small>{nT}/{LIM.teams}</small></h3>
       <div className="hx-ag__grid">{teams.map((t) => <button type="button" key={t.id} className="hx-acard hx-gl" data-archived={t.archived || undefined} onClick={() => open({ kind: 'team', id: t.id })}>
@@ -111,5 +141,5 @@ function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: str
       <BackgroundRuntimePanel />
       <WorkspaceSections onOpenTask={onOpenTask} /></div>
   }
-  return <div className="hx-ag">{body}</div>
+  return <div ref={rootRef} className="hx-ag">{body}</div>
 }

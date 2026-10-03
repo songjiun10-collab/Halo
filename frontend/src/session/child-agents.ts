@@ -23,6 +23,8 @@ export interface ChildPlanSummary {
   queuedAgentCount: number
   parentGoalVersion: number
   memoryPolicy: 'budgeted' | 'user_override'
+  /** Execution modes the trusted host currently admits for child assignments. */
+  executionModes?: Array<'host' | 'docker'>
   agents: ChildAgentSummary[]
   board?: ChildBoardEntry[]
 }

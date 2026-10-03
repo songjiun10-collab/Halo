@@ -3,7 +3,8 @@ import { AGENT_ROLE } from '../session/session'
 import { nonEmptyVerbatim } from '../session/composer'
 import { Forward } from './Icons'
 import { HaloMark } from './Logo'
-import type { HostSettings } from '../session/api'
+import type { HostSettings, IntentLockInput } from '../session/api'
+import { LockChips, lockFromChips, type LockChip } from './LockChips'
 import { AgentHome, ModeSwitch, type HomeMode } from '../agent/AgentHome'
 import { homeModeFor, onAgentView } from '../agent/agent-nav'
 import { ModelPicker } from './ModelPicker'
@@ -18,7 +19,7 @@ interface Props {
   /** A task already running or paused in another tab, if there is one. */
   activeTask?: { text: string; tabId: string }
   onSelectTab: (id: string) => void
-  onSubmit: (text: string) => void
+  onSubmit: (text: string, lock?: IntentLockInput) => void
 }
 
 /**
@@ -31,6 +32,7 @@ export function HomeScreen({ activeTask, onSelectTab, onSubmit }: Props) {
   const setMode = (next: HomeMode) => { lastMode = next; setModeState(next) }
   useEffect(() => onAgentView(() => { lastMode = 'agent'; setModeState('agent') }), [])
   const [value, setValue] = useState('')
+  const [lockChips, setLockChips] = useState<Set<LockChip>>(new Set())
   const [settings, setSettings] = useState<HostSettings | null>(null)
   const [savingProvider, setSavingProvider] = useState(false)
   const [providerError, setProviderError] = useState(false)
@@ -77,7 +79,7 @@ export function HomeScreen({ activeTask, onSelectTab, onSubmit }: Props) {
         onSubmit={(e) => {
           e.preventDefault()
           const text = nonEmptyVerbatim(value)
-          if (text !== null) onSubmit(text)
+          if (text !== null) onSubmit(text, lockFromChips(lockChips))
         }}
       >
         <input
@@ -90,6 +92,7 @@ export function HomeScreen({ activeTask, onSelectTab, onSubmit }: Props) {
         <ModelPicker settings={settings} onSelectModel={(id) => void selectModel(id)} onEffort={(effort) => void selectEffort(effort)} savingProvider={savingProvider} savingEffort={savingEffort} />
         <button className="hx-btn hx-btn--primary hx-btn--compact" type="submit" disabled={!value.trim()}>Go</button>
       </form>
+      <LockChips value={lockChips} onChange={setLockChips} />
       {(providerError || effortError) && (
         <p className="hx-home__provider-status" role="alert">{providerError ? 'Could not update provider preference.' : 'Could not update effort.'}</p>
       )}

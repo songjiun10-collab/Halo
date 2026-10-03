@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { LIM, agentInput, errText, type AgentApi, type AgentRecord, type Avatar as AvatarT, type TeamRecord } from './agent-api'
-import { Avatar, Field, Ic, SHAPES, COLORS, Shape, Stack } from './AgentUi'
+import { LIM, agentInput, errText, type AgentApi, type AgentCapability, type AgentRecord, type Avatar as AvatarT, type TeamRecord } from './agent-api'
+import { Avatar, Field, Ic, modelBrand, SHAPES, COLORS, Shape, Stack, type AgentBrand } from './AgentUi'
 import { PLANNER_MODELS } from '../session/claude-models'
 
 function AvatarPicker({ value, onChange }: { value: AvatarT; onChange: (a: AvatarT) => void }) {
@@ -11,11 +11,11 @@ function AvatarPicker({ value, onChange }: { value: AvatarT; onChange: (a: Avata
 }
 const Back = ({ onClick }: { onClick: () => void }) => <button type="button" className="hx-ag__back" onClick={onClick}><Ic d="M15 6l-6 6 6 6" />Agents</button>
 
-export function AgentForm({ api, agent, onBack, onSaved }: { api: AgentApi; agent?: AgentRecord; onBack: () => void; onSaved: (a: AgentRecord) => void }) {
-  const [f, setF] = useState({ name: agent?.name ?? '', title: agent?.title ?? '', description: agent?.description ?? '', instructions: agent?.instructions ?? '', avatar: agent?.avatar ?? { shape: 'circle', color: 'blue' } as AvatarT, model: agent?.model ?? null as string | null })
+export function AgentForm({ api, agent, defaultBrand, onBack, onSaved }: { api: AgentApi; agent?: AgentRecord; defaultBrand?: AgentBrand; onBack: () => void; onSaved: (a: AgentRecord) => void }) {
+  const [f, setF] = useState({ name: agent?.name ?? '', title: agent?.title ?? '', description: agent?.description ?? '', instructions: agent?.instructions ?? '', avatar: agent?.avatar ?? { shape: 'circle', color: 'blue' } as AvatarT, model: agent?.model ?? null as string | null, capabilityId: agent?.capabilityId ?? 'browser' as AgentCapability })
   const [err, setErr] = useState<string | null>(null), [busy, setBusy] = useState(false)
   const set = <K extends keyof typeof f>(k: K) => (v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }))
-  const group = (provider: 'claude_code' | 'codex_cli') => PLANNER_MODELS.filter((m) => m.provider === provider).map((m) => <option key={m.id} value={m.id}>{m.label}{m.legacy ? ' (legacy)' : ''}</option>)
+  const group = (provider: typeof PLANNER_MODELS[number]['provider']) => PLANNER_MODELS.filter((m) => m.provider === provider).map((m) => <option key={m.id} value={m.id}>{m.label}{m.legacy ? ' (legacy)' : ''}</option>)
   const bad = !f.name.trim() || f.name.length > LIM.name || f.title.length > LIM.title || f.description.length > LIM.description || f.instructions.length > LIM.instructions
   const save = async () => {
     setBusy(true); setErr(null)
@@ -23,18 +23,27 @@ export function AgentForm({ api, agent, onBack, onSaved }: { api: AgentApi; agen
     catch (e) { setErr(errText(e)); setBusy(false) }
   }
   return <div className="hx-ag__form"><Back onClick={onBack} /><h2>{agent ? 'Edit agent' : 'New agent'}</h2>
-    <div className="hx-ag__preview hx-gl"><Avatar avatar={f.avatar} size={56} /><div><b>{f.name || 'Agent name'}</b><span>{f.title || 'Title'}</span></div></div>
+    <div className="hx-ag__preview hx-gl"><Avatar avatar={f.avatar} size={56} brand={modelBrand(f.model) ?? (f.model == null ? defaultBrand : undefined)} /><div><b>{f.name || 'Agent name'}</b><span>{f.title || 'Title'}</span></div></div>
     <AvatarPicker value={f.avatar} onChange={set('avatar')} />
     <Field label="Name" value={f.name} onChange={set('name')} max={LIM.name} />
     <Field label="Title" value={f.title} onChange={set('title')} max={LIM.title} />
     <Field label="Description" value={f.description} onChange={set('description')} max={LIM.description} multi />
     <Field label="Role instructions" value={f.instructions} onChange={set('instructions')} max={LIM.instructions} multi rows={5} hint="How this agent should behave. It follows these on every task." />
-    <div className="hx-fld"><span className="hx-fld__top"><b>Capability</b></span><span className="hx-cap"><Ic d="M12 3a9 9 0 100 18 9 9 0 000-18zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" />{agent && agent.capabilityId !== 'browser' ? agent.capabilityId : 'Browser'}<small>{agent && agent.capabilityId !== 'browser' ? 'Kept from the saved agent' : 'Only capability available'}</small></span></div>
+    <label className="hx-fld"><span className="hx-fld__top"><b>Capability</b><small>Used when this Agent starts a task</small></span>
+      <select className="hx-fld__in" aria-label="Agent capability" value={f.capabilityId} onChange={(e) => set('capabilityId')(e.target.value as AgentCapability)}>
+        <option value="browser">Browser</option>
+        <option value="computer_use">Computer Use · screenshot-based</option>
+      </select>
+      {f.capabilityId === 'computer_use' ? <em>Team tasks use the parent review queue for CUA. Child agents stay read-only. Codex image input is required.</em> : null}
+    </label>
     <label className="hx-fld"><span className="hx-fld__top"><b>Model</b><small>Host default follows the model picker</small></span>
       <select className="hx-fld__in" aria-label="Agent model" value={f.model ?? ''} onChange={(e) => set('model')(e.target.value || null)}>
         <option value="">Host default</option>
         <optgroup label="Claude">{group('claude_code')}</optgroup>
         <optgroup label="Codex">{group('codex_cli')}</optgroup>
+        <optgroup label="Antigravity">{group('antigravity')}</optgroup>
+        <optgroup label="Cursor">{group('cursor')}</optgroup>
+        <optgroup label="NVIDIA">{group('nvidia')}</optgroup>
       </select></label>
     {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
     <div className="hx-ag__actions"><button type="button" className="hx-agbtn" onClick={onBack}>Cancel</button><button type="button" className="hx-agbtn hx-agbtn--p" disabled={bad || busy} onClick={save}>{agent ? 'Save changes' : 'Create agent'}</button></div></div>

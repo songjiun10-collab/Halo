@@ -16,7 +16,7 @@ export interface Tab {
   canGoForward: boolean
 }
 export interface TimelineEvent { id: number; actor: Actor; text: string; detail?: string; outcome?: Outcome; policy?: Verdict; notable?: boolean; at?: string }
-export interface Approval { taskId: string; id: string; action: string; request: string; createdAt: string }
+export interface Approval { taskId: string; id: string; action: string; request: string; createdAt: string; widen: boolean; leaseOffer: { action: string; origin: string } | null }
 export interface ChatMessage { from: Actor; text: string }
 export interface PendingCriterion { taskId: string; criterionId: string; text: string; goalVersion: number; evidenceId: string }
 export interface SessionState {
