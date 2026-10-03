@@ -6,10 +6,18 @@ The project is intentionally empirical. Claims are limited to explicit threat mo
 
 ![HALO agent workspace with agents and a team room](docs/images/halo-agent-home.png)
 
+## Components
+
+| Component | Guide | Responsibility |
+| --- | --- | --- |
+| Computer Browser | [Browser README](apps/computer-browser/README.md) | Electron UI, browser surfaces, task runtime, planner and approval flow |
+| Container | [Container README](deploy/container/README.ko.md) | Docker gateway, role keys, persistent state and deployment |
+| Architecture | [Architecture guide](docs/ARCHITECTURE.ko.md) | Component ownership, trust boundaries and restructuring sequence |
+
 ## Research workflow
 
 Local gateway development with Docker Compose is described in
-[the Docker guide](docs/DOCKER.ko.md), including key setup and an HTTP smoke check.
+[the Container guide](deploy/container/README.ko.md), including key setup and an HTTP smoke check.
 
 1. Check the closest prior work first.
 2. State the trusted assumptions and threat model.
