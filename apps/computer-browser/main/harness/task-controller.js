@@ -19,11 +19,16 @@
 // bounded slices via context-builder.js).
 
 const { randomUUID } = require("node:crypto");
+const { AsyncLocalStorage } = require("node:async_hooks");
 const contracts = require("../../shared/harness-contracts");
-const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal } = require("../../shared/harness-profile");
+const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal, isQuickProfile } = require("../../shared/harness-profile");
+const { adaptiveEffort } = require("./planner-effort-policy");
 const { buildContext } = require("./context-builder");
+const { ContextRefCatalog } = require("./context-refs");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
 const { isReadOnlyAction } = require("./permission-policy");
+const { evaluateGate, actionTargetOrigin } = require("./action-gate");
+const { LEASE_ACTIONS, lendTerms, createLease, isLeaseLive, LeaseError } = require("./capability-lease");
 
 class TaskControllerError extends Error {
   constructor(code, message) {
@@ -54,6 +59,18 @@ function describeActionTarget(action, lastObservation) {
     const amount = action.amount !== undefined ? String(action.amount) : "?";
     return `${direction} ${amount}`;
   }
+  if (["click", "type", "submit_form"].includes(action.type)) {
+    const element = lastObservation?.elements?.find((el) => el.elementId === action.elementId);
+    if (!element) return `unknown element ${String(action.elementId).slice(0, 32)}`;
+    const identity = `${element.role || "element"} ${JSON.stringify(element.name || "")} [${element.elementId}]`;
+    if (action.type === "type") return `${identity}; replace text with ${JSON.stringify(action.text)}`;
+    const destination = element.formAction ? `${(element.formMethod || "get").toUpperCase()} ${element.formAction}` : element.href;
+    return destination ? `${identity}; ${destination}` : identity;
+  }
+  if (["click_at", "type_at"].includes(action.type)) {
+    const point = `(${Math.round(Number(action.x) * 100)}%, ${Math.round(Number(action.y) * 100)}%)`;
+    return action.type === "type_at" ? `screenshot ${lastObservation?.id || action.observationId} ${point}; insert ${JSON.stringify(action.text)}` : `screenshot ${lastObservation?.id || action.observationId} ${point}`;
+  }
   return null;
 }
 
@@ -73,13 +90,90 @@ function observationKey(observation) {
   }
 }
 
+// Capability adapters are host-validated as part of the durable task profile.
+// Team parents include CUA; child profiles do not, preserving their
+// observe-only boundary while allowing the parent to request human review.
+function hasComputerUseAdapter(taskProfile) {
+  return Array.isArray(taskProfile?.capability?.adapters) &&
+    taskProfile.capability.adapters.some((adapter) => adapter?.capabilityId === "computer_use");
+}
+
+function hasMultiAgentCapability(taskProfile) {
+  return ["multi_agent", "multi_agent_computer_use"].includes(taskProfile?.capability?.id);
+}
+
 // Long-profile goal persistence: total finish proposals the host will reject
 // (criteria still unmet, all machine-verifiable) before pausing for a human.
 const GOAL_MAX_REJECTED_FINISHES = 5;
 const NAV_VISITED_MAX = 32;
+// Consecutive scrolls on one page after which the task pauses as no_progress.
+const PLANNER_RETRYABLE_CODES = ["invalid_proposal", "invalid_proposal_json"];
+const SCROLL_STREAK_LIMIT = 6;
+// Planner turns spent on one page (query and hash ignored) within the recent window.
+const PAGE_LOOP_WINDOW = 12;
+const PAGE_LOOP_LIMIT = 8;
+const ERROR_URLS_KEPT = 5;
+const OBSERVE_STALE_RETRIES = 2;
+const OBSERVE_RETRY_DELAY_MS = 400;
 const NAV_FRONTIER_MAX = 32;
 const NAV_URL_MAX_CHARS = 512;
 const NAV_NAME_MAX_CHARS = 80;
+const MCP_RESULT_MAX_BYTES = 4096;
+
+function truncateUtf8(text, maxBytes) {
+  const source = Buffer.from(String(text), "utf8");
+  if (source.length <= maxBytes) return { text: source.toString("utf8"), truncated: false };
+  let end = maxBytes;
+  while (end > 0 && (source[end] & 0xc0) === 0x80) end -= 1;
+  return { text: source.subarray(0, end).toString("utf8"), truncated: true };
+}
+
+function plannerMcpAction(action) {
+  if (!contracts.isPlainObject(action) || typeof action.type !== "string" || !action.type.startsWith("mcp_")) return false;
+  const fields = {
+    mcp_search: ["type", "query"],
+    mcp_describe: ["type", "connectionId", "toolName"],
+    mcp_propose: ["type", "connectionId", "toolName", "arguments", "reason"],
+  }[action.type];
+  if (!fields || Object.keys(action).some((key) => !fields.includes(key)) || fields.some((key) => !Object.hasOwn(action, key))) return false;
+  if (action.type === "mcp_search") return typeof action.query === "string" && action.query.trim().length > 0 && Buffer.byteLength(action.query, "utf8") <= 1024;
+  if (typeof action.connectionId !== "string" || !action.connectionId || action.connectionId.length > 256 ||
+      typeof action.toolName !== "string" || !action.toolName || action.toolName.length > 256) return false;
+  if (action.type === "mcp_describe") return true;
+  try {
+    contracts.validateMcpProposal({ connectionId: action.connectionId, toolName: action.toolName, arguments: action.arguments });
+  } catch { return false; }
+  return typeof action.reason === "string" && action.reason.trim().length > 0 && action.reason.length <= 2000;
+}
+
+// P1 context_read: one host-only read of manifest refs, exact keys only.
+function plannerContextRead(action) {
+  return contracts.isPlainObject(action) && action.type === "context_read"
+    && Object.keys(action).every((key) => key === "type" || key === "refIds")
+    && Array.isArray(action.refIds) && action.refIds.length > 0 && action.refIds.length <= 4
+    && action.refIds.every((id) => typeof id === "string" && id.length <= 128);
+}
+
+function mcpActionKind(action) {
+  return action.type.slice("mcp_".length);
+}
+
+function boundedMcpObservation(action, outcome, result = "", extra = {}) {
+  const base = { authority: "untrusted_mcp", action, outcome, truncated: false, ...extra };
+  const json = JSON.stringify({ ...base, result: String(result) });
+  if (Buffer.byteLength(json, "utf8") <= MCP_RESULT_MAX_BYTES) return { ...base, result: String(result) };
+  const overhead = Buffer.byteLength(JSON.stringify({ ...base, result: "" }), "utf8");
+  const bounded = truncateUtf8(result, Math.max(0, MCP_RESULT_MAX_BYTES - overhead - 20));
+  let candidate = { ...base, truncated: true, result: bounded.text };
+  while (Buffer.byteLength(JSON.stringify(candidate), "utf8") > MCP_RESULT_MAX_BYTES && candidate.result.length > 0) {
+    candidate = { ...candidate, result: truncateUtf8(candidate.result, Math.max(0, Buffer.byteLength(candidate.result, "utf8") - 8)).text };
+  }
+  return candidate;
+}
+
+function isMcpItem(item) {
+  return item.actionType === contracts.MCP_CALL_ACTION_TYPE && !!item.mcp;
+}
 
 class TaskController {
   constructor({
@@ -90,26 +184,58 @@ class TaskController {
     hostVerifier,
     memoryMonitor,
     now,
+    monotonicNow,
     segmentRotationCalls,
     noProgressThreshold,
     memoryStore,
     permissionMode = "browse",
+    observeRetryDelayMs = OBSERVE_RETRY_DELAY_MS,
     plannerEffort = "medium",
+    adaptiveEffort: adaptiveEffortEnabled = false,
     onChildPlan,
     sendMessage,
     listPendingMessages,
     recordMessagesConsumed,
+    readTeamBoard,
+    readChildPlan,
     readWorkGoalContext,
     routineRunner,
     routineRun,
     batchReadOnlyActions = true,
     harnessProfile,
+    makeMcpBroker,
+    mcpEnabled,
+    reviewFallback = "queue",
+    onTiming,
+    contextRefs = false,
   } = {}) {
     if (!store) throw new TaskControllerError("invalid_config", "store is required");
     if (!planner) throw new TaskControllerError("invalid_config", "planner is required");
     if (!browser) throw new TaskControllerError("invalid_config", "browser is required");
     if (!approve) throw new TaskControllerError("invalid_config", "approve is required");
     if (!hostVerifier) throw new TaskControllerError("invalid_config", "hostVerifier is required");
+    if (reviewFallback !== "queue" && reviewFallback !== "deny") {
+      throw new TaskControllerError("invalid_config", "reviewFallback must be queue or deny");
+    }
+    // "deny" is the unattended-run choice: nobody is watching, so an action
+    // that would wait for a human is denied (and journaled) instead.
+    this._reviewFallback = reviewFallback;
+    // Telemetry only (P0 measurement): {operation: "context_build", elapsedMs,
+    // bytes}. Never changes what runs; a throwing callback is ignored.
+    if (onTiming !== undefined && typeof onTiming !== "function") {
+      throw new TaskControllerError("invalid_config", "onTiming must be a function when provided");
+    }
+    this._onTiming = onTiming || null;
+    // P1 context manifest, opt-in: pages already left stay readable by ref
+    // through a host-only context_read action. Off leaves the packet as before.
+    if (typeof contextRefs !== "boolean") {
+      throw new TaskControllerError("invalid_config", "contextRefs must be a boolean");
+    }
+    this._contextRefsEnabled = contextRefs;
+    this._contextRefs = null;
+    this._contextRefsPage = null; // the page the last manifest was built on
+    this._pageRefs = new Map(); // url -> refId of its latest snapshot
+    this._pendingContextRead = null;
 
     this._store = store;
     this._planner = planner;
@@ -163,6 +289,28 @@ class TaskController {
       recoveredRejected = count;
     }
     this._rejectedFinishes = recoveredRejected;
+    // Generic MCP scope exists only when the trusted host supplies a broker
+    // factory. Open calls (durable mcp_call_started without an outcome) are
+    // recovered from the checkpoint plus the journal tail, like finish
+    // rejections above, so a crash mid-call can never be silently resumed.
+    this._makeMcpBroker = typeof makeMcpBroker === "function" ? makeMcpBroker : null;
+    this._mcpBroker = null;
+    this._mcpClosed = false;
+    this._plannerMcpEnabled = typeof mcpEnabled === "boolean" ? mcpEnabled : Boolean(this._makeMcpBroker);
+    this._mcpContext = new AsyncLocalStorage();
+    this._openMcpCalls = new Set();
+    const checkpointedOpenMcp = store.lastCheckpoint?.payload?.mcp?.openCalls;
+    if (checkpointedOpenMcp !== undefined) {
+      if (!Array.isArray(checkpointedOpenMcp) || !checkpointedOpenMcp.every((id) => typeof id === "string" && contracts.UUID_RE.test(id))) {
+        throw new TaskControllerError("invalid_mcp_recovery", "checkpointed open MCP calls are malformed");
+      }
+      for (const id of checkpointedOpenMcp) this._openMcpCalls.add(id);
+    }
+    for (const event of store.eventsSinceCheckpoint || []) {
+      if (event.type !== "note") continue;
+      if (event.payload?.kind === "mcp_call_started") this._openMcpCalls.add(event.payload.requestId);
+      if (event.payload?.kind === "mcp_call_outcome") this._openMcpCalls.delete(event.payload.requestId);
+    }
     this._browser = browser;
     this._approve = approve;
     this._hostVerifier = hostVerifier;
@@ -184,6 +332,14 @@ class TaskController {
     this._sendMessage = typeof sendMessage === "function" ? sendMessage : null;
     this._listPendingMessages = typeof listPendingMessages === "function" ? listPendingMessages : null;
     this._recordMessagesConsumed = typeof recordMessagesConsumed === "function" ? recordMessagesConsumed : null;
+    // A child's team board (ChildAgentCoordinator.readTeamBoard): advisory
+    // sibling notes, so a failed read only leaves them out of this turn.
+    this._readTeamBoard = typeof readTeamBoard === "function" ? readTeamBoard : null;
+    // A parent's current child plan summary (ChildAgentCoordinator.
+    // getPlanSummary), so its planner is told whether splitting the work is
+    // open or a plan is already running. Read only when this controller can
+    // actually accept a child_plan.
+    this._readChildPlan = typeof readChildPlan === "function" ? readChildPlan : null;
     // The binding is durable TaskStore state. The injected reader is only a
     // host-owned lookup for that exact version; it cannot choose a different
     // Goal for this Task or modify the Task's own GoalSpec.
@@ -194,18 +350,33 @@ class TaskController {
     const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
     if (!PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_config", "permissionMode is invalid");
     this._permissionMode = permissionMode;
+    this._observeRetryDelayMs = Number.isFinite(observeRetryDelayMs) && observeRetryDelayMs >= 0 ? observeRetryDelayMs : OBSERVE_RETRY_DELAY_MS;
     this._plannerEffort = plannerEffort;
+    this._adaptiveEffort = adaptiveEffortEnabled === true;
+    this._seenUrls = new Set();
+    this._lastActionType = undefined;
+    this._lastActionStatus = undefined;
+    this._easyStreak = 0;
     this._evaluateActionPolicy = evaluateActionPolicy;
     this._browser.setPermissionMode?.(permissionMode);
     this._now = typeof now === "function" ? now : Date.now;
+    this._monotonicNow = typeof monotonicNow === "function"
+      ? monotonicNow
+      : () => Number(process.hrtime.bigint()) / 1_000_000;
     this._segmentRotationCalls =
       typeof segmentRotationCalls === "number" ? segmentRotationCalls : contracts.SEGMENT_ROTATION_CALLS;
     this._noProgressThreshold =
       typeof noProgressThreshold === "number" ? noProgressThreshold : contracts.NO_PROGRESS_REPLAN_THRESHOLD;
 
     this._goal = store.getGoal();
+    // Leases live only as long as this controller: a restarted task starts
+    // with none, which is stricter than replaying them from the journal.
+    this._leases = [];
+    this._browser.setIntentLock?.(this._goal.lock ?? null);
     this._epoch = 0;
     this._loopRunning = false;
+    this._plannerAborter = null;
+    this._plannerShutdownRequired = false;
     this._listeners = new Set();
     this._lastEmittedSnapshot = null;
     this._pendingCheckpoints = 0;
@@ -237,8 +408,12 @@ class TaskController {
     this._segment = { index: 0, callsInSegment: 0 };
     this._criteriaStatus = new Map(); // criterionId -> {status, evidenceId}
     this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
+    this._scrollStreak = { url: null, count: 0 };
+    this._recentPages = [];
+    this._errorUrls = [];
     this._approvalQueue = [];
     this._lastObservation = null;
+    this._pendingMcpObservation = null;
     // Reusable-across-turns iff the last dispatched action was itself an
     // "observe" (see the reuse gate in the main loop and its assignment in
     // _afterActionDispatched, which is this field's one source of truth).
@@ -282,6 +457,9 @@ class TaskController {
       this._task = { state: "paused", pauseReason: "recovered" };
     } else {
       this._task = { state: "idle", pauseReason: null };
+    }
+    if (this._openMcpCalls.size > 0) {
+      this._task = { state: "paused", pauseReason: "execution_uncertain" };
     }
 
     // A nonterminal checkpoint still carries real progress -- restore it
@@ -329,9 +507,25 @@ class TaskController {
     return this._harnessProfile;
   }
 
+  // Adaptive thinking (see planner-effort-policy.js adaptiveEffort): only when
+  // the host runs effort mode "auto"; "fixed" always uses the configured effort.
+  _effectivePlannerEffort(pendingMessages, url) {
+    const revisit = typeof url === "string" && this._seenUrls.has(url);
+    if (typeof url === "string") this._seenUrls.add(url);
+    if (!this._adaptiveEffort) return this._plannerEffort;
+    return adaptiveEffort({
+      base: this._plannerEffort,
+      lastActionType: this._lastActionType,
+      lastActionOk: this._lastActionStatus === "ok",
+      revisit,
+      pendingMessages: Boolean(pendingMessages && pendingMessages.length > 0),
+      easyStreak: this._easyStreak,
+    });
+  }
+
   setPolicySettings({ permissionMode, plannerEffort } = {}) {
     const { PERMISSION_MODES } = require("./permission-policy");
-    const allowedEfforts = ["low", "medium", "high", "xhigh", "max"];
+    const allowedEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
     if (permissionMode !== undefined && !PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_permission_mode", "permissionMode is invalid");
     if (plannerEffort !== undefined && !allowedEfforts.includes(plannerEffort)) throw new TaskControllerError("invalid_planner_effort", "plannerEffort is invalid");
     if (permissionMode !== undefined) this._permissionMode = permissionMode;
@@ -340,6 +534,7 @@ class TaskController {
   }
 
   getSnapshot() {
+    this._pruneLeases();
     return {
       state: this._task.state,
       pauseReason: this._task.pauseReason,
@@ -347,8 +542,20 @@ class TaskController {
       budgets: { ...this._budgets },
       segment: { ...this._segment },
       criteriaStatus: [...this._criteriaStatus.entries()].map(([criterionId, v]) => ({ criterionId, ...v })),
-      approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null })),
+      approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor, widen, leaseOffer }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null, widen: !!widen, leaseOffer: leaseOffer ?? null })),
+      leases: this._terminal()
+        ? []
+        : this._leases.filter((l) => isLeaseLive(l, this._monotonicNow())).map(({ id, action, origin, expiresAt, usesLeft }) => ({ id, action, origin, expiresAt, usesLeft })),
     };
+  }
+
+  _pruneLeases(now = this._monotonicNow()) {
+    // Expired/consumed leases are already inert; retaining them forever makes
+    // a long-running task's every gate scan grow with its entire history.
+    // Keep only live leases and revocations whose durable journal append must
+    // still be retried.
+    this._leases = this._leases.filter((lease) =>
+      (lease.revoked && !lease.revocationRecorded) || isLeaseLive(lease, now));
   }
 
   onChange(listener) {
@@ -386,7 +593,10 @@ class TaskController {
       Object.keys(payload).length === 4 && Number.isInteger(payload.injected) && payload.injected >= 0 &&
       Number.isInteger(payload.failed) && payload.failed >= 0 && Array.isArray(payload.domains) &&
       payload.domains.length <= 20 && payload.domains.every((domain) => typeof domain === "string" && domain.length <= 253);
-    if (!autofill && !sessions) {
+    // Value-free by construction: exactly a fixed kind plus a short identifier-like code.
+    const sessionFailure = contracts.isPlainObject(payload) && payload.kind === "imported_sessions_injection_failed" &&
+      Object.keys(payload).length === 2 && typeof payload.errorCode === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(payload.errorCode);
+    if (!autofill && !sessions && !sessionFailure) {
       throw new TaskControllerError("invalid_host_note", "unsupported host audit note");
     }
     await this._store.append({ type: "note", payload });
@@ -406,9 +616,24 @@ class TaskController {
     if (typeof this._browser.userNavigate !== "function") {
       throw new TaskControllerError("browser_unavailable", "this task browser does not support user navigation");
     }
+    return this.runUserControlled(() => this._browser.userNavigate(action));
+  }
+
+  // Hold the same admission gate and transition drain for a complete trusted
+  // human-only browser operation (for example vault decrypt + credential fill).
+  // Otherwise resume() could hand the task back to the agent while an earlier
+  // isUserControlled() check is still waiting on asynchronous host work.
+  async runUserControlled(operation) {
+    this._checkAdmission();
+    if (typeof operation !== "function") {
+      throw new TaskControllerError("invalid_operation", "a trusted user-controlled operation is required");
+    }
+    if (!this.isUserControlled()) {
+      throw new TaskControllerError("invalid_state", "take over the task before using its browser");
+    }
     this._admissionOpen = false;
     try {
-      return await this._trackInFlight(Promise.resolve().then(() => this._browser.userNavigate(action)));
+      return await this._trackInFlight(Promise.resolve().then(operation));
     } finally {
       // A concurrent stop/takeover owns the gate until its drain finishes.
       if (this._pendingTransitions === 0) this._admissionOpen = true;
@@ -480,8 +705,11 @@ class TaskController {
   // admission closed (fail-closed) and _task unchanged, exactly like every
   // other store.append()/checkpoint() call in this file.
   async _doTransition({ finalState, pauseReason, cancelQueue, cancelReason }) {
-    if (cancelQueue) {
-      const queued = [...this._approvalQueue];
+    // A pending MCP review belongs to the agent's turn; any ownership change
+    // (including a plain pause) withdraws it rather than leaving a human
+    // approval that could dispatch after control changed hands.
+    const queued = cancelQueue ? [...this._approvalQueue] : this._approvalQueue.filter(isMcpItem);
+    if (queued.length > 0) {
       for (const item of queued) {
         // durable:false: this loop is always followed by this._checkpoint()
         // below (before any other await point reachable from here), and
@@ -495,12 +723,26 @@ class TaskController {
             requestId: item.id,
             actionType: item.actionType,
             goalVersion: item.goalVersion,
-            reason: cancelReason,
+            reason: cancelReason ?? pauseReason ?? "pause",
           },
         }, { durable: false });
         const idx = this._approvalQueue.findIndex((q) => q.id === item.id);
         if (idx !== -1) this._approvalQueue.splice(idx, 1);
+        if (isMcpItem(item)) item.mcp.settle({ allowed: false });
       }
+    }
+    // Stop and takeOver hand control back to the person: every lent
+    // permission ends with them. Revoked before the drain so an in-flight
+    // loop can no longer spend one (_useLease re-checks after its append).
+    // A plain pause leaves leases to their own time box.
+    if (cancelQueue) await this._revokeAllLeases(finalState === "stopped" ? "task_ended" : "taken_over");
+    if (this._plannerShutdownRequired || this._planner.isTerminating?.()) {
+      // Cancellation invalidates the proposal immediately, but control must
+      // not reopen while its worker is still using the user's model account.
+      // A shutdown failure leaves admission closed and this flag retryable.
+      this._plannerShutdownRequired = true;
+      await this._planner.close?.();
+      this._plannerShutdownRequired = false;
     }
     await Promise.allSettled([...this._inFlightOps]);
     this._leaveActive();
@@ -532,9 +774,9 @@ class TaskController {
   // action_outcome, _afterActionDispatched may still append evidence and
   // checkpoint progress. A transition must wait for that tail too, not just
   // for browser.execute() to finish.
-  async _dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch, { durable = true } = {}) {
+  async _dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch, { durable = true, widenedBy = null } = {}) {
     const op = (async () => {
-      const result = await this._dispatchApproved(descriptor, action, epoch, { durable });
+      const result = await this._dispatchApproved(descriptor, action, epoch, { durable, widenedBy });
       if (this._stopHappenedSince(epoch)) return { stale: true, result };
       if (result.status === "uncertain") {
         await this._pauseWith("execution_uncertain");
@@ -638,6 +880,7 @@ class TaskController {
         harnessProfile: this._harnessProfile,
         ...(this._harnessProfile === "long" ? { goalPersistence: { rejectedFinishes: this._rejectedFinishes } } : {}),
         ...(this._routineRun ? { routineRun: { ...this._routineRun } } : {}),
+        ...(this._openMcpCalls.size > 0 ? { mcp: { openCalls: [...this._openMcpCalls] } } : {}),
       });
       this._snapshotTrusted = true;
     } catch (error) {
@@ -718,7 +961,7 @@ class TaskController {
     if (this._routineRunner && (this._routineRun?.blocked || this._routineRun?.incomplete || this._store.recoveryReason === "execution_uncertain")) {
       throw new TaskControllerError("routine_recovery_incomplete", "a denied, failed, or uncertain routine step cannot be replayed; stop or inspect the task instead");
     }
-    if (this._task.pauseReason === "execution_uncertain" && !opts.confirmed) {
+    if ((this._task.pauseReason === "execution_uncertain" || this._openMcpCalls.size > 0) && !opts.confirmed) {
       throw new TaskControllerError(
         "confirmation_required",
         "resume() from execution_uncertain requires resume({confirmed: true}) -- the dangling action is never auto-replayed",
@@ -736,6 +979,13 @@ class TaskController {
         "this controller's browser/planner were disposed after a memory emergency -- re-attach the task fresh instead of resuming this instance",
       );
     }
+    if (this._openMcpCalls.size > 0) {
+      // The person confirmed the uncertain MCP call(s); close them durably so
+      // a restart does not re-report them. Nothing is ever replayed.
+      const epoch = this._epoch;
+      await this._trackInFlight(this._acknowledgeOpenMcpCalls());
+      if (this._stopHappenedSince(epoch) || this._task.state !== "paused") return this.getSnapshot();
+    }
     this._task = { state: "running", pauseReason: null };
     // Any interruption's cursor is meaningless now -- resume always starts
     // the next iteration with a completely fresh observation (design doc
@@ -749,7 +999,7 @@ class TaskController {
   }
 
   async pause(reason = "user") {
-    if (!["running", "awaiting_approval"].includes(this._task.state) && !this._transitionRetryable()) {
+    if (!["running", "awaiting_approval"].includes(this._task.state) && !this._transitionRetryable() && !this._planner.isTerminating?.()) {
       return this.getSnapshot();
     }
     // Close admission and invalidate any in-flight planner/approver
@@ -759,6 +1009,7 @@ class TaskController {
     // call must see the closed gate right here, not after that microtask.
     this._admissionOpen = false;
     this._epoch += 1;
+    this._cancelPlanner();
     await this._enqueueTransition(() =>
       this._doTransition({ finalState: "paused", pauseReason: reason, cancelQueue: false, cancelReason: null }),
     );
@@ -771,6 +1022,7 @@ class TaskController {
     // forces a transition to stopped regardless of current state.
     this._admissionOpen = false;
     this._epoch += 1;
+    this._cancelPlanner();
     await this._enqueueTransition(() =>
       this._doTransition({ finalState: "stopped", pauseReason: null, cancelQueue: true, cancelReason: "stop" }),
     );
@@ -786,11 +1038,12 @@ class TaskController {
   // already-admitted approve()/dispatch to reach its TRUE outcome first,
   // rather than labeling something "cancelled" that already ran.
   async takeOver(reason = "user_takeover") {
-    if (!["running", "awaiting_approval"].includes(this._task.state) && !this._transitionRetryable()) {
+    if (!["running", "awaiting_approval"].includes(this._task.state) && !this._transitionRetryable() && !this._planner.isTerminating?.()) {
       return this.getSnapshot();
     }
     this._admissionOpen = false;
     this._epoch += 1;
+    this._cancelPlanner();
     await this._enqueueTransition(() =>
       this._doTransition({ finalState: "paused", pauseReason: reason, cancelQueue: true, cancelReason: reason }),
     );
@@ -811,9 +1064,13 @@ class TaskController {
     }
     const nextGoal = await this._store.amendGoal(amendmentInput);
     this._goal = nextGoal;
+    this._browser.setIntentLock?.(nextGoal.lock ?? null);
+    // The intent changed, so every lent permission is taken back.
+    await this._revokeAllLeases("goal_amended", { durable: true });
     // A goal amendment invalidates any stale in-flight proposal/approval
     // tied to the old goalVersion (design doc section 7).
     this._epoch += 1;
+    await this._cancelMcpReviews("goal_amended");
     await this._checkpoint();
     return nextGoal;
   }
@@ -878,6 +1135,7 @@ class TaskController {
         const completion = canComplete(this._goal, this._evidenceForCompletionCheck());
         if (completion.complete) {
           this._task = { state: "completed", pauseReason: null };
+          await this._revokeAllLeases("task_ended");
           await this._checkpoint();
         }
       } else {
@@ -897,7 +1155,8 @@ class TaskController {
     const index = this._approvalQueue.findIndex((item) => item.id === requestId);
     if (index === -1) return this.getSnapshot();
     const [item] = this._approvalQueue.splice(index, 1);
-    const wasAwaitingApproval = this._approvalQueue.length === 0 && this._task.state === "awaiting_approval";
+    if (isMcpItem(item)) return this._approveMcp(item);
+    const wasAwaitingApproval = !this._approvalQueue.some((q) => !isMcpItem(q)) && this._task.state === "awaiting_approval";
     if (wasAwaitingApproval) {
       this._task = { state: "running", pauseReason: null };
     }
@@ -907,7 +1166,7 @@ class TaskController {
     // goal/epoch, so it must be dropped -- exactly like a deny() -- rather
     // than dispatched against a goal or execution context it no longer
     // corresponds to.
-    if (this._stopHappenedSince(item.epoch) || this._now() >= item.expiresAt) {
+    if (this._stopHappenedSince(item.epoch) || this._monotonicNow() >= item.deadline) {
       this._emit();
       if (wasAwaitingApproval) return this._runLoop();
       return this.getSnapshot();
@@ -918,7 +1177,13 @@ class TaskController {
       const outcome = await this._runApprovedReadOnlyBatch(item.proposal, item.actions, epoch);
       if (outcome === "stop_loop" || this._stopHappenedSince(epoch)) return this.getSnapshot();
     } else {
-      const dispatched = await this._dispatchApprovedAndApplyTracked(item.proposal, item.descriptor, item.action, epoch);
+      // The user clicked for this very request, so a widened item runs once
+      // even if the lease they just lent were somehow no longer live.
+      const leased = item.useLease ? await this._useLease(this._leases.find((l) => l.id === item.useLease), item.id) : null;
+      // The grant names the origin the user saw, so the browser refuses to
+      // land anywhere else (a re-resolved link or a redirect).
+      const widenedBy = leased ?? (item.widen ? { kind: "user_once", ...(item.targetOrigin ? { origin: item.targetOrigin } : {}) } : null);
+      const dispatched = await this._dispatchApprovedAndApplyTracked(item.proposal, item.descriptor, item.action, epoch, { widenedBy });
       if (dispatched.stale || this._stopHappenedSince(epoch)) return this.getSnapshot();
     }
     if (this._task.state === "running") return this._runLoop();
@@ -933,8 +1198,13 @@ class TaskController {
     // action_started was written for it -- see _dispatchActionsBatch), so
     // there is no action lifecycle event to close out here, only the queue
     // entry to drop.
-    this._approvalQueue.splice(index, 1);
-    if (this._approvalQueue.length === 0 && this._task.state === "awaiting_approval") {
+    const [item] = this._approvalQueue.splice(index, 1);
+    if (isMcpItem(item)) {
+      item.mcp.settle({ allowed: false });
+      this._emit();
+      return this.getSnapshot();
+    }
+    if (!this._approvalQueue.some((q) => !isMcpItem(q)) && this._task.state === "awaiting_approval") {
       this._task = { state: "running", pauseReason: null };
       this._emit();
       return this._runLoop();
@@ -943,7 +1213,469 @@ class TaskController {
     return this.getSnapshot();
   }
 
+  // Lend: the user turns one queued request into a short, scoped lease. The
+  // request itself is approved and counts as the lease's first use.
+  async lend(requestId, terms) {
+    this._checkAdmission();
+    // Keep the whole user operation admitted, not only lease_granted. If a
+    // transition closes admission between the durable grant and the request's
+    // final disposition, its request_stale revocation must also land before
+    // the transition checkpoints or closes the TaskStore.
+    return this._trackInFlight(this._lend(requestId, terms));
+  }
+
+  async _lend(requestId, terms) {
+    const item = this._approvalQueue.find((q) => q.id === requestId);
+    // One lease per request: a second, concurrent lend finds it taken.
+    if (!item || isMcpItem(item) || item.actions || !item.leaseOffer || item.lending || item.useLease) {
+      throw new TaskControllerError("lease_unavailable", "this request cannot be lent as a lease");
+    }
+    let parsed;
+    try {
+      if (terms !== null && terms !== undefined && !contracts.isPlainObject(terms)) {
+        throw new LeaseError("invalid_lease_terms", "lease terms must be an object");
+      }
+      parsed = lendTerms(terms ?? undefined);
+    } catch (error) {
+      if (error instanceof LeaseError) throw new TaskControllerError(error.code, error.message);
+      throw new TaskControllerError("invalid_lease_terms", "lease terms are invalid");
+    }
+    const fresh = () => !this._stopHappenedSince(item.epoch) && this._monotonicNow() < item.deadline;
+    // A stale item is dropped by approve(); it never earns a lease.
+    if (!fresh()) return this.approve(requestId);
+    item.lending = true;
+    const lease = createLease({
+      id: randomUUID(),
+      taskId: this._goal.taskId,
+      action: item.leaseOffer.action,
+      origin: item.leaseOffer.origin,
+      now: this._monotonicNow(),
+      wallNow: this._now(),
+      ...parsed,
+    });
+    try {
+      // Tracked so a concurrent transition drains the grant before it checkpoints.
+      await this._trackInFlight(this._store.append({ type: "lease_granted", payload: { leaseId: lease.id, action: lease.action, origin: lease.origin, expiresAt: lease.expiresAt, uses: parsed.uses } }));
+    } catch (error) {
+      item.lending = false;
+      throw error;
+    }
+    this._leases.push(lease);
+    // Anything may have happened while the grant was written: a pause/stop,
+    // the request expiring or leaving the queue. Then the lease goes too.
+    if (!this._admissionOpen || !fresh() || !this._approvalQueue.includes(item)) {
+      await this._revokeLeaseQuietly(lease, "request_stale");
+      if (!this._admissionOpen) throw new TaskControllerError("admission_closed", "a pause/stop/takeOver transition is in progress");
+      if (!this._approvalQueue.includes(item)) return this.getSnapshot();
+      return this.approve(requestId);
+    }
+    item.useLease = lease.id;
+    try {
+      return await this.approve(requestId);
+    } catch (error) {
+      await this._revokeLeaseQuietly(lease, "request_stale");
+      throw error;
+    }
+  }
+
+  async revokeLease(leaseId) {
+    const lease = this._leases.find((l) => l.id === leaseId);
+    if (lease && (!lease.revoked || !lease.revocationRecorded)) {
+      // A user revocation is a durable write just like a lease grant/use.
+      // Register it before yielding so a concurrent stop/takeOver/amend drains
+      // the record before its terminal checkpoint or storage teardown.
+      await this._trackInFlight(this._revokeLease(lease, "user"));
+      this._emit();
+    }
+    return this.getSnapshot();
+  }
+
+  // Marked revoked in memory first, so nothing can spend it while the
+  // record is written.
+  async _revokeLease(lease, reason, { durable = true } = {}) {
+    if (lease.revocationRecorded) return;
+    if (lease.revocationPromise) return lease.revocationPromise;
+    lease.revoked = true;
+    const append = this._store.append({ type: "lease_revoked", payload: { leaseId: lease.id, reason } }, { durable })
+      .then(() => { lease.revocationRecorded = true; });
+    lease.revocationPromise = append;
+    try {
+      await append;
+    } finally {
+      if (lease.revocationPromise === append) lease.revocationPromise = null;
+    }
+  }
+
+  // Cleanup path for a failure already being reported: the lease is dead in
+  // memory either way; a failed record must not mask the original error.
+  async _revokeLeaseQuietly(lease, reason) {
+    try {
+      await this._revokeLease(lease, reason);
+    } catch {
+      lease.revoked = true;
+    }
+  }
+
+  // durable:false by default: callers checkpoint right after, which flushes it.
+  async _revokeAllLeases(reason, { durable = false } = {}) {
+    for (const lease of this._leases.filter((l) => isLeaseLive(l, this._monotonicNow()) || (l.revoked && !l.revocationRecorded))) {
+      await this._revokeLease(lease, reason, { durable });
+    }
+  }
+
+  // The use is reserved synchronously (so two concurrent callers cannot both
+  // spend the last one) and journaled durably BEFORE the action runs: a crash
+  // mid-action can never hand the use back. A lease revoked while the record
+  // was written runs nothing; its use stays spent (fail closed). A dead lease
+  // returns null and runs nothing.
+  async _useLease(lease, requestId) {
+    if (!lease || !isLeaseLive(lease, this._monotonicNow())) return null;
+    lease.usesLeft -= 1;
+    await this._store.append({ type: "lease_used", payload: { leaseId: lease.id, requestId } });
+    // The reservation remains spent, but a lease that expired while its
+    // durable use record was being written no longer authorizes dispatch.
+    if (lease.revoked || this._monotonicNow() >= lease.deadline) return null;
+    return { kind: "lease", leaseId: lease.id, origin: lease.origin };
+  }
+
+  // --- generic MCP (host-scoped; see docs/superpowers/specs/2026-09-30-generic-mcp-broker-design.md) ---
+  //
+  // Trusted-host-only surface. The model/renderer never receives the broker,
+  // an approval, or a way to call requestApproval: every call is proposed
+  // here, queued in the ordinary approval queue for a human (regardless of
+  // the browser permission mode), bound to this task's epoch/goal, and
+  // dispatched once through the drain set so transitions wait for its real
+  // outcome.
+
+  _terminal() {
+    return ["stopped", "completed"].includes(this._task.state);
+  }
+
+  _requireMcp() {
+    if (!this._makeMcpBroker || this._mcpClosed) {
+      throw new TaskControllerError("mcp_disabled", "MCP is not enabled for this task");
+    }
+    if (!this._mcpBroker) {
+      this._mcpBroker = this._makeMcpBroker({
+        getContext: () => ({ taskId: this._store.taskId, goalVersion: this._goal.goalVersion, epoch: this._epoch }),
+        requestApproval: (request) => this._requestMcpApproval(request),
+        journal: { append: (event) => this._appendMcpJournal(event) },
+      });
+      if (!this._mcpBroker || typeof this._mcpBroker.proposeCall !== "function") {
+        this._mcpBroker = null;
+        throw new TaskControllerError("mcp_disabled", "MCP broker factory returned no broker");
+      }
+    }
+    return this._mcpBroker;
+  }
+
+  async listMcpConnections() {
+    return this._requireMcp().listConnections();
+  }
+
+  async searchMcpTools(query) {
+    return this._requireMcp().searchTools(query);
+  }
+
+  async describeMcpTool(connectionId, toolName) {
+    return this._requireMcp().describeTool(connectionId, toolName);
+  }
+
+  // Trusted UI only: the full review (including arguments) a person needs to
+  // decide. The renderer-facing snapshot carries only id/action/target.
+  describeMcpApproval(requestId) {
+    const item = this._approvalQueue.find((q) => q.id === requestId && isMcpItem(q));
+    if (!item) throw new TaskControllerError("unknown_request", "no pending MCP review with that id");
+    return structuredClone(item.mcp.review);
+  }
+
+  async proposeMcpCall(request, { reason } = {}) {
+    let proposal;
+    try {
+      proposal = contracts.validateMcpProposal(request);
+    } catch (error) {
+      throw new TaskControllerError("invalid_mcp_proposal", error.message);
+    }
+    const broker = this._requireMcp();
+    this._checkAdmission();
+    if (this._terminal()) {
+      throw new TaskControllerError("invalid_state", `cannot call MCP tools in state ${this._task.state}`);
+    }
+    const token = { epoch: this._epoch, goalVersion: this._goal.goalVersion, item: null, approvalId: null, release: null,
+      reason: typeof reason === "string" ? reason.slice(0, 2000) : null };
+    try {
+      const approval = await this._mcpContext.run(token, () => broker.proposeCall(proposal));
+      // approve() admitted this under the then-current epoch; a transition or
+      // amendment since then (which drains token.release) wins.
+      if (this._stopHappenedSince(token.epoch) || this._goal.goalVersion !== token.goalVersion || this._terminal()) {
+        throw new TaskControllerError("stale_proposal", "the task changed after this MCP call was approved");
+      }
+      token.approvalId = approval.id;
+      try {
+        return await this._mcpContext.run(token, () => broker.dispatchApproved(approval.id));
+      } catch (error) {
+        if (error?.code === "execution_uncertain") {
+          if (!this._terminal() && !this._stopHappenedSince(token.epoch)) await this._pauseWith("execution_uncertain");
+        } else if (this._openMcpCalls.has(approval.id)) {
+          // The durable preclaim landed but the broker refused before calling.
+          await this._closeMcpCall(approval.id, "not_dispatched").catch(() => {});
+        }
+        throw error;
+      }
+    } finally {
+      token.release?.();
+    }
+  }
+
+  async closeMcp() {
+    this._mcpClosed = true;
+    this._plannerMcpEnabled = false;
+    for (const item of this._approvalQueue.filter(isMcpItem)) {
+      const idx = this._approvalQueue.indexOf(item);
+      if (idx !== -1) this._approvalQueue.splice(idx, 1);
+      item.mcp.settle({ allowed: false });
+    }
+    const broker = this._mcpBroker;
+    this._mcpBroker = null;
+    this._emit();
+    if (broker) await broker.close();
+  }
+
+  async _applyReviewFallback(decision, actionType) {
+    if (decision.decision !== "review" || this._reviewFallback !== "deny") return decision;
+    const reasons = Array.isArray(decision.reasons) ? [...decision.reasons] : [];
+    await this._store.append({ type: "note", payload: { kind: "review_auto_denied", actionType, reasons } });
+    return { decision: "deny", reasons: [...reasons, "unattended_auto_deny"] };
+  }
+
+  // When the page changes, the page just left is kept as a text-only
+  // snapshot ref (url, title, text; no element ids, so nothing in it can be
+  // acted on). A revisited URL replaces its older snapshot. Returns the manifest.
+  _refreshContextRefs() {
+    if (!this._contextRefs) this._contextRefs = new ContextRefCatalog({ taskId: this._goal.taskId });
+    const current = this._lastObservation;
+    const previous = this._contextRefsPage;
+    if (previous && current && (previous.url !== current.url || previous.documentEpoch !== current.documentEpoch)) {
+      const url = typeof previous.url === "string" ? previous.url : "";
+      const prior = this._pageRefs.get(url);
+      if (prior) this._contextRefs.revoke(prior);
+      try {
+        const refId = this._contextRefs.register({
+          kind: "observation",
+          authority: "untrusted_page_derived",
+          body: { url, title: typeof previous.title === "string" ? previous.title : "", text: typeof previous.text === "string" ? previous.text : "" },
+          summary: `Earlier page: ${url}`,
+          goalVersion: this._goal.goalVersion,
+        });
+        this._pageRefs.delete(url);
+        this._pageRefs.set(url, refId);
+        while (this._pageRefs.size > 128) this._pageRefs.delete(this._pageRefs.keys().next().value);
+      } catch {
+        // An oversized or unserializable page is simply not offered.
+      }
+    }
+    if (current) this._contextRefsPage = current;
+    return this._contextRefs.manifest();
+  }
+
+  _mcpAvailableToPlanner() {
+    return this._plannerMcpEnabled && !this._mcpClosed;
+  }
+
+  async _handlePlannerMcpAction(action, epoch) {
+    const kind = mcpActionKind(action);
+    const active = () => this._task.state === "running" && !this._stopHappenedSince(epoch);
+    try {
+      let value;
+      if (kind === "search") {
+        value = await this.searchMcpTools(action.query);
+      } else if (kind === "describe") {
+        value = await this.describeMcpTool(action.connectionId, action.toolName);
+      } else {
+        try {
+          value = await this.proposeMcpCall(
+            { connectionId: action.connectionId, toolName: action.toolName, arguments: action.arguments },
+            { reason: action.reason },
+          );
+        } catch (error) {
+          if (error?.code === "execution_uncertain") {
+            this._pendingMcpObservation = boundedMcpObservation(kind, "execution_uncertain", "", { code: "execution_uncertain" });
+            return this._pendingMcpObservation;
+          }
+          if (error?.code === "approval_denied") return boundedMcpObservation(kind, "denied", "", { code: "approval_denied" });
+          throw error;
+        }
+      }
+      if (!active()) return null;
+      const serialized = JSON.stringify(value);
+      return boundedMcpObservation(kind, "ok", serialized);
+    } catch (error) {
+      if (error?.code === "mcp_disabled") return boundedMcpObservation(kind, "unavailable", "", { code: "mcp_disabled" });
+      if (error?.code === "approval_denied") return boundedMcpObservation(kind, "denied", "", { code: "approval_denied" });
+      if (error?.code === "execution_uncertain") return boundedMcpObservation(kind, "execution_uncertain", "", { code: "execution_uncertain" });
+      return boundedMcpObservation(kind, "error", "", { code: typeof error?.code === "string" ? error.code.slice(0, 64) : "mcp_error" });
+    }
+  }
+
+  // Broker callback. Only a review requested from inside proposeMcpCall()
+  // (correlated through AsyncLocalStorage) can ever be queued; anything else
+  // is refused, so no other caller can mint a human approval.
+  _requestMcpApproval(request) {
+    const token = this._mcpContext.getStore();
+    if (!token || token.item || !contracts.isPlainObject(request) || request.signal?.aborted ||
+        this._stopHappenedSince(token.epoch) || this._goal.goalVersion !== token.goalVersion ||
+        !this._admissionOpen || this._terminal()) {
+      return { allowed: false };
+    }
+    const { signal } = request;
+    const target = `${String(request.server).slice(0, 64)}/${String(request.toolName).slice(0, 128)}`;
+    const createdAt = this._now();
+    const deadline = this._monotonicNow() + contracts.APPROVAL_EXPIRY_MS;
+    return new Promise((resolve) => {
+      let settled = false;
+      const onAbort = () => {
+        const idx = this._approvalQueue.indexOf(item);
+        if (idx !== -1) this._approvalQueue.splice(idx, 1);
+        settle({ allowed: false });
+        this._emit();
+      };
+      const settle = (decision) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener?.("abort", onAbort);
+        resolve(decision);
+      };
+      const item = {
+        id: randomUUID(),
+        summary: `MCP ${target}${token.reason ? ` — ${token.reason}` : ""}`.slice(0, 2100),
+        actionType: contracts.MCP_CALL_ACTION_TYPE,
+        createdAt,
+        epoch: token.epoch,
+        goalVersion: token.goalVersion,
+        expiresAt: createdAt + contracts.APPROVAL_EXPIRY_MS,
+        deadline,
+        descriptor: { target },
+        mcp: {
+          token,
+          settle,
+          review: {
+            connectionId: request.connectionId,
+            provider: request.provider,
+            server: request.server,
+            toolName: request.toolName,
+            reason: token.reason,
+            connectorId: request.connectorId ?? null,
+            generation: request.generation,
+            arguments: structuredClone(request.arguments),
+            risk: request.risk,
+            authority: "untrusted_connector",
+          },
+        },
+      };
+      item.mcp.review.id = item.id;
+      item.mcp.review.expiresAt = item.expiresAt;
+      token.item = item;
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      this._approvalQueue.push(item);
+      this._emit();
+    });
+  }
+
+  async _approveMcp(item) {
+    const { settle, token } = item.mcp;
+    if (this._stopHappenedSince(item.epoch) || this._monotonicNow() >= item.deadline ||
+        item.goalVersion !== this._goal.goalVersion || this._terminal()) {
+      settle({ allowed: false });
+      this._emit();
+      return this.getSnapshot();
+    }
+    // Register the dispatch in the drain set before the proposal continues,
+    // so a transition started after this point waits for its real outcome.
+    const done = new Promise((resolve) => { token.release = resolve; });
+    const tracked = this._trackInFlight(done);
+    settle({ allowed: true, kind: "human" });
+    await tracked;
+    this._emit();
+    return this.getSnapshot();
+  }
+
+  async _cancelMcpReviews(reason) {
+    for (const item of this._approvalQueue.filter(isMcpItem)) {
+      await this._store.append({
+        type: "approval_cancelled",
+        payload: { requestId: item.id, actionType: item.actionType, goalVersion: item.goalVersion, reason },
+      }, { durable: false });
+      const idx = this._approvalQueue.indexOf(item);
+      if (idx !== -1) this._approvalQueue.splice(idx, 1);
+      item.mcp.settle({ allowed: false });
+    }
+  }
+
+  // Broker journal adapter: translate to value-free durable notes (no
+  // arguments, no raw result). A failed preclaim append makes the broker
+  // refuse the call (journal_failed) before any provider is contacted.
+  async _appendMcpJournal(event) {
+    const token = this._mcpContext.getStore();
+    if (!contracts.isPlainObject(event) || !token || token.approvalId !== event.requestId) {
+      throw new TaskControllerError("invalid_mcp_journal_event", "MCP journal event outside an approved dispatch");
+    }
+    let payload;
+    if (event.type === "mcp_call_started" && contracts.isPlainObject(event.binding)) {
+      const b = event.binding;
+      payload = {
+        kind: "mcp_call_started", requestId: event.requestId, connectionId: b.connectionId, provider: b.provider,
+        server: b.server, generation: b.generation, toolName: b.toolName, connectorId: b.connectorId ?? null,
+        schemaDigest: b.schemaDigest, argsDigest: b.argsDigest, contextDigest: b.contextDigest,
+      };
+    } else if (event.type === "mcp_call_outcome" && ["ok", "tool_error"].includes(event.outcome) && this._openMcpCalls.has(event.requestId)) {
+      payload = { kind: "mcp_call_outcome", requestId: event.requestId, outcome: event.outcome, resultDigest: event.resultDigest };
+    } else {
+      throw new TaskControllerError("invalid_mcp_journal_event", "unsupported MCP journal event");
+    }
+    try {
+      contracts.validateMcpCallNote(payload, "mcpNote");
+    } catch (error) {
+      throw new TaskControllerError("invalid_mcp_journal_event", error.message);
+    }
+    await this._store.append({ type: "note", payload });
+    if (payload.kind === "mcp_call_started") this._openMcpCalls.add(payload.requestId);
+    else this._openMcpCalls.delete(payload.requestId);
+  }
+
+  async _closeMcpCall(requestId, outcome) {
+    await this._store.append({ type: "note", payload: { kind: "mcp_call_outcome", requestId, outcome, resultDigest: null } });
+    this._openMcpCalls.delete(requestId);
+  }
+
+  async _acknowledgeOpenMcpCalls() {
+    for (const requestId of [...this._openMcpCalls]) await this._closeMcpCall(requestId, "uncertain_acknowledged");
+  }
+
   // --- internal loop ---
+
+  _cancelPlanner() {
+    if (!this._plannerAborter) return;
+    this._plannerShutdownRequired = true;
+    this._plannerAborter.abort();
+  }
+
+  async _nextPlanner(context, plannerOptions = {}) {
+    const aborter = new AbortController();
+    this._plannerAborter = aborter;
+    let onAbort;
+    const cancelled = new Promise((resolve, reject) => {
+      onAbort = () => reject(new TaskControllerError("aborted", "planner turn was cancelled"));
+      aborter.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      // Fence non-cooperative injected planners too. Their late result has
+      // no execution authority; close() owns actual worker termination.
+      return await Promise.race([this._planner.next(context, { ...plannerOptions, signal: aborter.signal }), cancelled]);
+    } finally {
+      aborter.signal.removeEventListener("abort", onAbort);
+      if (this._plannerAborter === aborter) this._plannerAborter = null;
+    }
+  }
 
   async _runLoop() {
     if (this._loopRunning) return this.getSnapshot();
@@ -987,18 +1719,35 @@ class TaskController {
         // stale_document guard trusts -- proves nothing has navigated since.
         // No match (including a fake with no getDocumentEpoch()) means a
         // real re-observe, same as middle/long always do.
-        const reusable = this._harnessProfile === "short" ? this._reusableObservation : null;
+        const reusable = isQuickProfile(this._harnessProfile) ? this._reusableObservation : null;
         if (reusable && typeof this._browser.getDocumentEpoch === "function" &&
             this._browser.getDocumentEpoch() === reusable.documentEpoch) {
           observation = reusable;
         } else {
-          try {
-            observation = await this._browser.observe({
-              signal: undefined,
-              initial: this._budgets.actionsUsed === 0 && this._budgets.plannerCallsUsed === 0,
-            });
-          } catch {
-            if (this._stopHappenedSince(epoch)) break;
+          // A page that is still navigating (a click that redirects, a late
+          // client-side route) fails observe() with stale_document. That is
+          // not a broken page: wait briefly and observe the settled one. Any
+          // other failure, or a page that never settles, still fails closed.
+          let failed = false;
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              observation = await this._browser.observe({
+                signal: undefined,
+                initial: this._budgets.actionsUsed === 0 && this._budgets.plannerCallsUsed === 0,
+              });
+              break;
+            } catch (error) {
+              if (this._stopHappenedSince(epoch)) break;
+              if (error?.code === "stale_document" && attempt < OBSERVE_STALE_RETRIES) {
+                await new Promise((resolve) => setTimeout(resolve, this._observeRetryDelayMs));
+                continue;
+              }
+              failed = true;
+              break;
+            }
+          }
+          if (this._stopHappenedSince(epoch)) break;
+          if (failed) {
             await this._pauseWith("observation_error");
             break;
           }
@@ -1033,33 +1782,137 @@ class TaskController {
         }
         if (this._stopHappenedSince(epoch)) break;
 
+        let teamBoard = null;
+        if (this._readTeamBoard) {
+          teamBoard = await Promise.resolve().then(() => this._readTeamBoard()).catch(() => null);
+          if (this._stopHappenedSince(epoch)) break;
+        }
+
+        // Offered only to a Multi-agent parent the host wired for child plans;
+        // an unreadable plan state leaves the offer out of this turn.
+        let childPlan;
+        if (this._onChildPlan && this._readChildPlan && hasMultiAgentCapability(this._store.taskProfile)) {
+          childPlan = await Promise.resolve().then(() => this._readChildPlan()).then((summary) => ({
+            enabled: true,
+            maxAgents: contracts.MAX_CHILD_ASSIGNMENTS,
+            executionModes: Array.isArray(summary?.executionModes) ? summary.executionModes : ["host"],
+            active: summary ? { agents: summary.agents.map((agent) => ({ subgoal: agent.subgoal ?? "", status: agent.status })) } : null,
+          }), () => undefined);
+          if (this._stopHappenedSince(epoch)) break;
+        }
+
+        // Staying on one page for most of the recent turns is a loop even if
+        // each turn dispatches a different action (scroll, re-observe, search).
+        {
+          let pageKey = null;
+          try { const u = new URL(observation?.url); pageKey = u.origin + u.pathname; } catch {}
+          if (Number.isInteger(observation?.httpStatus) && typeof observation.url === "string" && !this._errorUrls.includes(observation.url)) {
+            this._errorUrls.push(observation.url);
+            if (this._errorUrls.length > ERROR_URLS_KEPT) this._errorUrls.shift();
+          }
+          this._recentPages.push(pageKey);
+          if (this._recentPages.length > PAGE_LOOP_WINDOW) this._recentPages.shift();
+          const stuckOnOne = pageKey !== null && this._recentPages.filter((k) => k === pageKey).length >= PAGE_LOOP_LIMIT;
+          // Bouncing between two pages for a whole window is the same loop.
+          const bouncing = this._recentPages.length === PAGE_LOOP_WINDOW && !this._recentPages.includes(null)
+            && new Set(this._recentPages).size <= 2;
+          if (stuckOnOne || bouncing) {
+            await this._store.append({ type: "note", payload: { msg: "most recent turns stayed on one page; pausing" } });
+            await this._pauseWith("no_progress");
+            break;
+          }
+        }
+
         let context;
+        let visualCapture = null;
+        const contextStartedAt = this._onTiming ? performance.now() : null;
         try {
+          const contextManifest = this._contextRefsEnabled ? this._refreshContextRefs() : undefined;
           const workGoal = this._workGoalBinding && this._readWorkGoalContext
             ? await this._readWorkGoalContext({ ...this._workGoalBinding, taskId: this._goal.taskId })
             : undefined;
           if (this._stopHappenedSince(epoch)) break;
+          if (hasComputerUseAdapter(this._store.taskProfile)) {
+            if (typeof this._browser.captureComputerUseObservation !== "function") {
+              await this._pauseWith("computer_use_unavailable");
+              break;
+            }
+            try {
+              visualCapture = await this._browser.captureComputerUseObservation(observation);
+              if (!visualCapture?.binding || visualCapture.binding.observationId !== observation.id ||
+                  visualCapture.binding.taskId !== this._goal.taskId || visualCapture.binding.documentEpoch !== observation.documentEpoch ||
+                  !visualCapture.attachment || typeof visualCapture.attachment.path !== "string" || typeof visualCapture.attachment.dispose !== "function") {
+                throw new Error("invalid screenshot attachment binding");
+              }
+            } catch {
+              await this._pauseWith("computer_use_capture_failed");
+              break;
+            }
+          }
+          const plannerObservation = visualCapture
+            ? { ...observation, computerUse: { ...visualCapture.binding } }
+            : observation;
           context = buildContext({
             goal: this._goal,
             state: {
               criteriaStatus: this.getSnapshot().criteriaStatus,
               segment: { ...this._segment },
               budgets: { ...this._budgets },
-              plannerEffort: this._plannerEffort,
+              plannerEffort: this._effectivePlannerEffort(pendingMessages, observation?.url),
+              harnessProfile: this._harnessProfile,
               maxActionsPerProposal: this._maxActionsPerProposal,
+              ...(this._harnessProfile === "fast" ? { fastMode: true } : {}),
+              ...(this._scrollStreak.count >= 3 ? { scrollStreak: this._scrollStreak.count } : {}),
+              ...(this._errorUrls.length > 0 ? { errorUrls: [...this._errorUrls] } : {}),
+              mcp: { enabled: this._mcpAvailableToPlanner(),
+                actions: ["mcp_search", "mcp_describe", "mcp_propose"] },
               ...(this._harnessProfile === "long" ? { goalPersistence: this._goalPersistenceState() } : {}),
+              ...(childPlan ? { childPlan } : {}),
             },
             navigation: { visited: [...this._navigation.visited], frontier: [...this._navigation.frontier] },
-            observation,
+            observation: plannerObservation,
             recentEvents: this._store.eventsSinceCheckpoint || [],
             customMemory,
             pendingMessages,
+            ...(teamBoard ? { teamBoard } : {}),
             ...(this._workGoalBinding ? { workGoalBinding: this._workGoalBinding, workGoal } : {}),
+            ...(contextManifest ? { contextManifest } : {}),
           });
+          if (this._pendingContextRead) {
+            const candidate = { ...context, observation: { ...(context.observation || {}), contextRead: this._pendingContextRead } };
+            if (Buffer.byteLength(JSON.stringify(candidate), "utf8") <= contracts.MAX_CONTEXT_PACKET_BYTES) {
+              context = candidate;
+            } else {
+              // Keep the answer honest when the bodies do not fit: every ref
+              // is reported, none as an empty success.
+              const omitted = { authority: "context_read", truncated: true,
+                results: this._pendingContextRead.results.map((r) => ({ refId: r.refId, outcome: "error", code: "context_read_omitted" })) };
+              context = { ...context, observation: { ...(context.observation || {}), contextRead: omitted } };
+            }
+          }
+          if (this._pendingMcpObservation) {
+            const observationWithMcp = { ...(context.observation || {}), mcpResult: this._pendingMcpObservation };
+            const candidate = { ...context, observation: observationWithMcp };
+            if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) {
+              const compact = boundedMcpObservation(this._pendingMcpObservation.action, this._pendingMcpObservation.outcome,
+                "", { code: this._pendingMcpObservation.code || "result_omitted", truncated: true });
+              const compactCandidate = { ...context, observation: { ...(context.observation || {}), mcpResult: compact } };
+              if (Buffer.byteLength(JSON.stringify(compactCandidate), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) throw new Error("MCP observation exceeds context budget");
+              this._pendingMcpObservation = compact;
+              context = compactCandidate;
+            } else {
+              context = candidate;
+            }
+          }
         } catch {
+          await visualCapture?.attachment?.dispose?.().catch(() => {});
           if (this._stopHappenedSince(epoch)) break;
           await this._pauseWith("context_error");
           break;
+        }
+        if (this._onTiming) {
+          const elapsedMs = Math.max(0, performance.now() - contextStartedAt);
+          try { this._onTiming({ operation: "context_build", elapsedMs, bytes: Buffer.byteLength(JSON.stringify(context), "utf8") }); } catch {}
         }
         // The admitted subset only -- never mutated after this point. Used
         // below to durably acknowledge exactly what was actually shown to
@@ -1068,8 +1921,23 @@ class TaskController {
         const admittedMessageIds = context.pendingMessages.map((m) => m.messageId);
 
         let proposal;
+        if (this._stopHappenedSince(epoch)) break;
+        // Budget attempted turns, not only answers. Otherwise repeated
+        // cancellation/timeouts could spend model calls without consuming
+        // the host-owned limit; a pause checkpoint preserves this charge.
+        this._budgets.plannerCallsUsed += 1;
         try {
-          proposal = await this._planner.next(context, { signal: undefined });
+          try {
+            proposal = await this._nextPlanner(context, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
+          } catch (firstError) {
+            // A malformed proposal is a transient model slip, not a broken
+            // planner: retry the same context once (charged as a call).
+            if (!PLANNER_RETRYABLE_CODES.includes(firstError?.plannerCode) || this._stopHappenedSince(epoch)) throw firstError;
+            this._budgets.plannerCallsUsed += 1;
+            proposal = await this._nextPlanner(context, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
+          }
+          if (this._pendingMcpObservation) this._pendingMcpObservation = null;
+          this._pendingContextRead = null;
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -1081,10 +1949,15 @@ class TaskController {
           // configured planner broke".
           const routinePause = ["routine_step_unresolved", "routine_origin_violation", "routine_cursor_mismatch", "invalid_routine"]
             .includes(error?.code) ? error.code : null;
-          await this._pauseWith(routinePause || (error && error.code === "planner_unavailable" ? "planner_unavailable" : "planner_error"));
+          // The pause reason alone hides why the planner failed; leave the
+          // cause in the process log so a paused task can be diagnosed.
+          try { console.warn(`[task-controller] planner failed task=${this._goal?.taskId ?? "?"} code=${error?.code ?? "none"}: ${String(error?.message ?? error).slice(0, 500)}`); } catch {}
+          await this._pauseWith(routinePause || (error && error.code === "planner_unavailable" ? "planner_unavailable"
+            : error?.code === "computer_use_provider_unavailable" ? "computer_use_provider_unavailable" : "planner_error"));
           break;
+        } finally {
+          await visualCapture?.attachment?.dispose?.().catch(() => {});
         }
-        this._budgets.plannerCallsUsed += 1;
         if (this._stopHappenedSince(epoch)) break;
 
         // Subagent communication protocol Task 4 (Review Focus: "crash/
@@ -1125,6 +1998,17 @@ class TaskController {
           continue;
         }
 
+        const coordinateActions = validated.kind === "actions"
+          ? validated.actions.filter((action) => action.type === "click_at" || action.type === "type_at")
+          : [];
+        if (coordinateActions.length > 0 && (!hasComputerUseAdapter(this._store.taskProfile) ||
+            coordinateActions.length !== 1 || validated.actions.length !== 1 ||
+            validated.basedOnObservationId !== observation.id || coordinateActions[0].observationId !== observation.id)) {
+          // A coordinate proposal has no authority unless it names the exact
+          // one-use image observation delivered on this turn.
+          continue;
+        }
+
         if (validated.kind === "finish") {
           const completion = canComplete(this._goal, this._evidenceForCompletionCheck());
           if (!completion.complete && this._harnessProfile === "long" && this._onlyHostVerifiable(completion.missingIds)) {
@@ -1143,6 +2027,7 @@ class TaskController {
           this._leaveActive();
           if (completion.complete) {
             this._task = { state: "completed", pauseReason: null };
+            await this._revokeAllLeases("task_ended");
           } else {
             this._task = { state: "awaiting_verification", pauseReason: null };
           }
@@ -1161,7 +2046,7 @@ class TaskController {
         }
 
         if (validated.kind === "child_plan") {
-          if (this._store.taskProfile?.capability?.id !== "multi_agent") {
+          if (!hasMultiAgentCapability(this._store.taskProfile)) {
             await this._pauseWith("child_plan_not_authorized");
             break;
           }
@@ -1194,6 +2079,36 @@ class TaskController {
             break;
           }
           continue; // host messaging, not a browser action; never mutates an in-flight action
+        }
+
+        if (this._contextRefsEnabled && validated.actions.some((action) => action?.type === "context_read")) {
+          if (validated.actions.length !== 1 || !plannerContextRead(validated.actions[0])) continue;
+          if (this._budgets.actionsUsed >= this._goal.limits.maxActions) {
+            await this._pauseWith("budget_exhausted");
+            break;
+          }
+          this._budgets.actionsUsed += 1;
+          const scope = { taskId: this._goal.taskId, goalVersion: this._goal.goalVersion, documentEpoch: this._lastObservation?.documentEpoch ?? null };
+          try {
+            this._pendingContextRead = this._contextRefs.read(validated.actions[0].refIds, scope);
+          } catch (error) {
+            this._pendingContextRead = { authority: "context_read", truncated: false, results: [],
+              code: typeof error?.code === "string" ? error.code : "context_read_error" };
+          }
+          continue; // host-only read: no browser dispatch, nothing to approve
+        }
+
+        const mcpActions = validated.actions.filter((action) => typeof action.type === "string" && action.type.startsWith("mcp_"));
+        if (mcpActions.length > 0) {
+          if (validated.actions.length !== 1 || mcpActions.length !== 1 || !plannerMcpAction(mcpActions[0])) continue;
+          if (this._budgets.actionsUsed >= this._goal.limits.maxActions) {
+            await this._pauseWith("budget_exhausted");
+            break;
+          }
+          this._budgets.actionsUsed += 1;
+          this._pendingMcpObservation = await this._handlePlannerMcpAction(mcpActions[0], epoch);
+          if (this._task.state !== "running" || this._stopHappenedSince(epoch)) break;
+          continue;
         }
 
         // kind === "actions"
@@ -1242,26 +2157,65 @@ class TaskController {
       const descriptor = this._describeAction(action, requestId);
 
       let decision;
-      const policy = this._evaluateActionPolicy(this._permissionMode, action.type);
-      if (!policy.allowed) {
+      // Lock first (nothing overrides it, and a denied action never reaches
+      // the approver or the browser), then the mode, then any live lease.
+      const targetOrigin = actionTargetOrigin(action, this._lastObservation);
+      const gate = evaluateGate({ lock: this._goal.lock ?? null, mode: this._permissionMode, leases: this._leases, action: action.type, targetOrigin, now: this._monotonicNow() });
+      if (gate.outcome === "lock_denied") {
+        await this._store.append({ type: "note", payload: { kind: "lock_denied", actionType: action.type, reason: gate.reason, ruleIndex: gate.ruleIndex } });
+        if (this._routineRunner) {
+          await this._denyRoutineStep({ decision: "deny", reasons: [gate.reason] });
+          return "stop_loop";
+        }
+        continue;
+      }
+      const policy = gate.policy;
+      // Mode-denied actions may be widened by the user, but never for
+      // unattended runs or for actions this browser cannot perform.
+      const widen = !policy.allowed;
+      if (widen && (this._routineRunner || this._reviewFallback === "deny" ||
+          this._browser.supportsAction?.(action.type) === false || policy.reason === "unsupported_action")) {
         if (this._routineRunner) {
           await this._denyRoutineStep({ decision: "deny", reasons: [policy.reason || "permission_mode_denied"] });
           return "stop_loop";
         }
         continue;
       }
+      // A lease can only stand in for the user, never for the approver: an
+      // action that needs the user (widened, or human-review with a live
+      // lease) is first judged by the approver, and only its allow may be
+      // turned into a lease use.
+      const leasable = !!gate.lease && this._reviewFallback !== "deny";
+      const needsUser = widen || policy.approval === "human";
       try {
-        decision = policy.approval === "bypass"
-          ? { decision: "allow", reasons: ["explicit_full_permission"] }
-          : policy.approval === "human"
-            ? { decision: "review", reasons: ["human_confirmation_required"] }
-            : await this._approve(descriptor);
+        decision = widen || (policy.approval === "human" && leasable)
+          ? await this._approve(descriptor)
+          : policy.approval === "bypass"
+            ? { decision: "allow", reasons: ["explicit_full_permission"] }
+            : policy.approval === "human"
+              ? { decision: "review", reasons: ["human_confirmation_required"] }
+              : await this._approve(descriptor);
       } catch {
         if (this._stopHappenedSince(epoch)) return "stop_loop";
         await this._pauseWith("approver_error");
         return "stop_loop";
       }
       if (this._stopHappenedSince(epoch)) return "stop_loop";
+      // The approver's allow does not lift the mode or the human gate; the
+      // user (or a lease they lent) still decides. Its deny/quarantine/review
+      // is final: no widening or lease ever overrides it.
+      const approverAllowed = needsUser && decision.decision === "allow";
+      if (approverAllowed) {
+        decision = { decision: "review", reasons: [...(Array.isArray(decision.reasons) ? decision.reasons : []), widen ? "permission_mode_denied" : "human_confirmation_required"] };
+      }
+      let widenedBy = null;
+      // The approver may have taken time: re-check the lease at use time. A
+      // lease that died meanwhile leaves the request for the user.
+      if (approverAllowed && leasable) {
+        widenedBy = await this._useLease(gate.lease, requestId);
+        if (widenedBy) decision = { decision: "allow", reasons: ["capability_lease"] };
+      }
+      decision = await this._applyReviewFallback(decision, action.type);
 
       if (decision.decision === "review") {
         this._approvalQueue.push({
@@ -1277,9 +2231,17 @@ class TaskController {
           epoch,
           goalVersion: this._goal.goalVersion,
           expiresAt: this._now() + contracts.APPROVAL_EXPIRY_MS,
+          deadline: this._monotonicNow() + contracts.APPROVAL_EXPIRY_MS,
           descriptor,
           action,
           proposal,
+          widen,
+          targetOrigin,
+          // Offered only for what this browser can really run: a lease for an
+          // action it cannot perform would only ever fail.
+          leaseOffer: targetOrigin && LEASE_ACTIONS.includes(action.type) && this._browser.supportsAction?.(action.type) === true
+            ? { action: action.type, origin: targetOrigin }
+            : null,
         });
         this._leaveActive();
         this._task = { state: "awaiting_approval", pauseReason: null };
@@ -1296,7 +2258,7 @@ class TaskController {
         continue;
       }
 
-      const dispatched = await this._dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch);
+      const dispatched = await this._dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch, { widenedBy });
       if (dispatched.stale || this._stopHappenedSince(epoch)) return "stop_loop";
       if (this._stopHappenedSince(epoch) || this._task.state !== "running") return "stop_loop";
     }
@@ -1356,6 +2318,7 @@ class TaskController {
       if ((severity[next.decision] ?? 2) > (severity[decision.decision] ?? 2)) decision = next;
       if (next.decision === "review" && !reviewDescriptor) reviewDescriptor = descriptor;
     }
+    decision = await this._applyReviewFallback(decision, actions[0].type);
 
     if (decision.decision === "review") {
       const descriptor = reviewDescriptor ?? this._describeAction(actions[0], randomUUID(), suffix);
@@ -1367,6 +2330,7 @@ class TaskController {
         epoch,
         goalVersion: this._goal.goalVersion,
         expiresAt: this._now() + contracts.APPROVAL_EXPIRY_MS,
+        deadline: this._monotonicNow() + contracts.APPROVAL_EXPIRY_MS,
         descriptor,
         action: actions[0],
         actions,
@@ -1416,7 +2380,7 @@ class TaskController {
   // "cancelled" once action_started may already be durable. A concurrent
   // pause/stop/takeOver instead WAITS for this call's true outcome via
   // _dispatchApprovedAndApplyTracked's entry in _inFlightOps.
-  async _dispatchApproved(descriptor, action, epoch, { durable = true } = {}) {
+  async _dispatchApproved(descriptor, action, epoch, { durable = true, widenedBy = null } = {}) {
     if (this._stopHappenedSince(epoch)) {
       return { status: "not_dispatched", actionId: null, action, descriptor };
     }
@@ -1433,7 +2397,7 @@ class TaskController {
       // against a page that has since redirected or navigated act on the
       // wrong document instead of failing closed with stale_document.
       const documentEpoch = this._lastObservation ? this._lastObservation.documentEpoch : null;
-      result = await this._browser.execute(action, { signal: undefined, documentEpoch });
+      result = await this._browser.execute(action, { signal: undefined, documentEpoch, widenedBy });
     } catch {
       // A rejected/timeout response cannot prove that the remote or local
       // browser did not apply the action. Keep action_started open so reload
@@ -1448,6 +2412,9 @@ class TaskController {
     // skipping the budget increment here would let repeated takeover during
     // execution perform more real actions than maxActions allows.
     this._budgets.actionsUsed += 1;
+    this._lastActionType = action.type;
+    this._lastActionStatus = result.status;
+    this._easyStreak = result.status === "ok" && ["navigate", "follow_link"].includes(action.type) ? this._easyStreak + 1 : 0;
     // durable:false: the NEXT action_started's own durable append (same
     // loop, common case) or the checkpoint at whatever pause/stop follows
     // this one (rare case) flushes this write before either commits
@@ -1468,6 +2435,23 @@ class TaskController {
     this._reusableObservation = result.action?.type === "observe" && result.status === "ok" && result.observation
       ? result.observation
       : null;
+
+    // Scrolling the same page again and again is a loop even when each scroll
+    // reveals slightly different text (so the identical-observation key below
+    // never repeats): pause instead of burning the whole time budget on it.
+    if (result.action?.type === "scroll") {
+      const url = this._lastObservation?.url ?? null;
+      this._scrollStreak = url !== null && url === this._scrollStreak.url
+        ? { url, count: this._scrollStreak.count + 1 }
+        : { url, count: 1 };
+      if (this._scrollStreak.count >= SCROLL_STREAK_LIMIT) {
+        await this._store.append({ type: "note", payload: { msg: "repeated scrolling on one page; pausing" } });
+        await this._pauseWith("no_progress");
+        return;
+      }
+    } else {
+      this._scrollStreak = { url: null, count: 0 };
+    }
 
     // No-progress detection: 3 consecutive dispatches of the identical
     // (action, observation) pair with no newly-verified criterion earns one

@@ -6,7 +6,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
-const { readChromeSettings } = require("../main/harness/profile-import/chrome-settings-reader");
+const { readChromeSettings, readSearchEngines } = require("../main/harness/profile-import/chrome-settings-reader");
 
 async function makeProfile({ bookmarks, preferences, keywords } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-chrome-settings-"));
@@ -95,4 +95,37 @@ test("caps oversized bookmark sets and tolerates corrupt JSON", async () => {
     assert.equal(result.status, "ok");
     assert.equal(result.homepage, null);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("an unreadable or malformed file is reported as failed, while a missing file is simply empty", async () => {
+  const root = await makeProfile({ preferences: { homepage: "https://home.example/" } });
+  try {
+    // Missing Bookmarks and Web Data are legitimately empty, not failures.
+    const missing = await readChromeSettings({ chromeRoot: root });
+    assert.equal(missing.failed, undefined);
+    assert.equal(missing.homepage.url, "https://home.example/");
+
+    await fs.writeFile(path.join(root, "Default", "Bookmarks"), "{ not json");
+    await fs.rm(path.join(root, "Default", "Preferences"));
+    await fs.mkdir(path.join(root, "Default", "Preferences"));
+    const broken = await readChromeSettings({ chromeRoot: root });
+    assert.equal(broken.status, "ok");
+    assert.deepEqual(broken.failed.sort(), ["bookmarks", "preferences"]);
+    assert.deepEqual(broken.bookmarks, []);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("an unreadable Web Data database is reported as a failed searchEngines section", async () => {
+  const root = await makeProfile({});
+  try {
+    await fs.writeFile(path.join(root, "Default", "Web Data"), "this is not a sqlite database");
+    const result = await readChromeSettings({ chromeRoot: root });
+    assert.deepEqual(result.failed, ["searchEngines"]);
+    assert.deepEqual(result.searchEngines, []);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("a missing Web Data file is empty but an access error preserves the prior section", async () => {
+  assert.deepEqual(await readSearchEngines("missing", { access: async () => { throw Object.assign(new Error(), { code: "ENOENT" }); } }), []);
+  assert.equal(await readSearchEngines("protected", { access: async () => { throw Object.assign(new Error(), { code: "EACCES" }); } }), null);
 });

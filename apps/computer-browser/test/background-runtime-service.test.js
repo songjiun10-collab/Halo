@@ -15,6 +15,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -98,6 +99,38 @@ test("starting the same service twice is rejected rather than silently rebinding
     return true;
   });
   await service.stopService("test done");
+});
+
+test("a failed socket bind leaves the service retryable and does not unlink the existing listener", async () => {
+  const root = await mkTempRoot();
+  const socketPath = path.join(root, "runtime.sock");
+  const blocker = net.createServer();
+  await new Promise((resolve, reject) => {
+    blocker.once("error", reject);
+    blocker.listen(socketPath, resolve);
+  });
+  const service = new BackgroundRuntimeService({ socketPath, taskHost: makeFakeTaskHost() });
+
+  try {
+    await assert.rejects(service.start(), (error) => error.code === "socket_in_use");
+    await new Promise((resolve, reject) => {
+      const probe = net.createConnection({ path: socketPath });
+      probe.once("connect", () => { probe.end(); resolve(); });
+      probe.once("error", reject);
+    });
+    await new Promise((resolve) => blocker.close(resolve));
+
+    const started = await service.start();
+    assert.equal(started.socketPath, socketPath);
+    assert.equal(started.capability.length, 64);
+    const stopped = new Promise((resolve) => service.onEvent((event) => {
+      if (event === "serviceStopped") resolve();
+    }));
+    await service.stopService("test done");
+    await stopped;
+  } finally {
+    if (blocker.listening) await new Promise((resolve) => blocker.close(resolve));
+  }
 });
 
 test("attachClient()/detachClient() are pure bookkeeping: detaching a client never touches the TaskHost", async () => {
@@ -265,6 +298,46 @@ test("stopService() drains the TaskHost (close()) exactly once even if called tw
   assert.deepEqual(taskHost.calls.filter((c) => c[0] === "close"), [["close"]]);
 });
 
+test("concurrent stopService() callers share and await the same TaskHost drain", async () => {
+  let beginClose;
+  const closeStarted = new Promise((resolve) => { beginClose = resolve; });
+  let finishClose;
+  const closeGate = new Promise((resolve) => { finishClose = resolve; });
+  const taskHost = makeFakeTaskHost({
+    async close() {
+      this.calls.push(["close"]);
+      beginClose();
+      await closeGate;
+    },
+  });
+  const { service } = await startService(taskHost);
+  const stopped = new Promise((resolve) => service.onEvent((event) => {
+    if (event === "serviceStopped") resolve();
+  }));
+  let secondSettled = false;
+  let first;
+  let second;
+
+  try {
+    first = service.stopService("window quit");
+    await closeStarted;
+    second = service.stopService("explicit stop").finally(() => { secondSettled = true; });
+    await Promise.resolve();
+
+    assert.equal(secondSettled, false, "a racing caller must not report shutdown complete before TaskHost.close() drains");
+    assert.deepEqual(taskHost.calls.filter((call) => call[0] === "close"), [["close"]], "the host drains once");
+
+    finishClose();
+    await Promise.all([first, second]);
+    assert.equal(secondSettled, true);
+    assert.deepEqual(taskHost.calls.filter((call) => call[0] === "close"), [["close"]]);
+  } finally {
+    finishClose();
+    await Promise.allSettled([first, second].filter(Boolean));
+    await stopped;
+  }
+});
+
 test("stopService() called over IPC returns its acknowledgement before the service closes the socket", async () => {
   const taskHost = makeFakeTaskHost();
   const { service, socketPath, capability } = await startService(taskHost);
@@ -365,5 +438,58 @@ test("BackgroundRuntimeClient delivers taskHost.onEvent() updates via onEvent() 
   assert.equal(received[0].snapshot.state, "paused");
   assert.equal(received[0].detail.pauseReason, "need_user");
   await client.detach();
+  await service.stopService("test done");
+});
+
+test("room calls reach the TaskHost, and roster/room notices reach an attached client", async () => {
+  const rosterListeners = new Set();
+  const roomListeners = new Set();
+  const taskHost = makeFakeTaskHost({
+    onAgentRosterEvent(listener) { rosterListeners.add(listener); return () => rosterListeners.delete(listener); },
+    onRoomEvent(listener) { roomListeners.add(listener); return () => roomListeners.delete(listener); },
+    async postRoomMessage(input) { taskHost.calls.push(["postRoomMessage", input]); return { messageId: "m1" }; },
+    async getRoom(teamId) { return { roomId: teamId, messages: [], round: { active: false } }; },
+    async listRooms() { return []; },
+    async stopRoomRound(teamId) { return { stopped: false, teamId }; },
+  });
+  const { service, socketPath, capability } = await startService(taskHost);
+  const client = new BackgroundRuntimeClient({ socketPath, capability, clientId: "ui-1" });
+  await client.connect();
+  assert.deepEqual(await client.postRoomMessage({ teamId: "t", text: "hi" }), { messageId: "m1" });
+  assert.deepEqual(await client.getRoom("t"), { roomId: "t", messages: [], round: { active: false } });
+  assert.deepEqual(await client.listRooms(), []);
+  assert.deepEqual(await client.stopRoomRound("t"), { stopped: false, teamId: "t" });
+  const roster = [];
+  const rooms = [];
+  client.onAgentRosterEvent((notice) => roster.push(notice));
+  client.onRoomEvent((event) => rooms.push(event));
+  for (const listener of rosterListeners) listener({ kind: "team", id: "t", change: "saved" });
+  for (const listener of roomListeners) listener({ roomId: "t", message: { text: "hi" } });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(roster, [{ kind: "team", id: "t", change: "saved" }]);
+  assert.deepEqual(rooms, [{ roomId: "t", message: { text: "hi" } }]);
+  await client.detach();
+  await service.stopService("test done");
+  assert.equal(roomListeners.size, 0, "the service unsubscribes on stop");
+});
+
+test("the usage methods exposed to the UI are proxied through the background runtime", () => {
+  const { TASK_HOST_METHODS } = require("../main/harness/background-runtime-service");
+  for (const method of ["getUsage", "setUsageLimit", "syncUsage"]) assert.ok(TASK_HOST_METHODS.has(method), method);
+});
+
+test("lendTask and revokeTaskLease are relayed to the TaskHost only after the client attaches", async () => {
+  const taskHost = makeFakeTaskHost({
+    async lendTask(...args) { taskHost.calls.push(["lendTask", ...args]); return { ok: "lend" }; },
+    async revokeTaskLease(...args) { taskHost.calls.push(["revokeTaskLease", ...args]); return { ok: "revoke" }; },
+  });
+  const { service, socketPath, capability } = await startService(taskHost);
+  const client = await connectedClient(socketPath, capability, "ui-1");
+  await assert.rejects(() => client.call("lendTask", ["t1", "r1", { minutes: 5, uses: 1 }]), (e) => e.code === "not_attached");
+  await client.call("attachClient", "ui-1");
+  assert.deepEqual(await client.call("lendTask", ["t1", "r1", { minutes: 5, uses: 1 }]), { ok: "lend" });
+  assert.deepEqual(await client.call("revokeTaskLease", ["t1", "l1"]), { ok: "revoke" });
+  assert.deepEqual(taskHost.calls.slice(-2), [["lendTask", "t1", "r1", { minutes: 5, uses: 1 }], ["revokeTaskLease", "t1", "l1"]]);
+  await client.close();
   await service.stopService("test done");
 });

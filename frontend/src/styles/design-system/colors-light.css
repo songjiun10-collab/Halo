@@ -1,0 +1,26 @@
+/* Light theme — same semantic tokens, inverted neutrals. Chrome glass flips to a frosted-white material; the approval sheet stays high-contrast either way. */
+:root[data-theme="light"]{
+  --backdrop:#f4f5f3;
+  --chrome:#f4f5f3;
+  --toolbar:#eceeec;
+  --sidebar:#eceeec;
+  --surface:#ffffff;
+  --surface-2:#eceeec;
+  --hover:#e4e6e3;
+  --well:#dde0dd;
+  --border:#dde0dd;
+  --border-strong:#b7bcb6;
+  --foreground:#14160f;
+  --muted-foreground:#5b615a;
+  --text-muted:var(--muted-foreground);
+  --primary-fill:#14160f;
+  --on-primary:#f4f5f3;
+  --chip-bg:#dde0dd;
+  --brand-on-site:#3b6fc4;
+  --on-brand:#fff;
+  --halo-glass-chrome:#fafaf9c2;
+  --halo-glass-floating:#f6f6f4b8;
+  --halo-glass-critical:#fcfcfbf5;
+  --halo-glass-border:#00000014;
+  --halo-glass-highlight:#ffffffb3;
+}

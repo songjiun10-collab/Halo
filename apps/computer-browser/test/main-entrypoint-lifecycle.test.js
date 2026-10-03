@@ -10,8 +10,8 @@ const { EventEmitter } = require("node:events");
 
 const ENTRY = path.resolve(__dirname, "../main/index.js");
 
-function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0 } = {}) {
-  const calls = { windows: [], hosts: [], services: [], clients: [], ipc: [], errors: [], dockHide: 0, quit: 0 };
+function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcpEnabled = false } = {}) {
+  const calls = { windows: [], visibleViews: [], agentEnsureCalls: [], hosts: [], services: [], clients: [], ipc: [], errors: [], usage: [], dockHide: 0, quit: 0 };
   class FakeWindow extends EventEmitter {
     constructor(options) {
       super();
@@ -28,11 +28,24 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0 } = 
   }
   FakeWindow.getAllWindows = () => calls.windows.filter((win) => !win.destroyed);
   class FakeTaskHost {
-    constructor(options) { this.options = options; this.closed = 0; calls.hosts.push(this); }
+    constructor(options) { this.options = options; this.closed = 0; this.agentSchedulerStarts = 0; this.routineSchedulerStarts = 0; calls.hosts.push(this); }
     onEvent() { return () => {}; }
+    startAgentScheduler() { this.agentSchedulerStarts++; return Promise.resolve(); }
+    startScheduler() { this.routineSchedulerStarts++; return Promise.resolve(); }
     close() { this.closed++; return Promise.resolve(); }
     onMemorySample() { return Promise.resolve(); }
     canUseTaskBrowser() { return false; }
+  }
+  class FakeWebContentsView {
+    constructor(options) {
+      this.options = options;
+      this.webContents = new EventEmitter();
+      this.webContents.session = new EventEmitter();
+      this.webContents.setWindowOpenHandler = () => {};
+      this.webContents.session.setPermissionRequestHandler = () => {};
+      this.webContents.session.setPermissionCheckHandler = () => {};
+      calls.visibleViews.push(this);
+    }
   }
   class FakeService {
     constructor(options) { this.options = options; this.stopped = 0; calls.services.push(this); }
@@ -50,6 +63,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0 } = 
   const app = new EventEmitter();
   app.whenReady = () => Promise.resolve();
   app.getPath = () => userData;
+  app.getAppPath = () => "/test/app";
   app.dock = { hide: () => calls.dockHide++ };
   app.getAppMetrics = () => [];
   app.quit = () => calls.quit++;
@@ -62,30 +76,60 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0 } = 
     return child;
   };
   const map = {
-    electron: { app, BrowserWindow: FakeWindow, WebContentsView: class {}, safeStorage: {}, dialog: { showMessageBox: async () => ({ response: dialogResponse }) } },
+    electron: { app, nativeTheme: { themeSource: "system" }, BrowserWindow: FakeWindow, WebContentsView: FakeWebContentsView, safeStorage: {}, dialog: { showMessageBox: async () => ({ response: dialogResponse }) } },
     child_process: { spawn: approver, execFile: (_cmd, _args, done) => done(null, "") },
     "./control-api": { ControlApi: class { onChange() { return () => {}; } } },
     "./ipc": (...args) => calls.ipc.push(args),
+    "./page-theme": { applyPageTheme: (options) => { calls.pageTheme = options; } },
     "../shared/layout-constants": { HEADER_HEIGHT: 1, FOOTER_HEIGHT: 1, SIDE_PANEL_WIDTH: 1, MOBILE_BREAKPOINT: 1 },
     "./approver-client": { requestDecision() {} },
     "./harness/task-host": { TaskHost: FakeTaskHost },
     "./harness/browser-adapter": { BrowserAdapter: class {} },
-    "./harness/browser-surfaces": { BrowserSurfaces: class { register() {} setViewport() {} } },
+    "./harness/browser-surfaces": { BrowserSurfaces: class { register(taskId, view) { calls.registeredVisible ||= []; calls.registeredVisible.push({ taskId, view }); } setViewport() {} } },
     "./harness/planner-stdio": { PlannerStdioAdapter: class { constructor(options) { calls.plannerOptions = options; } } },
     "./harness/memory-monitor": { MemoryMonitor: class { registerExternalProcess() {} unregister() {} sample() { return Promise.resolve(); } } },
     "./harness/agent-viewport-host": { AgentViewportHost: class {
       constructor() { this.disposedChildren = []; calls.agentViewportHost = this; }
-      ensure() { return {}; }
+      ensure(...args) { calls.agentEnsureCalls.push(args); return {}; }
       ensureChild(...args) {
         this.childArgs = args;
         return { dispose() { throw new Error("child adapter disposed without its host window"); } };
       }
       disposeChild(childId) { this.disposedChildren.push(childId); return Promise.resolve(); }
       disposeAll() { return Promise.resolve(); }
-    }, makeDualSurfaceBrowser: () => ({}) },
-    "./harness/planner-command": { resolvePlannerCommand: () => ({ command: null, env: {} }) },
+    }, makeDualSurfaceBrowser: () => ({}), agentBrowserPartition: (agentId) => {
+      if (typeof agentId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(agentId)) {
+        const error = new TypeError("invalid Agent profile"); error.code = "invalid_agent_profile"; throw error;
+      }
+        return `persist:halo-agent-${agentId}`;
+    } },
+    "./harness/planner-command": { resolvePlannerCommand: () => ({ command: "/test/node", env: {} }) },
+    "./harness/planner-providers": require("../main/harness/planner-providers"),
+    "./harness/providers/codex-mcp-adapter": {
+      CodexMcpAdapter: class {
+        constructor(options) { calls.mcpOptions = options; calls.mcpClosed = 0; }
+        async close() { calls.mcpClosed++; }
+      }, parseRepositories: () => mcpEnabled ? ["owner/repo"] : [],
+    },
+    "./harness/providers/codex-mcp-provider": {
+      CodexMcpProvider: class {
+        constructor(options) { (calls.codexProviders ||= []).push(this); this.options = options; this.closed = 0; }
+        listConnections() { return []; } listTools() { return []; } describeTool() { return null; } call() { return null; }
+        async close() { this.closed++; }
+      },
+    },
+    "./harness/generic-mcp-broker": { GenericMcpBroker: class { constructor(options) { this.options = options; } } },
+    "./harness/shared-mcp-provider": require("../main/harness/shared-mcp-provider"),
+    "./harness/mcp-catalog-cache": require("../main/harness/mcp-catalog-cache"),
+    "./harness/mcp-schema-validator": require("../main/harness/mcp-schema-validator"),
+    "./harness/mcp-browser-observation": { makeMcpBrowserObservation: ({ browser }) =>
+      new Proxy(browser, { get(target, key) {
+        if (key === "dispose") return async () => { calls.connectorDisposed = (calls.connectorDisposed || 0) + 1; };
+        return Reflect.get(target, key);
+      } }) },
     "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } } },
     "./harness/local-memory-store": { LocalMemoryStore: class {} },
+    "./harness/usage-ledger": { UsageLedger: class { async load() { return this; } record(...args) { calls.usage.push(args); } } },
     "./harness/local-credential-vault": { LocalCredentialVault: class {} },
     "./harness/profile-import/session-vault": { SessionVault: class {} },
     "./harness/profile-import/profile-importer": { ProfileImporter: class {}, SessionConfigStore: class {} },
@@ -95,6 +139,10 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0 } = 
     "./harness/background-runtime-service": { BackgroundRuntimeService: FakeService },
     "./harness/background-runtime-client": { BackgroundRuntimeClient: FakeClient },
     "./harness/background-runtime-ipc": { prepareSocketDir: async (dir) => { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); return dir; } },
+    "./harness/background-launch-agent": {
+      launchAgentUserId: require("../main/harness/background-launch-agent").launchAgentUserId,
+      createBackgroundLaunchAgent: (options) => { calls.launchAgents = [...(calls.launchAgents ?? []), options]; return { label: "test", isInstalled: async () => false, enable: async () => {}, disable: async () => {} }; },
+    },
   };
   const realRequire = require;
   const context = {
@@ -120,6 +168,10 @@ test("background service mode owns TaskHost without creating a visible UI window
   await flushStartup();
   assert.equal(calls.services.length, 1);
   assert.equal(calls.services[0].options.taskHost, calls.hosts[0]);
+  // Always-on Agents run only in the one service-owned host.
+  assert.equal(calls.hosts[0].agentSchedulerStarts, 1);
+  // Scheduled routines likewise fire only from the service-owned host.
+  assert.equal(calls.hosts[0].routineSchedulerStarts, 1);
   assert.equal(calls.services[0].options.socketRoot, path.join(userData, "background-runtime"));
   assert.equal(calls.services[0].options.socketPath, path.join(userData, "background-runtime", "ipc", "runtime.sock"));
   assert.equal(calls.dockHide, 1);
@@ -128,6 +180,24 @@ test("background service mode owns TaskHost without creating a visible UI window
   const capabilityPath = path.join(userData, "background-runtime", "capability");
   assert.match(fs.readFileSync(capabilityPath, "utf8"), /^[0-9a-f]{64}$/);
   assert.equal(fs.statSync(capabilityPath).mode & 0o777, 0o600);
+});
+
+test("visible and hidden task views receive the same journal-derived Agent partition binding", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-agent-partition-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { calls } = loadEntrypoint({ serviceMode: true, userData });
+  await flushStartup();
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const taskProfile = { agentBrowserProfile: { agentId } };
+  calls.hosts[0].options.makeBrowser("agent-task", taskProfile);
+  assert.equal(calls.visibleViews[0].options.webPreferences.partition, `persist:halo-agent-${agentId}`);
+  assert.equal(calls.agentEnsureCalls[0][0], "agent-task");
+  assert.equal(calls.agentEnsureCalls[0][1].agentId, agentId);
+
+  calls.hosts[0].options.makeBrowser("ordinary-task", null);
+  assert.equal(calls.visibleViews[1].options.webPreferences.partition, "halo-task-ordinary-task");
+  assert.equal(calls.agentEnsureCalls[1][0], "ordinary-task");
+  assert.equal(calls.agentEnsureCalls[1].length, 1);
 });
 
 test("a child browser disposal also releases its service-owned hidden window", async (t) => {
@@ -161,6 +231,49 @@ test("UI attaches to a running service and closing its window detaches without c
   await flushStartup();
   assert.equal(calls.clients[0].detached, 1);
   assert.equal(calls.services.length, 0);
+});
+
+test("new windows attach independent clients and closing one does not detach another", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-multi-window-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const runtimeDir = path.join(userData, "background-runtime");
+  fs.mkdirSync(runtimeDir, { mode: 0o700 });
+  fs.writeFileSync(path.join(runtimeDir, "capability"), "a".repeat(64), { mode: 0o600 });
+  const { app, calls } = loadEntrypoint({ userData, dialogResponse: 0 });
+  await flushStartup();
+
+  assert.equal(calls.clients.length, 1);
+  await calls.ipc[0][2].onNewWindow();
+  assert.equal(calls.windows.length, 2);
+  assert.equal(calls.clients.length, 2);
+  assert.equal(calls.ipc[1][2].taskHost, calls.clients[1]);
+  assert.equal(calls.hosts.length, 0, "a second UI window must not create a competing TaskHost");
+
+  calls.windows[0].emit("closed");
+  await flushStartup();
+  assert.equal(calls.clients[0].detached, 1);
+  assert.equal(calls.clients[1].detached, 0, "closing one window must leave the other runtime client attached");
+
+  app.emit("before-quit", { preventDefault() {} });
+  await flushStartup();
+  assert.equal(calls.clients[0].detached, 1, "the already-closed window must not be detached twice");
+  assert.equal(calls.clients[1].detached, 1, "quitting detaches the remaining window client");
+  assert.equal(calls.clients[0].stopped + calls.clients[1].stopped, 0, "continue-in-background must not stop the service");
+});
+
+test("enabled MCP child disposal cancels its wrapper and releases the hidden host; quit closes the shared broker", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-mcp-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { app, calls } = loadEntrypoint({ serviceMode: true, userData, mcpEnabled: true });
+  await flushStartup();
+  assert.deepEqual(Array.from(calls.mcpOptions.repositories), ["owner/repo"]);
+  const browser = calls.hosts[0].options.makeChildBrowser("parent", "child", "https://example.test");
+  await browser.dispose();
+  assert.equal(calls.connectorDisposed, 1);
+  assert.deepEqual(calls.agentViewportHost.disposedChildren, ["child"]);
+  app.emit("before-quit", { preventDefault() {} });
+  await flushStartup();
+  assert.equal(calls.mcpClosed, 1);
 });
 
 test("an explicit service stop exits the headless Electron process after the service drained", async (t) => {
@@ -248,4 +361,79 @@ test("two overlapping Quit requests show one decision and detach once", async (t
   assert.equal(calls.clients[0].stopped, 1);
   assert.equal(calls.clients[0].detached, 1);
   assert.equal(calls.quit, 1);
+});
+
+test("planners launch only the pinned allowlisted worker and keep its usage to that provider", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-planner-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { calls } = loadEntrypoint({ serviceMode: true, userData });
+  await flushStartup();
+  const { makePlanner } = calls.hosts[0].options;
+  makePlanner("task-off");
+  assert.deepEqual([calls.plannerOptions.command, calls.plannerOptions.args], [null, []]);
+  makePlanner("task-off", { plannerProvider: "codex" });
+  assert.deepEqual([calls.plannerOptions.command, calls.plannerOptions.args], [null, []]);
+  makePlanner("task-claude", { plannerProvider: "claude_code" });
+  assert.equal(calls.plannerOptions.command, "/test/node");
+  assert.deepEqual(calls.plannerOptions.args, [path.join(path.dirname(ENTRY), "harness/providers/claude-code-worker.js")]);
+  calls.plannerOptions.onUsage({ provider: "codex", inputTokens: 1 });
+  calls.plannerOptions.onUsage({ provider: "claude", inputTokens: 2 });
+  assert.deepEqual(calls.usage, [["task-claude", "claude", { provider: "claude", inputTokens: 2 }]]);
+});
+
+test("MCP brokers exist only for tasks pinned to an allowlisted provider and share one provider", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-mcp-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { app, calls } = loadEntrypoint({ serviceMode: true, userData });
+  await flushStartup();
+  const { makeMcpBroker } = calls.hosts[0].options;
+  const hooks = { getContext: () => ({}), requestApproval: async () => ({}), journal: { append() {} } };
+  assert.equal(makeMcpBroker("task-off", hooks, { mcpProviders: [] }), null);
+  assert.equal(makeMcpBroker("task-off", hooks), null);
+  assert.equal(makeMcpBroker("task-odd", hooks, { mcpProviders: ["claude"] }), null);
+  assert.equal(calls.codexProviders, undefined, "no Codex app-server is prepared while MCP is off");
+  const first = makeMcpBroker("task-a", hooks, { mcpProviders: ["codex"] });
+  const second = makeMcpBroker("task-b", hooks, { mcpProviders: ["codex"] });
+  assert.equal(calls.codexProviders.length, 1);
+  const [provider] = calls.codexProviders;
+  assert.equal(provider.options.cwd, path.resolve(path.dirname(ENTRY), "..", "..", ".."));
+  assert.equal(typeof provider.options.onWorkerStart, "function");
+  assert.equal(typeof provider.options.onWorkerExit, "function");
+  for (const broker of [first, second]) {
+    assert.equal(broker.options.providers.length, 1);
+    assert.equal(broker.options.getContext, hooks.getContext);
+    assert.equal(typeof broker.options.validateArguments, "function");
+  }
+  assert.notEqual(first.options.providers[0], second.options.providers[0], "each task gets its own lease");
+  app.emit("before-quit", { preventDefault() {} });
+  await flushStartup();
+  assert.equal(provider.closed, 1);
+});
+
+test("UI windows offer start-at-login for the service; the service itself does not", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-login-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const runtimeDir = path.join(userData, "background-runtime");
+  fs.mkdirSync(runtimeDir, { mode: 0o700 });
+  fs.writeFileSync(path.join(runtimeDir, "capability"), "a".repeat(64), { mode: 0o600 });
+  const { calls } = loadEntrypoint({ userData });
+  await flushStartup();
+  assert.equal(calls.launchAgents.length, 1);
+  const options = calls.launchAgents[0];
+  assert.match(options.userId, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+  assert.equal(options.logPath, path.join(runtimeDir, "launch-agent.log"));
+  assert.equal(typeof calls.ipc[0][2].launchAgent?.enable, "function");
+
+  const service = loadEntrypoint({ serviceMode: true, userData: fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-login-svc-")) });
+  await flushStartup();
+  assert.equal(service.calls.launchAgents, undefined);
+});
+
+test("the entrypoint applies the page theme before the app is ready", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-theme-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { calls } = loadEntrypoint({ serviceMode: false, userData });
+  assert.ok(calls.pageTheme, "applied synchronously at load, not after whenReady");
+  assert.ok(calls.pageTheme.nativeTheme && calls.pageTheme.app);
+  await flushStartup();
 });

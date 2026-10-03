@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmitOnError": true,
+    "allowJs": false,
+    "skipLibCheck": true,
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "ignoreDeprecations": "6.0",
+    "types": ["node"],
+    "typeRoots": ["./node_modules/@types"],
+    "rootDir": "runtime-src/shared",
+    "newLine": "lf",
+    "removeComments": false,
+    "declaration": false,
+    "sourceMap": false,
+    "incremental": false,
+    "importHelpers": false
+  },
+  "files": [
+    "runtime-src/shared/harness-contracts.ts",
+    "runtime-src/shared/task-profile-contracts.ts",
+    "runtime-src/shared/harness-profile.ts",
+    "runtime-src/shared/capability-registry.ts"
+  ]
+}

@@ -19,6 +19,8 @@
 const contracts = require("../../shared/harness-contracts");
 const workGoalContracts = require("../../shared/work-goal-contracts");
 const { validateWorkGoalBinding } = require("../../shared/task-profile-contracts");
+const { selectBuiltinPlaybooks } = require("./skill-library");
+const { derivePlannerAdaptation } = require("./planner-adaptation");
 
 const WORK_GOAL_CONTEXT_FIELDS = Object.freeze([
   "goalId", "goalVersion", "objective", "successCriteria", "verifiedCriterionIds", "remainingBudget",
@@ -84,7 +86,44 @@ function validatedWorkGoalContext(workGoalBinding, workGoal) {
   };
 }
 
-function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal }) {
+// A child's team board (ChildAgentCoordinator.readTeamBoard): siblings'
+// notes, newest kept, within its own byte budget and the packet ceiling,
+// after pending messages (which come from the parent and matter more).
+const MAX_BOARD_CONTEXT_BYTES = 8 * 1024;
+
+function validTeamBoard(teamBoard) {
+  if (teamBoard === undefined || teamBoard === null) return null;
+  if (!contracts.isPlainObject(teamBoard) || !Array.isArray(teamBoard.entries) || typeof teamBoard.parentTaskId !== "string"
+    || !teamBoard.entries.every((e) => contracts.isPlainObject(e) && typeof e.text === "string" && typeof e.from === "string" && typeof e.kind === "string")) {
+    throw new ContextError("invalid_field", "teamBoard must be { parentTaskId, entries: [{from, kind, text, at}] }");
+  }
+  return teamBoard;
+}
+
+// P1 (2026-10-02 harness efficiency design, section 5): an opt-in list of
+// host-owned references the planner may read with a context_read action. Only
+// ids, labels, sizes and short summaries travel in the packet; bodies do not.
+const MAX_MANIFEST_CONTEXT_BYTES = 8 * 1024;
+
+function validContextManifest(manifest) {
+  if (manifest === undefined) return undefined;
+  if (!contracts.isPlainObject(manifest) || manifest.version !== 1 || !Array.isArray(manifest.refs) || manifest.refs.length > 128
+    || !manifest.refs.every((r) => contracts.isPlainObject(r) && typeof r.refId === "string" && typeof r.kind === "string"
+      && typeof r.authority === "string" && typeof r.revision === "string" && Number.isInteger(r.byteLength) && typeof r.summary === "string")) {
+    throw new ContextError("invalid_field", "contextManifest must be { version: 1, refs: [{refId, kind, authority, revision, byteLength, summary}] }");
+  }
+  // The catalog may hold 128 refs; the packet shows only the newest that fit
+  // in MAX_MANIFEST_CONTEXT_BYTES and says how many it left out.
+  const kept = [];
+  for (const ref of [...manifest.refs].reverse()) {
+    const candidate = { version: 1, refs: [ref, ...kept], omittedRefs: manifest.refs.length - kept.length - 1 };
+    if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > MAX_MANIFEST_CONTEXT_BYTES) break;
+    kept.unshift(ref);
+  }
+  return { version: 1, refs: kept, omittedRefs: manifest.refs.length - kept.length };
+}
+
+function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest }) {
   contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
 
   if (!contracts.isPlainObject(state)) {
@@ -100,6 +139,9 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     throw new ContextError("invalid_field", "pendingMessages must be an array");
   }
 
+  const board = validTeamBoard(teamBoard);
+  const manifest = validContextManifest(contextManifest);
+
   if (navigation !== null && (!contracts.isPlainObject(navigation) || !Array.isArray(navigation.visited) || !Array.isArray(navigation.frontier))) {
     throw new ContextError("invalid_field", "navigation must be null or { visited: [], frontier: [] }");
   }
@@ -107,6 +149,7 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
   const { modelSummary, ...trustedProgress } = state;
   const boundedRecentEvents = recentEvents.slice(-contracts.MAX_RECENT_EVENTS_IN_CONTEXT);
   const boundWorkGoal = validatedWorkGoalContext(workGoalBinding, workGoal);
+  const builtinPlaybooks = selectBuiltinPlaybooks(goal);
 
   const basePacket = {
     taskId: goal.taskId,
@@ -122,11 +165,13 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     observation: observation === undefined ? null : observation,
     untrustedSummary: modelSummary === undefined ? null : { text: modelSummary, authority: "untrusted_summary" },
     userMemory: { authority: "untrusted_user_memory", entries: customMemory },
+    ...(builtinPlaybooks === undefined ? {} : { haloPlaybooks: builtinPlaybooks }),
     // Host-recorded, but every URL/name originated in a page the browser
     // loaded, so it is data to consider, never an instruction.
     navigationHistory: navigation === null ? null : { authority: "untrusted_page_derived", visited: navigation.visited, frontier: navigation.frontier },
     pendingMessages: [],
     ...(boundWorkGoal === undefined ? {} : { workGoal: boundWorkGoal }),
+    ...(manifest === undefined ? {} : { contextManifest: manifest }),
   };
 
   const baseSize = Buffer.byteLength(JSON.stringify(basePacket), "utf8");
@@ -154,7 +199,28 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     messageBytes += candidateBytes;
   }
 
-  return { ...basePacket, pendingMessages: admitted };
+  const packet = { ...basePacket, pendingMessages: admitted };
+  // Optional style metadata gets space only after goal, observations, and
+  // incoming messages. Personalization must never turn a fitting task into a
+  // context_error or displace communication that the planner needs to consume.
+  const adapt = (input) => {
+    const plannerAdaptation = derivePlannerAdaptation({ goal, state: trustedProgress, observation, customMemory });
+    const candidate = { ...input, plannerAdaptation };
+    return Buffer.byteLength(JSON.stringify(candidate), "utf8") <= contracts.MAX_CONTEXT_PACKET_BYTES ? candidate : input;
+  };
+  if (!board) return adapt(packet);
+  const notes = [];
+  let noteBytes = 0;
+  for (const entry of [...board.entries].reverse()) {
+    const note = { from: entry.from, kind: entry.kind, text: entry.text, ...(typeof entry.at === "string" ? { at: entry.at } : {}) };
+    const bytes = Buffer.byteLength(JSON.stringify(note), "utf8");
+    if (noteBytes + bytes > MAX_BOARD_CONTEXT_BYTES) break;
+    const candidate = { ...packet, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: board.parentTaskId, entries: [note, ...notes] } };
+    if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) break;
+    notes.unshift(note);
+    noteBytes += bytes;
+  }
+  return adapt({ ...packet, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: board.parentTaskId, entries: notes } });
 }
 
 module.exports = { ContextError, buildContext };

@@ -120,7 +120,17 @@ test("permission mode is enforced by the host: observe denies click and full exp
     });
     await controller.start();
     assert.equal(executions, mode === "full" ? 1 : 0);
-    assert.equal(approvals, mode === "full" ? 0 : 0);
+    // Intent Lock / Capability Lease: in an interactive run a mode-denied
+    // click is still judged by the approver, then waits for the user as a
+    // widened request instead of being silently skipped. It never executes
+    // without that user decision.
+    assert.equal(approvals, mode === "full" ? 0 : 1);
+    if (mode === "observe") {
+      const snapshot = controller.getSnapshot();
+      assert.equal(snapshot.state, "awaiting_approval");
+      assert.equal(snapshot.approvalQueue.length, 1);
+      assert.equal(snapshot.approvalQueue[0].widen, true);
+    }
     await store.close();
   }
 });
@@ -251,7 +261,7 @@ test("does not count time spent in awaiting_approval toward the active-time budg
       actions: [{ type: "observe" }],
     }),
   };
-  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true, now });
+  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true, now, monotonicNow: now });
   await controller.start();
 
   assert.equal(controller.getSnapshot().state, "awaiting_approval");
@@ -577,7 +587,7 @@ test("approve() rejects a queued item once its 60-second approval window has exp
       actions: [{ type: "observe" }],
     }),
   };
-  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true, now });
+  const controller = new TaskController({ store, planner, browser, approve, hostVerifier: () => true, now, monotonicNow: now });
   await controller.start();
   const [item] = controller.getSnapshot().approvalQueue;
 
@@ -1939,6 +1949,30 @@ test("isRoutine() reflects whether the controller was constructed with a routine
   await routineStore.close();
 });
 
+test("recordHostNote accepts only value-free imported-session audit notes", async () => {
+  const { store } = await makeStore({ originalRequest: "host notes" });
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "n/a" }) },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => true,
+  });
+  await controller.recordHostNote({ kind: "imported_sessions_injection_failed", errorCode: "vault_corrupt" });
+  for (const bad of [
+    { kind: "imported_sessions_injection_failed" },
+    { kind: "imported_sessions_injection_failed", errorCode: "has spaces" },
+    { kind: "imported_sessions_injection_failed", errorCode: "x".repeat(65) },
+    { kind: "imported_sessions_injection_failed", errorCode: "ok", message: "cookie sk-secret" },
+    { kind: "something_else", errorCode: "ok" },
+  ]) {
+    await assert.rejects(controller.recordHostNote(bad), { code: "invalid_host_note" }, JSON.stringify(bad));
+  }
+  const events = await store.getEvents();
+  assert.deepEqual(events.filter((event) => event.type === "note").map((event) => event.payload), [{ kind: "imported_sessions_injection_failed", errorCode: "vault_corrupt" }]);
+  await store.close();
+});
+
 test("the planner context carries visited pages and not-yet-visited links so a dead end can backtrack", async () => {
   const { store } = await makeStore({ originalRequest: "navigation memory" });
   const pages = {
@@ -2172,7 +2206,7 @@ test("constructor rejects an explicit invalid harnessProfile and accepts an expl
     browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
     approve: allowApprove(),
     hostVerifier: () => true,
-    harnessProfile: "fast",
+    harnessProfile: "turbo",
   }));
   await badStore.close();
 
@@ -2700,4 +2734,59 @@ test("batchReadOnlyActions:false restores per-action approval and durability for
   assert.deepEqual(approvals, ["scroll", "scroll", "scroll"]);
   assert.deepEqual(records.filter((r) => r.type === "action_started").map((r) => r.durable), [true, true, true]);
   await store.close();
+});
+
+test("a child's team board reaches its planner context; a failing board read leaves it out without pausing", async () => {
+  for (const [readTeamBoard, expected] of [
+    [async () => ({ authority: "untrusted_sibling_notes", parentTaskId: "11111111-1111-4111-8111-111111111111", entries: [{ from: "Flights", kind: "progress", text: "KE123", at: "2026-10-02T00:00:00.000Z" }] }), ["KE123"]],
+    [async () => { throw new Error("board unreadable"); }, null],
+  ]) {
+    const { store } = await makeStore({ originalRequest: "goal" });
+    let seen;
+    const controller = new TaskController({
+      store,
+      planner: {
+        next: async (context) => {
+          seen = context.teamBoard ? context.teamBoard.entries.map((e) => e.text) : null;
+          return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] };
+        },
+      },
+      browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+      approve: allowApprove(),
+      hostVerifier: () => true,
+      readTeamBoard,
+    });
+    const snapshot = await controller.start();
+    assert.deepEqual(seen, expected);
+    assert.equal(snapshot.state, "awaiting_verification");
+    await store.close();
+  }
+});
+
+test("only a Multi-agent parent with a host child_plan hook is told it may split work, and whether a plan is already running", async () => {
+  const finish = (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] });
+  const running = { requestedAgentCount: 1, activeAgentCount: 1, queuedAgentCount: 0, parentGoalVersion: 1, memoryPolicy: "budgeted",
+    agents: [{ agentId: "a", status: "running", assignedOrigin: "https://a.example", evidenceCount: 0, subgoal: "Flights" }] };
+  const cases = [
+    ["multi_agent", true, async () => null, { enabled: true, maxAgents: 8, executionModes: ["host"], active: null }],
+    ["multi_agent", true, async () => running, { enabled: true, maxAgents: 8, executionModes: ["host"], active: { agents: [{ subgoal: "Flights", status: "running" }] } }],
+    ["multi_agent", true, async () => { throw new Error("unreadable"); }, undefined],
+    ["multi_agent", false, async () => null, undefined],
+    ["browser", true, async () => null, undefined],
+  ];
+  for (const [profile, hook, readChildPlan, expected] of cases) {
+    const { store } = await makeProfiledStore({ originalRequest: "parent" }, profile);
+    let seen = "unset";
+    const controller = new TaskController({
+      store,
+      planner: { next: async (context) => { seen = context.progress.childPlan; return finish(context); } },
+      browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+      approve: allowApprove(), hostVerifier: () => true,
+      ...(hook ? { onChildPlan: async () => {} } : {}),
+      readChildPlan,
+    });
+    await controller.start();
+    assert.deepEqual(seen, expected, `${profile} hook=${hook}`);
+    await store.close();
+  }
 });

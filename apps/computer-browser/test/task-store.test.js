@@ -1155,6 +1155,27 @@ test("top-level TaskStore persists and reloads an exact optional Work Goal bindi
   await assert.rejects(TaskStore.create(goal, { storageRoot, workGoalBinding: binding }), { code: "invalid_binding" });
 });
 
+test("top-level TaskStore journals and reloads the HALO Agent browser-profile binding before attachment", async () => {
+  const storageRoot = await mkTempRoot();
+  const goal = { originalRequest: "continue the same Agent session" };
+  const agentBrowserProfileBinding = { agentId: "11111111-1111-4111-8111-111111111111" };
+  const store = await TaskStore.create(goal, {
+    storageRoot,
+    resolvedProfile: profileFor(goal),
+    agentBrowserProfileBinding,
+  });
+  const taskId = store.taskId;
+  const events = await store.getEvents();
+  assert.deepEqual(events.slice(0, 2).map((event) => event.type), ["goal_created", "task_profile_selected"]);
+  assert.deepEqual(events[1].payload.agentBrowserProfile, agentBrowserProfileBinding);
+  assert.deepEqual(store.taskProfile.agentBrowserProfile, agentBrowserProfileBinding);
+  await store.close();
+
+  const reopened = await TaskStore.load(taskId, { storageRoot });
+  assert.deepEqual(reopened.taskProfile.agentBrowserProfile, agentBrowserProfileBinding);
+  await reopened.close();
+});
+
 test("profile-required child store binds its parent, plan, and independently selected Browser route", async () => {
   const storageRoot = await mkTempRoot();
   const parentGoal = { originalRequest: "delegate to agents" };

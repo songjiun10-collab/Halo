@@ -74,6 +74,21 @@ test("skip is trusted-host-only, durable, and distinct from completion", async (
   });
 });
 
+test("skipPending removes a trusted-host-selected non-head item durably without disturbing FIFO peers", async () => {
+  await withQueue(async (queue, root) => {
+    await queue.enqueue(ids[0]);
+    await queue.enqueue(ids[1]);
+    await queue.enqueue(ids[2]);
+    await assert.rejects(queue.skipPending(ids[1], { reason: "profile disabled" }), { code: "untrusted_skip" });
+    await queue.skipPending(ids[1], { reason: "profile disabled", actor: "trusted_host" });
+    assert.deepEqual(queue.pendingIds(), [ids[0], ids[2]]);
+    const reloaded = new TaskQueue({ storageRoot: root });
+    await reloaded.load();
+    assert.deepEqual(reloaded.pendingIds(), [ids[0], ids[2]]);
+    assert.deepEqual(reloaded.history().at(-1), { type: "skip_pending", taskId: ids[1], at: reloaded.history().at(-1).at, reason: "profile disabled", actor: "trusted_host" });
+  });
+});
+
 test("reconciliation fails closed for missing references and prunes checkpointed terminal tasks", async () => {
   await withQueue(async (queue) => {
     await queue.enqueue(ids[0]);

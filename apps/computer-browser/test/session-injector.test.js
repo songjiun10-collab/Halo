@@ -81,3 +81,22 @@ test("reports failed revocation when Electron leaves a matching cookie behind", 
 
   assert.deepEqual(await clearSessionCookies(session, ["claude.ai"]), { removed: 0, failed: 1 });
 });
+
+test("revocation accepts a legacy subdomain group without broadening new allowlist admission", async () => {
+  const cookies = [
+    { domain: ".api.claude.ai", name: "legacy", path: "/", secure: true },
+    { domain: ".other.claude.ai", name: "unrelated", path: "/", secure: true },
+  ];
+  const removed = [];
+  const session = { cookies: {
+    get: async () => cookies.map((cookie) => ({ ...cookie })),
+    remove: async (url, name) => {
+      removed.push([url, name]);
+      const host = new URL(url).hostname;
+      const index = cookies.findIndex((cookie) => cookie.name === name && cookie.domain.replace(/^\./, "") === host);
+      if (index >= 0) cookies.splice(index, 1);
+    },
+  } };
+  assert.deepEqual(await clearSessionCookies(session, ["api.claude.ai"]), { removed: 1, failed: 0 });
+  assert.deepEqual(removed, [["https://api.claude.ai/", "legacy"]]);
+});

@@ -3,8 +3,7 @@
 로컬에 이미 로그인되어 있는 `claude` CLI(Claude Code)를 harness의 플래너로
 재사용하기 위한 provider bridge다. `main/harness/task-controller.js`,
 `main/harness/planner-stdio.js`, `main/harness/task-host.js`,
-`main/index.js` 등 기존 파일은 **전혀 수정하지 않았다** — 이 디렉터리는
-순수 추가 파일이며, `main/index.js`의 `makeHarnessPlanner()`가 이미 제공하는
+기존 planner 통신 규약을 재사용한다. `main/index.js`의 `makeHarnessPlanner()`가 제공하는
 `HALO_PLANNER_COMMAND`/`HALO_PLANNER_ARGS` 배선을 그대로 재사용한다.
 
 ## 구성
@@ -17,10 +16,28 @@
   단독 테스트한다.
 - `claude-code-worker.js` — `PlannerStdioAdapter`가 실제로 spawn하는 진입점.
   `planner-stdio.js`가 이미 쓰는 JSONL 프로토콜(`{requestId, context}` 한
-  줄 → `{requestId, proposal}` 한 줄)을 그대로 따른다. 새 wire 포맷을 만들지
-  않았다.
+  줄 → `{requestId, proposal}` 한 줄)을 따른다. 실패하면
+  `{requestId, error: {code}}`를 즉시 반환하고 호스트는 작업을 일시정지한다.
+  오류 코드는 고정 목록으로 제한하며 원문 진단 메시지는 전달하지 않는다.
+  자세한 내용은 [실패·종료 계약](../../../contracts/PLANNER-FAILURES.md)을 참고한다.
 
-## 활성화 방법 (operator가 직접 환경변수로 설정)
+## 활성화 방법 1 — 호스트 설정 (Planner Router v1)
+
+호스트 설정 `plannerProvider`를 `"claude_code"`로 바꾸면(`updateHostSettings`
+IPC) 그 뒤에 시작하는 작업과 자식 에이전트부터 이 worker가 플래너로 쓰인다.
+기본값은 `"none"`이라 사용자가 고르기 전에는 `claude`를 띄우지 않는다. 선택
+가능한 id와 worker 경로는 `main/harness/planner-providers.js`의 고정 목록뿐이며,
+UI·페이지·모델은 명령이나 경로를 넘길 수 없다. 진행 중인 작업은 시작할 때
+고른 provider를 유지한다. 설계: `docs/superpowers/specs/2026-10-01-planner-router-design.md`.
+
+아래 환경변수 방식이 설정되어 있으면 그쪽이 항상 우선한다. 환경변수 값이
+잘못되면 설정으로 넘어가지 않고 플래너를 꺼 둔다.
+
+## 활성화 방법 2 — operator 환경변수
+
+모델은 고정 인자 `--model opus`로 선택한다. CLI의 사용자 기본 모델에
+의존하지 않으며, 모델 변경으로 도구 비활성화·승인 경계가 달라지지 않는다.
+`opus`의 실제 버전과 호출 가능 여부는 설치된 Claude와 계정에 따른다.
 
 ```bash
 export HALO_PLANNER_COMMAND=node
@@ -131,3 +148,74 @@ export HALO_PLANNER_ARGS='["apps/computer-browser/main/harness/providers/claude-
 - 이 provider가 결정하는 행동(navigate/follow_link/scroll/observe)의
   정확한 필드 형식은 여전히 `browser-adapter.js` 소관이며 이 문서는 그
   파일을 수정하지 않았다.
+
+## Codex 앱의 연결된 GitHub MCP를 브라우저 관찰에 사용
+
+공식 Codex app-server의 `app/installed`, `mcpServerStatus/list`,
+`mcpServer/tool/call`을 사용하는 별도 호스트 어댑터다. Claude에는 MCP를
+직접 열어주지 않는다. 연결 서비스 인증은 Codex가 처리하며 HALO는 토큰을
+읽거나 복사하지 않는다. 모델 추론을 위한 Codex turn을 시작하지 않는다.
+
+```bash
+export HALO_CODEX_MCP_REPOSITORIES=deepseek-ai/deepseek-harness
+```
+
+허용 목록이 비어 있으면 Codex 프로세스를 시작하지 않는다. 설정은 HALO를
+실행하는 호스트 환경에서만 받는다. 현재 지원 범위는 이 목록 안의 저장소에
+속한 `https://github.com/owner/repo/blob/ref/path` 파일 페이지다. 쿼리,
+앵커, 인코딩된 경로, 여러 세그먼트로 된 ref는 일반 DOM 관찰로 처리한다.
+
+브라우저가 방문한 파일의 첫 100줄을 `github.fetch_file`로 읽고, 최대
+4KiB UTF-8 텍스트와 저장소 링크 최대 12개를 모델 관찰로 전달한다. 잘림과
+조회 범위를 함께 표시한다. 전체 관찰 byte 수가 DOM 관찰보다 작을 때만
+선택하며, 더 크면 기존 DOM 관찰을 유지한다. 파일 내용은 `untrusted_connector`이며 승인,
+실행 권한, 목표 완료 증거를 직접 부여하지 않는다. 지원되지 않는 페이지,
+사용 불가능한 앱/도구, 조회 오류, 메모리 압력, 다른 작업의 조회 진행 중에는
+DOM 관찰로 돌아간다. 모든 기존 browser action은 원래 게이트를 거친다.
+
+프로세스 하나를 런타임 전체가 공유하고 HALO의 프로세스 트리 RSS 계측에
+등록한다. 이 조회 세션에서는 불필요한 사용자 설정 로컬 MCP 서버를 thread
+설정으로 끈다. 사용자의 전역 설정이나 managed policy는 변경하지 않는다.
+로그에는 결과 본문이나 인증 정보 없이 조회 지연과 관찰 byte 수만
+남긴다. byte 감소와 모델 token 감소는 같은 측정값이 아니다.
+
+실제 연결 검증(외부 서비스에서 읽기 수행):
+
+```bash
+cd apps/computer-browser
+HALO_CODEX_MCP_REPOSITORIES=deepseek-ai/deepseek-harness \
+  node integration/codex-mcp-smoke.js \
+  https://github.com/deepseek-ai/deepseek-harness/blob/master/README.md
+```
+
+공식 인터페이스와 구현 경계:
+[Codex app-server](https://learn.chatgpt.com/docs/app-server),
+[설계](../../../../../docs/superpowers/specs/2026-09-30-codex-app-mcp-adapter.md).
+
+## child plan과 팀 게시판
+
+- 호스트가 `context.progress.childPlan.enabled === true`(Multi-agent 최상위
+  부모)일 때만 프롬프트에 `kind="child_plan"` 분할 안내가 들어간다. 이미
+  plan이 실행 중이면(`active`) 새 plan을 내지 말라고만 안내한다.
+- 자식은 `context.teamBoard`가 있을 때만 `kind="send_message"`(부모에게
+  progress|evidence)로 게시판에 글을 올리는 법을 안내받는다. 형제 메모는
+  신뢰할 수 없는 데이터로 표시된다.
+- 두 경우 모두 실제 허용 여부는 호스트(계약 검증, capability 검사,
+  ChildAgentCoordinator, 자식 transport의 child_plan 거부)가 결정한다.
+
+## planner 모델 선택 (2026-10-02)
+
+- 허용 목록은 `claude-models.js` 하나다. 현재: Opus 5.5, Sonnet 5.5, Haiku 4.5, Fable 5.1. Legacy: Opus 4.5/4.1/4, Sonnet 4.5/4/3.7, Haiku 3.5.
+- 호스트 설정의 `plannerModel`은 v5 안의 선택 필드다. 없으면 지금처럼 CLI의 `opus` 별칭을 쓴다. 값은 허용 목록에 있어야 하며 그렇지 않으면 `invalid_planner_model`로 거부된다.
+- 경로는 설정 → TaskHost pin(새 작업·자식부터 적용) → `selectPlannerLaunch`가 worker argv에 `--model <id>`를 붙임 → worker가 그 형태만 허용 → bridge가 `CLI_ARGS`의 `opus` 자리만 바꾼다. 매 단계에서 허용 목록을 다시 확인한다.
+- 목록에 있다고 실제로 실행되는 것은 아니다. 계정이나 CLI 버전이 지원하지 않는 모델은 일반 `planner_error`로 드러난다.
+
+## Codex planner (`codex_cli`, 2026-10-02)
+
+- 모델 허용 목록은 `codex-models.js`에 있다. id와 설명, 모델별 effort 상한은 Codex 서버 카탈로그(client 0.159.2, 2026-10-02 기준)를 따르고, 라벨은 Codex 앱 모델 메뉴 표기(예: "GPT-6.1 Sol")를 그대로 쓴다. standalone CLI 0.153.4에 번들된 `codex debug models` 목록은 서버보다 뒤처져 있어서 출처로 쓰지 않는다. 현재 모델은 GPT-6.1 Sol(기본값), GPT-6 Astra, GPT-6 Sol, GPT-6 Luna이고, 카탈로그가 Older/Legacy라고 부르는 GPT-5.6 Sol/Terra/Luna와 GPT-5.5는 Legacy로 분류한다.
+- effort는 low부터 ultra까지 여섯 단계다. 모델이 지원하는 최고 단계까지만 쓴다: ultra는 6.1 Sol, 6 Astra, 6 Sol, 5.6 Sol, 5.6 Terra만 받고, Luna 계열은 max로, GPT-5.5는 xhigh로 낮춘다. Claude CLI에는 ultra가 없어서 Claude planner는 ultra를 max로 실행한다.
+- 실행 파일 선택: `HALO_CODEX_CLI_COMMAND`가 있으면 그것을 쓰고, 없으면 ChatGPT 앱에 번들된 CLI(`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`, 0.159.2)를, 그것도 없으면 PATH의 `codex`를 쓴다. 오래된 CLI(0.153.4)로 gpt-6.1-sol을 요청하면 서버가 "not supported when using Codex with a ChatGPT account"로 거부한다.
+- `codex-planner-bridge.js`는 `ClaudeCodeBridge`를 상속한다. 동시 호출 1개, 취소, stdout 상한, fail-closed 종료 처리, proposal 검증은 그대로 공유하고 argv, env, 출력 파싱만 다르다.
+- 실행 방식: `codex exec --json --ephemeral --ignore-user-config --ignore-rules -s read-only`, `approval_policy="never"`, `web_search="disabled"`, `project_doc_max_bytes=0`로 실행하고 shell, exec, plugins, apps, browser·computer use, multi_agent, memories, hooks를 `--disable`로 끈다. 작업 루트는 브리지 전용의 빈 0700 임시 디렉터리이고 close 때 지운다. env는 허용 목록과 `CODEX_HOME`만 넘기며, HALO는 Codex 로그인 정보를 읽지 않는다. 프롬프트는 stdin으로만 보낸다.
+- 확인된 한계(codex-cli 0.153.4 실측): shell은 사라지지만 `apply_patch`와 `request_user_input`은 여전히 노출된다. 파일 쓰기는 read-only sandbox와 approval "never"가 막는다. `--output-schema`는 Codex strict 모드가 optional 필드를 거부해서 쓰지 않으며, 대신 프롬프트와 `validateProposalEnvelope`로 막는다.
+- 실측 결과 gpt-5.5(약 5초)와 gpt-6-astra(약 8초), 그리고 번들 CLI 0.159.2로 실행한 gpt-6.1-sol(약 8초) 모두 low effort에서 유효한 proposal을 반환했고 usage도 기록됐다.

@@ -161,3 +161,132 @@ test("a failed settings import keeps the previously stored settings", async () =
     assert.equal((await importer.getSettings()).bookmarks.length, 1);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test("the allowlist rejects public and private suffixes but accepts a registrable domain beneath them", async () => {
+  await withImporter(async ({ config }) => {
+    for (const bad of ["co.uk", "github.io", "com", "herokuapp.com"]) {
+      await assert.rejects(config.setAllowlist([bad]), { code: "invalid_config" }, bad);
+    }
+    assert.deepEqual(await config.setAllowlist(["claude.ai", "victim.github.io", "shop.co.uk"]), ["claude.ai", "victim.github.io", "shop.co.uk"]);
+  });
+});
+
+test("an allowlist saved by an older build that contains a public suffix is narrowed on read, not trusted", async () => {
+  await withImporter(async ({ config, root }) => {
+    await fs.writeFile(path.join(root, "session-config.json"), JSON.stringify({ allowlist: ["co.uk", "claude.ai", "github.io"], optIn: [] }));
+    assert.deepEqual(await config.getAllowlist(), ["claude.ai"]);
+  });
+});
+
+function fakeTaskSession(initial) {
+  const removed = [];
+  const cookies = [...initial];
+  return {
+    removed,
+    cookies: {
+      set: async (details) => { cookies.push({ domain: details.domain || new URL(details.url).hostname, name: details.name, path: details.path || "/", secure: details.secure }); },
+      get: async () => [...cookies],
+      remove: async (url, name) => { removed.push([url, name]); const i = cookies.findIndex((c) => c.name === name); if (i >= 0) cookies.splice(i, 1); },
+    },
+  };
+}
+
+test("removing a domain also purges its cookies from running task sessions, and only that domain", async () => {
+  await withImporter(async ({ importer, config }) => {
+    await importer.import({ browser: "chrome" });
+    await config.addOptIn("task-1");
+    const session = fakeTaskSession([{ domain: ".other.example", name: "unrelated", path: "/", secure: true }]);
+    await importer.prepareTask("task-1", session);
+    assert.equal((await session.cookies.get()).some((c) => c.name === "sessionKey"), true, "injected before removal");
+
+    assert.equal(await importer.remove("claude.ai"), true);
+    assert.deepEqual(session.removed, [["https://claude.ai/", "sessionKey"]]);
+    const remaining = (await session.cookies.get()).map((c) => c.name).sort();
+    assert.deepEqual(remaining, ["t", "unrelated"], "chatgpt.com and unrelated cookies are untouched");
+  });
+});
+
+test("a released task session is no longer touched by a later removal", async () => {
+  await withImporter(async ({ importer, config }) => {
+    await importer.import({ browser: "chrome" });
+    await config.addOptIn("task-1");
+    const session = fakeTaskSession([]);
+    await importer.prepareTask("task-1", session);
+    importer.releaseTask("task-1");
+    await importer.remove("claude.ai");
+    assert.deepEqual(session.removed, []);
+  });
+});
+
+test("if a live session cannot be purged the removal is reported, not swallowed, and other sessions are still purged", async () => {
+  await withImporter(async ({ importer, config }) => {
+    await importer.import({ browser: "chrome" });
+    await config.addOptIn("bad");
+    await config.addOptIn("good");
+    const broken = { cookies: { set: async () => {}, get: async () => { throw new Error("session destroyed"); }, remove: async () => {} } };
+    const healthy = fakeTaskSession([]);
+    await importer.prepareTask("bad", broken);
+    await importer.prepareTask("good", healthy);
+    await assert.rejects(importer.remove("claude.ai"), { code: "purge_incomplete" });
+    assert.deepEqual(healthy.removed, [["https://claude.ai/", "sessionKey"]]);
+    assert.equal((await importer.list()).some((s) => s.domain === "claude.ai"), false, "the vault record is gone regardless");
+  });
+});
+
+test("a partial decrypt keeps the previously stored copies of the failed rows and reports the partial status", async () => {
+  let call = 0;
+  const readChrome = async () => {
+    call += 1;
+    if (call === 1) return { status: "ok", cookies: [cookie({ name: "a", value: "old-a" }), cookie({ name: "b", value: "old-b" })], skipped: 0, failed: [] };
+    return { status: "ok", cookies: [cookie({ name: "a", value: "new-a" })], skipped: 1, failed: [{ domain: ".claude.ai", name: "b", path: "/" }] };
+  };
+  await withImporter(async ({ importer, vault }) => {
+    assert.deepEqual(await importer.import({ browser: "chrome" }), { status: "ok", imported: 2, browser: "chrome" });
+    assert.deepEqual(await importer.import({ browser: "chrome" }), { status: "partial", imported: 1, browser: "chrome", skipped: 1 });
+    const stored = await vault.cookiesFor({ domains: ["claude.ai"], nowSeconds: 1 });
+    assert.deepEqual(stored.map((c) => `${c.name}=${c.value}`).sort(), ["a=new-a", "b=old-b"]);
+  }, { readChrome });
+});
+
+test("partitioned cookies that the reader excluded are reported by count without changing the status", async () => {
+  const readChrome = async () => ({ status: "ok", cookies: [cookie()], skipped: 0, failed: [], partitioned: 3 });
+  await withImporter(async ({ importer }) => {
+    assert.deepEqual(await importer.import({ browser: "chrome" }), { status: "ok", imported: 1, browser: "chrome", partitioned: 3 });
+  }, { readChrome });
+});
+
+test("a settings section that could not be read keeps its previously imported value and the import is partial", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-importer-settings-"));
+  try {
+    let response;
+    const config = new SessionConfigStore({ storageRoot: root });
+    const importer = new ProfileImporter({
+      vault: new SessionVault({ storageRoot: root, safeStorage: cipher }), config, readers: {},
+      settingsReaders: { chrome: async () => response },
+    });
+    response = { status: "ok", bookmarks: [{ folder: "", title: "Keep", url: "https://keep.example/" }], searchEngines: [], homepage: { url: "https://home.example/", useNewTab: false }, startupUrls: [] };
+    assert.equal((await importer.importSettings({ browser: "chrome" })).status, "ok");
+
+    response = { status: "ok", bookmarks: [], searchEngines: [{ name: "S", keyword: "s", url: "https://s.example/?q={searchTerms}" }], homepage: null, startupUrls: [], failed: ["bookmarks", "preferences"] };
+    const result = await importer.importSettings({ browser: "chrome" });
+    assert.equal(result.status, "partial");
+    assert.deepEqual(result.failed, ["bookmarks", "preferences"]);
+    const stored = await importer.getSettings();
+    assert.equal(stored.bookmarks.length, 1, "bookmarks were preserved");
+    assert.equal(stored.homepage.url, "https://home.example/", "homepage was preserved");
+    assert.equal(stored.searchEngines.length, 1, "the readable section was updated");
+
+    response = { status: "ok", bookmarks: [], searchEngines: [], homepage: null, startupUrls: [], failed: ["bookmarks", "preferences", "searchEngines"] };
+    assert.equal((await importer.importSettings({ browser: "chrome" })).status, "read_failed");
+    assert.equal((await importer.getSettings()).searchEngines.length, 1, "nothing was overwritten when every section failed");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("removeOptIn undoes an opt-in and is a no-op for an unknown task", async () => {
+  await withImporter(async ({ config }) => {
+    await config.addOptIn("t1");
+    assert.equal(await config.removeOptIn("t1"), true);
+    assert.equal(await config.hasOptIn("t1"), false);
+    assert.equal(await config.removeOptIn("never"), false);
+  });
+});

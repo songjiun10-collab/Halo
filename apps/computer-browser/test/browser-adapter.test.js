@@ -14,6 +14,25 @@ const vm = require("node:vm");
 const { EventEmitter } = require("node:events");
 const { BrowserAdapter, BrowserAdapterError, buildObserveScript } = require("../main/harness/browser-adapter");
 
+test("page navigation and redirects reject unsafe URLs even without an origin or Intent Lock", () => {
+  const wc = new EventEmitter();
+  Object.assign(wc, { getURL: () => "", close() {} });
+  new BrowserAdapter({ view: { webContents: wc } });
+  for (const eventName of ["will-navigate", "will-redirect"]) {
+    for (const url of ["file:///tmp/halo-canary.html", "javascript:alert(1)", "data:text/html,test",
+      "custom-app://open", "not a url", "https://user:secret@example.com/"]) {
+      let prevented = false;
+      wc.emit(eventName, { preventDefault() { prevented = true; } }, url);
+      assert.equal(prevented, true, `${eventName} must refuse ${url}`);
+    }
+    for (const url of ["https://example.com/", "http://127.0.0.1:1234/"]) {
+      let prevented = false;
+      wc.emit(eventName, { preventDefault() { prevented = true; } }, url);
+      assert.equal(prevented, false, `${eventName} must allow ${url}`);
+    }
+  }
+});
+
 test("browser snapshot and subscribers follow real page navigation, and unsubscribe on dispose", async () => {
   const wc = new EventEmitter();
   Object.assign(wc, { getURL: () => "https://example.com", getTitle: () => "Real page", close() {},
@@ -117,12 +136,15 @@ test("assignedOrigin rejects an unparseable redirect URL fail-closed", () => {
   assert.equal(prevented, true);
 });
 
-test("without assignedOrigin (top-level tasks), no origin-lock listener is registered", () => {
+test("without assignedOrigin the guard is still installed (Intent Lock) but allows any origin when unlocked", () => {
   const wc = new EventEmitter();
   Object.assign(wc, { getURL: () => "", close() {} });
   new BrowserAdapter({ view: { webContents: wc } });
-  assert.equal(wc.listenerCount("will-navigate"), 0);
-  assert.equal(wc.listenerCount("will-redirect"), 0);
+  assert.equal(wc.listenerCount("will-navigate"), 1);
+  assert.equal(wc.listenerCount("will-redirect"), 1);
+  let prevented = false;
+  wc.emit("will-navigate", { preventDefault: () => { prevented = true; } }, "https://anywhere.example/");
+  assert.equal(prevented, false);
 });
 
 test("assignedOrigin must be a non-empty string when provided", () => {
@@ -161,6 +183,130 @@ function makeFakeView({ loadURL, executeJavaScript, stop, getURL } = {}) {
 
 test("constructor requires a view", () => {
   assert.throws(() => new BrowserAdapter({}), BrowserAdapterError);
+});
+
+test("captureScreenshot returns PNG pixels only for the latest observation and its fixed viewport", async () => {
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const view = makeFakeView({
+    getURL: () => "https://example.com/",
+    executeJavaScript: async () => ({ url: "https://example.com/", title: "Fixture", text: "", elements: [] }),
+  });
+  view.getBounds = () => ({ x: 0, y: 0, width: 1440, height: 900 });
+  view.webContents.capturePage = async () => ({ toPNG: () => png, getSize: () => ({ width: 1440, height: 900 }) });
+  const adapter = new BrowserAdapter({ view });
+  const observation = await adapter.observe();
+
+  const captured = await adapter.captureScreenshot(observation);
+
+  assert.deepEqual(captured, {
+    png,
+    observationId: observation.id,
+    documentEpoch: observation.documentEpoch,
+    url: "https://example.com/",
+    viewport: { width: 1440, height: 900 },
+  });
+  await assert.rejects(adapter.captureScreenshot({ ...observation, id: "44444444-4444-4444-8444-444444444444" }), { code: "stale_visual_observation" });
+});
+
+test("captureScreenshot rejects a navigation or viewport resize racing the screenshot", async () => {
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  let currentUrl = "https://example.com/";
+  let captureMode = "navigation";
+  let boundCalls = 0;
+  const wc = new EventEmitter();
+  Object.assign(wc, {
+    getURL: () => currentUrl,
+    getTitle: () => "Fixture",
+    executeJavaScript: async () => ({ url: currentUrl, title: "Fixture", text: "", elements: [] }),
+    capturePage: async () => {
+      if (captureMode === "navigation") {
+        currentUrl = "https://other.example/";
+        wc.emit("did-navigate", {}, currentUrl, 200);
+      }
+      return { toPNG: () => png, getSize: () => ({ width: 1440, height: 900 }) };
+    },
+    close() {},
+  });
+  const view = {
+    webContents: wc,
+    getBounds: () => {
+      boundCalls += 1;
+      return { x: 0, y: 0, width: boundCalls > 1 && captureMode === "resize" ? 1280 : 1440, height: 900 };
+    },
+  };
+  const adapter = new BrowserAdapter({ view });
+  const navigationObservation = await adapter.observe();
+  await assert.rejects(adapter.captureScreenshot(navigationObservation), { code: "stale_visual_observation" });
+
+  captureMode = "resize";
+  currentUrl = "https://example.com/";
+  boundCalls = 0;
+  const resizedObservation = await adapter.observe();
+  await assert.rejects(adapter.captureScreenshot(resizedObservation), { code: "stale_visual_observation" });
+});
+
+test("coordinate actions use only the host-authorized current screenshot and consume it before input", async () => {
+  const sent = [];
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const view = makeFakeView({
+    getURL: () => "https://example.com/path",
+    executeJavaScript: async () => ({ url: "https://example.com/path", title: "Fixture", text: "", elements: [] }),
+  });
+  view.getBounds = () => ({ x: 0, y: 0, width: 1440, height: 900 });
+  view.webContents.capturePage = async () => ({ toPNG: () => png, getSize: () => ({ width: 1440, height: 900 }) });
+  view.webContents.sendInputEvent = (event) => sent.push(event);
+  view.webContents.insertText = (text) => sent.push({ type: "insertText", text });
+  const adapter = new BrowserAdapter({ view, permissionMode: "full" });
+  const observation = await adapter.observe();
+  const capture = await adapter.captureScreenshot(observation);
+  const binding = {
+    observationId: capture.observationId,
+    taskId: "11111111-1111-4111-8111-111111111111",
+    agentId: null,
+    documentEpoch: capture.documentEpoch,
+    origin: "https://example.com",
+    capturedAt: 1,
+    viewport: capture.viewport,
+    digest: "0".repeat(64),
+  };
+  adapter.authorizeVisualBinding(binding);
+  const action = { type: "type_at", observationId: observation.id, x: 0.5, y: 0.25, text: "검색" };
+  assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), { status: "ok" });
+  assert.deepEqual(sent, [
+    { type: "mouseDown", x: 720, y: 225, button: "left", clickCount: 1 },
+    { type: "mouseUp", x: 720, y: 225, button: "left", clickCount: 1 },
+    { type: "insertText", text: "검색" },
+  ]);
+  assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), { status: "failed", errorCode: "stale_visual_observation" });
+  assert.equal(sent.length, 3, "the screenshot binding is single-use");
+});
+
+test("coordinate actions reject stale, cross-origin, resized, and malformed bindings without input", async () => {
+  const sent = [];
+  const view = makeFakeView({ getURL: () => "https://example.com/", executeJavaScript: async () => ({ url: "https://example.com/", title: "", text: "", elements: [] }) });
+  view.getBounds = () => ({ x: 0, y: 0, width: 1440, height: 900 });
+  view.webContents.capturePage = async () => ({ toPNG: () => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), getSize: () => ({ width: 1440, height: 900 }) });
+  view.webContents.sendInputEvent = (event) => sent.push(event);
+  const adapter = new BrowserAdapter({ view, permissionMode: "full" });
+  const observation = await adapter.observe();
+  const capture = await adapter.captureScreenshot(observation);
+  const binding = { observationId: capture.observationId, taskId: "11111111-1111-4111-8111-111111111111", agentId: null,
+    documentEpoch: capture.documentEpoch, origin: "https://example.com", capturedAt: 1, viewport: capture.viewport, digest: "0".repeat(64) };
+  for (const changed of [
+    { ...binding, observationId: "other-observation" },
+    { ...binding, origin: "https://other.example" },
+    { ...binding, documentEpoch: binding.documentEpoch + 1 },
+  ]) assert.throws(() => adapter.authorizeVisualBinding(changed), { code: "invalid_visual_binding" });
+  adapter.authorizeVisualBinding(binding);
+  assert.notEqual((await adapter.execute({ type: "click_at", observationId: "other-observation", x: 0.2, y: 0.2 }, { documentEpoch: observation.documentEpoch })).status, "ok");
+  view.webContents.getURL = () => "https://other.example/";
+  assert.notEqual((await adapter.execute({ type: "click_at", observationId: observation.id, x: 0.2, y: 0.2 }, { documentEpoch: observation.documentEpoch })).status, "ok");
+  view.webContents.getURL = () => "https://example.com/";
+  view.getBounds = () => ({ x: 0, y: 0, width: 1000, height: 700 });
+  assert.notEqual((await adapter.execute({ type: "click_at", observationId: observation.id, x: 0.2, y: 0.2 }, { documentEpoch: observation.documentEpoch })).status, "ok");
+  view.getBounds = () => ({ x: 0, y: 0, width: 1440, height: 900 });
+  assert.notEqual((await adapter.execute({ type: "click_at", observationId: observation.id, x: 1, y: 0.2 }, { documentEpoch: 0 })).status, "ok");
+  assert.deepEqual(sent, []);
 });
 
 // --- ActionResult typing: a rejected loadURL must be reported as failed,
@@ -370,7 +516,7 @@ test("execute(follow_link) rejects a stale documentEpoch without re-resolving an
 // --- Unsupported actions: reported honestly, never silently mapped to a
 // permissive read or ignored.
 
-for (const type of ["click", "type", "submit_form", "download"]) {
+for (const type of ["download"]) {
   test(`execute(${type}) reports failed:unsupported_action`, async () => {
     const adapter = new BrowserAdapter({ view: makeFakeView() });
     const result = await adapter.execute({ type });
@@ -767,4 +913,100 @@ test("compact observation excludes hidden controls and remains bounded by the ex
   assert.equal(observation.elements[0].name, "Visible");
   assert.ok(Buffer.byteLength(observation.text, "utf8") <= 8);
   assert.equal(observation.text.includes("한글"), false, "the text budget counts UTF-8 bytes, not UTF-16 characters");
+});
+
+const { makeIntentLock } = require("../shared/harness-contracts");
+
+test("BrowserAdapter runs a mode-denied action only with an explicit widening grant", async () => {
+  let loads = 0;
+  const browser = new BrowserAdapter({ view: makeFakeView({ loadURL: async () => { loads += 1; } }) });
+  browser.setPermissionMode("observe");
+  assert.deepEqual(await browser.execute({ type: "navigate", url: "https://github.com/" }, { widenedBy: { kind: "planner" } }), { status: "failed", errorCode: "permission_mode_denied" });
+  assert.deepEqual(await browser.execute({ type: "navigate", url: "https://github.com/" }, { widenedBy: { kind: "lease" } }), { status: "failed", errorCode: "permission_mode_denied" });
+  await browser.execute({ type: "navigate", url: "https://github.com/" }, { widenedBy: { kind: "lease", leaseId: "l1" } });
+  assert.equal(loads, 1);
+});
+
+test("BrowserAdapter refuses lock-denied navigation even when widened or in full mode", async () => {
+  let loads = 0;
+  const browser = new BrowserAdapter({ view: makeFakeView({ loadURL: async () => { loads += 1; } }), permissionMode: "full" });
+  browser.setIntentLock(makeIntentLock({ rules: [{ kind: "allow_origins", origins: ["https://github.com"] }] }));
+  assert.deepEqual(await browser.execute({ type: "navigate", url: "https://evil.test/" }, { widenedBy: { kind: "user_once" } }), { status: "failed", errorCode: "intent_lock_denied" });
+  browser.setIntentLock(makeIntentLock({ rules: [{ kind: "deny_action", action: "follow_link" }] }));
+  assert.deepEqual(await browser.execute({ type: "follow_link", elementId: "0" }), { status: "failed", errorCode: "intent_lock_denied" });
+  assert.equal(loads, 0);
+});
+
+test("BrowserAdapter blocks page-initiated navigation to an origin the lock forbids", () => {
+  const wc = new EventEmitter();
+  Object.assign(wc, { getURL: () => "", close() {} });
+  const browser = new BrowserAdapter({ view: { webContents: wc } });
+  browser.setIntentLock(makeIntentLock({ rules: [{ kind: "deny_origins", origins: ["https://evil.test"] }] }));
+  let prevented = 0;
+  wc.emit("will-redirect", { preventDefault: () => { prevented += 1; } }, "https://evil.test/x");
+  wc.emit("will-navigate", { preventDefault: () => { prevented += 1; } }, "https://fine.test/");
+  assert.equal(prevented, 1);
+});
+
+test("supportsAction reports what execute can really do", () => {
+  const browser = new BrowserAdapter({ view: makeFakeView() });
+  assert.equal(browser.supportsAction("navigate"), true);
+  assert.equal(browser.supportsAction("click"), true);
+  assert.equal(browser.supportsAction("type"), true);
+  assert.equal(browser.supportsAction("submit_form"), true);
+  assert.equal(browser.supportsAction("download"), false);
+});
+
+test("the Intent Lock restricts the agent but not the human address bar", async () => {
+  let loads = 0;
+  const browser = new BrowserAdapter({ view: makeFakeView({ loadURL: async () => { loads += 1; } }), permissionMode: "full" });
+  browser.setIntentLock(makeIntentLock({ rules: [{ kind: "allow_origins", origins: ["https://github.com"] }] }));
+  await browser.userNavigate({ type: "navigate", url: "https://other.test/" });
+  assert.equal(loads, 1);
+  assert.deepEqual(await browser.execute({ type: "navigate", url: "https://other.test/" }), { status: "failed", errorCode: "intent_lock_denied" });
+  assert.equal(loads, 1);
+});
+
+test("widening cannot invent an interaction target or enable an unsupported download", async () => {
+  const browser = new BrowserAdapter({ view: makeFakeView() });
+  browser.setPermissionMode("observe");
+  for (const type of ["click", "type", "submit_form"]) {
+    assert.deepEqual(await browser.execute({ type }, { widenedBy: { kind: "user_once" } }), { status: "failed", errorCode: "invalid_action" });
+  }
+  assert.deepEqual(await browser.execute({ type: "download" }, { widenedBy: { kind: "user_once" } }), { status: "failed", errorCode: "unsupported_action" });
+});
+
+test("follow_link to a lock-forbidden origin is refused and does not load", async () => {
+  let loads = 0;
+  const view = makeFakeView({
+    executeJavaScript: async () => ({ url: "https://github.com/", title: "", text: "", elements: [{ role: "link", name: "x", href: "https://evil.test/p" }] }),
+    loadURL: async () => { loads += 1; },
+  });
+  const browser = new BrowserAdapter({ view, permissionMode: "full" });
+  browser.setIntentLock(makeIntentLock({ rules: [{ kind: "allow_origins", origins: ["https://github.com"] }] }));
+  assert.deepEqual(await browser.execute({ type: "follow_link", elementId: "0" }), { status: "failed", errorCode: "intent_lock_denied" });
+  assert.equal(loads, 0);
+});
+
+test("execute(scroll) is an instant scroll, so a page with smooth scrolling cannot stall it", async () => {
+  let script = "";
+  const view = makeFakeView({
+    executeJavaScript: async (code) => {
+      if (code.includes("scrollBy")) { script = code; return undefined; }
+      return { url: "https://example.com/", title: "", text: "", elements: [] };
+    },
+  });
+  const adapter = new BrowserAdapter({ view });
+  assert.equal((await adapter.execute({ type: "scroll", direction: "up", amount: 250 })).status, "ok");
+  assert.match(script, /behavior:\s*['"]instant['"]/);
+  assert.match(script, /top:\s*-250/);
+});
+
+test("execute(scroll) that never returns fails as scroll_failed instead of hanging", async () => {
+  const view = makeFakeView({
+    executeJavaScript: (code) => (code.includes("scrollBy") ? new Promise(() => {}) : Promise.resolve({ url: "https://example.com/", title: "", text: "", elements: [] })),
+  });
+  const adapter = new BrowserAdapter({ view, scrollTimeoutMs: 30 });
+  const result = await adapter.execute({ type: "scroll", direction: "down" });
+  assert.deepEqual([result.status, result.errorCode], ["failed", "scroll_failed"]);
 });

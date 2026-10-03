@@ -154,6 +154,101 @@
         },
         "enabled": "yes"
       }
+    },
+    {
+      "name": "calendar weekdays",
+      "valid": true,
+      "value": {
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "trigger": {
+          "kind": "calendar",
+          "days": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "time": "09:00",
+          "timeZone": "Asia/Seoul"
+        }
+      }
+    },
+    {
+      "name": "calendar empty days",
+      "valid": false,
+      "code": "invalid_days",
+      "value": {
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "trigger": {
+          "kind": "calendar",
+          "days": [],
+          "time": "09:00",
+          "timeZone": "Asia/Seoul"
+        }
+      }
+    },
+    {
+      "name": "calendar duplicate day",
+      "valid": false,
+      "code": "invalid_days",
+      "value": {
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "trigger": {
+          "kind": "calendar",
+          "days": [
+            1,
+            1
+          ],
+          "time": "09:00",
+          "timeZone": "Asia/Seoul"
+        }
+      }
+    },
+    {
+      "name": "calendar bad time",
+      "valid": false,
+      "code": "invalid_time",
+      "value": {
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "trigger": {
+          "kind": "calendar",
+          "days": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "time": "24:00",
+          "timeZone": "Asia/Seoul"
+        }
+      }
+    },
+    {
+      "name": "calendar unknown time zone",
+      "valid": false,
+      "code": "invalid_time_zone",
+      "value": {
+        "routineId": "11111111-1111-4111-8111-111111111111",
+        "revision": 1,
+        "trigger": {
+          "kind": "calendar",
+          "days": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "time": "09:00",
+          "timeZone": "Mars/Olympus"
+        }
+      }
     }
   ]
 }

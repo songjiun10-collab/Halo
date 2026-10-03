@@ -1,0 +1,35 @@
+:root{
+  /* graphite neutrals — 85–90% of the screen */
+  --backdrop:#0c0e0d;
+  --chrome:#0c0e0d;
+  --toolbar:#151816;
+  --sidebar:#151816;
+  --surface:#151816;
+  --hover:#1d201e;
+  --well:#292d2a;
+  --border:#292d2a;
+  --border-strong:#666d67;
+  --foreground:#e7e8e4;
+  --muted-foreground:#858c86;
+  --text-muted:var(--muted-foreground); /* alias — the source defines one secondary text tier, not two */
+  --primary-fill:#e7e8e4;
+  --on-primary:#0c0e0d;
+  --surface-2:#1d201e;
+  --chip-bg:#292d2a;
+  /* Halo brand ice — the ring, the halo, focus. Used sparingly. */
+  --brand:#a8c7fa;
+  --brand-on-site:#3b6fc4;
+  --on-brand:#fff;
+  --ring:var(--brand);
+  /* status */
+  --warning:#b99752;
+  --danger:#c86a64;
+  --success:#72a982;
+  /* the web page Halo browses keeps its own light look, unaffected by the shell theme */
+  --site-bg:#f8fafc;
+  --site-fg:#0f172a;
+  --site-muted:#475569;
+  --site-line:#e2e8f0;
+  --site-button:#1e293b;
+  --site-on-button:#fff;
+}

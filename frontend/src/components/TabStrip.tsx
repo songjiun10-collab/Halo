@@ -12,6 +12,7 @@ interface Props {
   onSelect: (id: string) => void
   onClose: (id: string) => void
   onNew: () => void
+  canCreate?: boolean
 }
 
 /** Favicon stand-in: the first letter of the site name; works for localhost, IPs and plain words. */
@@ -37,7 +38,7 @@ function Activity({ state }: { state: TabActivity }) {
   )
 }
 
-export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew }: Props) {
+export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew, canCreate = true }: Props) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({})
   // After Delete removes the focused tab, focus follows to whichever tab is selected next.
   const refocus = useRef(false)
@@ -63,7 +64,7 @@ export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew
   }
 
   return (
-    <div className="hx-strip">
+    <div className="hx-strip hx-chrome">
       <div className="hx-tabs" role="tablist" aria-label="Tabs">
         {tabs.map((tab, i) => {
           const selected = tab.id === activeTabId
@@ -95,7 +96,7 @@ export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew
             </div>
           )
         })}
-        <button className="hx-icbtn" aria-label="New tab" aria-keyshortcuts="Control+T Meta+T" onClick={onNew}><Plus /></button>
+        <button className="hx-icbtn" aria-label="New tab" aria-keyshortcuts="Control+T Meta+T" title={canCreate ? 'New tab' : 'Take over the task before opening a user tab'} disabled={!canCreate} onClick={onNew}><Plus /></button>
       </div>
     </div>
   )

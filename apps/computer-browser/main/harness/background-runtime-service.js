@@ -54,14 +54,21 @@ const TASK_HOST_METHODS = new Set([
   "getTaskDetail",
   "approveTask",
   "denyTask",
+  "lendTask",
+  "revokeTaskLease",
   "pauseTask",
   "takeOverTask",
   "getTaskEvents",
+  "getChildPlan",
+  "listMcpProviders",
   "getTaskBrowser",
   "taskBrowserAction",
   "setTaskViewport",
   "getHostSettings",
   "updateHostSettings",
+  "getUsage",
+  "setUsageLimit",
+  "syncUsage",
   "listCredentials",
   "saveCredential",
   "removeCredential",
@@ -74,6 +81,25 @@ const TASK_HOST_METHODS = new Set([
   "saveRoutine",
   "deleteRoutine",
   "runRoutine",
+  "listAgents",
+  "saveAgent",
+  "archiveAgent",
+  "listTeams",
+  "saveTeam",
+  "archiveTeam",
+  "startAgentTask",
+  "listAgentConversations",
+  "getAgentRoster",
+  "setAgentPinned",
+  "duplicateAgent",
+  "markAgentConversationsRead",
+  "listAgentSchedules",
+  "saveAgentSchedule",
+  "deleteAgentSchedule",
+  "listRooms",
+  "getRoom",
+  "postRoomMessage",
+  "stopRoomRound",
   "startWorkGoal",
   "getActiveWorkGoal",
   "listWorkGoalHistory",
@@ -113,6 +139,7 @@ class BackgroundRuntimeService {
     this._capability = null;
     this._startedAt = null;
     this._stopped = false;
+    this._stopPromise = null;
     this._serverCloseScheduled = false;
     this._listeners = new Set();
     this._unsubscribeTaskHost = null;
@@ -123,19 +150,39 @@ class BackgroundRuntimeService {
       throw new BackgroundRuntimeServiceError("already_started", "this service has already been started");
     }
     this._capability = this._randomBytes(32).toString("hex");
-    this._server = new RuntimeIpcServer({
+    const server = new RuntimeIpcServer({
       socketPath: this._socketPath,
       socketRoot: this._socketRoot,
       capability: this._capability,
       onCall: (method, params, clientId) => this._dispatch(method, params, clientId),
     });
-    await this._server.listen();
+    this._server = server;
+    try {
+      await server.listen();
+    } catch (error) {
+      await server.close().catch(() => {});
+      if (this._server === server) this._server = null;
+      this._capability = null;
+      throw error;
+    }
     this._startedAt = this._now();
     this._unsubscribeTaskHost = this._taskHost.onEvent((taskId, snapshot, detail) => {
       const payload = { taskId, snapshot, ...detail };
       this._emit("taskEvent", payload);
       this._server.broadcast("taskEvent", payload);
     });
+    if (typeof this._taskHost.onAgentRosterEvent === "function") {
+      this._unsubscribeRoster = this._taskHost.onAgentRosterEvent((notice) => {
+        this._emit("agentRosterEvent", notice);
+        this._server.broadcast("agentRosterEvent", notice);
+      });
+    }
+    if (typeof this._taskHost.onRoomEvent === "function") {
+      this._unsubscribeRoom = this._taskHost.onRoomEvent((event) => {
+        this._emit("roomEvent", event);
+        this._server.broadcast("roomEvent", event);
+      });
+    }
     return { socketPath: this._socketPath, capability: this._capability };
   }
 
@@ -217,25 +264,33 @@ class BackgroundRuntimeService {
 
   // Idempotent -- a second stopService() call (e.g. a racing Quit and an
   // already-in-flight explicit stop) never drains the TaskHost twice.
-  async stopService(reason) {
-    if (this._stopped) return;
+  stopService(reason) {
+    if (this._stopPromise) return this._stopPromise;
+    if (this._stopped) return Promise.resolve();
     this._stopped = true;
+    // Install the shared drain before notifying observers: a listener may
+    // synchronously request shutdown too, and must join this same operation.
+    this._stopPromise = Promise.resolve().then(async () => {
+      await this._taskHost.close();
+      // If this was invoked over the runtime socket, closing it before the
+      // dispatcher writes its response turns a successful explicit stop into
+      // a client-side connection_closed error. Return the durable drain result
+      // first, then close the listener/connections on the next macrotask.
+      // The app's local serviceStopped listener is emitted only after teardown.
+      if (!this._serverCloseScheduled) {
+        this._serverCloseScheduled = true;
+        setImmediate(async () => {
+          await this._server?.close();
+          this._emit("serviceStopped", { reason: reason ?? null });
+        });
+      }
+    });
     this._emit("serviceNotice", { kind: "service_stopping", reason: reason ?? null });
     this._server?.broadcast("serviceStopping", { reason: reason ?? null });
     this._unsubscribeTaskHost?.();
-    await this._taskHost.close();
-    // If this was invoked over the runtime socket, closing it before the
-    // dispatcher writes its response turns a successful explicit stop into
-    // a client-side connection_closed error. Return the durable drain result
-    // first, then close the listener/connections on the next macrotask.
-    // The app's local serviceStopped listener is emitted only after teardown.
-    if (!this._serverCloseScheduled) {
-      this._serverCloseScheduled = true;
-      setImmediate(async () => {
-        await this._server?.close();
-        this._emit("serviceStopped", { reason: reason ?? null });
-      });
-    }
+    this._unsubscribeRoster?.();
+    this._unsubscribeRoom?.();
+    return this._stopPromise;
   }
 }
 

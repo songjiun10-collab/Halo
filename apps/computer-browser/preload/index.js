@@ -34,12 +34,17 @@ const METHODS = [
 // authorized".
 const HARNESS_METHODS = [
   "createTask", "listTasks", "resumeSavedTask", "amendTask", "confirmCriterion", "getTaskDetail",
-  "taskApprove", "taskDeny", "taskPause", "taskStop", "taskTakeOver", "getTaskEvents",
-  "getTaskBrowser", "taskBrowserAction", "setTaskViewport", "getHostSettings", "updateHostSettings",
+  "taskApprove", "taskDeny", "taskLend", "taskRevokeLease", "taskPause", "taskStop", "taskTakeOver", "getTaskEvents", "getChildPlan", "listMcpProviders",
+  "getTaskBrowser", "taskBrowserAction", "setTaskViewport", "getHostSettings", "updateHostSettings", "getUsage", "setUsageLimit", "syncUsage",
   "listCredentials", "saveCredential", "removeCredential",
   "listMemories", "saveMemory", "removeMemory",
   "fillCredential",
   "listRoutines", "getRoutine", "saveRoutine", "deleteRoutine", "runRoutine",
+  "listAgents", "saveAgent", "archiveAgent", "listTeams", "saveTeam", "archiveTeam",
+  "startAgentTask", "listAgentConversations",
+  "getAgentRoster", "setAgentPinned", "duplicateAgent", "markAgentConversationsRead",
+  "listAgentSchedules", "saveAgentSchedule", "deleteAgentSchedule",
+  "listRooms", "getRoom", "postRoomMessage", "stopRoomRound",
   "startWorkGoal", "getActiveWorkGoal", "listWorkGoalHistory", "amendWorkGoal",
   "pauseWorkGoal", "resumeWorkGoal", "completeWorkGoal", "archiveWorkGoal",
   "recordWorkGoalProgress", "verifyWorkGoalCriterion",
@@ -47,7 +52,11 @@ const HARNESS_METHODS = [
   "importSessions", "listImportedSessions", "removeImportedSession",
   "getSessionAllowlist", "setSessionAllowlist",
   "importBrowserSettings", "getImportedSettings",
+  "getBackgroundRuntimeSnapshot", "attachBackgroundRuntime", "detachBackgroundRuntime",
+  "setMemoryPolicy", "stopBackgroundService", "setBackgroundLaunchAtLogin",
 ];
+
+const WINDOW_METHODS = ["newWindow", "captureSurface"];
 
 const api = {};
 for (const method of METHODS) {
@@ -56,12 +65,36 @@ for (const method of METHODS) {
 for (const method of HARNESS_METHODS) {
   api[method] = (...args) => ipcRenderer.invoke(`halo:${method}`, ...args);
 }
+for (const method of WINDOW_METHODS) {
+  api[method] = (...args) => ipcRenderer.invoke(`halo:${method}`, ...args);
+}
 
 api.onEvent = (callback) => {
   if (typeof callback !== "function") throw new TypeError("onEvent requires a callback function");
   const listener = (_event, payload) => callback(payload);
   ipcRenderer.on("halo:event", listener);
   return () => ipcRenderer.removeListener("halo:event", listener);
+};
+
+api.onAgentRosterEvent = (callback) => {
+  if (typeof callback !== "function") throw new TypeError("onAgentRosterEvent requires a callback function");
+  const listener = (_event, payload) => callback(payload);
+  ipcRenderer.on("halo:agentRosterEvent", listener);
+  return () => ipcRenderer.removeListener("halo:agentRosterEvent", listener);
+};
+
+api.onRoomEvent = (callback) => {
+  if (typeof callback !== "function") throw new TypeError("onRoomEvent requires a callback function");
+  const listener = (_event, payload) => callback(payload);
+  ipcRenderer.on("halo:roomEvent", listener);
+  return () => ipcRenderer.removeListener("halo:roomEvent", listener);
+};
+
+api.onBackgroundRuntimeEvent = (callback) => {
+  if (typeof callback !== "function") throw new TypeError("onBackgroundRuntimeEvent requires a callback function");
+  const listener = (_event, payload) => callback(payload);
+  ipcRenderer.on("halo:backgroundRuntimeEvent", listener);
+  return () => ipcRenderer.removeListener("halo:backgroundRuntimeEvent", listener);
 };
 
 api.onTaskEvent = (callback) => {

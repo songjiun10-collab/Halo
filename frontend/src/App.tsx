@@ -6,17 +6,23 @@ import { HaloChat } from './components/HaloChat'
 import { HaloSheet } from './components/HaloSheet'
 import { Back, Forward } from './components/Icons'
 import { Notice } from './components/Notice'
+import { SettingsPanel } from './components/SettingsPanel'
 import { ShortcutsHelp } from './components/ShortcutsHelp'
 import { TabOverview } from './components/TabOverview'
 import { TabStrip } from './components/TabStrip'
 import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
+import { WorkspaceSidebar } from './components/WorkspaceSidebar'
+import { SidebarAgents } from './agent/SidebarAgents'
+import { openAgentView, type AgentNavView } from './agent/agent-nav'
 import { usePresence } from './hooks/usePresence'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useTrackpad } from './hooks/useTrackpad'
-import { syncNativeSurface } from './session/browser-surface'
+import { captureSnapshot, syncDirectSurface, syncNativeSurface } from './session/browser-surface'
 import { AGENT, canNavigate, currentUrl, NEW_TAB_URL, pendingCriteria, SessionStore } from './session/session'
 import { tabTitle } from './session/pages'
+import type { IntentLockInput } from './session/api'
+import { LeaseChip } from './components/LeaseChip'
 import type { SessionState, Tab, TimelineEvent } from './session/types'
 
 const NOTICE_MS = 6000
@@ -38,11 +44,13 @@ export default function App() {
   useEffect(() => store.connect(), [store])
 
   const [activityOpen, setActivityOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
   const [chatOpen, setChatOpen] = useState(false)
   /** ⌘/Ctrl + . keeps Halo's controls unfolded even when nothing needs you. */
   const [pinned, setPinned] = useState(false)
   const [overviewOpen, setOverviewOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const omniRef = useRef<HTMLInputElement>(null)
   const pageRef = useRef<HTMLElement>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -80,12 +88,12 @@ export default function App() {
   const notableCount = s.timeline.filter((e) => e.notable).length
   // Reached only from Notice's "Details" link now that the halo ring opens Chat.
   const openActivity = useCallback(() => {
-    setActivityOpen(true); setChatOpen(false); setOverviewOpen(false); setHelpOpen(false)
+    setActivityOpen(true); setChatOpen(false); setOverviewOpen(false); setHelpOpen(false); setSettingsOpen(false)
     setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id)
   }, [notableCount, lastBlock])
   const closeActivity = useCallback(() => { setActivityOpen(false); setSeen(notableCount) }, [notableCount])
   const openChat = useCallback(() => {
-    setChatOpen(true); setActivityOpen(false); setOverviewOpen(false); setHelpOpen(false)
+    setChatOpen(true); setActivityOpen(false); setOverviewOpen(false); setHelpOpen(false); setSettingsOpen(false)
     setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id)
   }, [notableCount, lastBlock])
   const closeChat = useCallback(() => { setChatOpen(false); setSeen(notableCount) }, [notableCount])
@@ -93,19 +101,26 @@ export default function App() {
   const closeOverview = useCallback(() => setOverviewOpen(false), [])
   const toggleOverview = useCallback(() => {
     setOverviewOpen((o) => {
-      if (!o) { setActivityOpen(false); setChatOpen(false); setHelpOpen(false) }
+      if (!o) { setActivityOpen(false); setChatOpen(false); setHelpOpen(false); setSettingsOpen(false) }
       return !o
     })
   }, [])
   const toggleHelp = useCallback(() => {
     setHelpOpen((h) => {
-      if (!h) { setActivityOpen(false); setChatOpen(false); setOverviewOpen(false) }
+      if (!h) { setActivityOpen(false); setChatOpen(false); setOverviewOpen(false); setSettingsOpen(false) }
       return !h
+    })
+  }, [])
+  const toggleSettings = useCallback(() => {
+    setSettingsOpen((o) => {
+      if (!o) { setActivityOpen(false); setChatOpen(false); setOverviewOpen(false); setHelpOpen(false) }
+      return !o
     })
   }, [])
 
   const onShare = useCallback(async () => {
     const url = currentUrl(tab)
+    if (url.startsWith('halo://')) { setToast('Open a web page to share it'); return }
     try {
       if (navigator.share) await navigator.share({ title: tabTitle(tab), url })
       else { await navigator.clipboard.writeText(url); setToast('Link copied') }
@@ -113,18 +128,33 @@ export default function App() {
       if ((err as DOMException)?.name !== 'AbortError') setToast('Unable to share this page')
     }
   }, [tab])
-  const onNewWindow = useCallback(() => {
-    window.open(window.location.href, '_blank', 'noopener,width=1280,height=800')
-  }, [])
-  const onSendMessage = useCallback((text: string) => { void store.sendMessage(text) }, [store])
+  const onNewWindow = useCallback(() => { void store.newWindow() }, [store])
+  const leases = s.snapshot?.leases ?? []
+  const [leaseNow, setLeaseNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!leases.length) return
+    setLeaseNow(Date.now())
+    const timer = window.setInterval(() => setLeaseNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [leases.length])
+  const onSendMessage = useCallback((text: string, lock?: IntentLockInput) => { void store.sendMessage(text, lock) }, [store])
+  const onNewTask = useCallback(() => { store.newTask(); openChat() }, [store, openChat])
+  // Agent and team rows only open the Agent home: leave the current task or page
+  // for the home screen without starting, resuming or stopping anything.
+  const openAgents = useCallback((view: AgentNavView) => {
+    setSettingsOpen(false)
+    openAgentView(view)
+    const current = store.getState()
+    if (current.activeTaskId || current.directBrowser) store.newTask()
+  }, [store])
 
-  // Tab creation/closing/switching has no backing harness capability yet (BrowserAction only
-  // supports navigate/back/forward), so those shortcuts and controls are wired inert rather
-  // than faked. Selecting a task (from Home's resume hint) is real and goes through the store.
+  // Native tab commands are owned by the direct browser API. Task-owned browser tabs remain
+  // isolated and cannot be mutated through that API.
   const shortcutHandlers = useMemo(() => ({
-    onNewTab: () => {},
-    onCloseTab: () => {},
-    onSelectTab: (id: string) => void store.selectTask(id),
+    onNewTab: () => { void store.newBrowserTab() },
+    onNewTask,
+    onCloseTab: () => { if (tab.id !== 'home') void store.closeBrowserTab(tab.id) },
+    onSelectTab: (id: string) => void store.selectBrowserTab(id),
     onBack: () => void store.navigate({ type: 'back' }),
     onForward: () => void store.navigate({ type: 'forward' }),
     onFocusOmni: () => omniRef.current?.focus(),
@@ -134,7 +164,9 @@ export default function App() {
     onNewWindow,
     onShare,
     onToggleHelp: toggleHelp,
-  }), [store, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp])
+    onToggleSidebar: () => setSidebarOpen((open) => !open),
+    onToggleSettings: toggleSettings,
+  }), [store, onNewTask, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp, toggleSettings, tab.id])
   useShortcuts(s, approval, shortcutHandlers)
 
   const trackpadHandlers = useMemo(() => ({
@@ -180,6 +212,7 @@ export default function App() {
   // Adjusted during render (like usePresence) so the overview never commits on top of a new sheet.
   if (approval && overviewOpen) setOverviewOpen(false)
   if (approval && helpOpen) setHelpOpen(false)
+  if (approval && settingsOpen) setSettingsOpen(false)
   // At the moment of a decision, show only the decision: Activity/Chat close rather than stack behind the sheet.
   if (approval && activityOpen) { setActivityOpen(false); setSeen(notableCount) }
   if (approval && chatOpen) { setChatOpen(false); setSeen(notableCount) }
@@ -192,33 +225,65 @@ export default function App() {
   const toastShown = usePresence(toast)
   const overviewShown = usePresence(overviewOpen ? true : null)
   const helpShown = usePresence(helpOpen ? true : null)
+  const settingsShown = usePresence(settingsOpen ? true : null)
 
-  const nativeSurfaceVisible = !!s.activeTaskId && !!s.browser && !approval && !activityOpen && !chatOpen &&
-    !overviewOpen && !helpOpen && !noticeShown.item && !toastShown.item
+  const nativeSurfaceVisible = ((!!s.activeTaskId && !!s.browser) || (!s.activeTaskId && s.directBrowser)) && !approval && !activityOpen && !chatOpen &&
+    !overviewOpen && !helpOpen && !settingsOpen && !noticeShown.item && !toastShown.item
+  // A native view draws above the DOM, so overlays hide it. A still of the page stays in the
+  // slot meanwhile: taken while the page is still on screen, then the view is hidden.
+  const [snapshot, setSnapshot] = useState<string | null>(null)
+  const surfaceShown = useRef(false)
+  const visibleNow = useRef(nativeSurfaceVisible)
+  visibleNow.current = nativeSurfaceVisible
+  useEffect(() => setSnapshot(null), [s.activeTaskId])
   useLayoutEffect(() => {
     const api = window.haloBrowser
     if (!api) return
     let disposed = false
     let frame = 0
-    const sync = () => {
+    const sync = (then?: () => void) => {
       if (frame) cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
         frame = 0
-        if (!disposed) void syncNativeSurface(api, s.activeTaskId, pageRef.current, nativeSurfaceVisible).catch(() => {})
+        if (!disposed) {
+          void Promise.all([
+            syncNativeSurface(api, s.activeTaskId, pageRef.current, !!s.activeTaskId && nativeSurfaceVisible),
+            syncDirectSurface(api, pageRef.current, !s.activeTaskId && nativeSurfaceVisible),
+          ]).catch(() => {}).then(() => { if (!disposed) then?.() })
+        }
       })
     }
-    const observer = pageRef.current ? new ResizeObserver(sync) : null
+    const observer = pageRef.current ? new ResizeObserver(() => sync()) : null
     if (pageRef.current) observer?.observe(pageRef.current)
-    window.addEventListener('resize', sync)
-    sync()
+    const onResize = () => sync()
+    window.addEventListener('resize', onResize)
+    if (nativeSurfaceVisible) {
+      surfaceShown.current = true
+      // Drop the still only once the live page is back on top of it.
+      sync(() => setSnapshot(null))
+    } else if (surfaceShown.current) {
+      surfaceShown.current = false
+      void captureSnapshot(api).then((url) => {
+        if (!visibleNow.current) setSnapshot(url)
+        sync()
+      })
+    } else {
+      sync()
+    }
     return () => {
       disposed = true
       if (frame) cancelAnimationFrame(frame)
       observer?.disconnect()
-      window.removeEventListener('resize', sync)
-      void syncNativeSurface(api, null, null, false).catch(() => {})
+      window.removeEventListener('resize', onResize)
     }
-  }, [s.activeTaskId, s.browser, nativeSurfaceVisible])
+  }, [s.activeTaskId, s.browser, s.directBrowser, nativeSurfaceVisible])
+  // The next run of the effect above places or hides the view; only leaving the app hides it outright.
+  useEffect(() => () => {
+    const api = window.haloBrowser
+    if (!api) return
+    void syncNativeSurface(api, null, null, false).catch(() => {})
+    void syncDirectSurface(api, null, false).catch(() => {})
+  }, [])
 
   const tabsForDisplay = s.tabs.length ? s.tabs : [HOME_TAB]
 
@@ -229,14 +294,6 @@ export default function App() {
       <p className="hx-sr" role="status" aria-live="polite">{announcement(s, notice)}</p>
       <div className="hx-window">
         <header className="hx-chrome" inert={overviewOpen || !!approval}>
-          <TabStrip
-            tabs={tabsForDisplay}
-            activeTabId={tab.id}
-            canClose={() => false}
-            onSelect={() => {}}
-            onClose={() => {}}
-            onNew={() => {}}
-          />
           <Toolbar
             folded={folded}
             tab={tab}
@@ -248,88 +305,117 @@ export default function App() {
             onOverview={toggleOverview}
             onActivity={openActivity}
             onNavigate={(url) => void store.navigate({ type: 'navigate', url })}
-            onNewWindow={onNewWindow}
-            onHelp={toggleHelp}
+            onSettings={toggleSettings}
+            sidebarOpen={sidebarOpen}
+            onToggleSidebar={() => setSidebarOpen((open) => !open)}
             controller={
-              <ControllerChip
-                control={s.control}
-                finished={s.finished}
-                recoveryReason={s.recoveryReason}
-                onTakeOver={() => void store.control('takeOver')}
-                onResume={() => void store.control('resume', s.recoveryReason === 'execution_uncertain')}
-              />
+              <>
+                <ControllerChip
+                  control={s.control}
+                  finished={s.finished}
+                  recoveryReason={s.recoveryReason}
+                  onTakeOver={() => void store.control('takeOver')}
+                  onResume={() => void store.control('resume', s.recoveryReason === 'execution_uncertain')}
+                />
+                <LeaseChip leases={leases} now={leaseNow} agent={AGENT} onRevoke={(id) => void store.revokeLease(id)} />
+              </>
             }
-            halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
+              halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
+            />
+          <TabStrip
+            tabs={tabsForDisplay}
+            activeTabId={tab.id}
+            canClose={(candidate) => !s.activeTaskId && tabsForDisplay.length > 1 && candidate.id !== 'home'}
+            onSelect={(id) => void store.selectBrowserTab(id)}
+            onClose={(id) => void store.closeBrowserTab(id)}
+            canCreate={!s.activeTaskId}
+            onNew={() => { void store.newBrowserTab() }}
           />
         </header>
-        <div className="hx-body" inert={overviewOpen}>
-          <div className="hx-page" inert={!!approval}>
-            {s.activeTaskId && s.browser ? (
-              <main
-                id="hx-page"
-                ref={pageRef}
-                className="hx-native-page"
-                role="tabpanel"
-                aria-labelledby={`tab-${tab.id}`}
-                aria-label="Page rendered in the isolated browser surface"
-                tabIndex={-1}
-              />
-            ) : (
-              <Viewport
-                tab={tab}
-                driven={driven && !folded}
-                activeTask={activeTask}
-                onSelectTab={(id) => void store.selectTask(id)}
-                onStartTask={onSendMessage}
-              />
-            )}
-            <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
-            {swipeHint && (
-              <span className={`hx-swipe hx-swipe--${swipeHint}`} aria-hidden="true">
-                {swipeHint === 'back' ? <Back /> : <Forward />}
-              </span>
-            )}
-          </div>
-          {/* One Halo surface at a time: a surface a newer one supersedes cuts instantly rather
+        <div className="hx-window-row hx-workspace">
+          <WorkspaceSidebar
+            tasks={s.tasks}
+            activeTaskId={s.activeTaskId}
+            open={sidebarOpen}
+            inert={overviewOpen || !!approval}
+            onNewTask={onNewTask}
+            onSelectTask={(taskId) => void store.selectTask(taskId)}
+            agents={<SidebarAgents onOpen={(owner) => openAgents({ n: 'detail', owner })} onSeeAll={() => openAgents({ n: 'hub' })} onNew={() => openAgents({ n: 'hub' })} />}
+          />
+          <div className="hx-content-col">
+          <div className="hx-body" inert={overviewOpen}>
+            <div className="hx-page" inert={!!approval}>
+              {(s.activeTaskId && s.browser) || (!s.activeTaskId && s.directBrowser) ? (
+                <main
+                  id="hx-page"
+                  ref={pageRef}
+                  className="hx-native-page"
+                  role="tabpanel"
+                  aria-labelledby={`tab-${tab.id}`}
+                  aria-label="Page rendered in the isolated browser surface"
+                  tabIndex={-1}
+                >
+                  {snapshot && !nativeSurfaceVisible && <img className="hx-snapshot" src={snapshot} alt="" aria-hidden="true" draggable={false} />}
+                </main>
+              ) : (
+                <Viewport
+                  tab={tab}
+                  driven={driven && !folded}
+                  activeTask={activeTask}
+                  onSelectTab={(id) => void store.selectTask(id)}
+                  onStartTask={onSendMessage}
+                />
+              )}
+              <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
+              {swipeHint && (
+                <span className={`hx-swipe hx-swipe--${swipeHint}`} aria-hidden="true">
+                  {swipeHint === 'back' ? <Back /> : <Forward />}
+                </span>
+              )}
+            </div>
+            {/* One Halo surface at a time: a surface a newer one supersedes cuts instantly rather
               than cross-fading underneath it, so the glass never stacks two deep. */}
-          <div className="hx-overlays">
-            {sheet.item && (
-              <HaloSheet
-                approval={sheet.item}
-                leaving={sheet.leaving}
-                onApprove={() => void store.decideApproval('approve', sheet.item!)}
-                onDeny={() => void store.decideApproval('deny', sheet.item!)}
-                onTakeOver={() => void store.control('takeOver')}
-              />
-            )}
-            {noticeShown.item && !activityOpen && !chatOpen && !approval && <Notice event={noticeShown.item} leaving={noticeShown.leaving} blocked={!!approval} onOpen={openActivity} />}
-            {activityShown.item && !approval && !chatOpen && !overviewOpen && !helpOpen && <Activity session={s} leaving={activityShown.leaving} onClose={closeActivity} />}
-            {chatShown.item && !approval && !activityOpen && !overviewOpen && !helpOpen && (
-              <HaloChat
-                taskLabel={s.task || 'New task'}
-                messages={s.messages}
-                recentTasks={recentTasks}
-                pendingCriteria={pendingCriteria(s)}
-                isTaskActive={!!s.activeTaskId}
-                leaving={chatShown.leaving}
-                onClose={closeChat}
-                onSend={onSendMessage}
-                onSelectTask={(taskId) => void store.selectTask(taskId)}
-                onNewTask={() => { store.newTask(); closeChat() }}
-                onConfirmCriterion={(criterion, outcome) => void store.confirmCriterion(criterion, outcome)}
-              />
-            )}
-            {helpShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && <ShortcutsHelp leaving={helpShown.leaving} onClose={() => setHelpOpen(false)} />}
-            {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}
+            <div className="hx-overlays">
+              {sheet.item && (
+                <HaloSheet
+                  approval={sheet.item}
+                  leaving={sheet.leaving}
+                  onApprove={() => void store.decideApproval('approve', sheet.item!)}
+                  onDeny={() => void store.decideApproval('deny', sheet.item!)}
+                  onTakeOver={() => void store.control('takeOver')}
+                  onLend={(terms) => void store.lend(sheet.item!, terms)}
+                />
+              )}
+              {noticeShown.item && !activityOpen && !chatOpen && !approval && <Notice event={noticeShown.item} leaving={noticeShown.leaving} blocked={!!approval} onOpen={openActivity} />}
+              {activityShown.item && !approval && !chatOpen && !overviewOpen && !helpOpen && <Activity session={s} leaving={activityShown.leaving} onClose={closeActivity} />}
+              {chatShown.item && !approval && !activityOpen && !overviewOpen && !helpOpen && (
+                <HaloChat
+                  taskLabel={s.task || 'New task'}
+                  messages={s.messages}
+                  recentTasks={recentTasks}
+                  pendingCriteria={pendingCriteria(s)}
+                  isTaskActive={!!s.activeTaskId}
+                  leaving={chatShown.leaving}
+                  onClose={closeChat}
+                  onSend={onSendMessage}
+                  onSelectTask={(taskId) => void store.selectTask(taskId)}
+                  onNewTask={() => { store.newTask(); closeChat() }}
+                  onConfirmCriterion={(criterion, outcome) => void store.confirmCriterion(criterion, outcome)}
+                />
+              )}
+              {helpShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && <ShortcutsHelp leaving={helpShown.leaving} onClose={() => setHelpOpen(false)} />}
+              {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}
+            </div>
+            {settingsShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && !helpOpen && <SettingsPanel leaving={settingsShown.leaving} onClose={() => setSettingsOpen(false)} />}
           </div>
-
+          </div>
         </div>
         {overviewShown.item && !approval && !activityOpen && !chatOpen && !helpOpen && (
           <TabOverview
             leaving={overviewShown.leaving}
             tabs={tabsForDisplay}
             activeTabId={tab.id}
-            onPick={() => setOverviewOpen(false)}
+            onPick={(id) => { void store.selectBrowserTab(id); closeOverview() }}
             onClose={closeOverview}
           />
         )}

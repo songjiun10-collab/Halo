@@ -22,3 +22,30 @@ export function syncNativeSurface(
     visible: true,
   })
 }
+
+/** Position the legacy user-owned browser view only when no task owns the surface. */
+export function syncDirectSurface(
+  api: Pick<HaloBrowserApi, 'setBrowserBounds'>,
+  element: Pick<HTMLElement, 'getBoundingClientRect'> | null,
+  visible: boolean,
+): Promise<unknown> {
+  if (!element || !visible) {
+    return api.setBrowserBounds({ ...HIDDEN_VIEWPORT })
+  }
+  const rect = element.getBoundingClientRect()
+  if (![rect.left, rect.top, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) {
+    return api.setBrowserBounds({ ...HIDDEN_VIEWPORT })
+  }
+  return api.setBrowserBounds({ x: rect.left, y: rect.top, width: rect.width, height: rect.height, visible: true })
+}
+
+/** A still of the page main is showing, painted in the page slot while an overlay hides the native view. */
+export async function captureSnapshot(api: Partial<Pick<HaloBrowserApi, 'captureSurface'>>): Promise<string | null> {
+  if (typeof api.captureSurface !== 'function') return null
+  try {
+    const url = await api.captureSurface()
+    return typeof url === 'string' && url.startsWith('data:image/jpeg;base64,') ? url : null
+  } catch {
+    return null
+  }
+}

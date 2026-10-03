@@ -2,6 +2,11 @@
    ice = Halo (brand, focus), amber = needs approval, red = blocked, green = success. */
 :root {
   color-scheme: dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root {
 
   /* Neutrals: near-black with a faint green cast, flat layers separated by 1px lines. */
   --backdrop: #0c0e0d;         /* app background and tab bar */

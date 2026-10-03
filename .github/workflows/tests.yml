@@ -51,3 +51,27 @@ jobs:
       - name: Test macOS sandbox runner
         if: runner.os == 'macOS'
         run: cargo test --locked --manifest-path artifacts/sandbox_benchmark/rust_runner/Cargo.toml
+
+  browser-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/computer-browser
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/computer-browser/package-lock.json
+      - name: Install locked browser dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Check generated runtime artifacts
+        run: npm run check:runtime
+      - name: Typecheck runtime sources and consumers
+        run: npm run typecheck
+      - name: Test shared contracts and runtime build
+        run: node --test test/harness-contracts.test.js test/task-profile-contracts.test.js test/harness-profile.test.js test/runtime-build.test.js test/runtime-contract-conformance.test.js test/runtime-harness-conformance.test.js test/generic-mcp-broker.test.js test/mcp-schema-validator.test.js test/message-port.test.js test/message-mailbox.test.js test/message-runtime-conformance.test.js

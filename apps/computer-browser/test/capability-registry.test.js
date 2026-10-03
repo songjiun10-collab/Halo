@@ -10,7 +10,7 @@ const {
 
 test("registry is a closed, versioned allowlist with only implemented adapters available", () => {
   assert.equal(CAPABILITY_REGISTRY_VERSION, 1);
-  assert.deepEqual(CAPABILITY_IDS, ["browser", "computer_use", "multi_agent", "research", "routine"]);
+  assert.deepEqual(CAPABILITY_IDS, ["browser", "computer_use", "multi_agent", "multi_agent_computer_use", "research", "routine"]);
   assert.deepEqual(getCapabilityProfile("browser"), {
     id: "browser", available: true, dependencies: ["browser"],
     adapters: [{ capabilityId: "browser", adapterId: "planner-browser", adapterVersion: 1 }],
@@ -19,8 +19,17 @@ test("registry is a closed, versioned allowlist with only implemented adapters a
   assert.equal(getCapabilityProfile("multi_agent").available, true);
   assert.equal(getCapabilityProfile("research").available, false);
   assert.equal(getCapabilityProfile("research").reasonCode, "capability_unavailable");
-  assert.equal(getCapabilityProfile("computer_use").available, false);
-  assert.equal(getCapabilityProfile("computer_use").reasonCode, "capability_unavailable");
+  assert.deepEqual(getCapabilityProfile("computer_use"), {
+    id: "computer_use", available: true, dependencies: ["browser", "computer_use"],
+    adapters: [
+      { capabilityId: "browser", adapterId: "task-owned-viewport-screenshot", adapterVersion: 1 },
+      { capabilityId: "computer_use", adapterId: "codex-subscription-image", adapterVersion: 1 },
+    ],
+  });
+  assert.equal(getCapabilityProfile("multi_agent").adapters.some((item) => item.capabilityId === "computer_use"), false,
+    "ordinary team tasks do not require image-capable planners");
+  assert.ok(getCapabilityProfile("multi_agent_computer_use").adapters.some((item) => item.capabilityId === "computer_use"),
+    "explicit CUA team tasks expose screenshot-grounded actions under the parent's own review queue");
   assert.throws(() => getCapabilityProfile("unknown"), { code: "unknown_capability" });
 });
 

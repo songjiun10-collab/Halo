@@ -38,6 +38,13 @@ rl.on("line", (line) => {
   if (!request || typeof request.requestId !== "string" || !request.context) return;
 
   const { requestId, context } = request;
+  // Integration-only cancellation probe: explicitly signal that a real,
+  // initialized worker has received the request, then withhold its reply.
+  // This replaces racing an arbitrary startup sleep against worker loading.
+  if (process.env.HALO_FIXTURE_HOLD_RESPONSE === "1") {
+    process.stderr.write(`halo fixture planner holding request:${requestId}\n`);
+    return;
+  }
   const criteria = (context.goal && context.goal.criteria) || [];
   const criterionId = criteria.length > 0 ? criteria[0].id : "C1";
   const observation = context.observation || {};

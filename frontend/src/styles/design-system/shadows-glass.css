@@ -1,0 +1,12 @@
+:root{
+  --shadow-window:0 0 0 1px var(--border);
+  --shadow-raised:0 -12px 24px rgba(0,0,0,.35);
+  /* HALO Glass — lightweight system surfaces stay genuinely translucent; the approval sheet alone stays near-opaque for readability */
+  --halo-glass-chrome:#090a0ac2;    /* Chrome Glass, alpha .76 — top bar, address field */
+  --halo-glass-floating:#0d0f0eb8;  /* Floating Glass, alpha .72 — notice, events, tab overview, toast */
+  --halo-glass-critical:#0f100ff5;  /* Critical Glass, alpha .96, less blur — the approval sheet */
+  --halo-blur-chrome:18px;
+  --halo-blur-floating:30px;
+  --halo-glass-border:#ffffff1a;
+  --halo-glass-highlight:#ffffff0d;
+}
