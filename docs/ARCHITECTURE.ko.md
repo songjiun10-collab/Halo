@@ -1,8 +1,10 @@
 # HALO 아키텍처와 구성 분리
 
-문서 진입점은 [Computer Browser](../apps/computer-browser/README.md)와
-[Container](../deploy/container/README.ko.md)로 나눈다. 현재 코드 위치와 실행
-계약을 기준으로 책임을 정리한다.
+문서 진입점은 [HALO Core](../halo/README.md)와
+[HALO Browser](../apps/computer-browser/README.md)로 나눈다. Core는 안전 연구와
+게이트웨이, Browser는 데스크톱 앱과 에이전트 runtime을 담당한다.
+[Container](../deploy/container/README.ko.md)는 Core 게이트웨이의 실행 안내다.
+현재 코드 위치와 실행 계약을 기준으로 책임을 정리한다.
 
 ## 현재 구성
 

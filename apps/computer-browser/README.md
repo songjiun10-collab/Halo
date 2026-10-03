@@ -1,11 +1,13 @@
-# HALO Computer Browser
+# HALO Browser
 
 Electron browser and task runtime for HALO. The renderer presents tasks, agents,
 team rooms, approval queues and browser controls. The host owns task state,
 planner connections, browser execution and durable recovery.
 
-See the [architecture guide](../../docs/ARCHITECTURE.ko.md) for component boundaries
-and the [Container guide](../../deploy/container/README.ko.md) for the Docker gateway.
+See [HALO Core](../../halo/README.md) for containment research and the gateway,
+and the [architecture guide](../../docs/ARCHITECTURE.ko.md) for component boundaries.
+
+![HALO agent workspace with agents and a team room](../../docs/images/halo-agent-home.png)
 
 ## Run
 
