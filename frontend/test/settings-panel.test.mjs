@@ -61,9 +61,9 @@ test('settings is a full panel with a back header, labelled sections and selecta
   assert.doesNotMatch(html, /type="password"/i, 'settings never collects provider keys')
 })
 
-test('turning a provider row on picks its default model, and off turns the planner off', () => {
+test('provider switches are independent; the active one falls back to another enabled one, or to none', () => {
   const patches = []
-  const view = SettingsView({ settings: base, saving: false, error: null, onChange: (p) => patches.push(p), onClose: () => {} })
+  const lists = []
   const find = (node, label) => {
     if (!node || typeof node !== 'object') return null
     if (Array.isArray(node)) { for (const n of node) { const hit = find(n, label); if (hit) return hit } return null }
@@ -71,9 +71,20 @@ test('turning a provider row on picks its default model, and off turns the plann
     if (typeof node.type === 'function') return find(node.type(node.props), label)
     return find(node.props?.children, label)
   }
-  find(view, 'Use Codex').props.onClick()
-  find(view, 'Use Claude').props.onClick()
-  assert.deepEqual(patches, [{ plannerProvider: 'codex_cli', plannerModel: 'gpt-6.1-sol' }, { plannerProvider: 'none' }])
+  const view = (settings, enabledPlanners) => SettingsView({ settings, saving: false, error: null, onChange: (p) => patches.push(p), onClose: () => {}, enabledPlanners, onEnabledPlanners: (l) => lists.push(l) })
+  // nothing active: turning one on picks its default model; turning it off again turns the planner off
+  const off = { ...base, plannerProvider: 'none' }
+  delete off.plannerModel
+  find(view(off, null), 'Use Codex').props.onClick()
+  find(view({ ...off, plannerProvider: 'codex_cli' }, ['codex_cli']), 'Use Codex').props.onClick()
+  // claude active: switching Codex on leaves the active planner alone, both read as on
+  find(view(base, null), 'Use Codex').props.onClick()
+  assert.equal(find(view(base, ['codex_cli']), 'Use Codex').props['aria-checked'], true)
+  assert.equal(find(view(base, ['codex_cli']), 'Use Claude').props['aria-checked'], true)
+  // turning the active Claude off hands the planner to the other enabled provider
+  find(view(base, ['codex_cli']), 'Use Claude').props.onClick()
+  assert.deepEqual(patches, [{ plannerProvider: 'codex_cli', plannerModel: 'gpt-6.1-sol' }, { plannerProvider: 'none' }, { plannerProvider: 'codex_cli', plannerModel: 'gpt-6.1-sol' }])
+  assert.deepEqual(lists.at(-1), ['codex_cli'])
 })
 
 test('fast mode is off and explained when the model cannot use it', () => {

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { HostSettings } from '../session/api'
 import { activeModel, PLANNER_MODELS, type PlannerModel } from '../session/claude-models'
 import { DEFAULT_EFFORT, EFFORT_LEVELS, effortLabel, type PlannerEffort } from '../session/planner-effort'
+import { readEnabledPlanners } from '../session/enabled-planners'
 import { EffortSlider } from './EffortSlider'
 
 interface Props {
@@ -52,6 +53,8 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape) }
   }, [open])
 
+  const enabledList = open ? readEnabledPlanners() : null
+  const offered = (m: PlannerModel) => !enabledList || enabledList.includes(m.provider) || active?.provider === m.provider
   const isActive = (m: PlannerModel) => active?.id === m.id && active.provider === m.provider
   const option = (m: PlannerModel) => <button type="button" key={m.id} className="hx-mpick__opt" role="radio"
     aria-checked={isActive(m)} data-on={isActive(m) || undefined}
@@ -90,17 +93,17 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 6l-6 6 6 6" /></svg>Effort
         </button> : null}
         <p>{active ? 'Model' : 'Choose a planner'}</p>
-        {PLANNER_MODELS.filter((m) => m.provider === 'claude_code' && !m.legacy).map(option)}
+        {PLANNER_MODELS.filter((m) => offered(m) && m.provider === 'claude_code' && !m.legacy).map(option)}
         <p>Codex</p>
-        {PLANNER_MODELS.filter((m) => m.provider === 'codex_cli').map(option)}
+        {PLANNER_MODELS.filter((m) => offered(m) && m.provider === 'codex_cli').map(option)}
         <p>Antigravity / Cursor</p>
-        {PLANNER_MODELS.filter((m) => m.provider === 'antigravity' || m.provider === 'cursor').map(option)}
+        {PLANNER_MODELS.filter((m) => offered(m) && (m.provider === 'antigravity' || m.provider === 'cursor')).map(option)}
         <p>NVIDIA</p>
-        {PLANNER_MODELS.filter((m) => m.provider === 'nvidia').map(option)}
+        {PLANNER_MODELS.filter((m) => offered(m) && m.provider === 'nvidia').map(option)}
         <button type="button" className="hx-mpick__fold" aria-expanded={legacyOpen} onClick={() => setLegacyOpen((o) => !o)}>
           Legacy<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 6l6 6-6 6" /></svg>
         </button>
-        {legacyOpen ? PLANNER_MODELS.filter(isClaudeLegacy).map(option) : null}
+        {legacyOpen ? PLANNER_MODELS.filter((m) => offered(m) && isClaudeLegacy(m)).map(option) : null}
       </>}
     </div> : null}
   </div>

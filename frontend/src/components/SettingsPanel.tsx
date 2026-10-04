@@ -3,6 +3,7 @@ import type { HostSettings } from '../session/api'
 import { activeModel, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, DEFAULT_NVIDIA_MODEL, mergeDiscoveredNvidia, PLANNER_MODELS } from '../session/claude-models'
 import { DEFAULT_EFFORT, type PlannerEffort } from '../session/planner-effort'
 import { EXECUTION_OPTIONS, fastModeSupport, PERMISSION_OPTIONS, saveSetting, type SettingsPatch } from '../session/settings'
+import { useEnabledPlanners } from '../session/enabled-planners'
 import { EffortSlider } from './EffortSlider'
 import { Back } from './Icons'
 
@@ -21,6 +22,9 @@ interface ViewProps {
   onChange: (patch: SettingsPatch) => void
   onClose?: () => void
   leaving?: boolean
+  /** Providers switched on besides the active one; the container persists it. */
+  enabledPlanners?: string[] | null
+  onEnabledPlanners?: (next: string[]) => void
 }
 
 /** External adapter keys come from the host environment, not this UI. */
@@ -48,7 +52,7 @@ function Cards<T extends string>({ label, options, value, disabled, onPick }: { 
 }
 
 /** The settings content, without host calls. */
-export function SettingsView({ settings, saving, error, onChange, onClose, leaving }: ViewProps) {
+export function SettingsView({ settings, saving, error, onChange, onClose, leaving, enabledPlanners: enabledList = null, onEnabledPlanners: setEnabledList = () => {} }: ViewProps) {
   const head = (
     <header className="hx-settings__head">
       <button type="button" className="hx-settings__back" aria-label="Close settings" onClick={onClose}><Back /></button>
@@ -69,15 +73,27 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
       <div className="hx-settings__section">
         <p className="hx-settings__label">Planner</p>
         {PROVIDERS.map((p) => {
-          const on = settings.plannerProvider === p.id
+          const activeId = settings.plannerProvider
+          // Switches are independent: the active planner is always on; the rest are the providers the user turned on.
+          const enabled = new Set([...(enabledList ?? []), ...(activeId !== 'none' ? [activeId] : [])])
+          const on = enabled.has(p.id)
+          const toggle = () => {
+            const next = new Set(enabled)
+            if (on) next.delete(p.id); else next.add(p.id)
+            setEnabledList([...next])
+            if (on && activeId === p.id) {
+              const fallback = PROVIDERS.find((q) => next.has(q.id))
+              onChange(fallback ? { plannerProvider: fallback.id, plannerModel: fallback.model } : { plannerProvider: 'none' })
+            } else if (!on && activeId === 'none') onChange({ plannerProvider: p.id, plannerModel: p.model })
+          }
           return (
             <div key={p.id} className="hx-model-row" data-provider={p.id}>
               <span className="hx-model-row__mark" aria-hidden="true">{p.mark}</span>
               <span className="hx-model-row__body">
                 <span className="hx-model-row__name">{p.name}</span>
-                <span className="hx-model-row__meta" data-mono="">{on && model ? `planner · ${model.label}` : p.cli}</span>
+                <span className="hx-model-row__meta" data-mono="">{activeId === p.id && model ? `planner · ${model.label}` : p.cli}</span>
               </span>
-              <button type="button" className="hx-switch" role="switch" aria-label={`Use ${p.name}`} aria-checked={on} disabled={saving} onClick={() => onChange(on ? { plannerProvider: 'none' } : { plannerProvider: p.id, plannerModel: p.model })}><span /></button>
+              <button type="button" className="hx-switch" role="switch" aria-label={`Use ${p.name}`} aria-checked={on} disabled={saving} onClick={toggle}><span /></button>
             </div>
           )
         })}
@@ -206,5 +222,6 @@ export function SettingsPanel({ leaving, onClose }: Props) {
     else { setSettings(previous); setError('Could not save that change.') }
     setSaving(false)
   }
-  return <div ref={ref} className="hx-settings__host"><SettingsView settings={settings} saving={saving} error={error} onChange={(p) => void change(p)} onClose={onClose} leaving={leaving} /></div>
+  const [enabledPlanners, setEnabledPlanners] = useEnabledPlanners()
+  return <div ref={ref} className="hx-settings__host"><SettingsView settings={settings} saving={saving} error={error} onChange={(p) => void change(p)} onClose={onClose} leaving={leaving} enabledPlanners={enabledPlanners} onEnabledPlanners={setEnabledPlanners} /></div>
 }
