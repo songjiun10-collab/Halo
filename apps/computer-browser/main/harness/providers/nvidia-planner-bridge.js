@@ -7,6 +7,11 @@ const { getModelPromptGuidance } = require("./model-prompt-guidance");
 const ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions";
 const failure = (code) => Object.assign(new Error(`NVIDIA planner: ${code}`), { code });
 
+// A team-chat reply is a few sentences: bound the output and the wait so a
+// slow model costs one short pass instead of a minute of silence.
+const ROOM_MAX_TOKENS = 2048;
+const ROOM_TIMEOUT_MS = 25000;
+
 class NvidiaPlannerBridge {
   constructor({ apiKey = process.env.NVIDIA_API_KEY, model = DEFAULT_NVIDIA_MODEL, fetchFn = globalThis.fetch, timeoutMs = 55000 } = {}) {
     if (typeof apiKey !== "string" || !apiKey.trim() || /[\r\n]/.test(apiKey)) throw failure("authentication_failed");
@@ -25,12 +30,12 @@ class NvidiaPlannerBridge {
     const room = isRoomTurn(context);
     const promptGuidance = getModelPromptGuidance("nvidia", this._model, context.progress?.plannerEffort);
     const prompt = room ? buildRoomPrompt(context, promptGuidance) : buildPrompt(context, promptGuidance);
-    const body = JSON.stringify({ model: this._model, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: 8192 });
+    const body = JSON.stringify({ model: this._model, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: room ? ROOM_MAX_TOKENS : 8192 });
     if (Buffer.byteLength(body) > contracts.MAX_PLANNER_FRAME_BYTES) throw failure("invalid_field");
     const controller = new AbortController(); this._abort = controller; this._usage = null;
     const cancel = () => controller.abort(failure("cancelled"));
     signal?.addEventListener("abort", cancel, { once: true });
-    const timer = setTimeout(() => controller.abort(failure("timeout")), this._timeoutMs);
+    const timer = setTimeout(() => controller.abort(failure("timeout")), room ? Math.min(this._timeoutMs, ROOM_TIMEOUT_MS) : this._timeoutMs);
     const started = performance.now();
     // Defer until _pending has been assigned, including synchronous fetch errors.
     const pending = Promise.resolve().then(async () => {
