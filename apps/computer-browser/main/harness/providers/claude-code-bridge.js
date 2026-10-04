@@ -91,7 +91,8 @@ class ClaudeCodeBridgeError extends Error {
 // an ANTHROPIC_*-named override straight through -- a denylist is only ever
 // as complete as the names someone thought to list, which is exactly the gap
 // an allowlist closes structurally.)
-const ENV_ALLOWLIST = Object.freeze(["PATH", "HOME", "LANG", "TZ", "TMPDIR"]);
+// USER: the claude CLI reads its login from the macOS keychain by account name.
+const ENV_ALLOWLIST = Object.freeze(["PATH", "HOME", "USER", "LANG", "TZ", "TMPDIR"]);
 
 function buildEnv(overrides) {
   const env = {};
