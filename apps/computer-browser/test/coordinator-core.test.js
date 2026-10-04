@@ -85,6 +85,36 @@ test("parallel mode admits up to maxParallelTasks then stops", async () => {
   assert.equal(await core.admitNext(), null);
 });
 
+test("a reservation finishing after teardown begins is released without admitting another task", async () => {
+  const queue = fakeQueue({ pending: ["t1"] });
+  let blocked = false;
+  let signalAcquire;
+  const acquireStarted = new Promise((resolve) => { signalAcquire = resolve; });
+  let finishAcquire;
+  const acquireGate = new Promise((resolve) => { finishAcquire = resolve; });
+  const admission = {
+    released: [],
+    async acquire() { signalAcquire(); return acquireGate; },
+    async release(leaseId) { this.released.push(leaseId); },
+  };
+  const { core } = makeCore({
+    queue,
+    admission,
+    options: { executionMode: "parallel", isAdmissionBlocked: () => blocked },
+  });
+
+  const pending = core.admitNext();
+  await acquireStarted;
+  blocked = true;
+  finishAcquire({ admitted: true, leaseId: "lease-t1" });
+
+  assert.equal(await pending, null);
+  assert.deepEqual(admission.released, ["lease-t1"]);
+  assert.deepEqual(queue.active, []);
+  assert.deepEqual(queue.pending, ["t1"]);
+  assert.equal(core.hasLease("t1"), false);
+});
+
 test("a denied memory lease admits nothing and leaves the queue untouched", async () => {
   const { core, queue } = makeCore({ admission: fakeAdmission({ admit: false }) });
   assert.equal(await core.admitNext(), null);

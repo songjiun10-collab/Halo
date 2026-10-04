@@ -117,3 +117,16 @@ test("persisted Task profile accepts only an exact durable Work Goal binding", (
     workGoalBinding: binding,
   })), { code: "invalid_profile" });
 });
+
+test("persisted Task profile accepts only an exact HALO Agent browser-profile binding", () => {
+  const binding = { agentId: PARENT };
+  assert.equal(validateTaskProfileSelectedPayload(selectedPayload({ agentBrowserProfile: binding })).agentBrowserProfile, binding);
+  assert.throws(() => validateTaskProfileSelectedPayload(selectedPayload({ agentBrowserProfile: { ...binding, extra: true } })), { code: "unknown_field" });
+  assert.throws(() => validateTaskProfileSelectedPayload(selectedPayload({ agentBrowserProfile: { agentId: "../escape" } })), { code: "invalid_id" });
+  assert.throws(() => validateTaskProfileSelectedPayload(selectedPayload({
+    parentBinding: { parentTaskId: PARENT, planId: "plan_1", parentGoalVersion: 1 },
+    selection: { duration: { source: "parent_plan_policy" }, capability: { source: "parent_plan_policy" } },
+    agentBrowserProfile: binding,
+  })), { code: "invalid_profile" });
+  assert.throws(() => validateResolvedTaskProfile(profile({ agentBrowserProfile: binding })), { code: "unknown_field" });
+});

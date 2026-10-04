@@ -26,11 +26,13 @@ class CoordinatorCore {
     executionMode = "sequential",
     maxParallelTasks = 2,
     parallelTaskReserveBytes,
+    isAdmissionBlocked = () => false,
   } = {}) {
     if (!queue || typeof queue.admitNext !== "function") throw new CoordinatorCoreError("invalid_config", "queue is required");
     if (typeof ensureQueue !== "function") throw new CoordinatorCoreError("invalid_config", "ensureQueue is required");
     if (typeof getResourceAdmission !== "function") throw new CoordinatorCoreError("invalid_config", "getResourceAdmission is required");
     if (typeof getRunMemoryPolicy !== "function") throw new CoordinatorCoreError("invalid_config", "getRunMemoryPolicy is required");
+    if (typeof isAdmissionBlocked !== "function") throw new CoordinatorCoreError("invalid_config", "isAdmissionBlocked is required");
     this._queue = queue;
     this._ensureQueue = ensureQueue;
     this._getResourceAdmission = getResourceAdmission;
@@ -39,6 +41,7 @@ class CoordinatorCore {
     this._executionMode = executionMode;
     this._maxParallelTasks = maxParallelTasks;
     this._parallelTaskReserveBytes = parallelTaskReserveBytes;
+    this._isAdmissionBlocked = isAdmissionBlocked;
     this._leases = new Map();
     this._chain = Promise.resolve();
     this.recoveredBlocked = false;
@@ -63,13 +66,14 @@ class CoordinatorCore {
 
   async _admitNextLocked({ recoveredHead = false } = {}) {
     await this._ensureQueue();
-    if (this.recoveredBlocked && !recoveredHead) return null;
+    if ((this.recoveredBlocked && !recoveredHead) || this._isAdmissionBlocked()) return null;
     const candidateId = this._queue.pendingIds()[0];
     if (!candidateId) return null;
     const activeCount = this._queue.activeIds().length;
     const maxActive = this._executionMode === "parallel" ? this._maxParallelTasks : 1;
     if (activeCount >= maxActive) return null;
     const selected = await this._getRunMemoryPolicy(candidateId);
+    if (this._isAdmissionBlocked()) return null;
     const resourceAdmission = this._getResourceAdmission();
     // Monitor-less injected hosts retain sequential behavior. Production
     // supplies MemoryMonitor and always takes the shared lease path.
@@ -91,6 +95,10 @@ class CoordinatorCore {
       parentPolicy: { mode: selected.mode, parentTaskId: candidateId, requestedAgentCount: 1 },
     });
     if (!admission.admitted) return null;
+    if (this._isAdmissionBlocked()) {
+      await resourceAdmission.release(admission.leaseId);
+      return null;
+    }
     try {
       const admittedId = await this._queue.admitNext({ maxActive });
       if (admittedId === candidateId) {

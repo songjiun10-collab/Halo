@@ -170,12 +170,12 @@ function makeBrowser() {
     return new BrowserAdapter({ view });
   }
 
-  function makePlanner() {
+  function makePlanner({ holdResponse = false, onWorkerStart } = {}) {
     return new PlannerStdioAdapter({
       command: PLANNER_COMMAND,
       args: [LONG_HORIZON_PLANNER],
       cwd: APP_ROOT,
-      env: PLANNER_ENV,
+      env: { ...PLANNER_ENV, ...(holdResponse ? { HALO_FIXTURE_HOLD_RESPONSE: "1" } : {}) },
       onWorkerStart: ({ pid, creationTime }) => {
         memoryMonitor.registerExternalProcess({ pid, creationTime, label: "planner" });
         const record = { pid, creationTime, bytes: null, sampleCount: 0, active: true, pending: Promise.resolve(), timer: null };
@@ -198,6 +198,7 @@ function makeBrowser() {
         // not only that transient early value, contributes to the peak.
         takeSample();
         record.timer = setInterval(takeSample, 20);
+        onWorkerStart?.({ pid, creationTime });
       },
       onWorkerExit: ({ pid, creationTime }) => {
         const record = plannerWorkerRecords.get(`${pid}:${creationTime}`);
@@ -360,12 +361,27 @@ function makeBrowser() {
   const store2 = await TaskStore.create(goal2, { storageRoot });
   const taskId2 = store2.taskId;
   const browser2 = makeBrowser();
-  const planner2 = makePlanner();
+  let cancelledWorkerKey;
+  const planner2 = makePlanner({ holdResponse: true,
+    onWorkerStart: ({ pid, creationTime }) => { cancelledWorkerKey = `${pid}:${creationTime}`; } });
   const controller2 = new TaskController({ store: store2, planner: planner2, browser: browser2, approve: (d) => approve(taskId2, d), hostVerifier: defaultHostVerifier, memoryMonitor });
 
   const startPromise2 = controller2.start();
-  await new Promise((r) => setTimeout(r, 60));
+  const readyDeadline = Date.now() + 15000;
+  let plannerWasInFlight = false;
+  while (Date.now() < readyDeadline) {
+    const record = plannerWorkerRecords.get(cancelledWorkerKey);
+    if (record?.active && record.bytes >= 10_000_000 &&
+        planner2.getStderrTail().includes("halo fixture planner holding request:")) {
+      plannerWasInFlight = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(plannerWasInFlight, true, "cancellation probe must receive a real planner request and sample initialized worker RSS");
   await controller2.pause();
+  const workerExitConfirmed = plannerWorkerRecords.get(cancelledWorkerKey)?.active === false;
+  assert.equal(workerExitConfirmed, true, "pause must wait for the cancelled planner worker's actual exit");
   await startPromise2;
   await planner2.close().catch(() => {});
   const pausedMidflightState = controller2.getSnapshot().state;
@@ -462,6 +478,8 @@ function makeBrowser() {
       stageTotals: scenario1StageTotals,
     },
     scenario2: {
+      plannerWasInFlight,
+      workerExitConfirmed,
       pausedMidflightState,
       pauseResumeWorks,
       completedAfterFreshReattach: scenario2Completed,

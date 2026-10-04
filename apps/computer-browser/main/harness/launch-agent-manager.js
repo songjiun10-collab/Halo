@@ -211,6 +211,22 @@ class LaunchAgentManager {
     return this.start({ label });
   }
 
+  // Read-only: is this label's plist present as a regular file? A symlink
+  // planted at the path is never reported as installed. Does not ask
+  // launchd whether the job is loaded.
+  async isInstalled({ label } = {}) {
+    if (typeof label !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/.test(label)) {
+      throw new LaunchAgentError("invalid_field", "label must be a plain launchd label");
+    }
+    try {
+      const stat = await fs.lstat(this._plistPath(label));
+      return stat.isFile();
+    } catch (error) {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
   // Best-effort stop -> delete the plist file.
   async remove({ label }) {
     try {

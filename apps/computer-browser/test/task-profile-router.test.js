@@ -62,6 +62,15 @@ test("trusted duration and capability choices are independent and override lexic
   assert.equal(selected.selection.capability.source, "explicit_user_choice");
 });
 
+test("the combined team CUA profile preserves the multi-agent route", () => {
+  const selected = resolveTaskProfile({
+    goalInput: { originalRequest: "팀으로 사이트 확인" },
+    requestedCapabilityProfile: "multi_agent_computer_use",
+  });
+  assert.equal(selected.capability.id, "multi_agent_computer_use");
+  assert.ok(selected.capability.adapters.some((item) => item.capabilityId === "computer_use"));
+});
+
 test("exact English and Korean intent rules are versioned and normalized", () => {
   assert.equal(resolveTaskProfile({ goalInput: { originalRequest: "Please use parallel agents for this." } }).capability.id, "multi_agent");
   assert.equal(resolveTaskProfile({ goalInput: { originalRequest: "이 자료를 병렬 에이전트에게 분담해" } }).capability.id, "multi_agent");
@@ -77,13 +86,14 @@ test("English matching uses whole phrase boundaries and negative cases stay at d
 });
 
 test("unavailable capabilities fail explicitly and never fall back to Browser", () => {
-  for (const requestedCapabilityProfile of ["research", "computer_use"]) {
+  for (const requestedCapabilityProfile of ["research"]) {
     assert.throws(() => resolveTaskProfile({
       goalInput: { originalRequest: "Do the work." }, requestedCapabilityProfile,
     }), (error) => error instanceof TaskProfileRouterError && error.code === "capability_unavailable");
   }
   assert.throws(() => resolveTaskProfile({ goalInput: { originalRequest: "Research this carefully." } }),
     (error) => error instanceof TaskProfileRouterError && error.code === "capability_unavailable");
+  assert.equal(resolveTaskProfile({ goalInput: { originalRequest: "Do this." }, requestedCapabilityProfile: "computer_use" }).capability.id, "computer_use");
 });
 
 test("overlapping capability or duration hint groups require clarification", () => {
@@ -160,4 +170,13 @@ test("child resolution accepts the durable selected-profile form stored in the p
 test("router rejects malformed raw goal input before selecting a route", () => {
   assert.throws(() => resolveTaskProfile({ goalInput: { originalRequest: "" } }), TaskProfileRouterError);
   assert.throws(() => resolveTaskProfile({ goalInput: { originalRequest: "x".repeat(16 * 1024 + 1) } }), TaskProfileRouterError);
+});
+
+test("fast-mode wording selects the fast profile", () => {
+  for (const request of ["Use fast mode to check the price", "패스트 모드로 가격 확인해 줘", "패스트모드로 확인"]) {
+    const profile = resolveTaskProfile({ goalInput: { originalRequest: request } });
+    assert.equal(profile.duration.id, "fast", request);
+    assert.equal(profile.selection.duration.source, "intent_rule");
+  }
+  assert.equal(resolveTaskProfile({ goalInput: { originalRequest: "quick check in fast mode" } }).duration.id, "fast");
 });

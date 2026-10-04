@@ -12,10 +12,13 @@ export const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Alt+←', label: 'Back' },
   { keys: 'Alt+→', label: 'Forward' },
   { keys: 'Mod+L', label: 'Focus the address field' },
+  { keys: 'Mod+K', label: 'New task' },
+  { keys: 'Mod+Shift+L', label: 'Toggle sidebar' },
   { keys: 'Mod+.', label: 'Keep Halo unfolded' },
   { keys: 'Mod+Shift+.', label: 'Halo Chat' },
   { keys: 'Mod+Shift+A', label: 'Show all tabs' },
   { keys: 'Mod+N', label: 'New window' },
+  { keys: 'Mod+,', label: 'Settings' },
   { keys: 'Mod+Shift+S', label: 'Share' },
   { keys: 'Esc', label: 'Close the open Halo surface' },
   { keys: 'Shift+/', label: 'This list' },
@@ -23,6 +26,7 @@ export const SHORTCUTS: { keys: string; label: string }[] = [
 
 interface Handlers {
   onNewTab: () => void
+  onNewTask: () => void
   onCloseTab: (id: string) => void
   onSelectTab: (id: string) => void
   onBack: () => void
@@ -34,6 +38,8 @@ interface Handlers {
   onNewWindow: () => void
   onShare: () => void
   onToggleHelp: () => void
+  onToggleSidebar: () => void
+  onToggleSettings: () => void
 }
 
 /**
@@ -59,6 +65,8 @@ export function useShortcuts(s: SessionState, approval: unknown, handlers: Handl
       if (e.altKey && e.code === 'ArrowLeft') { e.preventDefault(); handlers.onBack(); return }
       if (e.altKey && e.code === 'ArrowRight') { e.preventDefault(); handlers.onForward(); return }
       if (!mod) return
+      if (e.code === 'KeyK' && !e.shiftKey) { e.preventDefault(); handlers.onNewTask(); return }
+      if (e.code === 'Comma' && !e.shiftKey) { e.preventDefault(); handlers.onToggleSettings(); return }
 
       const tab = s.tabs.find((t) => t.id === s.activeTabId) ?? s.tabs[0]
       if (!tab) return
@@ -67,6 +75,7 @@ export function useShortcuts(s: SessionState, approval: unknown, handlers: Handl
       if (e.code === 'KeyT' && !e.shiftKey) { e.preventDefault(); handlers.onNewTab(); return }
       if (e.code === 'KeyW' && !e.shiftKey) { e.preventDefault(); handlers.onCloseTab(tab.id); return }
       if (e.code === 'KeyL' && !e.shiftKey) { e.preventDefault(); handlers.onFocusOmni(); return }
+      if (e.code === 'KeyL' && e.shiftKey) { e.preventDefault(); handlers.onToggleSidebar(); return }
       if (e.code === 'KeyN' && !e.shiftKey) { e.preventDefault(); handlers.onNewWindow(); return }
       const digit = /^Digit([1-9])$/.exec(e.code)
       if (digit && !e.shiftKey) {

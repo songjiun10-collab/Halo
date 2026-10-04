@@ -247,6 +247,23 @@ class TaskQueue {
     return this._popHead(taskId, "skip", { reason, actor: actor ?? null });
   }
 
+  // Removes a specifically selected pending entry without reordering its
+  // peers. This is reserved for trusted host revocation flows (for example,
+  // an Agent profile being disabled) and is never a user/model queue action.
+  async skipPending(taskId, { reason, actor } = {}) {
+    this._assertLoaded();
+    if (typeof reason !== "string" || reason.length === 0) throw new TaskQueueError("invalid_field", "skipPending requires a non-empty reason");
+    if (actor !== "trusted_host") throw new TaskQueueError("untrusted_skip", "skipPending is restricted to an explicit trusted host action");
+    return this._mutate(async () => {
+      const index = this._entries.indexOf(taskId);
+      if (index < 0) throw new TaskQueueError("not_pending", `task ${taskId} is not pending`);
+      const entries = this._entries.filter((id) => id !== taskId);
+      const history = [...this._history, { type: "skip_pending", taskId, at: new Date().toISOString(), reason, actor }].slice(-MAX_HISTORY_ENTRIES);
+      await this._persist(entries, this._active, history);
+      return entries[0] ?? null;
+    });
+  }
+
   async _popHead(taskId, type, extra = {}) {
     this._assertLoaded();
     return this._mutate(async () => {

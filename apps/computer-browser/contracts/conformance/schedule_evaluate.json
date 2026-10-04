@@ -353,6 +353,250 @@
         "action": "finished",
         "nextRunAtMs": null
       }
+    },
+    {
+      "name": "calendar weekday slot runs",
+      "input": {
+        "record": {
+          "schemaVersion": 1,
+          "scheduleId": "22222222-2222-4222-8222-222222222222",
+          "routineId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "enabled": true,
+          "disabledReason": null,
+          "trigger": {
+            "kind": "calendar",
+            "days": [
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
+            "time": "09:00",
+            "timeZone": "Asia/Seoul"
+          },
+          "overlap": "skip",
+          "createdAt": "2026-10-01T12:00:00.000Z",
+          "updatedAt": "2026-10-01T12:00:00.000Z",
+          "lastOccurrenceAt": null,
+          "lastTaskId": null,
+          "lastError": null,
+          "consecutiveFailures": 0,
+          "skippedCount": 0,
+          "nextRunAt": "2026-10-01T12:00:00.000Z"
+        },
+        "nowMs": 1790899500000
+      },
+      "expected": {
+        "action": "run",
+        "occurrenceAtMs": 1790899200000,
+        "nextRunAtMs": 1791158400000
+      }
+    },
+    {
+      "name": "calendar skips the weekend",
+      "input": {
+        "record": {
+          "schemaVersion": 1,
+          "scheduleId": "22222222-2222-4222-8222-222222222222",
+          "routineId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "enabled": true,
+          "disabledReason": null,
+          "trigger": {
+            "kind": "calendar",
+            "days": [
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
+            "time": "09:00",
+            "timeZone": "Asia/Seoul"
+          },
+          "overlap": "skip",
+          "createdAt": "2026-10-01T12:00:00.000Z",
+          "updatedAt": "2026-10-01T12:00:00.000Z",
+          "lastOccurrenceAt": "2026-10-02T00:00:00.000Z",
+          "lastTaskId": null,
+          "lastError": null,
+          "consecutiveFailures": 0,
+          "skippedCount": 0,
+          "nextRunAt": "2026-10-01T12:00:00.000Z"
+        },
+        "nowMs": 1790996400000
+      },
+      "expected": {
+        "action": "none",
+        "nextRunAtMs": 1791158400000
+      }
+    },
+    {
+      "name": "calendar slot before creation never runs",
+      "input": {
+        "record": {
+          "schemaVersion": 1,
+          "scheduleId": "22222222-2222-4222-8222-222222222222",
+          "routineId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "enabled": true,
+          "disabledReason": null,
+          "trigger": {
+            "kind": "calendar",
+            "days": [
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
+            "time": "09:00",
+            "timeZone": "Asia/Seoul"
+          },
+          "overlap": "skip",
+          "createdAt": "2026-10-02T00:30:00.000Z",
+          "updatedAt": "2026-10-02T00:30:00.000Z",
+          "lastOccurrenceAt": null,
+          "lastTaskId": null,
+          "lastError": null,
+          "consecutiveFailures": 0,
+          "skippedCount": 0,
+          "nextRunAt": "2026-10-02T00:30:00.000Z"
+        },
+        "nowMs": 1790902800000
+      },
+      "expected": {
+        "action": "none",
+        "nextRunAtMs": 1791158400000
+      }
+    },
+    {
+      "name": "calendar keeps local time across DST end",
+      "input": {
+        "record": {
+          "schemaVersion": 1,
+          "scheduleId": "22222222-2222-4222-8222-222222222222",
+          "routineId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "enabled": true,
+          "disabledReason": null,
+          "trigger": {
+            "kind": "calendar",
+            "days": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "time": "09:00",
+            "timeZone": "America/New_York"
+          },
+          "overlap": "skip",
+          "createdAt": "2026-10-30T00:00:00.000Z",
+          "updatedAt": "2026-10-30T00:00:00.000Z",
+          "lastOccurrenceAt": null,
+          "lastTaskId": null,
+          "lastError": null,
+          "consecutiveFailures": 0,
+          "skippedCount": 0,
+          "nextRunAt": "2026-10-30T00:00:00.000Z"
+        },
+        "nowMs": 1793453400000
+      },
+      "expected": {
+        "action": "run",
+        "occurrenceAtMs": 1793451600000,
+        "nextRunAtMs": 1793541600000
+      }
+    },
+    {
+      "name": "calendar nonexistent local time runs after the gap",
+      "input": {
+        "record": {
+          "schemaVersion": 1,
+          "scheduleId": "22222222-2222-4222-8222-222222222222",
+          "routineId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "enabled": true,
+          "disabledReason": null,
+          "trigger": {
+            "kind": "calendar",
+            "days": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "time": "02:30",
+            "timeZone": "America/New_York"
+          },
+          "overlap": "skip",
+          "createdAt": "2026-03-07T00:00:00.000Z",
+          "updatedAt": "2026-03-07T00:00:00.000Z",
+          "lastOccurrenceAt": "2026-03-07T07:30:00.000Z",
+          "lastTaskId": null,
+          "lastError": null,
+          "consecutiveFailures": 0,
+          "skippedCount": 0,
+          "nextRunAt": "2026-03-07T00:00:00.000Z"
+        },
+        "nowMs": 1772971200000
+      },
+      "expected": {
+        "action": "run",
+        "occurrenceAtMs": 1772955000000,
+        "nextRunAtMs": 1773037800000
+      }
+    },
+    {
+      "name": "calendar repeated local time runs at the first",
+      "input": {
+        "record": {
+          "schemaVersion": 1,
+          "scheduleId": "22222222-2222-4222-8222-222222222222",
+          "routineId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "enabled": true,
+          "disabledReason": null,
+          "trigger": {
+            "kind": "calendar",
+            "days": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "time": "01:30",
+            "timeZone": "America/New_York"
+          },
+          "overlap": "skip",
+          "createdAt": "2026-10-31T00:00:00.000Z",
+          "updatedAt": "2026-10-31T00:00:00.000Z",
+          "lastOccurrenceAt": "2026-10-31T05:30:00.000Z",
+          "lastTaskId": null,
+          "lastError": null,
+          "consecutiveFailures": 0,
+          "skippedCount": 0,
+          "nextRunAt": "2026-10-31T00:00:00.000Z"
+        },
+        "nowMs": 1793534400000
+      },
+      "expected": {
+        "action": "run",
+        "occurrenceAtMs": 1793511000000,
+        "nextRunAtMs": 1793601000000
+      }
     }
   ]
 }

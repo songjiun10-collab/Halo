@@ -86,6 +86,17 @@ test("validateProposal enforces the shared wire shape (unknown kind, bad batch s
   );
 });
 
+test("validateProposal strictly bounds screenshot-bound coordinate action fields", () => {
+  const goal = makeGoal();
+  const valid = baseProposal(goal, { actions: [{ type: "click_at", observationId: "obs-1", x: 0.1, y: 0.2 }] });
+  assert.equal(validateProposal(valid, { goal }).actions[0].type, "click_at");
+  for (const action of [
+    { type: "click_at", observationId: "obs-1", x: 1, y: 0.2 },
+    { type: "click_at", observationId: "obs-1", x: 0.1, y: 0.2, url: "https://attacker.test" },
+    { type: "type_at", observationId: "obs-1", x: 0.1, y: 0.2, text: "x".repeat(4097) },
+  ]) assert.throws(() => validateProposal(baseProposal(goal, { actions: [action] }), { goal }), (error) => error.code === "invalid_coordinate_action");
+});
+
 test("verifyCriterion never trusts a model-supplied verification status directly -- only the injected hostVerifier decides", () => {
   const goal = makeGoal();
   const criterion = goal.criteria.find((c) => c.id === "host-check");

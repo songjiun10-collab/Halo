@@ -29,6 +29,13 @@ const crypto = require("node:crypto");
 const { EventEmitter } = require("node:events");
 
 const MAX_FRAME_BYTES = 65536;
+// A call result too large for one frame is sent as ordered chunks of the
+// result's JSON text and reassembled by the caller. Each chunk is a bounded
+// number of characters (worst case under 6 bytes each once escaped, so one
+// chunk always fits a frame); the whole result is capped so a peer can never
+// make the other side buffer without limit.
+const RESULT_CHUNK_CHARS = 8192;
+const MAX_RESULT_CHARS = 8 * 1024 * 1024;
 
 class RuntimeIpcError extends Error {
   constructor(code, message) {
@@ -247,6 +254,7 @@ class RuntimeIpcServer {
     this._onCall = onCall;
     this._net = netModule || net;
     this._server = null;
+    this._ownsSocket = false;
     this._clients = new Map(); // socket -> { authenticated, clientId, decoder }
   }
 
@@ -254,16 +262,30 @@ class RuntimeIpcServer {
     const socketDir = path.dirname(this._socketPath);
     await prepareSocketDir(socketDir, { socketRoot: this._socketRoot });
     await removeStaleSocket(this._socketPath);
-    await new Promise((resolve, reject) => {
-      this._server = this._net.createServer((socket) => this._handleConnection(socket));
-      const onError = (error) => reject(error);
-      this._server.once("error", onError);
-      this._server.listen(this._socketPath, () => {
-        this._server.removeListener("error", onError);
-        resolve();
+    const server = this._net.createServer((socket) => this._handleConnection(socket));
+    this._server = server;
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = (error) => reject(error);
+        server.once("error", onError);
+        server.listen(this._socketPath, () => {
+          server.removeListener("error", onError);
+          this._ownsSocket = true;
+          resolve();
+        });
       });
-    });
-    await fsp.chmod(this._socketPath, 0o600);
+      await fsp.chmod(this._socketPath, 0o600);
+    } catch (error) {
+      if (this._server === server) this._server = null;
+      if (server.listening) {
+        await new Promise((resolve) => server.close(() => resolve()));
+      }
+      if (this._ownsSocket) {
+        this._ownsSocket = false;
+        await fsp.unlink(this._socketPath).catch(() => {});
+      }
+      throw error;
+    }
   }
 
   _handleConnection(socket) {
@@ -303,12 +325,30 @@ class RuntimeIpcServer {
     }
     Promise.resolve()
       .then(() => this._onCall(message.method, message.params, state.clientId))
-      .then((result) => this._safeWrite(socket, { type: "result", id: message.id, result: result === undefined ? null : result }))
+      .then((result) => this._writeResult(socket, message.id, result === undefined ? null : result))
       .catch((error) => this._safeWrite(socket, {
         type: "error",
         id: message.id,
         error: { code: error?.code || "call_failed", message: error?.message || String(error) },
       }));
+  }
+
+  _writeResult(socket, id, result) {
+    const frame = { type: "result", id, result };
+    let single = null;
+    try { single = encodeFrame(frame); } catch (error) { if (error.code !== "frame_too_large") throw error; }
+    if (single) {
+      if (!socket.destroyed) socket.write(single);
+      return;
+    }
+    const text = JSON.stringify(result);
+    if (text.length > MAX_RESULT_CHARS) {
+      throw Object.assign(new Error(`result exceeds ${MAX_RESULT_CHARS} characters`), { code: "result_too_large" });
+    }
+    const total = Math.ceil(text.length / RESULT_CHUNK_CHARS);
+    for (let index = 0; index < total; index += 1) {
+      this._safeWrite(socket, { type: "result_chunk", id, index, last: index === total - 1, data: text.slice(index * RESULT_CHUNK_CHARS, (index + 1) * RESULT_CHUNK_CHARS) });
+    }
   }
 
   _safeWrite(socket, message) {
@@ -332,11 +372,15 @@ class RuntimeIpcServer {
   async close() {
     for (const socket of this._clients.keys()) socket.destroy();
     this._clients.clear();
-    if (this._server) {
-      await new Promise((resolve) => this._server.close(() => resolve()));
-      this._server = null;
+    const server = this._server;
+    this._server = null;
+    if (server?.listening) {
+      await new Promise((resolve) => server.close(() => resolve()));
     }
-    await fsp.unlink(this._socketPath).catch(() => {});
+    if (this._ownsSocket) {
+      this._ownsSocket = false;
+      await fsp.unlink(this._socketPath).catch(() => {});
+    }
   }
 }
 
@@ -357,6 +401,7 @@ class RuntimeIpcClient {
     this._net = netModule || net;
     this._socket = null;
     this._decoder = new FrameDecoder();
+    this._chunks = new Map(); // call id -> partially received chunked result
     this._pending = new Map(); // id -> { resolve, reject }
     this._nextId = 1;
     this._attached = false;
@@ -425,7 +470,12 @@ class RuntimeIpcClient {
       this._emitter.emit(message.event, message.payload);
       return;
     }
+    if (message.type === "result_chunk" && typeof message.id === "string") {
+      this._onResultChunk(message);
+      return;
+    }
     if (message.type === "result" || (message.type === "error" && message.id)) {
+      this._chunks.delete(message.id);
       const pending = this._pending.get(message.id);
       if (!pending) return;
       this._pending.delete(message.id);
@@ -443,6 +493,34 @@ class RuntimeIpcClient {
     }
   }
 
+  _onResultChunk(message) {
+    const pending = this._pending.get(message.id);
+    if (!pending) return;
+    const entry = this._chunks.get(message.id) ?? { next: 0, parts: [], chars: 0 };
+    const bad = message.index !== entry.next || typeof message.data !== "string" || message.data.length === 0 || message.data.length > RESULT_CHUNK_CHARS ||
+      entry.chars + message.data.length > MAX_RESULT_CHARS;
+    if (bad) {
+      this._chunks.delete(message.id);
+      this._pending.delete(message.id);
+      pending.reject(new RuntimeIpcError("invalid_frame", "malformed or oversized chunked result"));
+      return;
+    }
+    entry.parts.push(message.data);
+    entry.chars += message.data.length;
+    entry.next += 1;
+    if (message.last !== true) {
+      this._chunks.set(message.id, entry);
+      return;
+    }
+    this._chunks.delete(message.id);
+    this._pending.delete(message.id);
+    try {
+      pending.resolve(JSON.parse(entry.parts.join("")));
+    } catch {
+      pending.reject(new RuntimeIpcError("invalid_frame", "chunked result is not valid JSON"));
+    }
+  }
+
   _onClose() {
     if (!this._attached) {
       const error = new RuntimeIpcError("connection_closed", "socket closed before attach completed");
@@ -454,6 +532,7 @@ class RuntimeIpcClient {
   _failEverything(error) {
     for (const pending of this._pending.values()) pending.reject(error);
     this._pending.clear();
+    this._chunks.clear();
   }
 }
 

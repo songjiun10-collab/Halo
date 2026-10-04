@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AGENT } from '../session/session'
 import type { Actor, SessionState } from '../session/types'
+import { ChildPlanPanel } from '../agent/ChildPlanPanel'
 
 const actorName: Record<Actor, string> = { claude: AGENT, you: 'You', halo: 'Halo' }
 
@@ -47,6 +48,7 @@ export function Activity({ session, leaving, onClose }: Props) {
   return (
     <section id="hx-activity" className="hx-activity" data-leaving={leaving || undefined} inert={leaving} role="dialog" aria-label="Halo events" tabIndex={-1} ref={ref}>
       <p className="hx-activity__task">{session.task}</p>
+      <ChildPlanPanel plan={session.childPlan} />
       {notable.length === 0 ? (
         <p className="hx-activity__empty">Nothing needed you so far.</p>
       ) : (

@@ -53,6 +53,22 @@ test("relays one request to the bridge and writes exactly one matching JSONL res
   assert.equal(stdoutChunks.join(""), `${JSON.stringify({ requestId: "r1", proposal: { kind: "finish", ok: true } })}\n`);
 });
 
+test("forwards MCP capability and bounded-result instructions in planner context unchanged", async () => {
+  const { stdin, stdout, stderr, stdoutChunks } = makeStreams();
+  let seen;
+  const context = {
+    taskId: "t1",
+    progress: { mcp: { enabled: true, actions: ["mcp_search", "mcp_describe", "mcp_propose"] } },
+    observation: { mcpResult: { action: "mcp_search", outcome: "ok", result: "untrusted output", truncated: false } },
+  };
+  const bridge = { start: async (input) => { seen = input; return { kind: "need_user", reason: "done" }; } };
+  createWorkerLoop({ stdin, stdout, stderr, bridge });
+  writeLine(stdin, { requestId: "mcp", context });
+  await flush();
+  assert.deepEqual(seen, context);
+  assert.equal(JSON.parse(stdoutChunks.join("")).proposal.kind, "need_user");
+});
+
 test("processes multiple sequential request lines in order", async () => {
   const { stdin, stdout, stderr, stdoutChunks } = makeStreams();
   let call = 0;
@@ -75,7 +91,18 @@ test("processes multiple sequential request lines in order", async () => {
   );
 });
 
-test("a bridge rejection writes nothing to stdout and only logs to stderr -- planner-stdio.js has no error frame, so this deliberately lets its own 60s timeout surface the failure as planner_error, exactly like any other broken planner", async () => {
+test("providers without an explicit image route fail closed instead of receiving screenshot paths", async () => {
+  const { stdin, stdout, stderr, stdoutChunks } = makeStreams();
+  let starts = 0;
+  const bridge = { start: async () => { starts += 1; return { kind: "finish" }; } };
+  createWorkerLoop({ stdin, stdout, stderr, bridge });
+  writeLine(stdin, { requestId: "image", context: {}, attachments: [{ kind: "image", id: "22222222-2222-4222-8222-222222222222", path: "/tmp/halo-computer-use-x/observation.png" }] });
+  await flush();
+  assert.equal(starts, 0);
+  assert.deepEqual(JSON.parse(stdoutChunks.join("")), { requestId: "image", error: { code: "computer_use_provider_unavailable" } });
+});
+
+test("a bridge rejection returns a correlated bounded error without leaking CLI diagnostics", async () => {
   const { stdin, stdout, stderr, stdoutChunks, stderrChunks } = makeStreams();
   let call = 0;
   const bridge = {
@@ -90,9 +117,10 @@ test("a bridge rejection writes nothing to stdout and only logs to stderr -- pla
   writeLine(stdin, { requestId: "fail-1", context: {} });
   await flush();
 
-  assert.equal(stdoutChunks.join(""), "");
+  assert.deepEqual(JSON.parse(stdoutChunks.join("")), { requestId: "fail-1", error: { code: "planner_failed" } });
   assert.ok(stderrChunks.join("").includes("fail-1"));
-  assert.ok(stderrChunks.join("").includes("boom"));
+  assert.ok(!stderrChunks.join("").includes("boom"));
+  stdoutChunks.length = 0;
 
   // The loop itself must not crash/hang: a later, successful request on the
   // same (persistent) worker process still gets a real response.
@@ -140,4 +168,19 @@ test("ignores blank lines", async () => {
 
   assert.equal(stdoutChunks.join(""), "");
   assert.equal(stderrChunks.join(""), "");
+});
+
+test("attaches the bridge's usage to the response line only when there is some", async () => {
+  const { stdin, stdout, stderr, stdoutChunks } = makeStreams();
+  const usage = { provider: "claude", inputTokens: 4 };
+  let pending = usage;
+  const bridge = { start: async () => ({ kind: "finish" }), takeUsage: () => { const u = pending; pending = null; return u; } };
+  createWorkerLoop({ stdin, stdout, stderr, bridge });
+  writeLine(stdin, { requestId: "r1", context: {} });
+  await flush();
+  writeLine(stdin, { requestId: "r2", context: {} });
+  await flush();
+  const lines = stdoutChunks.join("").trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(lines[0], { requestId: "r1", proposal: { kind: "finish" }, usage });
+  assert.deepEqual(lines[1], { requestId: "r2", proposal: { kind: "finish" } });
 });

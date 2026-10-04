@@ -1,5 +1,6 @@
 import { tabTitle } from '../session/pages'
 import { AGENT, currentUrl, NEW_TAB_URL } from '../session/session'
+import type { IntentLockInput } from '../session/api'
 import type { Tab } from '../session/types'
 import { HomeScreen } from './HomeScreen'
 
@@ -10,7 +11,7 @@ interface Props {
   /** A task already running or paused in another tab: offered from the home screen. */
   activeTask?: { text: string; tabId: string }
   onSelectTab: (id: string) => void
-  onStartTask: (text: string) => void
+  onStartTask: (text: string, lock?: IntentLockInput) => void
 }
 
 /**

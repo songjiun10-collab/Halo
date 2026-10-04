@@ -82,3 +82,32 @@ test("a corrupt vault file fails closed", async () => {
     await assert.rejects(vault.listSessions(), { code: "vault_corrupt" });
   });
 });
+
+test("replaceFromImport keeps the stored copy of a row the reader could not decrypt, and replaces everything else", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-vault-preserve-"));
+  try {
+    const vault = new SessionVault({ storageRoot: root, safeStorage: cipher });
+    await vault.replaceFromImport({ source: "chrome", replaceDomains: ["claude.ai"], cookies: [
+      cookie({ name: "keep-me", value: "old-keep" }), cookie({ name: "refresh-me", value: "old" }), cookie({ name: "gone", value: "old-gone" }),
+    ] });
+    const outcome = await vault.replaceFromImport({
+      source: "chrome", replaceDomains: ["claude.ai"],
+      cookies: [cookie({ name: "refresh-me", value: "new" })],
+      preserve: [{ domain: ".claude.ai", name: "keep-me", path: "/" }],
+    });
+    assert.deepEqual(outcome, { imported: 1, preserved: 1 });
+    const stored = await vault.cookiesFor({ domains: ["claude.ai"], nowSeconds: 1 });
+    assert.deepEqual(stored.map((c) => `${c.name}=${c.value}`).sort(), ["keep-me=old-keep", "refresh-me=new"]);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("without a preserve list an import still replaces the whole allowlisted domain", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-vault-replace-"));
+  try {
+    const vault = new SessionVault({ storageRoot: root, safeStorage: cipher });
+    await vault.replaceFromImport({ source: "chrome", replaceDomains: ["claude.ai"], cookies: [cookie({ name: "a" }), cookie({ name: "b" })] });
+    const outcome = await vault.replaceFromImport({ source: "chrome", replaceDomains: ["claude.ai"], cookies: [cookie({ name: "b", value: "n" })] });
+    assert.deepEqual(outcome, { imported: 1, preserved: 0 });
+    assert.deepEqual((await vault.cookiesFor({ domains: ["claude.ai"], nowSeconds: 1 })).map((c) => c.name), ["b"]);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});

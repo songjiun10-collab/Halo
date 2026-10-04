@@ -166,6 +166,24 @@ test("admits pending messages in order up to the 4-message-per-turn cap", () => 
   assert.deepEqual(packet.pendingMessages.map((m) => m.messageId), ["m0", "m1", "m2", "m3"]);
 });
 
+test("message admission does not repeatedly serialize the full observation", () => {
+  const goal = makeGoal();
+  const messages = Array.from({ length: 4 }, (_, i) => makeMessage({ messageId: `m${i}`, text: '한글😀"\\'.repeat(30) }));
+  const stringify = JSON.stringify;
+  let fullPackets = 0;
+  JSON.stringify = function (value, ...args) {
+    if (value && Object.hasOwn(value, "observation") && Object.hasOwn(value, "pendingMessages")) fullPackets += 1;
+    return stringify(value, ...args);
+  };
+  let packet;
+  try {
+    packet = buildContext({ goal, state: makeState(), observation: { text: "x".repeat(40000) }, recentEvents: [], pendingMessages: messages });
+  } finally { JSON.stringify = stringify; }
+  assert.deepEqual(packet.pendingMessages, messages);
+  assert.ok(Buffer.byteLength(stringify(packet), "utf8") <= 65536);
+  assert.ok(fullPackets <= 2, `full packet serialized ${fullPackets} times instead of at most twice`);
+});
+
 test("stops admitting once the 8 KiB serialized-message-bytes budget would be exceeded", () => {
   const goal = makeGoal();
   const big = makeMessage({ messageId: "big", idempotencyKey: "idem-big", text: "x".repeat(7600) });
@@ -306,4 +324,19 @@ test("Work Goal content counts toward the existing 64 KiB packet ceiling", () =>
     }),
     (error) => error instanceof ContextError && error.code === "context_limit",
   );
+});
+
+test("contextManifest is opt-in, keeps the newest refs within 8 KiB, and counts what it left out", () => {
+  const goal = makeGoal();
+  const base = { goal, state: makeState(), observation: null, recentEvents: [] };
+  assert.equal(Object.hasOwn(buildContext(base), "contextManifest"), false);
+  const refs = Array.from({ length: 128 }, (_, i) => ({ refId: `ref_${String(i).padStart(12, "0")}`, kind: "observation", authority: "untrusted_page_derived", revision: "g1.e-", byteLength: 100, summary: `Earlier page: https://example.com/${"p".repeat(200)}/${i}` }));
+  const packet = buildContext({ ...base, contextManifest: { version: 1, refs } });
+  const manifest = packet.contextManifest;
+  assert.ok(Buffer.byteLength(JSON.stringify(manifest), "utf8") <= 8 * 1024);
+  assert.ok(manifest.refs.length > 0 && manifest.refs.length < 128);
+  assert.equal(manifest.refs.at(-1).refId, refs.at(-1).refId, "the newest ref is kept");
+  assert.deepEqual(manifest.refs.map((r) => r.refId), refs.slice(-manifest.refs.length).map((r) => r.refId), "a contiguous newest suffix, oldest first");
+  assert.equal(manifest.omittedRefs, 128 - manifest.refs.length);
+  assert.throws(() => buildContext({ ...base, contextManifest: { version: 2, refs: [] } }), /contextManifest/);
 });

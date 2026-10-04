@@ -4,21 +4,13 @@
 // operator points HALO_PLANNER_COMMAND/HALO_PLANNER_ARGS at this file (see
 // README.ko.md). Speaks the exact JSONL protocol PlannerStdioAdapter already
 // expects: one `{requestId, context}` line in on stdin, one
-// `{requestId, proposal}` line out on stdout per request -- no new wire
-// format, so PlannerStdioAdapter's existing frame-size cap, timeout,
+// `{requestId, proposal}` line out on success. PlannerStdioAdapter's frame-size cap, timeout,
 // one-in-flight enforcement, and wrong/late-requestId rejection all apply
 // here unmodified.
 //
-// There is no error frame in that protocol (no planner -- scripted, fake, or
-// this one -- has ever had one), so a failed request here is deliberately
-// left unanswered: nothing is written for that requestId, and the failure is
-// only logged to stderr (planner-stdio.js already captures a bounded tail of
-// it for diagnostics). PlannerStdioAdapter's existing 60s response timeout
-// then surfaces this exactly like any other broken/slow planner would --
-// task-controller.js pauses with pauseReason "planner_error". This is a
-// deliberate reuse of an existing safety path, not a gap: adding a bespoke
-// error frame here would be a new wire contract PlannerStdioAdapter was never
-// built to parse.
+// Failures return `{requestId, error: {code}}` immediately. The host pauses
+// with planner_error rather than waiting for the response deadline. Codes
+// are allowlisted; raw exception text never crosses this boundary.
 //
 // This file has no direct dependency on Electron, the durable journal, or
 // the approver -- createWorkerLoop() is exercised directly (fake stdin/
@@ -27,6 +19,21 @@
 
 const readline = require("node:readline");
 const { ClaudeCodeBridge } = require("./claude-code-bridge");
+const { isClaudeModel } = require("./claude-models");
+const { failureCode } = require("../planner-failure");
+const { normalizePlannerAttachments } = require("../planner-stdio");
+
+// The host launches this worker with either no arguments or exactly
+// `--model <allowlisted id>` (planner-providers.js). Anything else is refused
+// rather than ignored, so argv can never smuggle extra CLI flags.
+// A trailing `--fast` (host setting plannerFast) is the only other flag.
+function parseWorkerArgs(argv) {
+  const fast = argv.length > 0 && argv[argv.length - 1] === "--fast";
+  const rest = fast ? argv.slice(0, -1) : argv;
+  if (rest.length === 0) return { model: undefined, fast };
+  if (rest.length === 2 && rest[0] === "--model" && isClaudeModel(rest[1])) return { model: rest[1], fast };
+  throw new Error("worker accepts only [--model <allowlisted Claude model>] [--fast]");
+}
 
 function createWorkerLoop({ stdin, stdout, stderr, bridge }) {
   const rl = readline.createInterface({ input: stdin, terminal: false });
@@ -48,12 +55,21 @@ function createWorkerLoop({ stdin, stdout, stderr, bridge }) {
 
     const { requestId, context } = parsed;
     Promise.resolve()
-      .then(() => bridge.start(context))
+      .then(() => {
+        const attachments = normalizePlannerAttachments(parsed.attachments);
+        if (attachments.length && bridge.supportsImageAttachments !== true) {
+          throw Object.assign(new Error("this planner provider has no approved image-input route"), { code: "computer_use_provider_unavailable" });
+        }
+        return bridge.start(context, { attachments });
+      })
       .then((proposal) => {
-        stdout.write(`${JSON.stringify({ requestId, proposal })}\n`);
+        const usage = typeof bridge.takeUsage === "function" ? bridge.takeUsage() : null;
+        stdout.write(`${JSON.stringify(usage ? { requestId, proposal, usage } : { requestId, proposal })}\n`);
       })
       .catch((error) => {
-        stderr.write(`[claude-code-worker] request ${requestId} failed: ${(error && error.message) || error}\n`);
+        const code = failureCode(error);
+        stderr.write(`[planner-worker] request ${JSON.stringify(requestId).slice(0, 128)} failed: ${code}\n`);
+        stdout.write(`${JSON.stringify({ requestId, error: { code } })}\n`);
       });
   });
 
@@ -61,8 +77,18 @@ function createWorkerLoop({ stdin, stdout, stderr, bridge }) {
 }
 
 function main() {
+  let model;
+  let fast;
+  try {
+    ({ model, fast } = parseWorkerArgs(process.argv.slice(2)));
+  } catch (error) {
+    process.stderr.write(`[claude-code-worker] ${error.message}\n`);
+    process.exit(2);
+  }
   const bridge = new ClaudeCodeBridge({
     command: process.env.HALO_CLAUDE_CLI_COMMAND || "claude",
+    model,
+    fast,
   });
 
   // If this worker process is killed while a claude CLI call is in flight,
@@ -92,4 +118,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { createWorkerLoop };
+module.exports = { createWorkerLoop, parseWorkerArgs };

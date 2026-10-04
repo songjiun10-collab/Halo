@@ -298,3 +298,43 @@ test("server close() destroys attached client sockets and removes the socket fil
   await server.close();
   await assert.rejects(fs.stat(socketPath), (error) => error.code === "ENOENT");
 });
+
+test("a result larger than one frame is chunked and reassembled intact, with other calls unaffected", async () => {
+  const big = { items: Array.from({ length: 400 }, (_, i) => ({ i, text: `é${"x".repeat(500)}\n☃`.repeat(2) })) };
+  assert.ok(Buffer.byteLength(JSON.stringify(big)) > MAX_FRAME_BYTES * 4);
+  const { server, socketPath, capability: cap } = await makeServerAndCapability(async (method) => (method === "big" ? big : { ok: method }));
+  const client = new RuntimeIpcClient({ socketPath, capability: cap, clientId: "ui-1" });
+  await client.connect();
+  const [a, b, c] = await Promise.all([client.call("big"), client.call("small"), client.call("big")]);
+  assert.deepEqual(a, big);
+  assert.deepEqual(c, big);
+  assert.deepEqual(b, { ok: "small" });
+  assert.deepEqual(await client.call("small"), { ok: "small" }, "the connection stays usable");
+  await client.close();
+  await server.close();
+});
+
+test("a result beyond the overall cap is a rejected call, not a dropped connection", async () => {
+  const huge = { text: "y".repeat(9 * 1024 * 1024) };
+  const { server, socketPath, capability: cap } = await makeServerAndCapability(async (method) => (method === "huge" ? huge : { ok: true }));
+  const client = new RuntimeIpcClient({ socketPath, capability: cap, clientId: "ui-1" });
+  await client.connect();
+  await assert.rejects(client.call("huge"), (e) => e.code === "result_too_large");
+  assert.deepEqual(await client.call("small"), { ok: true });
+  await client.close();
+  await server.close();
+});
+
+test("a client rejects a malformed chunk sequence for that call only", async () => {
+  const { server, socketPath, capability: cap } = await makeServerAndCapability(async () => ({ ok: true }));
+  const client = new RuntimeIpcClient({ socketPath, capability: cap, clientId: "ui-1" });
+  await client.connect();
+  const pending = client.call("x");
+  // Inject an out-of-order chunk for the in-flight id as if a faulty peer sent it.
+  const id = [...client._pending.keys()][0];
+  client._onMessage({ type: "result_chunk", id, index: 5, last: true, data: "{}" });
+  await assert.rejects(pending, (e) => e.code === "invalid_frame");
+  assert.deepEqual(await client.call("y"), { ok: true });
+  await client.close();
+  await server.close();
+});

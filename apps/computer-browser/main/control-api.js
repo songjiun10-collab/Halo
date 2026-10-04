@@ -3,7 +3,22 @@
 const { randomUUID } = require("crypto");
 const { performance } = require("node:perf_hooks");
 const { WebContentsView } = require("electron");
-const { clampBrowserBounds } = require("../shared/clamp-bounds");
+const { MIN_CHROME_HEIGHT } = require("./harness/browser-surfaces");
+
+// The React shell has no fixed side panel, so the user's view fills the page
+// slot the renderer measures, exactly like task surfaces (BrowserSurfaces):
+// clamped to the window and kept below the tab strip + toolbar. Anything that
+// must not be covered (approval, activity, chat) hides the view instead.
+function clampToWindow(bounds, contentWidth, contentHeight) {
+  if (!bounds || ![bounds.x, bounds.y, bounds.width, bounds.height, contentWidth, contentHeight].every(Number.isFinite)) {
+    throw new TypeError("setBrowserBounds requires finite numeric bounds");
+  }
+  const x = Math.max(0, Math.min(contentWidth, Math.round(bounds.x)));
+  const y = Math.max(MIN_CHROME_HEIGHT, Math.min(contentHeight, Math.round(bounds.y)));
+  const right = Math.max(x, Math.min(contentWidth, Math.round(bounds.x + bounds.width)));
+  const bottom = Math.max(y, Math.min(contentHeight, Math.round(bounds.y + bounds.height)));
+  return { x, y, width: right - x, height: bottom - y };
+}
 const { looksLikeCaptcha } = require("../shared/captcha-heuristics");
 const { summarizeMetrics } = require("../shared/metrics");
 const { requestDecision } = require("./approver-client");
@@ -56,8 +71,10 @@ class ControlApi {
     navigationWaitUntil,
     maxDomLinksScanned,
     now,
+    onPageVisit,
     webContentsViewClass = WebContentsView,
   } = {}) {
+    this._onPageVisit = typeof onPageVisit === "function" ? onPageVisit : null;
     this._window = window;
     this._WebContentsView = webContentsViewClass;
     this._socketPath = socketPath;
@@ -227,6 +244,7 @@ class ControlApi {
     wc.on("did-start-navigation", () => { if (this._view === view) this._syncPageState({ loadState: "loading" }); });
     wc.on("did-navigate", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url, loadState: "ready" }); });
     wc.on("did-navigate-in-page", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url }); });
+    wc.on("did-finish-load", () => { this._onPageVisit?.(wc); });
     wc.on("page-title-updated", (_e, title) => { tab.title = title; if (this._view === view) this._syncPageState({ title }); });
     wc.on("did-fail-load", (_e, code, description) => {
       if (this._view !== view) return;
@@ -464,7 +482,7 @@ class ControlApi {
 
   setBrowserBounds(bounds) {
     const [contentWidth, contentHeight] = this._window.getContentSize();
-    const clamped = clampBrowserBounds(bounds, contentWidth, contentHeight);
+    const clamped = clampToWindow(bounds, contentWidth, contentHeight);
     // Always remember the latest requested bounds, even with no view yet --
     // _ensureView() applies this the moment a view is created. The
     // same-key skip below only guards against redundant native setBounds()

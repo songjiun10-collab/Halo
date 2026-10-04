@@ -1,6 +1,6 @@
 "use strict";
 
-const { domainMatches, matchingAllowedDomain, normalizeDomain } = require("./domain-utils");
+const { domainMatches, matchingAllowedDomain, normalizeDomain, normalizeAllowlistEntry, groupMatches } = require("./domain-utils");
 
 const SAME_SITE = { lax: "lax", strict: "strict", none: "no_restriction", unspecified: "unspecified" };
 
@@ -16,7 +16,7 @@ function cookieToElectron(cookie) {
 }
 
 async function injectSessions({ vault, session, domains, nowSeconds = Date.now() / 1000 }) {
-  const allowlist = (Array.isArray(domains) ? domains : []).map(normalizeDomain).filter(Boolean);
+  const allowlist = (Array.isArray(domains) ? domains : []).map(normalizeAllowlistEntry).filter(Boolean);
   if (!allowlist.length) return { injected: 0, failed: 0, domains: [] };
   const cookies = await vault.cookiesFor({ domains: allowlist, nowSeconds });
   let injected = 0;
@@ -60,7 +60,7 @@ async function removeCookiesWhere(session, shouldRemove) {
 async function clearSessionCookies(session, domains) {
   const allowlist = (Array.isArray(domains) ? domains : []).map(normalizeDomain).filter(Boolean);
   if (!allowlist.length) return { removed: 0, failed: 0 };
-  return removeCookiesWhere(session, (host) => domainMatches(host, allowlist));
+  return removeCookiesWhere(session, (host) => groupMatches(host, allowlist));
 }
 
 async function clearDisallowedSessionCookies(session, allowedDomains) {

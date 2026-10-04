@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFile } = require("node:child_process");
-const { normalizeDomain, domainMatches } = require("./domain-utils");
+const { normalizeAllowlistEntry, domainMatches } = require("./domain-utils");
 
 const WEBKIT_EPOCH_OFFSET_SECONDS = 11_644_473_600;
 const HASH_PREFIX_MIN_VERSION = 24;
@@ -76,15 +76,19 @@ function queryRows(databaseFile, domains) {
   try {
     let version = 0;
     try { version = Number(db.prepare("SELECT value FROM meta WHERE key = 'version'").get()?.value) || 0; } catch { /* no meta table */ }
+    // Chrome 114+ stores CHIPS (partitioned) cookies in the same table, keyed
+    // additionally by top_frame_site_key. Older schemas have no such column.
+    const hasPartitionKey = db.prepare("PRAGMA table_info(cookies)").all().some((column) => column.name === "top_frame_site_key");
     const clauses = domains.map(() => "(host_key = ? OR host_key = ? OR host_key LIKE ?)").join(" OR ");
     const params = domains.flatMap((d) => [d, `.${d}`, `%.${d}`]);
     // expires_utc is microseconds since 1601 (~1.3e16) and exceeds Number.MAX_SAFE_INTEGER.
-    const statement = db.prepare(`SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite FROM cookies WHERE ${clauses}`);
+    const statement = db.prepare(`SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite${hasPartitionKey ? ", top_frame_site_key" : ""} FROM cookies WHERE ${clauses}`);
     statement.setReadBigInts(true);
     const rows = statement.all(...params).map((row) => ({
       ...row,
       expires_utc: row.expires_utc ? Number(BigInt(row.expires_utc) / 1_000_000n) : 0,
       is_secure: Number(row.is_secure), is_httponly: Number(row.is_httponly), samesite: Number(row.samesite),
+      partitioned: hasPartitionKey && typeof row.top_frame_site_key === "string" && row.top_frame_site_key !== "",
     }));
     return { version, rows };
   } finally {
@@ -94,7 +98,7 @@ function queryRows(databaseFile, domains) {
 
 async function readChromeCookies({ chromeRoot = defaultChromeRoot(), profile = "Default", domains, getSafeStoragePassword = defaultGetSafeStoragePassword, now = Date.now } = {}) {
   if (typeof profile !== "string" || !/^(Default|Profile \d{1,3})$/.test(profile)) throw new ProfileImportError("invalid_config", "profile must be Default or Profile N");
-  const allowlist = Array.isArray(domains) ? domains.map(normalizeDomain).filter(Boolean) : [];
+  const allowlist = Array.isArray(domains) ? domains.map(normalizeAllowlistEntry).filter(Boolean) : [];
   if (!allowlist.length) throw new ProfileImportError("invalid_config", "at least one allowlisted domain is required");
 
   const source = await findCookiesFile(chromeRoot, profile);
@@ -106,8 +110,14 @@ async function readChromeCookies({ chromeRoot = defaultChromeRoot(), profile = "
     let data;
     try { data = queryRows(copy.target, allowlist); } catch { return { status: "locked", cookies: [] }; }
 
-    const rows = data.rows.filter((row) => domainMatches(row.host_key, allowlist));
-    if (!rows.length) return { status: "ok", cookies: [] };
+    const matched = data.rows.filter((row) => domainMatches(row.host_key, allowlist));
+    // Partitioned cookies are only valid under their original top-level site.
+    // The vault and Electron injection have no partition field, so importing
+    // them would widen their scope and let different partitions overwrite one
+    // another. They are excluded and counted instead.
+    const rows = matched.filter((row) => !row.partitioned);
+    const partitioned = matched.length - rows.length;
+    if (!rows.length) return { status: "ok", cookies: [], partitioned };
 
     const needsKey = rows.some((row) => row.encrypted_value && row.encrypted_value.length);
     let key = null;
@@ -122,6 +132,7 @@ async function readChromeCookies({ chromeRoot = defaultChromeRoot(), profile = "
     const cookies = [];
     let encryptedSeen = 0;
     let decryptFailures = 0;
+    const failed = [];
     for (const row of rows) {
       const expires = row.expires_utc ? row.expires_utc - WEBKIT_EPOCH_OFFSET_SECONDS : null;
       if (expires !== null && expires <= nowSeconds) continue;
@@ -129,7 +140,7 @@ async function readChromeCookies({ chromeRoot = defaultChromeRoot(), profile = "
       if (row.encrypted_value && row.encrypted_value.length) {
         encryptedSeen += 1;
         value = decryptChromeValue(row.encrypted_value, { key, hostKey: row.host_key, hasHashPrefix: data.version >= HASH_PREFIX_MIN_VERSION });
-        if (value === null) { decryptFailures += 1; continue; }
+        if (value === null) { decryptFailures += 1; failed.push({ domain: row.host_key, name: row.name, path: row.path || "/" }); continue; }
       }
       cookies.push({
         domain: row.host_key, name: row.name, value, path: row.path || "/",
@@ -138,7 +149,7 @@ async function readChromeCookies({ chromeRoot = defaultChromeRoot(), profile = "
       });
     }
     if (encryptedSeen > 0 && decryptFailures === encryptedSeen && !cookies.length) return { status: "decrypt_failed", cookies: [] };
-    return { status: "ok", cookies, skipped: decryptFailures };
+    return { status: "ok", cookies, skipped: decryptFailures, failed, partitioned };
   } finally {
     if (copy) await fs.rm(copy.directory, { recursive: true, force: true }).catch(() => {});
   }

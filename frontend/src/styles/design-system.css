@@ -1,0 +1,15 @@
+/* HALO Browser design kit: copied from Halo Design System-3.zip. */
+@import './design-system/colors.css';
+@import './design-system/colors-light.css';
+@import './design-system/typography.css';
+@import './design-system/spacing-radius.css';
+@import './design-system/shadows-glass.css';
+@import './design-system/motion.css';
+@import './design-system/base.css';
+@import './design-system/components.css';
+
+/* Keep disabled browser controls identifiable; disabled should not look deleted. */
+.hx-toolbar .hx-icbtn:disabled { color: var(--muted-foreground); opacity: .78; }
+@media (max-width: 40rem) {
+  .hx-toolbar .hx-nav .hx-icbtn[aria-label="Share"] { display: inline-grid; }
+}

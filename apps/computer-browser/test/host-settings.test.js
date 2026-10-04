@@ -11,9 +11,9 @@ test("host settings default to browse/medium/budgeted and persist validated valu
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
   try {
     const settings = new HostSettingsStore({ storageRoot: root });
-    assert.deepEqual(await settings.load(), { version: 2, executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", memoryPolicy: "budgeted" });
+    assert.deepEqual(await settings.load(), { version: 5, plannerEffortMode: "auto", executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [] });
     await settings.update({ executionMode: "parallel", permissionMode: "interact", plannerEffort: "high" });
-    assert.deepEqual(await settings.load(), { version: 2, executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted" });
+    assert.deepEqual(await settings.load(), { version: 5, plannerEffortMode: "auto", executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [] });
     const stat = await fs.stat(path.join(root, "host-settings.json"));
     assert.equal(stat.mode & 0o777, 0o600);
   } finally {
@@ -28,7 +28,7 @@ test("host settings reject invalid mode or effort without changing persisted val
     await settings.load();
     await assert.rejects(settings.update({ permissionMode: "unrestricted" }), { code: "invalid_permission_mode" });
     await assert.rejects(settings.update({ plannerEffort: "--dangerous" }), { code: "invalid_planner_effort" });
-    assert.deepEqual(await settings.load(), { version: 2, executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", memoryPolicy: "budgeted" });
+    assert.deepEqual(await settings.load(), { version: 5, plannerEffortMode: "auto", executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [] });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -46,14 +46,14 @@ test("host settings reject an invalid memoryPolicy value", async () => {
   }
 });
 
-test("host settings atomically migrate a v1 file to v2, defaulting memoryPolicy to budgeted", async () => {
+test("host settings atomically migrate a v1 file to v4, defaulting memoryPolicy to budgeted and plannerProvider to none", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
   try {
     const file = path.join(root, "host-settings.json");
     await fs.writeFile(file, JSON.stringify({ version: 1, executionMode: "parallel", permissionMode: "interact", plannerEffort: "high" }), { mode: 0o600 });
     const settings = new HostSettingsStore({ storageRoot: root });
     const loaded = await settings.load();
-    assert.deepEqual(loaded, { version: 2, executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted" });
+    assert.deepEqual(loaded, { version: 5, plannerEffortMode: "auto", executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [] });
     const onDisk = JSON.parse(await fs.readFile(file, "utf8"));
     assert.deepEqual(onDisk, loaded);
   } finally {
@@ -140,6 +140,102 @@ test("host settings refuse a symlinked settings file", async () => {
     const settings = new HostSettingsStore({ storageRoot: root });
     await assert.rejects(settings.load(), { code: "unsafe_path" });
     assert.match(await fs.readFile(external, "utf8"), /"full"/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("host settings migrate an exact v2 file to v4 with the planner left off", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
+  try {
+    const file = path.join(root, "host-settings.json");
+    await fs.writeFile(file, JSON.stringify({ version: 2, executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted" }), { mode: 0o600 });
+    const loaded = await new HostSettingsStore({ storageRoot: root }).load();
+    assert.deepEqual(loaded, { version: 5, plannerEffortMode: "auto", executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [] });
+    assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), loaded);
+    await fs.writeFile(file, JSON.stringify({ version: 2, executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted", plannerProvider: "claude_code" }));
+    await assert.rejects(new HostSettingsStore({ storageRoot: root }).load(), { code: "invalid_settings" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("plannerProvider accepts only allowlisted ids and never a command or path", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
+  try {
+    const settings = new HostSettingsStore({ storageRoot: root });
+    assert.equal((await settings.update({ plannerProvider: "claude_code" })).plannerProvider, "claude_code");
+    for (const plannerProvider of ["codex", "/bin/sh", "toString", "__proto__", null, ["claude_code"]]) {
+      await assert.rejects(settings.update({ plannerProvider }), { code: "invalid_planner_provider" }, String(plannerProvider));
+    }
+    assert.equal((await settings.load()).plannerProvider, "claude_code");
+    assert.equal((await settings.update({ plannerProvider: "none", mcpProviders: [] })).plannerProvider, "none");
+    await assert.rejects(settings.update({ plannerCommand: "/bin/sh" }), { code: "invalid_settings" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("host settings migrate an exact v3 file to v5 with MCP left off", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
+  try {
+    const file = path.join(root, "host-settings.json");
+    const v3 = { version: 3, executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted", plannerProvider: "claude_code" };
+    await fs.writeFile(file, JSON.stringify(v3), { mode: 0o600 });
+    const loaded = await new HostSettingsStore({ storageRoot: root }).load();
+    assert.deepEqual(loaded, { ...v3, version: 5, mcpProviders: [], plannerEffortMode: "auto" });
+    assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), loaded);
+    await fs.writeFile(file, JSON.stringify({ ...v3, mcpProviders: ["codex"] }));
+    await assert.rejects(new HostSettingsStore({ storageRoot: root }).load(), { code: "invalid_settings" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("mcpProviders accepts only a duplicate-free allowlisted id list", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
+  try {
+    const settings = new HostSettingsStore({ storageRoot: root });
+    const enabled = await settings.update({ mcpProviders: ["codex"] });
+    assert.deepEqual(enabled.mcpProviders, ["codex"]);
+    for (const mcpProviders of ["codex", ["codex", "codex"], ["claude"], ["/bin/sh"], ["__proto__"], [1], null, {}]) {
+      await assert.rejects(settings.update({ mcpProviders }), { code: "invalid_mcp_providers" }, JSON.stringify(mcpProviders));
+    }
+    assert.deepEqual((await settings.load()).mcpProviders, ["codex"]);
+    // The returned and loaded lists are copies; mutating them changes nothing durable.
+    enabled.mcpProviders.push("claude");
+    assert.deepEqual((await settings.load()).mcpProviders, ["codex"]);
+    assert.deepEqual((await settings.update({ mcpProviders: [] })).mcpProviders, []);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("host settings migrate an exact v4 file to v5, keeping MCP providers and adding auto effort", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
+  try {
+    const file = path.join(root, "host-settings.json");
+    const v4 = { version: 4, executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted", plannerProvider: "claude_code", mcpProviders: ["codex"] };
+    await fs.writeFile(file, JSON.stringify(v4), { mode: 0o600 });
+    const loaded = await new HostSettingsStore({ storageRoot: root }).load();
+    assert.deepEqual(loaded, { ...v4, version: 5, plannerEffortMode: "auto" });
+    assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), loaded);
+    await fs.writeFile(file, JSON.stringify({ ...v4, plannerEffortMode: "auto" }));
+    await assert.rejects(new HostSettingsStore({ storageRoot: root }).load(), { code: "invalid_settings" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("plannerEffortMode accepts only auto or fixed", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
+  try {
+    const settings = new HostSettingsStore({ storageRoot: root });
+    assert.equal((await settings.update({ plannerEffortMode: "fixed" })).plannerEffortMode, "fixed");
+    for (const plannerEffortMode of ["smart", "", null, 1, "AUTO"]) {
+      await assert.rejects(settings.update({ plannerEffortMode }), { code: "invalid_planner_effort_mode" }, String(plannerEffortMode));
+    }
+    assert.equal((await settings.load()).plannerEffortMode, "fixed");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

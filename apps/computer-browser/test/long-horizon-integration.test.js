@@ -139,6 +139,8 @@ test(
 
     // --- Pause mid-flight + fresh re-attachment (simulated restart) completes the journey ---
     assert.equal(result.scenario2.pauseResumeWorks, true);
+    assert.equal(result.scenario2.plannerWasInFlight, true, "pause must interrupt an initialized planner, not an arbitrary startup sleep");
+    assert.equal(result.scenario2.workerExitConfirmed, true, "paused control must only return after the cancelled worker exits");
     assert.equal(result.scenario2.completedAfterFreshReattach, true, "resuming from a fresh TaskController after pause must still reach completion");
     assert.equal(result.scenario2.finalState, "completed");
     t.diagnostic(

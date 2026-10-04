@@ -20,7 +20,7 @@
   동시 요청 제한을 설정한다. 키·요청 본문·응답 토큰을 로그에 남기지 않는다.
 
 WSGI 서버의 factory 설정으로 `halo.gateway_app:create_app()`을 지정한다.
-로컬 개발용 Docker Compose 실행은 [Docker 안내](../docs/DOCKER.ko.md)를 따른다.
+로컬 개발용 Docker Compose 실행은 [Container 안내](../deploy/container/README.ko.md)를 따른다.
 TLS·인증 프록시는 이 저장소에 구성되지 않았다. 개발용 wsgiref 서버를
 인터넷 서비스로 사용하지 않는다. gunicorn+Caddy+DuckDNS로 이 전제조건을
 채우는 참조 배포는 [배포 안내](../docs/DEPLOY.ko.md)를 따른다.

@@ -26,6 +26,17 @@ What this says, without overreach:
 - **Planner latency is the cost.** 11 calls × ~4 s ≈ the whole ~45 s. The harness's own overhead measured earlier (about 7-8 ms per page) is negligible next to it, so on real runs the lever that matters is the number of planner round-trips, not harness speed.
 - 4 runs, 1 site, 1 goal: an existence check, not a statistical comparison.
 
+## Planner effort vs. latency (2026-09-30, real model, `short`)
+
+Same site, goal and build; only `HALO_LLM_EFFORT` differs (`llm-goal-run.js`, 3 runs each, all found the target, 100% of runs):
+
+| effort | time to target | planner calls | seconds / call |
+|---|---|---|---|
+| medium (default) | 62.1 s / 61.2 s / 51.4 s | 13 / 11 / 11 | 4.78 / 5.56 / 4.67 |
+| low | 46.2 s / 54.3 s / 45.8 s | 11 / 13 / 11 | 4.20 / 4.18 / 4.16 |
+
+Per-call latency was about 16% lower at `low` (mean 5.0 s vs 4.2 s); the call count depends on which links the model happens to explore, not on effort. Also measured: the same runs already batch about 2 actions per proposal (a `navigate` plus `observe`), so on this site calls track pages visited and prompt wording is not the lever. Caveats: n=3 per arm, one synthetic site with a shallow goal, and effort was not varied on a task that needs careful reading. The default stays `medium`; `plannerEffort` is a host setting, so a user who values speed can pick `low`. Not evidence that `low` is safe for harder tasks.
+
 ## Environment note
 
 Installing Electron for these runs (`npm ci` in `apps/computer-browser`; `node_modules` is gitignored) turned five previously self-skipped real-Electron tests into failures in this sandbox: they spawn Electron as root without `--no-sandbox` (and need a Python approver venv that is absent here). They fail at Electron launch, before any harness code runs. The other 723 tests pass.

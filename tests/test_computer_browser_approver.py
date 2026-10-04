@@ -174,9 +174,18 @@ def test_serve_forever_rejects_oversized_frame_without_crashing(private_socket_p
         if private_socket_path.exists():
             break
         threading.Event().wait(0.01)
-    raw = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    raw.settimeout(2)
-    raw.connect(str(private_socket_path))
+    # The socket file appears at bind(), before listen(): retry a refused connect.
+    for attempt in range(200):
+        raw = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        raw.settimeout(2)
+        try:
+            raw.connect(str(private_socket_path))
+            break
+        except (ConnectionRefusedError, FileNotFoundError):
+            raw.close()
+            if attempt == 199:
+                raise
+            threading.Event().wait(0.01)
     raw.sendall((70000).to_bytes(4, "big") + b"x")
     raw.close()
     server.join(timeout=5)
