@@ -58,6 +58,26 @@ npm --prefix apps/computer-browser run test:renderer:e2e
 Electron integration tests require a desktop session. Unit tests with fake
 transports do not establish live provider or operating-system isolation behavior.
 
+## Reliability and safety features (0.1.0-beta)
+
+All three switches below are off by default and live in Settings (host settings
+`plannerEscalation`, `plannerRouting`, `contextAwareness`).
+
+- **Planner escalation:** after a planner failure the host retries one tier up
+  (`model-tiers`), never the same model and never a lower tier.
+- **Route by task length:** with no pinned model, short tasks use a faster tier and
+  long tasks a stronger one, within the configured provider.
+- **Effect-based approval:** the effect classifier assigns auto, ask or deny. Deny
+  applies to clicks on buttons or links with irreversible names and is enforced in
+  the controller before approval policy. It is keyword-based, not a guarantee.
+- **Context Awareness:** a safeStorage-encrypted journal of https pages you read
+  (no query strings; sensitive hosts, paths and password/card pages excluded; 14
+  days, 300 entries). Tasks recall matching entries as untrusted memory. It runs
+  only in the local host, not the background service; clear it from Settings.
+- **Memory override** applies to the next parent run only, then returns to budgeted.
+- **Slack task entry** (`slack-task-entry`) verifies signatures, replay window,
+  allowlists and rate limits, but is not connected to Slack yet.
+
 ## Execution boundaries
 
 Automatic browser actions include observation, navigation, link following,
@@ -78,7 +98,8 @@ they no longer wait for the 60-second response deadline after a known CLI failur
 See the [failure and shutdown contract](contracts/PLANNER-FAILURES.md).
 
 The NVIDIA NIM planner is selectable in Settings and supports DeepSeek V4,
-Kimi K3 and Nemotron 3 Super through the hosted API. Set `NVIDIA_API_KEY` in
+Kimi K3 and Nemotron 3 Super through the hosted API. Settings can refresh the
+list from the account's hosted catalog; discovered models are saved across restarts. Set `NVIDIA_API_KEY` in
 the host environment; see [NVIDIA setup and limits](contracts/NVIDIA-PLANNER.md).
 
 OpenCode CLI is also available as an experimental planner. It uses OpenCode's

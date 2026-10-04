@@ -22,6 +22,14 @@ the host manages planner connections, browser surfaces and saved task state.
   proposals tied to the state they were made against.
 - **Local workflow:** routines, local memory and credential storage, with provider
   setup and optional routed MCP tool proposals.
+- **Recovery on hard tasks (opt-in):** planner escalation steps up to a stronger
+  model tier when one fails, and routing picks a tier by expected task length.
+- **Effect-based approval:** actions are auto, ask or deny by effect; irreversible
+  clicks (payments, account deletion) are refused outright in text-mode computer use.
+- **Context Awareness (opt-in):** an encrypted local journal of pages you read that
+  later tasks can recall. It skips sign-in, payment, mail and bank pages.
+
+Current version: `0.1.0-beta`. The opt-in features are off by default.
 
 ### Run locally
 
