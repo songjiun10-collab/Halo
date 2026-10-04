@@ -73,6 +73,8 @@ const TASK_HOST_METHODS = new Set([
   "listCredentials",
   "saveCredential",
   "removeCredential",
+  "listActivity",
+  "clearActivity",
   "listMemories",
   "saveMemory",
   "removeMemory",

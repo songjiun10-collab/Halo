@@ -104,8 +104,8 @@ Phase one added strict JSDoc typing to the shared contracts and recorded an init
 shared modules, phase three step one adds the three MCP broker modules, and
 the next isolated cohort adds the two communication modules. The October 4 wave
 adds four routing/browser-boundary modules and two background-runtime bindings,
-bringing the production TypeScript module count from nine to twenty-four (recovery-policy,
-model-tiers, nvidia-model-catalog, screen-map, effect-classifier, planner-escalation, planner-routing, slack-task-entry, and context-builder added in the October 4 follow-up waves). The
+bringing the production TypeScript module count from nine to twenty-five (recovery-policy,
+model-tiers, nvidia-model-catalog, screen-map, effect-classifier, planner-escalation, planner-routing, slack-task-entry, activity-journal, and context-builder added in the October 4 follow-up waves). The
 approval-latency benchmark helper is also generated, but is not counted as production.
 Other runtime modules remain JavaScript; each subsequent wave must expand the
 exact compiler cohort, build fixtures, and source/output conformance checks together.

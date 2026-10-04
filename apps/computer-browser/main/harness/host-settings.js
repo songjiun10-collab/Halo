@@ -34,10 +34,11 @@ const SETTINGS_FIELDS = ["executionMode", "mcpProviders", "memoryPolicy", "permi
 // alias, so existing settings files need no migration.
 // plannerFast (opt-in, off when unset) asks the planner CLI for its faster
 // service tier; Claude bills it to account credits.
+// contextAwareness (opt-in, off when unset) keeps a local journal of pages the user read.
 // plannerRouting (opt-in, off when unset) picks a planner tier from the task duration profile.
 // plannerEscalation (opt-in, off when unset) lets a stuck task move up one model tier.
-const OPTIONAL_FIELDS = ["plannerModel", "plannerFast", "plannerEscalation", "plannerRouting"];
-const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast", "plannerEscalation", "plannerRouting"];
+const OPTIONAL_FIELDS = ["plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness"];
+const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness"];
 const LEGACY_V1_FIELDS = "executionMode,permissionMode,plannerEffort,version";
 const LEGACY_V2_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,version";
 const LEGACY_V3_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,plannerProvider,version";
@@ -99,6 +100,10 @@ function validateSettings(value) {
   if (hasFast && typeof value.plannerFast !== "boolean") {
     throw new HostSettingsError("invalid_planner_fast", "plannerFast must be a boolean");
   }
+  const hasAwareness = Object.prototype.hasOwnProperty.call(value, "contextAwareness");
+  if (hasAwareness && typeof value.contextAwareness !== "boolean") {
+    throw new HostSettingsError("invalid_context_awareness", "contextAwareness must be a boolean");
+  }
   const hasRouting = Object.prototype.hasOwnProperty.call(value, "plannerRouting");
   if (hasRouting && typeof value.plannerRouting !== "boolean") {
     throw new HostSettingsError("invalid_planner_routing", "plannerRouting must be a boolean");
@@ -120,6 +125,7 @@ function validateSettings(value) {
     ...(hasFast ? { plannerFast: value.plannerFast } : {}),
     ...(hasEscalation ? { plannerEscalation: value.plannerEscalation } : {}),
     ...(hasRouting ? { plannerRouting: value.plannerRouting } : {}),
+    ...(hasAwareness ? { contextAwareness: value.contextAwareness } : {}),
   };
 }
 

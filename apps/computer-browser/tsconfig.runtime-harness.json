@@ -38,6 +38,7 @@
     "runtime-src/main/harness/effect-classifier.ts",
     "runtime-src/main/harness/planner-escalation.ts",
     "runtime-src/main/harness/planner-routing.ts",
-    "runtime-src/main/harness/slack-task-entry.ts"
+    "runtime-src/main/harness/slack-task-entry.ts",
+    "runtime-src/main/harness/activity-journal.ts"
   ]
 }

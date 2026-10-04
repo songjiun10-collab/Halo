@@ -71,8 +71,10 @@ class ControlApi {
     navigationWaitUntil,
     maxDomLinksScanned,
     now,
+    onPageVisit,
     webContentsViewClass = WebContentsView,
   } = {}) {
+    this._onPageVisit = typeof onPageVisit === "function" ? onPageVisit : null;
     this._window = window;
     this._WebContentsView = webContentsViewClass;
     this._socketPath = socketPath;
@@ -242,6 +244,7 @@ class ControlApi {
     wc.on("did-start-navigation", () => { if (this._view === view) this._syncPageState({ loadState: "loading" }); });
     wc.on("did-navigate", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url, loadState: "ready" }); });
     wc.on("did-navigate-in-page", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url }); });
+    wc.on("did-finish-load", () => { this._onPageVisit?.(wc); });
     wc.on("page-title-updated", (_e, title) => { tab.title = title; if (this._view === view) this._syncPageState({ title }); });
     wc.on("did-fail-load", (_e, code, description) => {
       if (this._view !== view) return;

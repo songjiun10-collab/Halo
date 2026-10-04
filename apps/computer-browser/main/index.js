@@ -29,6 +29,8 @@ const { resolvePlannerCommand } = require("./harness/planner-command");
 const { parseOperatorOverride, selectPlannerLaunch, plannerProviderEnv } = require("./harness/planner-providers");
 const { HostSettingsStore } = require("./harness/host-settings");
 const { LocalMemoryStore } = require("./harness/local-memory-store");
+const { ActivityJournalStore } = require("./harness/activity-journal-store");
+const { createPageVisitSink } = require("./activity-capture");
 const { LocalCredentialVault } = require("./harness/local-credential-vault");
 const { SessionVault } = require("./harness/profile-import/session-vault");
 const { ProfileImporter, SessionConfigStore } = require("./harness/profile-import/profile-importer");
@@ -480,11 +482,24 @@ function makeHarnessPlanner(usageLedger) {
   };
 }
 
+// Set once the host exists; page loads before that are simply not journaled.
+let pageVisitSink = null;
+
 async function createHarnessHost(socketPath, hostWindow) {
   const dataRoot = path.join(app.getPath("userData"), "harness-data");
   const settingsStore = new HostSettingsStore({ storageRoot: dataRoot });
   const settings = await settingsStore.load();
   const memoryStore = new LocalMemoryStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
+  // Context Awareness: off unless the user turned it on. The setting is read
+  // live (cached briefly) so toggling it takes effect without a restart.
+  const journalStore = new ActivityJournalStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
+  let awarenessCache = { at: 0, on: false };
+  const awarenessOn = async () => {
+    if (Date.now() - awarenessCache.at > 3000) awarenessCache = { at: Date.now(), on: (await settingsStore.load()).contextAwareness === true };
+    return awarenessCache.on;
+  };
+  pageVisitSink = createPageVisitSink({ isEnabled: awarenessOn, record: (visit) => journalStore.record(visit) });
+  const activityJournal = { store: journalStore, isEnabled: awarenessOn };
   const credentialVault = new LocalCredentialVault({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
   const profileImporter = new ProfileImporter({
     vault: new SessionVault({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage }),
@@ -510,6 +525,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     approve: makeHarnessApprove(socketPath),
     memoryMonitor,
     memoryStore,
+    activityJournal,
     permissionMode: settings.permissionMode,
     plannerEffort: settings.plannerEffort,
     plannerEffortMode: settings.plannerEffortMode,
@@ -545,7 +561,7 @@ async function createWindow(socketPath, attachedClient = undefined) {
     },
   });
 
-  const controlApi = new ControlApi({ window: win, socketPath });
+  const controlApi = new ControlApi({ window: win, socketPath, onPageVisit: (wc) => pageVisitSink?.(wc) });
   let taskHost;
   try {
     taskHost = attachedClient === undefined ? await createHarnessHost(socketPath, win) : attachedClient;

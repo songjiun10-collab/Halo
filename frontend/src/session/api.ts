@@ -78,6 +78,8 @@ export interface HostSettings {
   plannerFast?: boolean
   plannerEscalation?: boolean
   plannerRouting?: boolean
+  /** Opt-in local journal of pages the user read, recalled by later tasks. */
+  contextAwareness?: boolean
 }
 export interface HaloBrowserApi {
   getSnapshot: () => Promise<DirectBrowserSnapshot>
@@ -110,6 +112,7 @@ export interface HaloBrowserApi {
   getTaskBrowser(taskId: string): Promise<BrowserSnapshot>
   getChildPlan(taskId: string): Promise<ChildPlanSummary | null>
   getHostSettings(): Promise<HostSettings>
+  clearActivity?(): Promise<boolean>
   refreshPlannerModels(): Promise<{ nvidia: { id: string; label: string; discovered: boolean }[]; error: string | null }>
   updateHostSettings(patch: Partial<Omit<HostSettings, 'version'>>): Promise<HostSettings>
   taskBrowserAction(taskId: string, action: BrowserAction): Promise<BrowserSnapshot>

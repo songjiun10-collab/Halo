@@ -8,7 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
 
 const APP_ROOT = path.resolve(__dirname, "..");
-const HARNESS_NAMES = ["generic-mcp-broker", "mcp-schema-validator", "mcp-schema-worker", "message-port", "message-mailbox", "background-runtime-ui", "background-launch-agent", "recovery-policy", "model-tiers", "context-builder", "nvidia-model-catalog", "screen-map", "effect-classifier", "planner-escalation", "planner-routing", "slack-task-entry"];
+const HARNESS_NAMES = ["generic-mcp-broker", "mcp-schema-validator", "mcp-schema-worker", "message-port", "message-mailbox", "background-runtime-ui", "background-launch-agent", "recovery-policy", "model-tiers", "context-builder", "nvidia-model-catalog", "screen-map", "effect-classifier", "planner-escalation", "planner-routing", "slack-task-entry", "activity-journal"];
 
 test("harness modules are generated from TypeScript sources", () => {
   for (const name of HARNESS_NAMES) {

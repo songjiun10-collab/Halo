@@ -107,6 +107,7 @@ class TaskHost {
     plannerRouting,
     mcpProviders = [],
     memoryStore,
+    activityJournal,
     settingsStore,
     usageLedger,
     usageSources,
@@ -162,6 +163,8 @@ class TaskHost {
     this._mcpProviders = Array.isArray(mcpProviders) ? [...mcpProviders] : [];
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
+    // { store, isEnabled }: the Context Awareness journal (local host only).
+    this._activityJournal = activityJournal || null;
     this._settingsStore = settingsStore || null;
     this._usageLedger = usageLedger || null;
     this._usageSources = usageSources || {};
@@ -498,6 +501,7 @@ class TaskHost {
       hostVerifier: this._hostVerifier,
       memoryMonitor: controllerMemoryMonitor,
       memoryStore: this._memoryStore,
+      ...(this._activityJournal ? { activityRecall: async (query) => (await this._activityJournal.isEnabled()) ? this._activityJournal.store.recall(query) : [] } : {}),
       permissionMode: this._permissionMode,
       plannerEffort: this._effortForProfile(taskProfile),
       adaptiveEffort: this._plannerEffortMode === "auto",
@@ -2405,6 +2409,18 @@ class TaskHost {
         fillCredential: (credentials) => browser.fillCredential({ ...credentials, origin }),
       });
     });
+  }
+
+  async listActivity() {
+    this._assertOpen();
+    if (!this._activityJournal) throw new TaskHostError("activity_unavailable", "activity journal is unavailable");
+    return this._activityJournal.store.list();
+  }
+
+  async clearActivity() {
+    this._assertOpen();
+    if (!this._activityJournal) throw new TaskHostError("activity_unavailable", "activity journal is unavailable");
+    return this._activityJournal.store.clear();
   }
 
   async listMemories() {

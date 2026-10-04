@@ -216,6 +216,7 @@ class TaskController {
     segmentRotationCalls,
     noProgressThreshold,
     memoryStore,
+    activityRecall,
     permissionMode = "browse",
     observeRetryDelayMs = OBSERVE_RETRY_DELAY_MS,
     maxRecoveries,
@@ -379,6 +380,7 @@ class TaskController {
     this._readWorkGoalContext = typeof readWorkGoalContext === "function" ? readWorkGoalContext : null;
     this._memoryMonitor = memoryMonitor || NOOP_MEMORY_MONITOR;
     this._memoryStore = memoryStore || null;
+    this._activityRecall = typeof activityRecall === "function" ? activityRecall : null;
     const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
     if (!PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_config", "permissionMode is invalid");
     this._permissionMode = permissionMode;
@@ -1847,6 +1849,15 @@ class TaskController {
           break;
         }
         if (this._stopHappenedSince(epoch)) break;
+        // Context Awareness: pages the user read that match this request. Best
+        // effort and untrusted like any memory entry; a failure never pauses work.
+        if (this._activityRecall) {
+          try {
+            const recalled = await this._activityRecall(this._goal.originalRequest ?? "");
+            if (Array.isArray(recalled) && recalled.length) customMemory = [...customMemory, ...recalled];
+          } catch { /* the journal is optional */ }
+          if (this._stopHappenedSince(epoch)) break;
+        }
 
         let pendingMessages = [];
         try {

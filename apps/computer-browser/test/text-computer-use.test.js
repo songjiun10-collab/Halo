@@ -346,3 +346,23 @@ test("a click on a money-moving control is refused: nothing runs, nothing queues
   assert.equal(controller.getSnapshot().approvalQueue.length, 0);
   assert.notEqual(controller.getSnapshot().pauseReason, "approver_error");
 });
+
+test("recalled activity joins the memory entries the planner sees, and a failing journal never pauses the task", async (t) => {
+  for (const [recall, included] of [[async () => [{ id: "activity-1", text: "Visited 2026-10-03: Hotel list", origin: "https://h.example.com" }], true], [async () => { throw new Error("journal down"); }, false]]) {
+    const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-recall-"));
+    const store = await TaskStore.create({ originalRequest: "summarize the hotels I read" }, { storageRoot });
+    const seen = [];
+    const controller = new TaskController({
+      store, permissionMode: "browse", approve: async () => ({ decision: "allow", reasons: [] }), hostVerifier: () => true, maxRecoveries: 0,
+      activityRecall: recall,
+      browser: { supportsAction: () => true, observe: async () => ({ id: "obs", documentEpoch: 1, url: "https://page.test/", elements: [] }), execute: async () => ({ status: "ok" }) },
+      planner: { next: async (c) => { seen.push(c); return { taskId: c.taskId, goalVersion: c.goalVersion, basedOnObservationId: c.observation.id, criterionIds: [], kind: "finish", evidenceIds: [] }; } },
+    });
+    t.after(async () => { await controller.stop(); await store.close(); await fs.rm(storageRoot, { recursive: true, force: true }); });
+    await controller.start();
+    assert.ok(seen.length >= 1);
+    const entries = seen[0].userMemory.entries;
+    assert.equal(entries.some((e) => e.id === "activity-1"), included);
+    assert.notEqual(controller.getSnapshot().pauseReason, "context_error");
+  }
+});

@@ -50,6 +50,8 @@ const HARNESS_METHODS = {
   "halo:listCredentials": "listCredentials",
   "halo:saveCredential": "saveCredential",
   "halo:removeCredential": "removeCredential",
+  "halo:listActivity": "listActivity",
+  "halo:clearActivity": "clearActivity",
   "halo:listMemories": "listMemories",
   "halo:saveMemory": "saveMemory",
   "halo:removeMemory": "removeMemory",

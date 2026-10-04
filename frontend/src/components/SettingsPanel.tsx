@@ -119,6 +119,12 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
         </div>
         <p className="hx-settings__hint">Fast tasks use a lighter model and long tasks a top-tier one, within the selected provider. Tasks pinned to a model are never rerouted.</p>
         <p className="hx-settings__hint">When a task is stuck after retries, it moves up one model tier once. This can use a more expensive model.</p>
+        <div className="hx-settings__row">
+          <span>Context Awareness</span>
+          <button type="button" className="hx-switch" role="switch" aria-label="Context Awareness" aria-checked={settings.contextAwareness === true} onClick={() => onChange({ contextAwareness: settings.contextAwareness !== true })}><span /></button>
+        </div>
+        <p className="hx-settings__hint">Remembers the title and a short excerpt of pages you read in Halo, on this Mac only and encrypted, for 14 days. Sign-in, payment, mail and bank pages, and pages with password or card fields, are never saved. Tasks can recall matching pages. Off by default.</p>
+        <ActivityClear />
       </fieldset>
 
       <div className="hx-settings__section">
@@ -140,6 +146,21 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
 interface Props {
   leaving?: boolean
   onClose: () => void
+}
+
+function ActivityClear() {
+  const api = typeof window === 'undefined' ? undefined : window.haloBrowser
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
+  const clear = () => {
+    setState('busy')
+    void Promise.resolve(api?.clearActivity?.()).then(() => setState('done')).catch(() => setState('error'))
+  }
+  return (
+    <div className="hx-settings__row">
+      <span>Saved activity</span>
+      <button type="button" className="hx-agbtn" disabled={state === 'busy' || !api?.clearActivity} onClick={clear}>{state === 'done' ? 'Cleared' : state === 'error' ? 'Could not clear' : 'Clear all'}</button>
+    </div>
+  )
 }
 
 /** Settings overlay, opened from the toolbar or ⌘,. Every change goes straight to host settings. */

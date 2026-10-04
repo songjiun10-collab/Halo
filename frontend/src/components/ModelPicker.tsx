@@ -20,9 +20,9 @@ interface Props {
 /** The home form's model picker (design system `hx-mpick`): a pill that opens Model and Effort. */
 export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider, savingEffort, defaultOpen = false, defaultView = 'effort' }: Props) {
   const [open, setOpen] = useState(defaultOpen)
-  const [view, setView] = useState(defaultView)
-  const ref = useRef<HTMLDivElement>(null)
   const active = activeModel(settings)
+  const [view, setView] = useState(!active ? 'models' : defaultView)
+  const ref = useRef<HTMLDivElement>(null)
   // Claude's legacy models stay folded unless the pinned model is one of them;
   // Codex models are all listed in their own group.
   const isClaudeLegacy = (m: PlannerModel) => m.provider === 'claude_code' && m.legacy
@@ -33,7 +33,7 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
 
   // The popover opens upward: keep it below the Task/Agent switch at the top
   // of the home area instead of letting that clip its first rows.
-  useEffect(() => { if (!open) setView('effort') }, [open])
+  useEffect(() => { if (!open) setView(active ? 'effort' : 'models') }, [open, active])
 
   useLayoutEffect(() => {
     if (!open || !ref.current) return
@@ -67,7 +67,7 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
 
   return <div ref={ref} className="hx-mpick" data-open={open || undefined}>
     <button type="button" className="hx-mpick__toggle" aria-haspopup="true" aria-expanded={open} disabled={!settings} onClick={() => setOpen((o) => !o)}>
-      <span>{active ? `${({ codex_cli: 'Codex', claude_code: 'Claude', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA', opencode_cli: 'OpenCode' })[active.provider]} ${active.label}` : 'Model'}</span>
+      <span>{active ? `${({ codex_cli: 'Codex', claude_code: 'Claude', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA', opencode_cli: 'OpenCode' })[active.provider]} ${active.label}` : 'Choose planner'}</span>
       <svg className="hx-mpick__chev" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 9l6 6 6-6" /></svg>
     </button>
     {open && settings ? <div className="hx-mpick__pop" data-view={view} style={view === 'models' && maxHeight ? { maxHeight } : undefined}>
@@ -84,10 +84,10 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
         </div>
         <EffortSlider value={saved} onChange={onEffort} onPreview={setPreview} disabled={savingEffort} naming={naming} />
       </> : <>
-        <button type="button" className="hx-mpick__back" onClick={() => setView('effort')}>
+        {active ? <button type="button" className="hx-mpick__back" onClick={() => setView('effort')}>
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 6l-6 6 6 6" /></svg>Effort
-        </button>
-        <p>Model</p>
+        </button> : null}
+        <p>{active ? 'Model' : 'Choose a planner'}</p>
         {PLANNER_MODELS.filter((m) => m.provider === 'claude_code' && !m.legacy).map(option)}
         <p>Codex</p>
         {PLANNER_MODELS.filter((m) => m.provider === 'codex_cli').map(option)}

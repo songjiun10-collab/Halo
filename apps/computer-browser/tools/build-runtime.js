@@ -13,7 +13,7 @@ const COHORTS = Object.freeze([
   Object.freeze({ config: 'tsconfig.runtime.json', source: 'runtime-src/shared', output: 'shared',
     names: Object.freeze(['harness-contracts', 'task-profile-contracts', 'harness-profile', 'capability-registry', 'task-profile-router', 'port-contracts', 'layout-constants', 'clamp-bounds']) }),
   Object.freeze({ config: 'tsconfig.runtime-harness.json', source: 'runtime-src/main/harness', output: 'main/harness',
-    names: Object.freeze(['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker', 'message-port', 'message-mailbox', 'background-runtime-ui', 'background-launch-agent', 'recovery-policy', 'model-tiers', 'context-builder', 'nvidia-model-catalog', 'screen-map', 'effect-classifier', 'planner-escalation', 'planner-routing', 'slack-task-entry']) }),
+    names: Object.freeze(['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker', 'message-port', 'message-mailbox', 'background-runtime-ui', 'background-launch-agent', 'recovery-policy', 'model-tiers', 'context-builder', 'nvidia-model-catalog', 'screen-map', 'effect-classifier', 'planner-escalation', 'planner-routing', 'slack-task-entry', 'activity-journal']) }),
   Object.freeze({ config: 'tsconfig.runtime-integration.json', source: 'runtime-src/integration', output: 'integration',
     names: Object.freeze(['approval-latency']) }),
 ]);
