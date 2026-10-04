@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { AGENT_ROLE } from '../session/session'
 import { nonEmptyVerbatim } from '../session/composer'
 import { Forward, Up } from './Icons'
 import { HaloMark } from './Logo'
