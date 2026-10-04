@@ -214,15 +214,17 @@ export function SettingsPanel({ leaving, onClose }: Props) {
     return () => { current = false }
   }, [])
   // Opening settings asks the host which NVIDIA models the account can use; a failed lookup keeps the built-in list.
-  useEffect(() => {
-    let current = true
-    void window.haloBrowser?.refreshPlannerModels?.().then((result) => {
-      if (!current || !result) return
+  const mounted = useRef(true)
+  useEffect(() => () => { mounted.current = false }, [])
+  const refreshModels = async () => {
+    try {
+      const result = await window.haloBrowser?.refreshPlannerModels?.()
+      if (!result) return
       mergeDiscoveredNvidia(result.nvidia)
-      setModelsVersion((v) => v + 1)
-    }).catch(() => {})
-    return () => { current = false }
-  }, [])
+      if (mounted.current) setModelsVersion((v) => v + 1)
+    } catch { /* keep the built-in list */ }
+  }
+  useEffect(() => { void refreshModels() }, [])
   useEffect(() => {
     if (leaving) return
     ref.current?.querySelector<HTMLElement>('[role=dialog]')?.focus()
@@ -247,10 +249,10 @@ export function SettingsPanel({ leaving, onClose }: Props) {
   const [keyEditing, setKeyEditing] = useState<string | null>(null)
   const [keyError, setKeyError] = useState<string | null>(null)
   useEffect(() => { window.haloBrowser?.getApiKeyStatus?.().then(setApiKeys).catch(() => {}) }, [])
-  const keyCall = async (call: Promise<Record<string, boolean>> | undefined, done: boolean) => {
+  const keyCall = async (call: Promise<Record<string, boolean>> | undefined, done: boolean, provider?: string) => {
     setKeyError(null)
-    try { if (call) { setApiKeys(await call); if (done) setKeyEditing(null) } else setKeyError('API keys are not available in this build.') }
+    try { if (call) { setApiKeys(await call); if (done) setKeyEditing(null); if (provider === 'nvidia') await refreshModels() } else setKeyError('API keys are not available in this build.') }
     catch (caught) { setKeyError((caught as { code?: string })?.code === 'encryption_unavailable' ? 'Secure keychain storage is unavailable, so the key was not saved.' : 'Could not save that key.') }
   }
-  return <div ref={ref} className="hx-settings__host"><SettingsView settings={settings} saving={saving} error={error} onChange={(p) => void change(p)} onClose={onClose} leaving={leaving} enabledPlanners={enabledPlanners} onEnabledPlanners={setEnabledPlanners} apiKeys={apiKeys} keyEditing={keyEditing} keyError={keyError} onKeyEditing={(id) => { setKeyError(null); setKeyEditing(id) }} onSaveKey={(id, key) => void keyCall(window.haloBrowser?.setApiKey?.(id, key), true)} onClearKey={(id) => void keyCall(window.haloBrowser?.clearApiKey?.(id), true)} /></div>
+  return <div ref={ref} className="hx-settings__host"><SettingsView settings={settings} saving={saving} error={error} onChange={(p) => void change(p)} onClose={onClose} leaving={leaving} enabledPlanners={enabledPlanners} onEnabledPlanners={setEnabledPlanners} apiKeys={apiKeys} keyEditing={keyEditing} keyError={keyError} onKeyEditing={(id) => { setKeyError(null); setKeyEditing(id) }} onSaveKey={(id, key) => void keyCall(window.haloBrowser?.setApiKey?.(id, key), true, id)} onClearKey={(id) => void keyCall(window.haloBrowser?.clearApiKey?.(id), true, id)} /></div>
 }
