@@ -3,6 +3,7 @@ import { tabTitle } from '../session/pages'
 import { getDomain } from 'tldts'
 import { AGENT, currentUrl, host } from '../session/session'
 import type { Tab, TabActivity } from '../session/types'
+import { BrandIcon, brandFor } from './BrandIcon'
 import { Check, Close, Pause, Plus } from './Icons'
 
 interface Props {
@@ -84,7 +85,7 @@ export function TabStrip({ tabs, activeTabId, canClose, onSelect, onClose, onNew
                 onClick={() => onSelect(tab.id)}
                 onKeyDown={(e) => onKeyDown(e, i)}
               >
-                <span className="hx-tab__fav" aria-hidden="true">{initial(currentUrl(tab))}</span>
+                <span className="hx-tab__fav" aria-hidden="true">{brandFor(host(currentUrl(tab))) ? <BrandIcon host={host(currentUrl(tab))} size={16} /> : initial(currentUrl(tab))}</span>
                 {tab.claude && <Activity state={tab.claude} />}
                 <span className="hx-tab__title">{title}</span>
               </button>

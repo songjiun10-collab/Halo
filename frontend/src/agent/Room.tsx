@@ -49,7 +49,10 @@ export function TeamRoom({ api, teamId, agents, members = agents, archived, onOp
       .catch((e) => { if (live) setErr(errText(e)) })
     return () => { live = false; off() }
   }, [api, teamId])
-  useEffect(() => { end.current?.scrollIntoView?.({ block: 'end', behavior: 'smooth' }) }, [state.messages.length, state.round.speakerId])
+  useEffect(() => {
+    const id = requestAnimationFrame(() => end.current?.scrollIntoView?.({ block: 'end' }))
+    return () => cancelAnimationFrame(id)
+  }, [state.messages.length, state.round.speakerId])
   const send = async () => {
     const text = draft.trim()
     if (!text || sending || archived) return

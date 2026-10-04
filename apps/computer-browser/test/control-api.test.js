@@ -286,7 +286,7 @@ test("address bar opens bare domains and turns ordinary text into a web search",
   await api.navigate("example.com/path");
   await api.navigate("research notes 2026");
   assert.equal(targets[0], "https://example.com/path");
-  assert.equal(targets[1], "https://duckduckgo.com/?q=research%20notes%202026");
+  assert.equal(targets[1], "https://www.google.com/search?q=research%20notes%202026");
 });
 
 test("address bar refuses explicit non-web schemes", async () => {

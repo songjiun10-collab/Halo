@@ -1,3 +1,4 @@
+import { BrandIcon, brandFor } from './BrandIcon'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Plus } from './Icons'
 import type { TaskSummary } from '../session/api'
@@ -28,6 +29,8 @@ const stateLabel: Record<TaskSummary['state'], string> = {
   stopped: 'Stopped',
   completed: 'Complete',
 }
+
+function hostOf(url: string) { try { return new URL(url).hostname } catch { return '' } }
 
 interface Shortcut { url: string; label: string }
 const MAX_SHORTCUTS = 8
@@ -116,7 +119,7 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
         )}
         {shown.map((pin, i) => (
           <button type="button" key={pin.url + i} className="hx-sc" title={`${pin.label} (right-click to remove)`} aria-label={pin.label}
-            onClick={() => onOpenUrl(pin.url)} onContextMenu={(e) => { e.preventDefault(); setPins(shown.filter((_, j) => j !== i)) }}>{pin.label[0]?.toUpperCase()}</button>
+            onClick={() => onOpenUrl(pin.url)} onContextMenu={(e) => { e.preventDefault(); setPins(shown.filter((_, j) => j !== i)) }}>{brandFor(pin.label) ? <BrandIcon host={pin.label} size={28} /> : pin.label[0]?.toUpperCase()}</button>
         ))}
       </div>
       {adding && (
@@ -138,7 +141,7 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
       <p className="hx-sidebar__label">Tabs</p>
       {tabs.map((tab) => (
         <button type="button" key={tab.id} className="hx-sidebar__item" data-selected={(!activeTaskId && tab.id === activeTabId) || undefined} onClick={() => onSelectTab(tab.id)}>
-          <span className="hx-sidebar__fav" aria-hidden="true">{tab.title.trim().slice(0, 1) || '?'}</span><span>{tab.title}</span>
+          <span className="hx-sidebar__fav" aria-hidden="true">{brandFor(hostOf(tab.url)) ? <BrandIcon host={hostOf(tab.url)} size={20} /> : tab.title.trim().slice(0, 1) || '?'}</span><span>{tab.title}</span>
         </button>
       ))}
       <p className="hx-sidebar__label hx-sidebar__label--row">Projects<button type="button" className="hx-sidebar__add" aria-label="New project folder" onClick={addProject}>+</button></p>

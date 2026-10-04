@@ -356,7 +356,7 @@ class ControlApi {
       throw new TypeError("Only HTTP and HTTPS addresses can be opened");
     }
     if (/\s/.test(input) || !/^(localhost|[\w.-]+\.\w+)(?::\d+)?(?:\/|$)/i.test(input)) {
-      return `https://duckduckgo.com/?q=${encodeURIComponent(input)}`;
+      return `https://www.google.com/search?q=${encodeURIComponent(input)}`;
     }
     const parsed = new URL(`https://${input}`);
     return parsed.href;
