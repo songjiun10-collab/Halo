@@ -11,6 +11,7 @@ import { activeModel } from '../session/claude-models'
 import type { AgentBrand } from './AgentUi'
 
 export type HomeMode = 'task' | 'agent'
+export const activeAgentCount = (agents: AgentRecord[]) => agents.filter((agent) => !agent.archived).length
 /** Task/Agent switch for the new-task home (Design System-6 glass toggle: tap or drag the thumb). Renders nothing while the preload lacks the roster API. */
 export function ModeSwitch({ mode, onChange }: { mode: HomeMode; onChange: (m: HomeMode) => void }) {
   const ref = useRef<HTMLDivElement>(null), dragging = useRef(false)
@@ -99,7 +100,7 @@ function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: str
       onBack={hub} onEdit={() => setV(owner.kind === 'team' ? { n: 'teamForm', team: it as TeamRecord } : { n: 'agentForm', agent: it as AgentRecord })} onChanged={refresh}
       onDuplicated={async (a) => { await refresh(); open({ kind: 'agent', id: a.id }) }} onOpenTask={openTask} />
   } else {
-    const nA = agents.filter((a) => !a.archived).length, nT = teams.filter((t) => !t.archived).length
+    const nA = activeAgentCount(agents), nT = teams.filter((t) => !t.archived).length
     const dot = (id: string) => rosterDot(status[id])
     const deskRows = [...agents.filter((a) => !a.archived).map((item) => ({ item, kind: 'agent' as const })), ...teams.filter((t) => !t.archived).map((item) => ({ item, kind: 'team' as const }))]
       .map(({ item, kind }) => ({ item, kind, status: status[item.id] }))
@@ -129,7 +130,7 @@ function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: str
       <div className="hx-ag__grid">{agents.map((a) => <button type="button" key={a.id} className="hx-acard hx-gl" data-archived={a.archived || undefined} onClick={() => open({ kind: 'agent', id: a.id })}>
           {a.archived ? null : <i className="hx-dot" data-s={dot(a.id)} title={dot(a.id)} />}{a.pinned ? <span className="hx-pin" aria-label="Pinned"><Ic d="M12 17v5M8 3h8l-1 6 3 4H6l3-4z" s={13} /></span> : null}
           <Avatar avatar={a.avatar} size={48} brand={modelBrand(a.model) ?? (a.model == null ? defaultBrand : undefined)} /><b>{a.name}</b><span>{a.title || 'No title'}</span>{a.archived ? <i className="hx-badge">Archived</i> : null}</button>)}
-        <button type="button" className="hx-acard hx-acard--new" disabled={agents.length >= LIM.agents} onClick={() => setV({ n: 'agentForm' })}><span className="hx-plus">+</span><b>New agent</b>{agents.length >= LIM.agents ? <span>Limit reached</span> : null}</button></div>
+        <button type="button" className="hx-acard hx-acard--new" disabled={nA >= LIM.agents} onClick={() => setV({ n: 'agentForm' })}><span className="hx-plus">+</span><b>New agent</b>{nA >= LIM.agents ? <span>Limit reached</span> : null}</button></div>
       <h3 className="hx-ag__h">Teams <small>{nT}/{LIM.teams}</small></h3>
       <div className="hx-ag__grid">{teams.map((t) => <button type="button" key={t.id} className="hx-acard hx-gl" data-archived={t.archived || undefined} onClick={() => open({ kind: 'team', id: t.id })}>
           {t.archived ? null : <i className="hx-dot" data-s={dot(t.id)} title={dot(t.id)} />}{t.pinned ? <span className="hx-pin" aria-label="Pinned"><Ic d="M12 17v5M8 3h8l-1 6 3 4H6l3-4z" s={13} /></span> : null}

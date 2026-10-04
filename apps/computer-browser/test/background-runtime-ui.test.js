@@ -119,6 +119,18 @@ test("the snapshot reports whether the LaunchAgent is installed, and omits it wh
   assert.equal(Object.hasOwn(await none.getSnapshot(), "launchAgentInstalled"), false);
 });
 
+test("enabling login launch from a local host installs without starting a competing service", async () => {
+  const calls = [];
+  const launchAgent = {
+    isInstalled: async () => true,
+    enable: async (options) => { calls.push(["enable", options]); },
+    disable: async () => { calls.push(["disable"]); },
+  };
+  const ui = new BackgroundRuntimeUi({ host: localHost(), launchAgent });
+  await ui.setLaunchAtLogin(true);
+  assert.deepEqual(calls, [["enable", { deferStart: true }]]);
+});
+
 test("LaunchAgentManager.isInstalled trusts only a regular plist file", async () => {
   const os = require("node:os");
   const { LaunchAgentManager } = require("../main/harness/launch-agent-manager");
@@ -188,6 +200,19 @@ test("enable installs and loads the service's LaunchAgent; disable boots it out 
   await agent.disable();
   assert.equal(await agent.isInstalled(), false);
   assert.ok(calls.some((args) => args[0] === "bootout"));
+});
+
+test("deferred LaunchAgent enable only installs the plist and never bootstraps a competing host", async () => {
+  const os = require("node:os");
+  const { LaunchAgentManager } = require("../main/harness/launch-agent-manager");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "halo-launchagents-deferred-"));
+  const calls = [];
+  const manager = new LaunchAgentManager({ launchAgentsDir: dir, runLaunchctl: async (args) => { calls.push(args); return ""; }, uid: 501 });
+  const agent = createBackgroundLaunchAgent({ manager, executablePath: "/Applications/Halo.app/Contents/MacOS/Halo", userId: "tester" });
+  await agent.enable({ deferStart: true });
+  assert.equal(await agent.isInstalled(), true);
+  assert.deepEqual(calls, []);
+  await fs.rm(dir, { recursive: true, force: true });
 });
 
 test("setLaunchAtLogin toggles the LaunchAgent and pushes the new snapshot", async () => {

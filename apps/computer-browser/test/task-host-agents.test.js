@@ -66,6 +66,31 @@ test("startAgentTask creates a normal task carrying the role and lists it as a c
   assert.equal(conversations[0].task.taskId, taskId);
 });
 
+test("startAgentTask links and returns after admission without waiting for the planner run to finish", async () => {
+  let releasePlanner;
+  let enteredPlanner;
+  const plannerEntered = new Promise((resolve) => { enteredPlanner = resolve; });
+  const plannerGate = new Promise((resolve) => { releasePlanner = resolve; });
+  const { host } = await makeHost({ makePlanner: () => ({
+    next: async (context) => {
+      enteredPlanner();
+      await plannerGate;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] };
+    },
+  }) });
+  const saved = await host.saveAgent(agentInput);
+  const starting = host.startAgentTask({ agentId: saved.id, request: "긴 작업" });
+  await plannerEntered;
+  const early = await Promise.race([
+    starting,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("startAgentTask waited for the planner run")), 100)),
+  ]);
+  assert.equal(typeof early.taskId, "string");
+  assert.equal((await host.listAgentConversations({ agentId: saved.id }))[0].taskId, early.taskId);
+  releasePlanner();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
 test("only an opted-in direct Agent start records its owner before browser construction", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-agent-profile-"));
   let observedProfileAtBrowserConstruction = null;

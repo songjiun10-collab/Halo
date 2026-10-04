@@ -184,7 +184,7 @@ class TaskHost {
       store: this._agentStore,
       createTask: (goalInput, selectors, ownerBinding) => ownerBinding
         ? this._createAgentTask(goalInput, selectors, ownerBinding)
-        : this.createTask(goalInput, selectors),
+        : this._createTaskWithProfile(goalInput, selectors, { waitForRunLoop: false }),
       listTasks: () => this.listTasks(),
     });
     // Always-on Agents: schedules live beside agents.json. The scheduler is
@@ -838,6 +838,7 @@ class TaskHost {
       return this._createTaskWithProfile(goalInput, selectors, {
         agentBrowserProfileBinding: { agentId: agent.id },
         onAgentBrowserProfileAttached: release,
+        waitForRunLoop: false,
       });
     });
   }
@@ -930,7 +931,7 @@ class TaskHost {
     return this._withWorkGoalAdmission(() => this._workGoalOrchestrator.repairMissingTaskReservation(goalId, expectedVersion, reservationId));
   }
 
-  _createTaskWithProfile(goalInput, selectors = {}, { agentBrowserProfileBinding = null, onAgentBrowserProfileAttached = null } = {}) {
+  _createTaskWithProfile(goalInput, selectors = {}, { agentBrowserProfileBinding = null, onAgentBrowserProfileAttached = null, waitForRunLoop = true } = {}) {
     this._assertOpen();
     if (!isPlainObject(selectors) || Object.keys(selectors).some((key) => !TASK_PROFILE_SELECTOR_FIELDS.includes(key)) ||
         (Object.hasOwn(selectors, "standalone") && typeof selectors.standalone !== "boolean") ||
@@ -962,7 +963,7 @@ class TaskHost {
       reviewFallback: selectors.reviewFallback ?? "queue",
       plannerModel: selectors.plannerModel ?? null,
     };
-    return this._createNewTask(stableGoalInput, null, null, resolvedProfile, selectors.standalone === true, selectors.useImportedSessions === true, runScope, agentBrowserProfileBinding, onAgentBrowserProfileAttached);
+    return this._createNewTask(stableGoalInput, null, null, resolvedProfile, selectors.standalone === true, selectors.useImportedSessions === true, runScope, agentBrowserProfileBinding, onAgentBrowserProfileAttached, waitForRunLoop);
   }
 
   async listRoutines() {
@@ -1347,7 +1348,7 @@ class TaskHost {
     });
   }
 
-  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null, standalone = false, useImportedSessions = false, runScope = null, agentBrowserProfileBinding = null, onAgentBrowserProfileAttached = null) {
+  _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null, standalone = false, useImportedSessions = false, runScope = null, agentBrowserProfileBinding = null, onAgentBrowserProfileAttached = null, waitForRunLoop = true) {
     const scope = runScope ?? { mcpProviders: null, reviewFallback: "queue", plannerModel: null };
     this._assertOpen();
     if (!resolvedProfile) throw new TaskHostError("profile_required", "new tasks must have a host-resolved profile before storage or admission");
@@ -1519,6 +1520,15 @@ class TaskHost {
       return { store, controller, started };
     }).then(async (result) => {
       if (!result.controller) return { taskId: result.taskId, snapshot: result.snapshot, goal: result.goal };
+      if (!waitForRunLoop) {
+        // The controller is attached and its run loop has started. Keep any
+        // unexpected rejection observed; normal planner/browser failures are
+        // represented by durable paused state and task events.
+        result.started.catch((error) => {
+          this._emit(result.store.taskId, { state: "paused", pauseReason: "task_start_failed", error: String(error?.message ?? error).slice(0, 500) });
+        });
+        return { taskId: result.store.taskId, snapshot: result.controller.getSnapshot(), goal: result.controller.getGoal() };
+      }
       await result.started;
       return { taskId: result.store.taskId, snapshot: result.controller.getSnapshot(), goal: result.controller.getGoal() };
     });

@@ -116,7 +116,13 @@ class BackgroundRuntimeUi {
     if (!this._launchAgent) {
       throw new BackgroundRuntimeUiError("launch_agent_unavailable", "starting at login is not available here");
     }
-    await (enabled ? this._launchAgent.enable() : this._launchAgent.disable());
+    // A local TaskHost and a bootstrapped background service would own
+    // separate in-memory coordinators over the same durable stores. Install
+    // the login job without starting it now; launchd will start it at the
+    // next login, after this local host is gone.
+    await (enabled
+      ? this._launchAgent.enable(this._attached ? undefined : { deferStart: true })
+      : this._launchAgent.disable());
     await this._refreshInstalled();
     const snapshot = this._snapshot();
     this._emit(snapshot);

@@ -20,8 +20,10 @@ function launchAgentUserId({ username, uid } = {}) {
   return cleaned || `uid-${Number.isInteger(uid) ? uid : 0}`;
 }
 
-// enable(): writes the plist and bootstraps it, which also starts the service
-// now (RunAtLoad). disable(): boots it out and deletes the plist.
+// enable(): writes the plist and normally bootstraps it now (RunAtLoad).
+// Call with {deferStart:true} when a local TaskHost still owns shared storage;
+// launchd will start the service at the next login instead. disable(): boots
+// it out and deletes the plist.
 function createBackgroundLaunchAgent({ manager = new LaunchAgentManager(), executablePath, appPath, userId, logPath } = {}) {
   const invocation = resolveBackgroundServiceInvocation({ executablePath, appPath, userId });
   const job = {
@@ -33,7 +35,7 @@ function createBackgroundLaunchAgent({ manager = new LaunchAgentManager(), execu
   return Object.freeze({
     label: invocation.label,
     isInstalled: () => manager.isInstalled({ label: invocation.label }),
-    enable: () => manager.update(job),
+    enable: ({ deferStart = false } = {}) => deferStart ? manager.install(job) : manager.update(job),
     disable: () => manager.remove({ label: invocation.label }),
   });
 }

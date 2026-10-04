@@ -44,6 +44,7 @@ export function AgentForm({ api, agent, defaultBrand, onBack, onSaved }: { api: 
         <optgroup label="Antigravity">{group('antigravity')}</optgroup>
         <optgroup label="Cursor">{group('cursor')}</optgroup>
         <optgroup label="NVIDIA">{group('nvidia')}</optgroup>
+        <optgroup label="OpenCode">{group('opencode_cli')}</optgroup>
       </select></label>
     {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
     <div className="hx-ag__actions"><button type="button" className="hx-agbtn" onClick={onBack}>Cancel</button><button type="button" className="hx-agbtn hx-agbtn--p" disabled={bad || busy} onClick={save}>{agent ? 'Save changes' : 'Create agent'}</button></div></div>
