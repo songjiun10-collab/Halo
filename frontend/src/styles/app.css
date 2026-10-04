@@ -733,3 +733,5 @@ kbd {
 html, body, #root { background: transparent !important; }
 .hx-window { background: rgba(18, 22, 32, 0.38) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
 :root[data-theme="light"] .hx-window { background: rgba(255, 255, 255, 0.35) !important; }
+
+.hx-sc__input { margin: 0 8px 8px; width: calc(100% - 16px); box-sizing: border-box; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, white 8%, transparent); color: var(--foreground); font: inherit; font-size: 12px; outline: none; }

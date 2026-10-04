@@ -29,14 +29,18 @@ const stateLabel: Record<TaskSummary['state'], string> = {
   completed: 'Complete',
 }
 
-const PINS = [
-  { n: 'Instagram', g: 'i', c: '#e1306c', url: 'https://www.instagram.com' },
-  { n: 'Google', g: 'G', c: '#4285f4', url: 'https://www.google.com' },
-  { n: 'Slack', g: 'S', c: '#e01e5a', url: 'https://app.slack.com' },
-  { n: 'Figma', g: 'F', c: '#a259ff', url: 'https://www.figma.com' },
-  { n: 'Threads', g: '@', c: '#8a8d91', url: 'https://www.threads.net' },
-  { n: 'Discord', g: 'D', c: '#5865f2', url: 'https://discord.com/app' },
-]
+interface Shortcut { url: string; label: string }
+const SHORTCUT_SLOTS = 6
+
+function toShortcut(raw: string): Shortcut | null {
+  const text = raw.trim()
+  if (!text) return null
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`)
+    return { url: url.href, label: url.hostname.replace(/^www\./, '') }
+  } catch { return null }
+}
+
 interface Project { id: string; name: string; open: boolean; taskIds: string[] }
 
 function useStored<T>(key: string, initial: T): [T, (next: T) => void] {
@@ -70,7 +74,8 @@ function TaskButton({ task, active, onClick, child }: { task: TaskSummary; activ
 }
 
 export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, tabs, activeTabId, onSelectTab, onOpenUrl, agents }: Props) {
-  const [pins, setPins] = useStored<(string | null)[]>('halo.shortcuts', PINS.map((p) => p.n))
+  const [pins, setPins] = useStored<(Shortcut | null)[]>('halo.shortcuts', Array.from({ length: SHORTCUT_SLOTS }, () => null))
+  const [adding, setAdding] = useState<number | null>(null)
   const [projects, setProjects] = useStored<Project[]>('halo.projects', [])
   const [moreOpen, setMoreOpen] = useStored<boolean>('halo.sidebar.more', false)
   const [editing, setEditing] = useState<string | null>(null)
@@ -95,17 +100,27 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
   return (
     <aside className="hx-sidebar" data-open={open} aria-label="Workspace" inert={inert}>
       <div className="hx-scs" aria-label="Shortcuts">
-        {pins.map((name, i) => {
-          const pin = PINS.find((candidate) => candidate.n === name)
+        {Array.from({ length: SHORTCUT_SLOTS }, (_, i) => {
+          const pin = pins[i] && typeof pins[i] === 'object' ? pins[i] : null
           return pin ? (
-            <button type="button" key={i} className="hx-sc" style={{ color: pin.c }} title={`${pin.n} (right-click to remove)`} aria-label={pin.n}
-              onClick={() => onOpenUrl(pin.url)} onContextMenu={(e) => { e.preventDefault(); setPins(pins.map((x, j) => (j === i ? null : x))) }}>{pin.g}</button>
+            <button type="button" key={i} className="hx-sc" title={`${pin.label} (right-click to remove)`} aria-label={pin.label}
+              onClick={() => onOpenUrl(pin.url)} onContextMenu={(e) => { e.preventDefault(); setPins(Array.from({ length: SHORTCUT_SLOTS }, (_, j) => (j === i ? null : pins[j] ?? null))) }}>{pin.label[0]?.toUpperCase()}</button>
           ) : (
-            <button type="button" key={i} className="hx-sc hx-sc--empty" aria-label="Add shortcut"
-              onClick={() => { const next = PINS.find((candidate) => !pins.includes(candidate.n)); if (next) setPins(pins.map((x, j) => (j === i ? next.n : x))) }}>+</button>
+            <button type="button" key={i} className="hx-sc hx-sc--empty" aria-label="Add shortcut" onClick={() => setAdding(i)}>+</button>
           )
         })}
       </div>
+      {adding !== null && (
+        <input className="hx-sc__input" autoFocus placeholder="Site address, then Enter" aria-label="Shortcut address"
+          onBlur={() => setAdding(null)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setAdding(null)
+            if (e.key !== 'Enter') return
+            const next = toShortcut(e.currentTarget.value)
+            if (next) setPins(Array.from({ length: SHORTCUT_SLOTS }, (_, j) => (j === adding ? next : pins[j] ?? null)))
+            setAdding(null)
+          }} />
+      )}
       <button type="button" className="hx-sidebar__item hx-sidebar__new" onClick={onNewTask}>
         <Plus />
         <span>New task</span>
