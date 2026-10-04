@@ -735,3 +735,14 @@ html, body, #root { background: transparent !important; }
 :root[data-theme="light"] .hx-window { background: rgba(255, 255, 255, 0.35) !important; }
 
 .hx-sc__input { margin: 0 8px 8px; width: calc(100% - 16px); box-sizing: border-box; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, white 8%, transparent); color: var(--foreground); font: inherit; font-size: 12px; outline: none; }
+
+/* Sidebar as a liquid-glass panel over the vibrant window. */
+@media (min-width: 681px) {
+  .hx-window .hx-sidebar {
+    margin: 0 0 8px 8px; border-radius: 18px; overflow: hidden;
+    border: 1px solid color-mix(in srgb, white 14%, transparent) !important;
+    background: linear-gradient(180deg, color-mix(in srgb, white 14%, transparent), color-mix(in srgb, white 5%, transparent)) !important;
+    -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, white 28%, transparent), inset 0 -1px 0 color-mix(in srgb, white 6%, transparent), 0 8px 24px rgba(0, 0, 0, 0.25);
+  }
+}
