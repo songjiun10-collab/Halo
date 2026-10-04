@@ -307,8 +307,6 @@ class RoomOrchestrator {
     }
     let previous = null;
     let passes = 0;
-    const failures = new Set();
-    let failedTurns = 0;
     while (round.turn < maxTurns && (passes < members.length || reviewWorkRemains())) {
       if (signal.aborted) return;
       let speaker;
@@ -382,8 +380,6 @@ class RoomOrchestrator {
       }
 
       if (error) {
-        failures.add(error);
-        failedTurns += 1;
       }
       if (error || reply.kind === "pass") {
         passes += 1;
@@ -416,10 +412,6 @@ class RoomOrchestrator {
       return; // at most one task per round, and a start (or a failed one) ends it
     }
     await recordReviewOutcome();
-    // Every turn failed: say so once rather than leaving silent passes.
-    if (failedTurns > 0 && failedTurns === round.turn) {
-      await this._append(teamId, { author: "host", kind: "notice", text: `Team members couldn't reply (${[...failures].join(", ")}). Their worker may not support team rooms.` });
-    }
   }
 
   async _roomTaskRunning(teamId) {

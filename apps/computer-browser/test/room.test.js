@@ -532,7 +532,7 @@ test("a live lock held by another host is never taken over, a symlinked lock is 
   await assert.rejects(store.acquireRoundLock(TEAM), { code: "unsafe_path" });
 });
 
-test("a worker that cannot take room turns gets one notice instead of silent passes", async () => {
+test("a worker that cannot take room turns gets a per-member warning instead of silent passes", async () => {
   const bad = Object.assign(new Error("not a room turn"), { code: "invalid_room_turn" });
   const h = await harness({ members: [A, B], replies: { [A]: Array(3).fill(bad), [B]: Array(3).fill(bad) } });
   await h.orchestrator.post(TEAM, "hi");
