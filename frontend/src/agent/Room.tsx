@@ -37,7 +37,7 @@ export function RoomTranscript({ messages, agents, round, onOpenTask }: { messag
  * A team's chat room. Members reply in turn after each message; when they agree on
  * work, one team task starts automatically and still goes through approval.
  */
-export function TeamRoom({ api, teamId, agents, archived, onOpenTask }: { api: RoomApi; teamId: string; agents: Named[]; archived: boolean; onOpenTask: (taskId: string) => void }) {
+export function TeamRoom({ api, teamId, agents, members = agents, archived, onOpenTask }: { api: RoomApi; teamId: string; agents: Named[]; members?: Named[]; archived: boolean; onOpenTask: (taskId: string) => void }) {
   const [state, setState] = useState<{ messages: RoomMessage[]; round: RoomRound }>({ messages: [], round: IDLE })
   const [draft, setDraft] = useState(''), [err, setErr] = useState<string | null>(null), [sending, setSending] = useState(false)
   const end = useRef<HTMLDivElement>(null)
@@ -62,6 +62,9 @@ export function TeamRoom({ api, teamId, agents, archived, onOpenTask }: { api: R
     <div ref={end} />
     <p className="hx-ag__note">When the team agrees on work, it starts one task automatically. Anything with an effect still needs your approval.</p>
     {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
+    {archived || members.length < 2 ? null : <div className="hx-room__mentions" aria-label="Address a member">
+      {members.map((member) => <button key={member.id} type="button" className="hx-room__mention" onClick={() => setDraft((text) => `${text}${text && !/\s$/.test(text) ? ' ' : ''}@${member.name} `)}>@{member.name}</button>)}
+    </div>}
     <div className="hx-room__compose">
       <textarea className="hx-fld__in" rows={2} value={draft} maxLength={LIM.message} disabled={archived} aria-label="Message to the team"
         placeholder={archived ? 'This team is archived' : 'Message the team'} onChange={(e) => setDraft(e.target.value)}

@@ -54,6 +54,22 @@ class RoomError extends Error {
   }
 }
 
+// Members named as "@name" in the text, in the order they were mentioned.
+// Longer names match first so "@하이쿠 사본" is not read as "@하이쿠".
+function mentionedMembers(text, members) {
+  const found = [];
+  let rest = text;
+  for (const member of [...members].sort((a, b) => b.name.length - a.name.length)) {
+    const at = rest.indexOf(`@${member.name}`);
+    if (at < 0) continue;
+    const end = at + member.name.length + 1;
+    if (/[\p{L}\p{N}_]/u.test(rest[end] ?? "")) continue;
+    found.push({ at, member });
+    rest = rest.slice(0, at) + " ".repeat(end - at) + rest.slice(end);
+  }
+  return found.sort((a, b) => a.at - b.at).map((entry) => entry.member);
+}
+
 class RoomOrchestrator {
   constructor({ store, getTeam, getAgent, requestTurn, startTask, getTaskState, emit, maxTurns = contracts.DEFAULT_MAX_TURNS } = {}) {
     for (const [name, value] of Object.entries({ getTeam, getAgent, requestTurn, startTask, getTaskState })) {
@@ -236,8 +252,11 @@ class RoomOrchestrator {
       await this._append(teamId, { author: "host", kind: "notice", text: "No team member is available to reply." });
       return;
     }
-    const maxTurns = members.length === 1 ? 1 : this._maxTurns;
     const initialMessage = (await this._store.read(teamId)).find((message) => message.messageId === originMessageId);
+    // "@name" addresses members directly: only they answer, once each. A
+    // high-impact request still gets the full-team review, so it ignores it.
+    const addressed = HIGH_IMPACT_REQUEST.test(initialMessage?.text ?? "") ? [] : mentionedMembers(initialMessage?.text ?? "", members);
+    const maxTurns = addressed.length > 0 ? addressed.length : members.length === 1 ? 1 : this._maxTurns;
     const reviewReasons = new Set(HIGH_IMPACT_REQUEST.test(initialMessage?.text ?? "") && members.length > 1 ? ["high_impact"] : []);
     const reviewAttempts = new Map();
     const reviewCompleted = new Map();
@@ -275,10 +294,14 @@ class RoomOrchestrator {
     let failedTurns = 0;
     while (round.turn < maxTurns && (passes < members.length || reviewWorkRemains())) {
       if (signal.aborted) return;
-      let index = (this._rotation.get(teamId) ?? 0) % members.length;
-      if (members.length > 1 && members[index].id === previous) index = (index + 1) % members.length;
-      const speaker = members[index];
-      this._rotation.set(teamId, (index + 1) % members.length);
+      let speaker;
+      if (addressed.length > 0) speaker = addressed[round.turn];
+      else {
+        let index = (this._rotation.get(teamId) ?? 0) % members.length;
+        if (members.length > 1 && members[index].id === previous) index = (index + 1) % members.length;
+        speaker = members[index];
+        this._rotation.set(teamId, (index + 1) % members.length);
+      }
       round.turn += 1;
       round.speakerId = speaker.id;
       this._emitRound(teamId);

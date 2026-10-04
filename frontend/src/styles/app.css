@@ -776,3 +776,6 @@ section.hx-chat .hx-chat__thread { flex: 1 1 0; min-height: 60px; overflow-y: au
 .hx-chat__fold:hover { color: var(--foreground); }
 .hx-chat__fold[aria-expanded="false"] .hx-sidebar__chev { transform: none; }
 .hx-chat__fold-n { opacity: .6; }
+.hx-room__mentions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.hx-room__mention { border: 1px solid var(--border, rgba(255,255,255,.14)); background: transparent; color: var(--muted-foreground); font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 999px; cursor: pointer; }
+.hx-room__mention:hover { color: var(--foreground); }

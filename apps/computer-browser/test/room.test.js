@@ -597,3 +597,17 @@ test("a proposed task carries the person's own message so its intent survives re
   await h.orchestrator.idle(TEAM);
   assert.equal(calls[0].intentText, "컴퓨터 유즈로 버튼 확인해 줘");
 });
+
+test("@name addresses only the mentioned members, once each, in mention order", async () => {
+  const h = await harness({ replies: { [A]: [{ kind: "say", text: "a" }], [C]: [{ kind: "say", text: "c" }] } });
+  await h.orchestrator.post(TEAM, "@Cy 먼저, 그리고 @Ann 도 의견 줘");
+  await h.orchestrator.idle(TEAM);
+  assert.deepEqual(h.calls, [C, A]);
+});
+
+test("a mention must end at a name boundary, and no mention keeps the normal rotation", async () => {
+  const h = await harness({});
+  await h.orchestrator.post(TEAM, "@Anna 안녕");
+  await h.orchestrator.idle(TEAM);
+  assert.deepEqual(h.calls, [A, B, C], "unmatched mention falls back to everyone passing in rotation");
+});
