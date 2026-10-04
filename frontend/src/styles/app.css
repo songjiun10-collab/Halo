@@ -262,16 +262,34 @@ code { font-family: var(--font-mono); }
 
 /* A new tab: Halo's own dark surface, not the light web page. */
 .hx-site--home { display: flex; background: var(--backdrop); padding: 0; }
-.hx-home { margin: auto; width: min(30rem, calc(100% - 48px)); padding: 40px 0; text-align: center; }
-.hx-home__mark { width: 40px; height: 40px; color: var(--brand); }
-.hx-home__title { margin: var(--space-md) 0 var(--space-lg); font-size: 20px; font-weight: 600; color: var(--foreground); }
-.hx-home__form { display: flex; gap: var(--space-sm); }
+.hx-home { margin: auto; width: min(40rem, calc(100% - 48px)); padding: 40px 0; text-align: center; }
+.hx-home__mark { width: 48px; height: 48px; color: var(--brand); }
+.hx-home__title { margin: var(--space-md) 0 28px; font-size: 28px; font-weight: 600; letter-spacing: -.01em; color: var(--foreground); }
+.hx-home__form { display: flex; align-items: center; gap: 8px; }
 .hx-home__input {
-  flex: 1; min-width: 0; height: 44px; padding-inline: var(--space-md); border-radius: var(--radius-md);
-  border: 1px solid var(--border-strong); background: var(--toolbar); color: var(--foreground); font: 400 15px/1 var(--font-body);
+  flex: 1; min-width: 0; height: 56px; padding-inline: 20px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--toolbar); color: var(--foreground); font: 400 16px/1 var(--font-body);
 }
 .hx-home__input::placeholder { color: var(--muted-foreground); }
 .hx-home__input:focus-visible { outline-offset: 0; }
+.hx-home__form .hx-mpick__toggle { height: 56px; padding-inline: 16px; border-radius: 999px; font-size: 15px; }
+.hx-home__form .hx-btn { width: 56px; height: 56px; min-height: 56px; padding: 0; border-radius: 999px; }
+.hx-home__form .hx-btn .hx-ic { width: 20px; height: 20px; }
+.hx-home__recent { margin-top: 28px; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.hx-home__recent p { margin: 0 4px 6px; font: 600 12px var(--font-body); color: var(--muted-foreground); }
+.hx-rc { display: flex; align-items: center; gap: 10px; border: 0; background: transparent; color: var(--foreground); cursor: pointer; border-radius: 12px; padding: 10px 12px; font: 500 14px var(--font-body); text-align: left; }
+.hx-rc i { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted-foreground); }
+.hx-rc i[data-s=run] { background: var(--success); }
+.hx-rc i[data-s=ask] { background: var(--warning); }
+.hx-rc__t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hx-rc__s { color: var(--muted-foreground); font-size: 12.5px; font-weight: 400; }
+.hx-rc > span:last-child { color: var(--muted-foreground); }
+.hx-home__try { list-style: none; margin: 18px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.hx-home__try button { border: 0; background: transparent; color: var(--muted-foreground); cursor: pointer; font: 400 13px var(--font-body); padding: 4px 8px; border-radius: 999px; }
+@media (hover: hover) and (pointer: fine) {
+  .hx-rc:hover { background: color-mix(in oklab, var(--foreground) 9%, transparent); }
+  .hx-home__try button:hover { color: var(--foreground); background: color-mix(in oklab, var(--foreground) 9%, transparent); }
+}
 .hx-home__resume {
   display: inline-flex; align-items: center; gap: var(--space-sm); margin-top: var(--space-xl); padding: 8px 4px;
   border: 0; background: none; color: var(--muted-foreground); font: 500 13px/1 var(--font-body); cursor: pointer;
