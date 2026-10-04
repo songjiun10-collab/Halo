@@ -78,6 +78,16 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
   const [adding, setAdding] = useState(false)
   const shown = pins.filter((pin) => pin && typeof pin === 'object')
   const [projects, setProjects] = useStored<Project[]>('halo.projects', [])
+  const [folded, setFolded] = useStored<string[]>('halo.sidebar.folded', [])
+  const toggleFold = (key: string) => setFolded(folded.includes(key) ? folded.filter((k) => k !== key) : [...folded, key])
+  const fold = (key: string, title: string, items: TaskSummary[]) => (
+    <>
+      <button type="button" className="hx-sidebar__label hx-sidebar__label--fold" aria-expanded={!folded.includes(key)} onClick={() => toggleFold(key)}>
+        <span className="hx-sidebar__chev" aria-hidden="true">›</span>{title}
+      </button>
+      {folded.includes(key) ? null : list(items)}
+    </>
+  )
   const [moreOpen, setMoreOpen] = useStored<boolean>('halo.sidebar.more', false)
   const [editing, setEditing] = useState<string | null>(null)
   const filed = new Set(projects.flatMap((project) => project.taskIds))
@@ -148,8 +158,8 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
           {project.open ? list(project.taskIds.map((id) => byId.get(id)).filter((task): task is TaskSummary => !!task), true) : null}
         </div>
       ))}
-      {active.length ? <><p className="hx-sidebar__label">In progress</p>{list(active)}</> : null}
-      {recent.length ? <><p className="hx-sidebar__label">Recent tasks</p>{list(recent)}</> : null}
+      {active.length ? fold('active', 'In progress', active) : null}
+      {recent.length ? fold('recent', 'Recent tasks', recent) : null}
       <button type="button" className="hx-sidebar__item hx-more" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}>
         <span className="hx-sidebar__fav" style={{ transform: moreOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>›</span><span>Agents &amp; routines</span>
       </button>

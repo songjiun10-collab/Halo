@@ -746,3 +746,8 @@ html, body, #root { background: transparent !important; }
     box-shadow: inset 0 1px 0 color-mix(in srgb, white 28%, transparent), inset 0 -1px 0 color-mix(in srgb, white 6%, transparent), 0 8px 24px rgba(0, 0, 0, 0.25);
   }
 }
+
+.hx-sidebar__label--fold { display: flex; align-items: center; gap: 4px; width: calc(100% - 16px); border: 0; background: transparent; padding: 0; cursor: pointer; text-align: left; }
+.hx-sidebar__label--fold:hover { color: var(--foreground); }
+.hx-sidebar__chev { display: inline-block; transition: transform .15s; transform: rotate(90deg); }
+.hx-sidebar__label--fold[aria-expanded="false"] .hx-sidebar__chev { transform: none; }
