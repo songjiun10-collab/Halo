@@ -2287,6 +2287,22 @@ class TaskController {
         }
         continue;
       }
+      // Text mode only (the control under the point is known): a click on a
+      // control that moves money or destroys an account is refused whatever the
+      // permission mode, lease or approver says. The planner sees the note.
+      if (this._screenTargets && this._screenTargets.observationId === action.observationId &&
+          (action.type === "click_at" || action.type === "type_at") && hasComputerUseAdapter(this._store.taskProfile)) {
+        const hit = resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y));
+        const verdict = classifyTarget(hit, action.type);
+        if (verdict.gate === "deny") {
+          await this._store.append({ type: "note", payload: { kind: "effect_denied", actionType: action.type, effect: verdict.effect, reason: verdict.reason } });
+          if (this._routineRunner) {
+            await this._denyRoutineStep({ decision: "deny", reasons: [verdict.reason] });
+            return "stop_loop";
+          }
+          continue;
+        }
+      }
       // Computer use: coordinate clicks, typing and non-Enter keys run on the
       // approver's verdict alone. The mode, lock and one-use screen binding still
       // apply; Enter (which can submit a form) keeps the human gate.

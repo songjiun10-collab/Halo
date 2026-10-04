@@ -109,6 +109,7 @@ async function controllerFixture(t, { textMode = true, sparse = false, vision = 
           { role: "button", name: "Delete", x: 0.6, y: 0.2, w: 0.2, h: 0.1, covered: false, disabled: false },
           { role: "textbox", name: "Title", x: 0.1, y: 0.2, w: 0.4, h: 0.1, covered: false, disabled: false },
           { role: "button", name: "Search", x: 0.6, y: 0.6, w: 0.2, h: 0.1, covered: false, disabled: false },
+          { role: "button", name: "Withdraw", x: 0.6, y: 0.8, w: 0.2, h: 0.1, covered: false, disabled: false },
         ] },
       };
     },
@@ -233,10 +234,10 @@ test("text-mode clicks on an effect-bearing or unmapped control wait for the hum
 
 test("classifyTarget separates navigation, input, effect and unknown controls", () => {
   const c = (role, name, extra = {}) => classifyTarget({ role, name, ...extra }, "click_at");
-  for (const name of ["Delete account", "Buy now", "Send", "Pay $20", "결제하기", "삭제", "Submit", "Place order", "Sign out"]) {
+  for (const name of ["Buy now", "Send", "Pay $20", "삭제", "Submit", "Sign out"]) {
     assert.deepEqual([c("button", name).gate, c("button", name).effect], ["ask", "effect"], name);
   }
-  assert.equal(c("link", "Delete account").gate, "ask");
+  assert.equal(c("link", "Delete account").gate, "deny");
   for (const name of ["Search", "Next", "Close", "더보기", "Show more"]) assert.equal(c("button", name).gate, "auto", name);
   assert.equal(c("link", "Pricing").gate, "auto");
   assert.equal(c("checkbox", "Remember me").gate, "auto");
@@ -320,4 +321,28 @@ test("image-mode coordinate clicks are classified by the control they land on", 
     assert.equal(executed.length > 0, expectRun, JSON.stringify(action));
     if (!expectRun) assert.match(controller.getSnapshot().approvalQueue[0].target, /-> button "Delete"/);
   }
+});
+
+test("effect classifier denies money-moving and account-destroying button clicks outright", () => {
+  const { classifyTarget } = require("../main/harness/effect-classifier");
+  const btn = (name) => ({ role: "button", name });
+  for (const name of ["Withdraw", "Transfer funds", "Delete account", "Permanently delete", "송금", "회원 탈퇴"]) {
+    const verdict = classifyTarget(btn(name), "click_at");
+    assert.equal(verdict.gate, "deny", name);
+    assert.equal(verdict.effect, "irreversible");
+  }
+  assert.equal(classifyTarget({ role: "link", name: "Close my account" }, "click_at").gate, "deny");
+  // Ordinary effect names still go to the human, not the floor.
+  assert.equal(classifyTarget(btn("Delete"), "click_at").gate, "ask");
+  assert.equal(classifyTarget(btn("Send"), "click_at").gate, "ask");
+  // A text field that only mentions one is not a click on it.
+  assert.equal(classifyTarget({ role: "textbox", name: "Withdraw amount" }, "type_at").gate, "ask");
+  assert.equal(classifyTarget({ role: "textbox", name: "Search" }, "type_at").gate, "auto");
+});
+
+test("a click on a money-moving control is refused: nothing runs, nothing queues, and the task carries on", async (t) => {
+  const { controller, executed } = await controllerFixture(t, { action: { type: "click_at", x: 0.7, y: 0.85 } });
+  assert.equal(executed.length, 0);
+  assert.equal(controller.getSnapshot().approvalQueue.length, 0);
+  assert.notEqual(controller.getSnapshot().pauseReason, "approver_error");
 });

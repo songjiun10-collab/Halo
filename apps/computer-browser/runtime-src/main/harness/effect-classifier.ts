@@ -7,8 +7,8 @@
 // so a match can only add a question, never remove the approver or the lock.
 
 interface ClassifiedTarget { role: string; name: string; covered?: boolean; disabled?: boolean }
-type Gate = "auto" | "ask";
-type Effect = "navigation" | "input" | "effect" | "unknown" | "blocked";
+type Gate = "auto" | "ask" | "deny";
+type Effect = "navigation" | "input" | "effect" | "irreversible" | "unknown" | "blocked";
 interface Classification { gate: Gate; effect: Effect; reason: string }
 
 // Controls whose click is navigation or editing, if their name raises no flag.
@@ -24,6 +24,16 @@ const EFFECT_NAME = new RegExp([
   "삭제|제거|탈퇴|해지|취소 신청|초기화|구매|결제|주문|송금|이체|기부|구독|예약|전송|보내기|게시|등록|공유|제출|확인 및|동의|수락|승인|로그아웃|가입|초대|답글|댓글|병합|배포",
 ].join("|"), "i");
 
+// A click on these names moves money or destroys an account or its data for
+// good. The agent never does this on its own, however the task was phrased:
+// it is refused outright (the user can still do it by hand). Only buttons and
+// links are judged, so typing into a field that merely mentions one is not.
+const IRREVERSIBLE_NAME = new RegExp([
+  "\\b(transfer (?:funds|money)|wire (?:funds|money)|send money|withdraw|pay now|confirm payment|place order|complete purchase)\\b",
+  "\\b(delete (?:my )?account|close (?:my )?account|permanently delete|delete forever|erase all data|deactivate account)\\b",
+  "송금|이체|출금|결제하기|결제 확인|계정 삭제|회원 탈퇴|영구 삭제|계정 폐쇄",
+].join("|"), "i");
+
 // Buttons that only move around the page or reveal more of it.
 const BENIGN_BUTTON = /^(?:search|find|go|next|previous|prev|back|close|cancel|dismiss|menu|more|show(?: more| all)?|hide|expand|collapse|open|filter|sort|view(?: details)?|details|learn more|read more|검색|다음|이전|뒤로|닫기|취소|메뉴|더보기|보기|열기|필터|정렬|자세히(?: 보기)?)$/i;
 
@@ -35,6 +45,9 @@ function classifyTarget(target: ClassifiedTarget | null, actionType: "click_at" 
   if (target.disabled) return { gate: "ask", effect: "blocked", reason: "the control is disabled" };
   const role = target.role;
   const name = normalize(target.name);
+  if (actionType === "click_at" && (role === "button" || role === "link") && name && IRREVERSIBLE_NAME.test(name)) {
+    return { gate: "deny", effect: "irreversible", reason: "the control moves money or destroys an account" };
+  }
   if (name && EFFECT_NAME.test(name)) return { gate: "ask", effect: "effect", reason: "the control name suggests an external effect" };
   if (actionType === "type_at") {
     return TEXT_ENTRY_ROLES.has(role)
