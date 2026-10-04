@@ -54,6 +54,23 @@ class RoomError extends Error {
   }
 }
 
+// A visible, plain-language warning for one member's failed turn. Only host
+// labels are shown, never worker output.
+function failureWarning(speaker, code) {
+  const model = String(speaker.model ?? "");
+  const cli = /^claude/.test(model) ? "Claude" : /^gpt-/.test(model) ? "Codex" : null;
+  const hint = {
+    authentication_failed: "its login or API key was rejected",
+    cli_error: cli ? `the ${cli} CLI may be signed out; sign in again` : "its worker reported an error (it may be signed out)",
+    cli_exit_nonzero: cli ? `the ${cli} CLI may be signed out; sign in again` : "its worker exited with an error",
+    timeout: "the model took too long to answer",
+    rate_limited: "the model is rate limited right now",
+    network_error: "the network request failed",
+    spawn_failed: "its worker could not start",
+  }[code] ?? `its worker failed (${code})`;
+  return `⚠ ${speaker.name} couldn't reply: ${hint}.`;
+}
+
 // Members named as "@name" in the text, in the order they were mentioned.
 // Longer names match first so "@하이쿠 사본" is not read as "@하이쿠".
 function mentionedMembers(text, members) {
@@ -325,6 +342,8 @@ class RoomOrchestrator {
         reply = contracts.validateRoomTurn(await untilAborted(this._requestTurn({ teamId, agent: speaker, context, signal }), signal));
       } catch (caught) {
         error = typeof caught?.code === "string" && CODE_RE.test(caught.code) ? caught.code : "turn_failed";
+        const detail = typeof caught?.plannerCode === "string" && CODE_RE.test(caught.plannerCode) ? caught.plannerCode : error;
+        if (!signal.aborted) await this._append(teamId, { author: "host", kind: "notice", text: failureWarning(speaker, detail) }).catch(() => {});
       }
       if (signal.aborted) return;
       previous = speaker.id;

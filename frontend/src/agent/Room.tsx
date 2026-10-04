@@ -20,7 +20,7 @@ export function RoomTranscript({ messages, agents, round, onOpenTask }: { messag
       if (m.author === 'host') {
         if (m.kind === 'task_started') return <li key={m.messageId} className="hx-room__task hx-gl"><span><b>Task started</b><small>{m.text}</small></span>
           {m.taskId ? <button type="button" className="hx-agbtn" onClick={() => onOpenTask(m.taskId!)}>Open task</button> : null}</li>
-        return <li key={m.messageId} className="hx-room__notice">{m.text}</li>
+        return <li key={m.messageId} className="hx-room__notice" data-warn={m.text.startsWith('⚠') || undefined} role={m.text.startsWith('⚠') ? 'alert' : undefined}>{m.text}</li>
       }
       const agent = byId.get(m.author)
       return <li key={m.messageId} className="hx-room__msg">

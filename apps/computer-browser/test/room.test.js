@@ -611,3 +611,11 @@ test("a mention must end at a name boundary, and no mention keeps the normal rot
   await h.orchestrator.idle(TEAM);
   assert.deepEqual(h.calls, [A, B, C], "unmatched mention falls back to everyone passing in rotation");
 });
+
+test("a failed turn posts a plain warning naming the member and the likely cause", async () => {
+  const h = await harness({ replies: { [A]: [Object.assign(new Error("x"), { code: "planner_failed", plannerCode: "cli_error" })] } });
+  await h.orchestrator.post(TEAM, "@Ann hi");
+  await h.orchestrator.idle(TEAM);
+  const warning = (await h.store.read(TEAM)).find((m) => m.kind === "notice" && m.text.startsWith("⚠"));
+  assert.match(warning.text, /Ann couldn't reply: .*signed out/);
+});
