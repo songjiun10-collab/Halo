@@ -729,6 +729,7 @@ kbd {
   .hx-window .hx-content-col { margin: 0 8px 8px 8px; border-radius: 18px; overflow: hidden; background: var(--backdrop); }
 }
 
-/* Design-system .hx-window (loaded later) paints a glass fill; keep the gradient backdrop on top of it. */
-.hx-window { background: linear-gradient(180deg,#1d3a73 0%,#2a3566 28%,#4a3b63 62%,#5b3d4a 100%) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
-:root[data-theme="light"] .hx-window { background: linear-gradient(180deg,#9ec1ff 0%,#c9b8e8 60%,#f0c4b8 100%) !important; }
+/* Real glass: the Electron window is vibrant (macOS), so the page stays transparent and the desktop behind shows through. */
+html, body, #root { background: transparent !important; }
+.hx-window { background: rgba(18, 22, 32, 0.38) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
+:root[data-theme="light"] .hx-window { background: rgba(255, 255, 255, 0.35) !important; }

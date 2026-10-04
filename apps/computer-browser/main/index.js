@@ -555,6 +555,8 @@ async function createWindow(socketPath, attachedClient = undefined) {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    // macOS: the window is real glass; the desktop behind it shows through the translucent chrome.
+    ...(process.platform === "darwin" ? { vibrancy: "under-window", visualEffectState: "active", backgroundColor: "#00000000" } : {}),
     webPreferences: {
       preload: path.join(__dirname, "..", "preload", "index.js"),
       contextIsolation: true,
