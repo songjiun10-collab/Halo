@@ -740,11 +740,11 @@ html, body, #root { background: transparent !important; }
 /* Sidebar as a liquid-glass panel over the vibrant window. */
 @media (min-width: 681px) {
   .hx-window .hx-sidebar {
-    margin: 0 0 8px 8px; border-radius: 18px; overflow: hidden;
-    border: 1px solid color-mix(in srgb, white 14%, transparent) !important;
-    background: linear-gradient(180deg, color-mix(in srgb, white 14%, transparent), color-mix(in srgb, white 5%, transparent)) !important;
-    -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6);
-    box-shadow: inset 0 1px 0 color-mix(in srgb, white 28%, transparent), inset 0 -1px 0 color-mix(in srgb, white 6%, transparent), 0 8px 24px rgba(0, 0, 0, 0.25);
+    margin: 0 0 8px 8px; border-radius: 16px; overflow: hidden;
+    border: 1px solid color-mix(in srgb, white 7%, transparent) !important;
+    background: color-mix(in srgb, white 4%, transparent) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(1.3); backdrop-filter: blur(24px) saturate(1.3);
+    box-shadow: none;
   }
 }
 

@@ -47,10 +47,14 @@ const BRANDS: Record<string, Brand> = {
   'amazon.com': { bg: '#232f3e', fg: '#ff9900', glyph: text('a') },
 }
 
+const LOCAL: Brand = { bg: '#3b3f46', glyph: <g fill="none" stroke="currentColor" strokeWidth="2"><rect x="3.5" y="5" width="17" height="11" rx="2" /><path d="M8 20h8M12 16v4" /></g> }
+
 export function brandFor(host: string): Brand | null {
   const h = host.replace(/^www\./, '').toLowerCase()
   const hit = Object.keys(BRANDS).find((d) => h === d || h.endsWith(`.${d}`))
-  return hit ? BRANDS[hit] : null
+  if (hit) return BRANDS[hit]
+  if (h === 'localhost' || h.endsWith('.localhost') || /^(\d{1,3}\.){3}\d{1,3}$/.test(h)) return LOCAL
+  return null
 }
 
 export function BrandIcon({ host, size = 28 }: { host: string; size?: number }) {
