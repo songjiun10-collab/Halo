@@ -108,7 +108,8 @@ function extractAnswer({ intent, pageText }) {
 async function runTask({ task, sites, arm, outDir, timeoutMs, createBrowser, har }) {
   const intent = fillSites(task.intent, sites);
   const startUrl = fillSites((task.start_urls || [])[0] || "", sites);
-  const taskType = task.task_type || task.type || "NAVIGATE";
+  // The dataset keeps the operation under eval[].expected.task_type.
+  const taskType = task.task_type || (task.eval || []).map((entry) => entry?.expected?.task_type).find(Boolean) || "NAVIGATE";
   const startedAt = performance.now();
   const counts = { plannerCalls: 0, escalations: 0 };
   let lastPageText = "";
@@ -157,6 +158,7 @@ async function runTask({ task, sites, arm, outDir, timeoutMs, createBrowser, har
     approve: async () => ({ decision: "allow", reasons: [] }),
     hostVerifier: () => true,
     harnessProfile: "long",
+    permissionMode: "full",
     ...(escalatePlanner ? { escalatePlanner } : {}),
   });
 
@@ -173,6 +175,7 @@ async function runTask({ task, sites, arm, outDir, timeoutMs, createBrowser, har
     clearTimeout(timer);
   }
 
+  const pendingApprovals = (controller.getSnapshot().approvalQueue || []).map((item) => `${item.action}: ${String(item.summary).slice(0, 160)}`);
   let answer = null;
   if (taskType === "RETRIEVE" && (state === "completed" || state === "awaiting_verification")) answer = await extractAnswer({ intent, pageText: lastPageText });
   const response = buildAgentResponse({ taskType, state, pauseReason, answer, timedOut });
@@ -185,7 +188,7 @@ async function runTask({ task, sites, arm, outDir, timeoutMs, createBrowser, har
   await browser.dispose().catch(() => {});
   await store.close().catch(() => {});
   await fs.rm(storageRoot, { recursive: true, force: true }).catch(() => {});
-  return { task_id: task.task_id, arm, taskType, state, pauseReason, timedOut, status: response.status, totalMs: Math.round(performance.now() - startedAt), ...counts };
+  return { task_id: task.task_id, arm, taskType, state, pauseReason, timedOut, ...(pendingApprovals.length ? { pendingApprovals } : {}), status: response.status, totalMs: Math.round(performance.now() - startedAt), ...counts };
 }
 
 async function main() {
