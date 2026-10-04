@@ -11,7 +11,7 @@ interface Props {
   onNewTask: () => void
   onSelectTask: (taskId: string) => void
   /** Open browser tabs, listed under Tabs. */
-  tabs: { id: string; title: string }[]
+  tabs: { id: string; title: string; url?: string }[]
   activeTabId: string
   onSelectTab: (tabId: string) => void
   onOpenUrl: (url: string) => void
@@ -141,7 +141,7 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
       <p className="hx-sidebar__label">Tabs</p>
       {tabs.map((tab) => (
         <button type="button" key={tab.id} className="hx-sidebar__item" data-selected={(!activeTaskId && tab.id === activeTabId) || undefined} onClick={() => onSelectTab(tab.id)}>
-          <span className="hx-sidebar__fav" aria-hidden="true">{brandFor(hostOf(tab.url)) ? <BrandIcon host={hostOf(tab.url)} size={20} /> : tab.title.trim().slice(0, 1) || '?'}</span><span>{tab.title}</span>
+          <span className="hx-sidebar__fav" aria-hidden="true">{brandFor(hostOf(tab.url ?? "")) ? <BrandIcon host={hostOf(tab.url ?? "")} size={20} /> : tab.title.trim().slice(0, 1) || '?'}</span><span>{tab.title}</span>
         </button>
       ))}
       <p className="hx-sidebar__label hx-sidebar__label--row">Projects<button type="button" className="hx-sidebar__add" aria-label="New project folder" onClick={addProject}>+</button></p>

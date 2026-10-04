@@ -340,7 +340,7 @@ export default function App() {
             inert={overviewOpen || !!approval}
             onNewTask={onNewTask}
             onSelectTask={(taskId) => void store.selectTask(taskId)}
-            tabs={tabsForDisplay.map((t) => ({ id: t.id, title: tabTitle(t) }))}
+            tabs={tabsForDisplay.map((t) => ({ id: t.id, title: tabTitle(t), url: currentUrl(t) }))}
             activeTabId={tab.id}
             onSelectTab={(id) => void store.selectBrowserTab(id)}
             onOpenUrl={(url) => void store.navigate({ type: 'navigate', url })}
