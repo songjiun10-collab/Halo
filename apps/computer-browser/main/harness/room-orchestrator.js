@@ -379,8 +379,6 @@ class RoomOrchestrator {
         await this._append(teamId, { author: "host", kind: "notice", text: `HALO requested a bounded read-only review for: ${newReviewReasons.join(", ")}.` });
       }
 
-      if (error) {
-      }
       if (error || reply.kind === "pass") {
         passes += 1;
         await this._append(teamId, { author: speaker.id, kind: "pass", text: "", ...(error ? { error } : {}) });
