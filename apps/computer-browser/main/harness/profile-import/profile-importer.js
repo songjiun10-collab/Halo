@@ -153,6 +153,9 @@ class ProfileImporter {
   // not be purged is reported rather than swallowed.
   async remove(domain) {
     const removed = await this._vault.removeDomain(domain);
+    // A domain that was never imported must not purge live sessions: a broad
+    // suffix such as co.uk would otherwise sign tasks out of unrelated sites.
+    if (!removed) return false;
     const group = normalizeDomain(domain);
     let incomplete = 0;
     for (const session of [...this._liveSessions.values()]) {

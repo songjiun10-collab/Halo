@@ -29,7 +29,7 @@ const { fetchNvidiaModelIds } = require("./nvidia-model-catalog");
 const { escalationTarget } = require("./planner-escalation");
 const { routedModel } = require("./planner-routing");
 const { tierOf, modelsInTier, MODEL_TIERS } = require("./model-tiers");
-const { setDiscoveredNvidiaModels, listNvidiaModels } = require("./providers/nvidia-models");
+const { setDiscoveredNvidiaModels, saveDiscoveredNvidiaModels, listNvidiaModels } = require("./providers/nvidia-models");
 const { TaskController, TaskControllerError } = require("./task-controller");
 const { TaskQueue, TaskQueueError } = require("./task-queue");
 const { ResourceAdmission } = require("./resource-admission");
@@ -108,6 +108,7 @@ class TaskHost {
     mcpProviders = [],
     memoryStore,
     activityJournal,
+    nvidiaModelsFile,
     settingsStore,
     usageLedger,
     usageSources,
@@ -165,6 +166,7 @@ class TaskHost {
     this._memoryStore = memoryStore || null;
     // { store, isEnabled }: the Context Awareness journal (local host only).
     this._activityJournal = activityJournal || null;
+    this._nvidiaModelsFile = typeof nvidiaModelsFile === "string" ? nvidiaModelsFile : null;
     this._settingsStore = settingsStore || null;
     this._usageLedger = usageLedger || null;
     this._usageSources = usageSources || {};
@@ -406,6 +408,7 @@ class TaskHost {
     let error = null;
     try {
       setDiscoveredNvidiaModels(await fetchNvidiaModelIds({ apiKey: process.env.NVIDIA_API_KEY }));
+      if (this._nvidiaModelsFile) { try { saveDiscoveredNvidiaModels(this._nvidiaModelsFile); } catch { /* still valid for this run */ } }
     } catch (caught) {
       error = typeof caught?.code === "string" ? caught.code : "network_error";
     }
@@ -1509,6 +1512,9 @@ class TaskHost {
       }
       const { store, workGoalBinding } = created;
       this._runMemoryPolicies.set(store.taskId, { mode: selected.mode, auditEventId: selected.auditEventId });
+      // The override is a one-run exception: this parent run has captured it,
+      // so the saved default returns to budgeted for every later run.
+      if (selected.mode === "user_override") await this._settingsStore.update({ memoryPolicy: "budgeted" }, { actor: "host" }).catch(() => {});
       this._runScopes.set(store.taskId, structuredClone(scope));
       // Validate the exact pinned revision while the task is still not
       // enqueued/admitted. A malformed or missing routine must never reserve

@@ -2,7 +2,7 @@ import type { BackgroundRuntimeSnapshot, MemoryPolicy } from './background-runti
 import type { ChildPlanSummary } from './child-agents'
 
 /** Renderer view of the existing harness contracts and trusted preload methods. */
-export type TaskState = 'idle' | 'running' | 'awaiting_approval' | 'awaiting_verification' | 'paused' | 'stopped' | 'completed'
+export type TaskState = 'idle' | 'queued' | 'running' | 'awaiting_approval' | 'awaiting_verification' | 'paused' | 'stopped' | 'completed'
 export interface GoalCriterion { id: string; text: string; required: boolean; verification: 'host' | 'user'; sourceMessageId?: string }
 export interface GoalConstraint { id: string; text: string; sourceMessageId?: string }
 export type LockRule = { kind: 'deny_action'; action: 'navigate' | 'follow_link' | 'click' | 'type' | 'submit_form' } | { kind: 'allow_origins' | 'deny_origins'; origins: string[] }

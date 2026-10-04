@@ -29,6 +29,7 @@ const contracts = require("../../shared/room-contracts");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SETTLED = new Set(["completed", "stopped"]);
+const UNKNOWN_STATE = "unknown";
 const CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_FOLLOW_UPS = 3; // follow-up rounds in a row for waiting messages
 const HIGH_IMPACT_REQUEST = /\b(send|submit|purchase|buy|pay|transfer|delete|cancel|book|publish|post|share|order|sign|authorize)\b|전송|발송|송금|결제|구매|삭제|취소|예약|게시|공유|서명|승인/i;
@@ -133,16 +134,14 @@ class RoomOrchestrator {
         if (await this._store.clearStaleRoundLock(teamId)) {
           await this._append(teamId, { author: "host", kind: "notice", text: "The previous round was interrupted when HALO stopped." });
         }
-        const pending = new Map();
-        for (const message of await this._store.read(teamId)) {
-          if (message.kind === "task_started" && message.taskId) pending.set(message.taskId, true);
-          else if (message.kind === "notice" && message.taskId) pending.delete(message.taskId);
-        }
-        const taskId = [...pending.keys()].at(-1);
+        // The whole log, not the 500-message tail: a long chat during a long
+        // task must not hide the start record of a task that is still running.
+        const taskId = (await this._store.openTaskIds(teamId)).at(-1);
         if (!taskId || this._taskRoom.has(taskId)) continue;
         this._roomTask.set(teamId, taskId);
         this._taskRoom.set(taskId, teamId);
-        const state = await Promise.resolve(this._getTaskState(taskId)).catch(() => null);
+        // An unreadable state is unknown, not settled: keep the mapping.
+        const state = await Promise.resolve(this._getTaskState(taskId)).catch(() => UNKNOWN_STATE);
         if (SETTLED.has(state)) await this.onTaskEvent(taskId, { state });
       } catch {
         // One unreadable room never blocks the others.
@@ -384,7 +383,9 @@ class RoomOrchestrator {
   async _roomTaskRunning(teamId) {
     const taskId = this._roomTask.get(teamId);
     if (!taskId) return false;
-    const state = await Promise.resolve(this._getTaskState(taskId)).catch(() => null);
+    // A failed lookup is not a missing task: when unsure, the task counts as
+    // running so a second one is never started over it.
+    const state = await Promise.resolve(this._getTaskState(taskId)).catch(() => UNKNOWN_STATE);
     return state !== null && state !== undefined && !SETTLED.has(state);
   }
 }

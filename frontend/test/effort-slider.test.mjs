@@ -55,7 +55,7 @@ test('as in the design, effort lives in the model picker popover between the inp
   assert.match(models, /role="radio" aria-checked="true"[^>]*>.*Opus 5.5/)
   assert.doesNotMatch(models, /Gemini/, 'only models the host actually wires are listed')
   const none = renderToStaticMarkup(React.createElement(ModelPicker, { ...props, settings: null }))
-  assert.match(none, /<span>Model<\/span>/)
+  assert.match(none, /<span>Choose planner<\/span>/)
   assert.match(none, /disabled=""/, 'nothing to pick until host settings load')
 })
 

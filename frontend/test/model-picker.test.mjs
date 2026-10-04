@@ -58,7 +58,7 @@ test('versioned Opus, Sonnet and Haiku are listed, with legacy models in their o
 
 test('without a planner the toggle asks for a model and nothing is checked', () => {
   const html = renderToStaticMarkup(React.createElement(ModelPicker, { settings: { ...settings, plannerProvider: 'none' }, onSelectModel: () => {}, onEffort: () => {}, defaultOpen: true, defaultView: 'models' }))
-  assert.match(html, /<span>Model<\/span>/)
+  assert.match(html, /<span>Choose planner<\/span>/)
   assert.doesNotMatch(html, /aria-checked="true"/)
 })
 

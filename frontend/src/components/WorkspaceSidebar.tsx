@@ -15,6 +15,7 @@ interface Props {
 
 const stateLabel: Record<TaskSummary['state'], string> = {
   idle: 'Ready',
+  queued: 'Queued',
   running: 'Running',
   awaiting_approval: 'Needs approval',
   awaiting_verification: 'Review',
@@ -44,7 +45,7 @@ function TaskButton({ task, active, onClick }: { task: TaskSummary; active: bool
 }
 
 export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, agents }: Props) {
-  const active = tasks.filter((task) => task.active || ['running', 'awaiting_approval', 'awaiting_verification', 'paused'].includes(task.state))
+  const active = tasks.filter((task) => task.active || ['queued', 'running', 'awaiting_approval', 'awaiting_verification', 'paused'].includes(task.state))
   const recent = tasks.filter((task) => !active.includes(task))
   return (
     <aside className="hx-sidebar" data-open={open} aria-label="Workspace" inert={inert}>

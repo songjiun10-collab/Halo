@@ -130,6 +130,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
     "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } } },
     "./harness/local-memory-store": { LocalMemoryStore: class {} },
     "./harness/activity-journal-store": { ActivityJournalStore: class {} },
+    "./harness/providers/nvidia-models": { loadDiscoveredNvidiaModels() {} },
     "./activity-capture": { createPageVisitSink: () => async () => {} },
     "./harness/usage-ledger": { UsageLedger: class { async load() { return this; } record(...args) { calls.usage.push(args); } } },
     "./harness/local-credential-vault": { LocalCredentialVault: class {} },

@@ -29,7 +29,8 @@ const RECORD_FIELDS = [
 const PATCH_FIELDS = ["enabled", "disabledReason", "lastOccurrenceAt", "lastTaskId", "lastError", "consecutiveFailures", "skippedCount"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // A run that reached one of these no longer blocks the next occurrence.
-const SETTLED_STATES = new Set(["completed", "stopped", "awaiting_verification", "failed", "cancelled"]);
+// awaiting_verification still needs the user, so it keeps blocking like awaiting_approval.
+const SETTLED_STATES = new Set(["completed", "stopped", "failed", "cancelled"]);
 const OWNER_GONE_CODES = new Set(["agent_unavailable", "team_member_unavailable", "not_found", "archived"]);
 const DEFAULT_MAX_FAILURES = 3;
 const DEFAULT_RETRY_MS = 30_000;
@@ -320,10 +321,17 @@ class AgentScheduler {
         return;
       }
     }
-    await this._store.update(record.id, { lastOccurrenceAt: occurrenceAt });
+    const started = await this._store.update(record.id, { lastOccurrenceAt: occurrenceAt });
     try {
       const result = await this._startTask(record, occurrenceAt);
       const once = record.trigger.kind === "once";
+      // The start runs outside the store chain: if the user edited, disabled or
+      // re-armed this schedule meanwhile, this run must not write into the new one.
+      const current = await this._store.get(record.id).catch(() => null);
+      if (!current || current.updatedAt !== started.updatedAt) {
+        this._emit({ type: "started", scheduleId: record.id, occurrenceAt, taskId: result?.taskId ?? null });
+        return;
+      }
       await this._store.update(record.id, {
         lastTaskId: result?.taskId ?? null,
         lastError: null,

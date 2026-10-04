@@ -129,6 +129,32 @@ class RoomStore {
     return (await this._readLines(teamId)).map((line) => this._parse(teamId, line));
   }
 
+  // Task ids whose task_started has no later notice, found by scanning the
+  // whole log (not just the newest messages), oldest first. Only lines that
+  // mention a task are parsed, so a long chat costs a substring test per line.
+  async openTaskIds(teamId) {
+    roomId(teamId);
+    await this._chain(teamId);
+    await this._ensureDirectory();
+    let handle;
+    try { handle = await this._open(teamId, fsConstants.O_RDONLY); }
+    catch (error) { if (error.code === "ENOENT") return []; throw error; }
+    const pending = new Set();
+    try {
+      const reader = require("node:readline").createInterface({ input: handle.createReadStream({ autoClose: false }), crlfDelay: Infinity });
+      for await (const line of reader) {
+        if (!line.includes("\"taskId\"")) continue;
+        const message = this._parse(teamId, line);
+        if (!message.taskId) continue;
+        if (message.kind === "task_started") { pending.delete(message.taskId); pending.add(message.taskId); }
+        else if (message.kind === "notice") pending.delete(message.taskId);
+      }
+    } finally {
+      await handle.close();
+    }
+    return [...pending];
+  }
+
   _parse(teamId, line) {
     let parsed;
     try { parsed = JSON.parse(line); } catch { throw new RoomStoreError("room_corrupt", "room log has an unparseable line"); }

@@ -488,6 +488,8 @@ let pageVisitSink = null;
 async function createHarnessHost(socketPath, hostWindow) {
   const dataRoot = path.join(app.getPath("userData"), "harness-data");
   const settingsStore = new HostSettingsStore({ storageRoot: dataRoot });
+  const nvidiaModelsFile = path.join(dataRoot, "nvidia-models.json");
+  require("./harness/providers/nvidia-models").loadDiscoveredNvidiaModels(nvidiaModelsFile);
   const settings = await settingsStore.load();
   const memoryStore = new LocalMemoryStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
   // Context Awareness: off unless the user turned it on. The setting is read
@@ -526,6 +528,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     memoryMonitor,
     memoryStore,
     activityJournal,
+    nvidiaModelsFile,
     permissionMode: settings.permissionMode,
     plannerEffort: settings.plannerEffort,
     plannerEffortMode: settings.plannerEffortMode,
