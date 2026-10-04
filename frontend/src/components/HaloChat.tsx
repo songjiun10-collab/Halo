@@ -49,6 +49,12 @@ export function HaloChat({ taskLabel, messages, recentTasks = [], pendingCriteri
     return () => window.removeEventListener('keydown', onKey)
   }, [leaving])
 
+  const [folded, setFolded] = useState(() => { try { return localStorage.getItem('halo.chat.history.folded') === '1' } catch { return false } })
+  const toggleFold = () => setFolded((value) => {
+    try { localStorage.setItem('halo.chat.history.folded', value ? '0' : '1') } catch { /* per-viewer convenience only */ }
+    return !value
+  })
+
   return (
     <section id="hx-chat" className="hx-chat" data-leaving={leaving || undefined} inert={leaving} role="dialog" aria-label="Halo chat" tabIndex={-1} ref={ref}>
       <div className="hx-chat__head">
@@ -58,7 +64,12 @@ export function HaloChat({ taskLabel, messages, recentTasks = [], pendingCriteri
         <button className="hx-chat__close" onClick={onClose} aria-label="Close chat">×</button>
       </div>
       {recentTasks.length > 0 && (
-        <ul className="hx-chat__recent">
+        <button type="button" className="hx-chat__fold" aria-expanded={!folded} aria-controls="hx-chat-recent" onClick={toggleFold}>
+          <span className="hx-sidebar__chev" aria-hidden="true">›</span>History <span className="hx-chat__fold-n">{recentTasks.length}</span>
+        </button>
+      )}
+      {recentTasks.length > 0 && !folded && (
+        <ul id="hx-chat-recent" className="hx-chat__recent">
           {recentTasks.map((t, i) => (
             <li key={i}>
               <button type="button" data-task-id={t.taskId} className="hx-chat__recent-task" onClick={() => onSelectTask(t.taskId)}>

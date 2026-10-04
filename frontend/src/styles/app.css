@@ -772,3 +772,7 @@ section.hx-chat { max-height: calc(100% - 20px); overflow: hidden; min-height: 0
 section.hx-chat .hx-chat__head, section.hx-chat .hx-chat__composer { flex: none; }
 section.hx-chat .hx-chat__recent { flex: 0 1 auto; max-height: 34%; overflow-y: auto; min-height: 0; }
 section.hx-chat .hx-chat__thread { flex: 1 1 0; min-height: 60px; overflow-y: auto; }
+.hx-chat__fold { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 12px; padding: 6px 16px; cursor: pointer; text-align: left; flex: 0 0 auto; }
+.hx-chat__fold:hover { color: var(--foreground); }
+.hx-chat__fold[aria-expanded="false"] .hx-sidebar__chev { transform: none; }
+.hx-chat__fold-n { opacity: .6; }

@@ -229,7 +229,7 @@ class TaskHost {
     });
     // One planner per room, reused across its turns and closed after a
     // minute without one (or at shutdown). A failed turn drops it.
-    this._roomPlanners = new Map(); // teamId -> { planner, timer }
+    this._roomPlanners = new Map(); // `${teamId}|${model}|${effort}` -> { planner, timer }
     this._roomsRecovered = null;
     if (executionMode !== "sequential" && executionMode !== "parallel") throw new TaskHostError("invalid_config", "executionMode must be sequential or parallel");
     this._executionMode = executionMode;
@@ -1171,29 +1171,33 @@ class TaskHost {
     return this._roomsRecovered;
   }
 
-  async _requestRoomTurn({ teamId, context, signal }) {
-    let entry = this._roomPlanners.get(teamId);
+  // Each speaker runs on its own saved model and effort (null inherits the
+  // host setting). Planners are pooled per team and per (model, effort).
+  async _requestRoomTurn({ teamId, agent, context, signal }) {
+    const key = `${teamId}|${agent?.model ?? ""}|${agent?.effort ?? ""}`;
+    let entry = this._roomPlanners.get(key);
     if (entry) clearTimeout(entry.timer);
     else {
-      entry = { planner: this._makePlanner(`room-${teamId}`, this._plannerPin("child")), timer: null };
-      this._roomPlanners.set(teamId, entry);
+      entry = { planner: this._makePlanner(`room-${teamId}`, this._plannerPin("child", agent?.model ?? null)), timer: null };
+      this._roomPlanners.set(key, entry);
     }
+    const effort = agent?.effort ?? effortForRoute({ base: this._plannerEffort, mode: this._plannerEffortMode, route: "child" });
     try {
-      return await entry.planner.next(context, { signal });
+      return await entry.planner.next({ ...context, progress: { plannerEffort: effort } }, { signal });
     } catch (error) {
-      await this._closeRoomPlanner(teamId, entry);
+      await this._closeRoomPlanner(key, entry);
       throw error;
     } finally {
-      if (this._roomPlanners.get(teamId) === entry) {
-        entry.timer = setTimeout(() => { void this._closeRoomPlanner(teamId, entry); }, ROOM_PLANNER_IDLE_MS);
+      if (this._roomPlanners.get(key) === entry) {
+        entry.timer = setTimeout(() => { void this._closeRoomPlanner(key, entry); }, ROOM_PLANNER_IDLE_MS);
         entry.timer.unref?.();
       }
     }
   }
 
-  async _closeRoomPlanner(teamId, entry) {
+  async _closeRoomPlanner(key, entry) {
     clearTimeout(entry.timer);
-    if (this._roomPlanners.get(teamId) === entry) this._roomPlanners.delete(teamId);
+    if (this._roomPlanners.get(key) === entry) this._roomPlanners.delete(key);
     await Promise.resolve(entry.planner.close?.()).catch(() => {});
   }
 
@@ -2481,7 +2485,7 @@ class TaskHost {
       await this._scheduler?.stop();
       await this._agentScheduler?.stop();
       await this._rooms.close();
-      await Promise.allSettled([...this._roomPlanners].map(([teamId, entry]) => this._closeRoomPlanner(teamId, entry)));
+      await Promise.allSettled([...this._roomPlanners].map(([key, entry]) => this._closeRoomPlanner(key, entry)));
       // A create/load that started before close() must either attach before
       // this snapshot (so it gets cleaned up below) or observe the closed
       // state after its await, close its store, and reject. Never let a late

@@ -239,3 +239,12 @@ test("archiving frees an active slot, while total stored records stay bounded", 
   }
   assert.equal(stored, 20);
 });
+
+test("agent effort is optional, defaults to null and rejects unknown levels", async () => {
+  const store = new AgentStore({ storageRoot: await tempRoot() });
+  const created = await store.saveAgent(agentInput());
+  assert.equal(created.effort, null);
+  const high = await store.saveAgent({ ...agentInput(), id: created.id, effort: "high" });
+  assert.equal(high.effort, "high");
+  await assert.rejects(store.saveAgent({ ...agentInput(), id: created.id, effort: "ultra" }), { code: "invalid_agent" });
+});

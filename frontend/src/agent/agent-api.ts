@@ -14,9 +14,12 @@ export interface Avatar { shape: AvatarShape; color: AvatarColor }
 export type AgentCapability = 'browser' | 'research' | 'computer_use'
 
 interface Stamp { generation: number; createdAt: string; updatedAt: string; archived: boolean; pinned: boolean }
-export interface AgentRecord extends Stamp { id: string; name: string; title: string; description: string; avatar: Avatar; instructions: string; capabilityId: AgentCapability; mcpProviders: string[] | null; model?: string | null; persistentBrowser: boolean }
+/** null inherits the host effort setting. */
+export type AgentEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export const AGENT_EFFORTS: readonly AgentEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+export interface AgentRecord extends Stamp { id: string; name: string; title: string; description: string; avatar: Avatar; instructions: string; capabilityId: AgentCapability; mcpProviders: string[] | null; model?: string | null; effort?: AgentEffort | null; persistentBrowser: boolean }
 export interface TeamRecord extends Stamp { id: string; name: string; title: string; description: string; avatar: Avatar; memberAgentIds: string[] }
-export interface AgentInput { id?: string; name: string; title: string; description: string; avatar: Avatar; instructions: string; capabilityId: AgentCapability; mcpProviders?: string[] | null; model?: string | null; persistentBrowser?: boolean }
+export interface AgentInput { id?: string; name: string; title: string; description: string; avatar: Avatar; instructions: string; capabilityId: AgentCapability; mcpProviders?: string[] | null; model?: string | null; effort?: AgentEffort | null; persistentBrowser?: boolean }
 export interface TeamInput { id?: string; name: string; title: string; description: string; avatar: Avatar; memberAgentIds: string[] }
 
 export type OwnerKind = 'agent' | 'team'
@@ -116,7 +119,7 @@ export const listConversations = (api: AgentApi, owner: OwnerRef) => api.listAge
 export const markRead = (api: AgentApi, owner: OwnerRef) => api.markAgentConversationsRead(ownerArg(owner))
 export const setPinned = (api: AgentApi, owner: OwnerRef, pinned: boolean) => api.setAgentPinned({ kind: owner.kind, id: owner.id, pinned })
 
-export interface AgentFields { name: string; title: string; description: string; instructions: string; avatar: Avatar; model?: string | null; capabilityId?: AgentCapability }
+export interface AgentFields { name: string; title: string; description: string; instructions: string; avatar: Avatar; model?: string | null; effort?: AgentEffort | null; capabilityId?: AgentCapability }
 /** Capability is user-selectable; omitted fields keep the agent's saved capability. */
 export function agentInput(existing: AgentRecord | undefined, fields: AgentFields): AgentInput {
   return {
@@ -126,6 +129,7 @@ export function agentInput(existing: AgentRecord | undefined, fields: AgentField
     capabilityId: fields.capabilityId ?? existing?.capabilityId ?? 'browser',
     // null runs the host's planner setting; an id pins this agent's tasks to it.
     ...(fields.model !== undefined ? { model: fields.model } : {}),
+    ...(fields.effort !== undefined ? { effort: fields.effort } : {}),
   }
 }
 /** Only the explicit browser-profile control should write this preference. */

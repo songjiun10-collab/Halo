@@ -16,14 +16,14 @@ const { PLANNER_PROVIDERS } = require("./planner-providers");
 
 const SCHEMA_VERSION = 4;
 const STORE_FIELDS = ["schemaVersion", "agents", "teams", "links"];
-const AGENT_FIELDS = ["id", "name", "title", "description", "avatar", "instructions", "capabilityId", "mcpProviders", "model", "persistentBrowser", "generation", "createdAt", "updatedAt", "archived", "pinned"];
+const AGENT_FIELDS = ["id", "name", "title", "description", "avatar", "instructions", "capabilityId", "mcpProviders", "model", "effort", "persistentBrowser", "generation", "createdAt", "updatedAt", "archived", "pinned"];
 // model is optional on stored records: ones saved before it existed inherit.
-const AGENT_REQUIRED_FIELDS = AGENT_FIELDS.filter((key) => key !== "model");
+const AGENT_REQUIRED_FIELDS = AGENT_FIELDS.filter((key) => key !== "model" && key !== "effort");
 const TEAM_FIELDS = ["id", "name", "title", "description", "avatar", "memberAgentIds", "generation", "createdAt", "updatedAt", "archived", "pinned"];
 const LINK_FIELDS = ["taskId", "kind", "ownerId", "generation", "createdAt", "seenState"];
 // Task states as reported by TaskHost summaries; only used for read markers.
 const TASK_STATES = ["idle", "running", "awaiting_approval", "awaiting_verification", "paused", "stopped", "completed"];
-const AGENT_INPUT_FIELDS = ["id", "name", "title", "description", "avatar", "instructions", "capabilityId", "mcpProviders", "model", "persistentBrowser"];
+const AGENT_INPUT_FIELDS = ["id", "name", "title", "description", "avatar", "instructions", "capabilityId", "mcpProviders", "model", "effort", "persistentBrowser"];
 const TEAM_INPUT_FIELDS = ["id", "name", "title", "description", "avatar", "memberAgentIds"];
 
 const AGENT_SHAPES = Object.freeze(["circle", "square", "bag", "star", "drop", "cloud", "triangle", "hex"]);
@@ -101,8 +101,17 @@ function validateAgentRecord(value, label) {
   if (!AGENT_CAPABILITIES.includes(value.capabilityId)) throw new AgentStoreError("invalid_store", `${label}.capabilityId is unknown`);
   mcpSubset(value.mcpProviders, "invalid_store", `${label}.mcpProviders`);
   if (Object.hasOwn(value, "model")) plannerModel(value.model, "invalid_store", `${label}.model`);
+  if (Object.hasOwn(value, "effort")) plannerEffort(value.effort, "invalid_store", `${label}.effort`);
   if (typeof value.persistentBrowser !== "boolean") throw new AgentStoreError("invalid_store", `${label}.persistentBrowser must be boolean`);
   stamp(value, label);
+}
+
+// null inherits the host's effort setting; otherwise one fixed level.
+const AGENT_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+function plannerEffort(value, code, label) {
+  if (value === null) return null;
+  if (!AGENT_EFFORTS.includes(value)) throw new AgentStoreError(code, `${label} must be null or one of ${AGENT_EFFORTS.join(", ")}`);
+  return value;
 }
 
 // null runs the host's planner setting; otherwise an id from one planner
@@ -229,6 +238,8 @@ class AgentStore {
       else if (input.id === undefined) fields.mcpProviders = null;
       if (Object.hasOwn(input, "model")) fields.model = plannerModel(input.model, "invalid_agent", "agent.model");
       else if (input.id === undefined) fields.model = null;
+      if (Object.hasOwn(input, "effort")) fields.effort = plannerEffort(input.effort, "invalid_agent", "agent.effort");
+      else if (input.id === undefined) fields.effort = null;
       if (Object.hasOwn(input, "persistentBrowser")) {
         if (typeof input.persistentBrowser !== "boolean") throw new AgentStoreError("invalid_agent", "agent.persistentBrowser must be boolean");
         fields.persistentBrowser = input.persistentBrowser;
@@ -297,6 +308,7 @@ class AgentStore {
         capabilityId: source.capabilityId,
         mcpProviders: source.mcpProviders === null ? null : [...source.mcpProviders],
         model: source.model ?? null,
+        effort: source.effort ?? null,
         persistentBrowser: false,
       };
       return this._upsert(state.agents, undefined, fields, this._limits.maxAgents, "agent");
