@@ -17,6 +17,8 @@ interface Props {
 }
 
 
+const PROVIDER_NAME = { codex_cli: 'Codex', claude_code: 'Claude', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA', opencode_cli: 'OpenCode' } as const
+
 /** The home form's model picker (design system `hx-mpick`): a pill that opens Model and Effort. */
 export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider, savingEffort, defaultOpen = false, defaultView = 'effort' }: Props) {
   const [open, setOpen] = useState(defaultOpen)
@@ -67,7 +69,7 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
 
   return <div ref={ref} className="hx-mpick" data-open={open || undefined}>
     <button type="button" className="hx-mpick__toggle" aria-haspopup="true" aria-expanded={open} disabled={!settings} onClick={() => setOpen((o) => !o)}>
-      <span>{active ? `${({ codex_cli: 'Codex', claude_code: 'Claude', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA', opencode_cli: 'OpenCode' })[active.provider]} ${active.label}` : 'Choose planner'}</span>
+      <span title={active ? `${PROVIDER_NAME[active.provider]} ${active.label}` : undefined}>{active ? active.label : 'Choose planner'}</span>
       <svg className="hx-mpick__chev" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 9l6 6 6-6" /></svg>
     </button>
     {open && settings ? <div className="hx-mpick__pop" data-view={view} style={view === 'models' && maxHeight ? { maxHeight } : undefined}>
