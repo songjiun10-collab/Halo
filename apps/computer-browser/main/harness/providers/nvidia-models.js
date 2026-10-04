@@ -8,7 +8,10 @@ const NVIDIA_MODELS = Object.freeze([
   { id: "nvidia/nemotron-3-super-120b-a12b", label: "Nemotron 3 Super" },
   { id: "deepseek-ai/deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
 ].map(Object.freeze));
-const DEFAULT_NVIDIA_MODEL = NVIDIA_MODELS[0].id;
+// DeepSeek V4 Flash/Pro reached end of life on the hosted API (HTTP 410, checked
+// 2026-10-04). They stay in the allowlist so saved settings still load, but the
+// default must be a model that answers.
+const DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b";
 // Ids discovered from the hosted /v1/models endpoint (host-fetched and
 // shape-checked by nvidia-model-catalog). They extend the built-in list only.
 let discovered = new Set();

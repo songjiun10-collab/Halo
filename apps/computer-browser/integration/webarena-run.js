@@ -19,7 +19,7 @@
 //    local `claude` login. Approval is an immediate programmatic allow.
 //
 // Run from apps/computer-browser (tasks.json from `webarena-verified dataset-get`):
-//   HALO_WA_TASKS=tasks.json HALO_WA_IDS=108,109 HALO_WA_OUT=out/baseline \
+//   HALO_WA_PROVIDER=nvidia NVIDIA_API_KEY=... HALO_WA_TASKS=tasks.json HALO_WA_IDS=108,109 HALO_WA_OUT=out/baseline \
 //   HALO_WA_SITES='{"__SHOPPING__":"http://localhost:7770"}' \
 //   node_modules/.bin/electron integration/webarena-run.js
 
@@ -38,9 +38,15 @@ const { isClaudeModel } = require("../main/harness/providers/claude-models");
 const { createHarRecorder } = require("./webarena/har");
 const { buildAgentResponse } = require("./webarena/response");
 
-const WORKER = path.resolve(__dirname, "..", "main", "harness", "providers", "claude-code-worker.js");
+// HALO_WA_PROVIDER=claude (default, local `claude` login) or nvidia (hosted NIM;
+// NVIDIA_API_KEY comes from the environment and is passed only to the worker).
+const PROVIDER = process.env.HALO_WA_PROVIDER || "claude";
+if (!["claude", "nvidia"].includes(PROVIDER)) throw new RangeError("HALO_WA_PROVIDER must be claude or nvidia");
+const WORKER = path.resolve(__dirname, "..", "main", "harness", "providers", PROVIDER === "nvidia" ? "nvidia-planner-worker.js" : "claude-code-worker.js");
+const { DEFAULT_NVIDIA_MODEL, isNvidiaModel } = require("../main/harness/providers/nvidia-models");
+const isModelOf = PROVIDER === "nvidia" ? isNvidiaModel : isClaudeModel;
 const APP_ROOT = path.resolve(__dirname, "..");
-const DEFAULT_MODEL = process.env.HALO_WA_MODEL || null;
+const DEFAULT_MODEL = process.env.HALO_WA_MODEL || (PROVIDER === "nvidia" ? DEFAULT_NVIDIA_MODEL : null);
 
 const envInt = (name, fallback, min, max) => {
   const raw = process.env[name];
@@ -57,14 +63,31 @@ function makePlanner(model) {
     command: process.execPath,
     args: [WORKER, ...(model ? ["--model", model] : [])],
     cwd: APP_ROOT,
-    env: { ELECTRON_RUN_AS_NODE: "1" },
+    env: { ELECTRON_RUN_AS_NODE: "1", ...(PROVIDER === "nvidia" && process.env.NVIDIA_API_KEY ? { NVIDIA_API_KEY: process.env.NVIDIA_API_KEY } : {}) },
     timeoutMs: 120000,
   });
 }
 
 // One tool-less model call: the task and the last page text in, a JSON array of
 // strings out. Returns null if it cannot produce one.
+async function extractAnswerNvidia({ intent, pageText }) {
+  const prompt = `Task: ${intent}\n\nFinal page text:\n${pageText.slice(0, 12000)}\n\nIf the task asks for information, reply with ONLY a JSON array of strings holding the answer values found on the page. If the page does not contain the answer, reply with []. No other text.`;
+  try {
+    const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(90000),
+      headers: { "content-type": "application/json", authorization: `Bearer ${process.env.NVIDIA_API_KEY}` },
+      body: JSON.stringify({ model: DEFAULT_MODEL, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: 1024 }),
+    });
+    if (!response.ok) return null;
+    const text = (await response.json())?.choices?.[0]?.message?.content ?? "";
+    const match = String(text).match(/\[[\s\S]*\]/);
+    const parsed = JSON.parse(match ? match[0] : "");
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : null;
+  } catch { return null; }
+}
+
 function extractAnswer({ intent, pageText }) {
+  if (PROVIDER === "nvidia") return extractAnswerNvidia({ intent, pageText });
   return new Promise((resolve) => {
     const prompt = `Task: ${intent}\n\nFinal page text:\n${pageText.slice(0, 12000)}\n\nIf the task asks for information, reply with ONLY a JSON array of strings holding the answer values found on the page. If the page does not contain the answer, reply with []. No other text.`;
     const child = spawn("claude", ["-p", "--output-format", "text"], { stdio: ["pipe", "pipe", "ignore"] });
@@ -118,7 +141,7 @@ async function runTask({ task, sites, arm, outDir, timeoutMs, createBrowser, har
     const escalatePlanner = arm === "escalation" ? async () => {
     if (!currentModel) return null;
     tried.add(currentModel);
-    const candidates = [...modelsInTier(1), ...modelsInTier(2)].filter(isClaudeModel);
+    const candidates = [...modelsInTier(1), ...modelsInTier(2)].filter(isModelOf);
     const target = escalationTarget({ currentModel, candidates, tried, tierOf });
     if (!target) return null;
     tried.add(target);
@@ -173,6 +196,7 @@ async function main() {
   if (!["baseline", "escalation"].includes(arm)) throw new RangeError("HALO_WA_ARM must be baseline or escalation");
   const tasksFile = process.env.HALO_WA_TASKS;
   const outDir = path.resolve(process.env.HALO_WA_OUT || "out/webarena");
+  if (PROVIDER === "nvidia" && !process.env.NVIDIA_API_KEY) throw new Error("NVIDIA_API_KEY is required for HALO_WA_PROVIDER=nvidia");
   if (!tasksFile) throw new Error("HALO_WA_TASKS is required");
   const sites = JSON.parse(process.env.HALO_WA_SITES || "{}");
   const ids = process.env.HALO_WA_IDS ? new Set(process.env.HALO_WA_IDS.split(",").map((id) => id.trim())) : null;

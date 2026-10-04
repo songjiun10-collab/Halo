@@ -10,11 +10,10 @@ are rejected, and no tool/function definitions are sent.
 Set `NVIDIA_API_KEY` in the environment of the HALO host, then start the app.
 Choose NVIDIA in Settings or choose one of its models in the model picker:
 
-- DeepSeek V4 Flash (`deepseek-ai/deepseek-v4-flash`, default)
-- DeepSeek V4 Pro (`deepseek-ai/deepseek-v4-pro`)
-- Kimi K3 (`moonshotai/kimi-k3`)
-- DeepSeek V4.1 Flash (`deepseek-ai/deepseek-v4.1-flash`; id inferred from the build.nvidia.com URL, not yet confirmed against a live request)
-- Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b`)
+- Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b`, default)
+- DeepSeek V4 Flash / Pro: end of life on the hosted API (HTTP 410 since 2026-08-07); still accepted in saved settings but not usable
+- Kimi K3 (`moonshotai/kimi-k3`; a 2026-10-04 test request got no reply within 90 s)
+- DeepSeek V4.1 Flash (`deepseek-ai/deepseek-v4.1-flash`; answers, but a tiny request took about 25 s on 2026-10-04)
 
 The key only goes to the selected built-in NVIDIA worker. It is not stored in
 settings, renderer state, planner prompts, or error messages. Custom operator

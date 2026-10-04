@@ -46,7 +46,7 @@ const { PLANNER_PROVIDERS } = require("./planner-providers");
 
 // The planner provider whose allowlist holds this model id, or null.
 // What an unpinned plannerModel runs per provider (for tier lookup only).
-const DEFAULT_MODEL_BY_PROVIDER = Object.freeze({ claude_code: "claude-opus-5-5", codex_cli: "gpt-6.1-sol", antigravity: "antigravity-default", cursor: "cursor-auto", nvidia: "deepseek-ai/deepseek-v4-flash", opencode_cli: "opencode-default" });
+const DEFAULT_MODEL_BY_PROVIDER = Object.freeze({ claude_code: "claude-opus-5-5", codex_cli: "gpt-6.1-sol", antigravity: "antigravity-default", cursor: "cursor-auto", nvidia: "nvidia/nemotron-3-super-120b-a12b", opencode_cli: "opencode-default" });
 const providerForModel = (model) => Object.values(PLANNER_PROVIDERS).find((provider) => provider.isModel(model))?.id ?? null;
 const { effortForRoute, routeForProfile } = require("./planner-effort-policy");
 const { RoutineRunner } = require("./routine-runner");
