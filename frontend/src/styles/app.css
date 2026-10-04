@@ -751,3 +751,6 @@ html, body, #root { background: transparent !important; }
 .hx-sidebar__label--fold:hover { color: var(--foreground); }
 .hx-sidebar__chev { display: inline-block; transition: transform .15s; transform: rotate(90deg); }
 .hx-sidebar__label--fold[aria-expanded="false"] .hx-sidebar__chev { transform: none; }
+
+/* The design system's .hx-switch draws its own ::after knob; the settings switches already render a <span> knob. */
+.hx-switch[role="switch"]::after { content: none; }
