@@ -30,7 +30,7 @@ const stateLabel: Record<TaskSummary['state'], string> = {
 }
 
 interface Shortcut { url: string; label: string }
-const SHORTCUT_SLOTS = 6
+const MAX_SHORTCUTS = 8
 
 function toShortcut(raw: string): Shortcut | null {
   const text = raw.trim()
@@ -74,8 +74,9 @@ function TaskButton({ task, active, onClick, child }: { task: TaskSummary; activ
 }
 
 export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, tabs, activeTabId, onSelectTab, onOpenUrl, agents }: Props) {
-  const [pins, setPins] = useStored<(Shortcut | null)[]>('halo.shortcuts', Array.from({ length: SHORTCUT_SLOTS }, () => null))
-  const [adding, setAdding] = useState<number | null>(null)
+  const [pins, setPins] = useStored<Shortcut[]>('halo.shortcuts', [])
+  const [adding, setAdding] = useState(false)
+  const shown = pins.filter((pin) => pin && typeof pin === 'object')
   const [projects, setProjects] = useStored<Project[]>('halo.projects', [])
   const [moreOpen, setMoreOpen] = useStored<boolean>('halo.sidebar.more', false)
   const [editing, setEditing] = useState<string | null>(null)
@@ -100,25 +101,23 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
   return (
     <aside className="hx-sidebar" data-open={open} aria-label="Workspace" inert={inert}>
       <div className="hx-scs" aria-label="Shortcuts">
-        {Array.from({ length: SHORTCUT_SLOTS }, (_, i) => {
-          const pin = pins[i] && typeof pins[i] === 'object' ? pins[i] : null
-          return pin ? (
-            <button type="button" key={i} className="hx-sc" title={`${pin.label} (right-click to remove)`} aria-label={pin.label}
-              onClick={() => onOpenUrl(pin.url)} onContextMenu={(e) => { e.preventDefault(); setPins(Array.from({ length: SHORTCUT_SLOTS }, (_, j) => (j === i ? null : pins[j] ?? null))) }}>{pin.label[0]?.toUpperCase()}</button>
-          ) : (
-            <button type="button" key={i} className="hx-sc hx-sc--empty" aria-label="Add shortcut" onClick={() => setAdding(i)}>+</button>
-          )
-        })}
+        {shown.length < MAX_SHORTCUTS && (
+          <button type="button" className="hx-sc hx-sc--empty" aria-label="Add shortcut" onClick={() => setAdding(true)}>+</button>
+        )}
+        {shown.map((pin, i) => (
+          <button type="button" key={pin.url + i} className="hx-sc" title={`${pin.label} (right-click to remove)`} aria-label={pin.label}
+            onClick={() => onOpenUrl(pin.url)} onContextMenu={(e) => { e.preventDefault(); setPins(shown.filter((_, j) => j !== i)) }}>{pin.label[0]?.toUpperCase()}</button>
+        ))}
       </div>
-      {adding !== null && (
+      {adding && (
         <input className="hx-sc__input" autoFocus placeholder="Site address, then Enter" aria-label="Shortcut address"
-          onBlur={() => setAdding(null)}
+          onBlur={() => setAdding(false)}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') setAdding(null)
+            if (e.key === 'Escape') setAdding(false)
             if (e.key !== 'Enter') return
             const next = toShortcut(e.currentTarget.value)
-            if (next) setPins(Array.from({ length: SHORTCUT_SLOTS }, (_, j) => (j === adding ? next : pins[j] ?? null)))
-            setAdding(null)
+            if (next) setPins([...shown, next])
+            setAdding(false)
           }} />
       )}
       <button type="button" className="hx-sidebar__item hx-sidebar__new" onClick={onNewTask}>
