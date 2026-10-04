@@ -24,7 +24,7 @@ function initial(url: string) {
 
 const activityText: Record<TabActivity, string> = {
   working: `${AGENT} working`,
-  waiting: `${AGENT} waiting for approval`,
+  waiting: `${AGENT} waiting for you`,
   paused: `${AGENT} paused`,
   done: `${AGENT} done`,
 }

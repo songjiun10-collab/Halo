@@ -1,8 +1,9 @@
 # Runtime TypeScript migration
 
 The frontend uses TypeScript. The Electron runtime still loads CommonJS JavaScript,
-with four shared contract modules, three MCP broker modules and two communication modules authored in
-strict TypeScript and emitted to their existing `.js` paths. This is a scoped
+with eight shared modules, three MCP broker modules, two communication modules,
+and background-runtime, recovery, model-tier, and context-builder modules authored in strict TypeScript and emitted to
+their existing `.js` paths. This is a scoped
 runtime conversion, not a claim that the whole Electron runtime has migrated.
 
 ## Reproduce the initial audit
@@ -15,10 +16,13 @@ npm --prefix apps/computer-browser run typecheck
 
 This audit uses the browser package's pinned TypeScript 6.0.2 and Node 24 types.
 It checks the TypeScript sources and compile-only type fixtures. The runtime build
-uses two fixed compiler cohorts, `tsconfig.runtime.json` (`runtime-src/shared` to
+uses three fixed compiler cohorts, `tsconfig.runtime.json` (`runtime-src/shared` to
 `shared/`) and `tsconfig.runtime-harness.json` (`runtime-src/main/harness` to
-`main/harness/`). Each emits CommonJS JS only into its own private temporary
-directory before the tool checks or explicitly publishes the nine approved outputs.
+`main/harness/`), and `tsconfig.runtime-integration.json` (`runtime-src/integration`
+to `integration/`) for the benchmark-only approval latency helper. Each emits
+CommonJS JS only into its own private temporary directory before the tool checks
+or explicitly publishes the nineteen approved outputs (eighteen production modules
+and one benchmark helper).
 
 From this directory:
 
@@ -33,7 +37,7 @@ npm run build            # check generated files, then build frontend
 Only `build:runtime` writes generated JavaScript. It compiles first, validates the
 exact output set of each cohort, rejects symlinked input/output paths, uses a private
 exclusive writer lock, and replaces each file using a sibling temporary file.
-The nine replacements are individually atomic, not a single atomic transaction.
+The nineteen replacements are individually atomic, not a single atomic transaction.
 If interrupted, `check:runtime` reports stale files; rerun the explicit build to
 repair them. A leftover lock after a crash is not deleted automatically: inspect
 the named lock and remove it manually only after confirming no publisher is active.
@@ -47,8 +51,10 @@ headless Electron end-to-end run.
 
 ## Boundaries
 
-1. Four shared contract modules now have strict TypeScript source with existing
-   runtime validation retained.
+1. Eight shared modules have strict TypeScript source: the four original
+   contracts plus task-profile-router, port-contracts, layout-constants, and
+   clamp-bounds. Routing, parent restrictions, deep freezing, transport method
+   names, renderer bounds validation, and CommonJS export order are retained.
 2. The generic MCP broker, its schema validator and schema worker have strict
    TypeScript source (phase three, step one). The Codex/Claude providers under
    `main/harness/providers/` remain JavaScript; the broker types only the
@@ -59,6 +65,16 @@ headless Electron end-to-end run.
    JSON transport, cancellation, durable message idempotency, conversation quota,
    and consumed-message acknowledgement semantics are unchanged. Their tests run
    against the emitted JavaScript, not a runtime TypeScript loader.
+5. `background-runtime-ui` and `background-launch-agent` are strict TypeScript.
+   Host settings, service state, listener lifetimes, and deferred login launch
+   retain their prior behavior. Structural interfaces describe the remaining
+   JavaScript launch-agent manager without adding it to the compiler output set.
+6. `context-builder` is authored in strict TypeScript. Input and Work Goal,
+   team board, navigation, and reference boundaries have explicit structural
+   types; runtime validation remains in place. The message admission optimization
+   is maintained in this source, not in the generated JavaScript.
+7. The benchmark-only `approval-latency` helper has its own strict TypeScript
+   cohort. Compile-only fixtures reject invalid outcome names and goal versions.
 
 Approval, journal formats, cancellation, expiry, and execution-uncertain behavior
 must remain unchanged. Runtime tests and type checks are complementary; neither
@@ -86,5 +102,10 @@ errors intentionally return bounded codes and point users there for details.
 Phase one added strict JSDoc typing to the shared contracts and recorded an initial
 154-diagnostic baseline. Phase two now uses actual TypeScript source for the four
 shared modules, phase three step one adds the three MCP broker modules, and
-the next isolated cohort adds the two communication modules;
-other runtime modules remain JavaScript.
+the next isolated cohort adds the two communication modules. The October 4 wave
+adds four routing/browser-boundary modules and two background-runtime bindings,
+bringing the production TypeScript module count from nine to twenty-four (recovery-policy,
+model-tiers, nvidia-model-catalog, screen-map, effect-classifier, planner-escalation, planner-routing, slack-task-entry, and context-builder added in the October 4 follow-up waves). The
+approval-latency benchmark helper is also generated, but is not counted as production.
+Other runtime modules remain JavaScript; each subsequent wave must expand the
+exact compiler cohort, build fixtures, and source/output conformance checks together.

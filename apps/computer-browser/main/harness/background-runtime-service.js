@@ -61,6 +61,7 @@ const TASK_HOST_METHODS = new Set([
   "getTaskEvents",
   "getChildPlan",
   "listMcpProviders",
+  "refreshPlannerModels",
   "getTaskBrowser",
   "taskBrowserAction",
   "setTaskViewport",

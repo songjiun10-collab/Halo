@@ -13,7 +13,7 @@
 // Run from apps/computer-browser:
 //   node_modules/.bin/electron integration/realistic-task-compare.js
 // Env: HALO_RT_PROVIDER (claude|codex), HALO_RT_ARMS (default "raw,harness"), HALO_RT_MODEL (default claude-sonnet-5-5),
-//   HALO_RT_TIMEOUT_S (60..1800, default 420), HALO_RT_MAX_STEPS (default 30). Emits RESULT_JSON:<json>.
+//   HALO_RT_START / HALO_RT_GOAL / HALO_RT_CRITERION / HALO_RT_SUCCESS_RE+_MIN (custom task), HALO_RT_TIMEOUT_S (60..1800, default 420), HALO_RT_MAX_STEPS (default 30). Emits RESULT_JSON:<json>.
 
 const fs = require("node:fs/promises");
 const os = require("node:os");
@@ -33,13 +33,18 @@ const TIMEOUT_MS = Number(process.env.HALO_RT_TIMEOUT_S || 420) * 1000;
 const PROFILE = process.env.HALO_RT_PROFILE || ""; // short|fast|middle|long; empty = controller default
 const MAX_STEPS = Number(process.env.HALO_RT_MAX_STEPS || 30);
 
-const START_URL = "https://developer.mozilla.org/";
+const START_URL = process.env.HALO_RT_START || "https://developer.mozilla.org/";
 const GOAL = process.env.HALO_RT_GOAL || "MDN에서 structuredClone() 문서를 찾아 Node.js 지원 시작 버전을 확인한 다음, "
   + "Node.js 공식 문서(nodejs.org)에서 structuredClone이 설명된 페이지로 이동해줘. "
   + `시작 페이지는 ${START_URL} 이야. 읽기만 하고 아무것도 입력하거나 제출하지 마.`;
 
 // Host-side success: the run visited the MDN structuredClone page and ended on nodejs.org's globals docs.
 function succeeded(visited, currentUrl) {
+  if (process.env.HALO_RT_SUCCESS_RE) {
+    const re = new RegExp(process.env.HALO_RT_SUCCESS_RE, "i");
+    const min = Number(process.env.HALO_RT_SUCCESS_MIN || 3);
+    return new Set([...visited, currentUrl].filter((u) => re.test(u || ""))).size >= min;
+  }
   const mdn = visited.some((u) => /developer\.mozilla\.org\/.*structuredClone/i.test(u));
   let onNode = false;
   try {
@@ -202,7 +207,7 @@ async function runHarness({ createBrowser, storageRoot }) {
   };
   const store = await TaskStore.create({
     originalRequest: GOAL,
-    criteria: [{ id: "done", text: "ended on the Node.js docs page for structuredClone after reading MDN", required: true, verification: "user" }],
+    criteria: [{ id: "done", text: process.env.HALO_RT_CRITERION || "ended on the Node.js docs page for structuredClone after reading MDN", required: true, verification: "user" }],
     limits: { maxActions: 200, maxPlannerCalls: 120, maxActiveMs: TIMEOUT_MS },
   }, { storageRoot });
   const planner = new PlannerStdioAdapter({
@@ -215,6 +220,7 @@ async function runHarness({ createBrowser, storageRoot }) {
     browser,
     approve: async () => { approvals += 1; return { decision: "allow", reasons: [] }; },
     hostVerifier: () => true,
+    ...(process.env.HALO_RT_MODE ? { permissionMode: process.env.HALO_RT_MODE } : {}),
     ...(PROFILE ? { harnessProfile: PROFILE, plannerEffort: process.env.HALO_RT_EFFORT || (PROFILE === "short" ? "low" : "medium"), adaptiveEffort: process.env.HALO_RT_ADAPTIVE === "1" } : {}),
   });
   let endState;
@@ -238,7 +244,7 @@ async function runHarness({ createBrowser, storageRoot }) {
     await planner.close().catch(() => {});
     await browser.dispose().catch(() => {});
     await store.close().catch(() => {});
-    return { arm: "harness", success: found, state: endState, steps: actions, modelCalls: plannerCalls, approvals, userApprovals, wallMs: Math.round(performance.now() - t0), usage, pages: visited.length, path: visited, trace, pauseReason: snap.pauseReason, needUser: snap.needUser ?? snap.pendingQuestion ?? null };
+    return { arm: "harness", success: found, state: endState, steps: actions, modelCalls: plannerCalls, approvals, userApprovals, wallMs: Math.round(performance.now() - t0), usage, pages: visited.length, path: visited, trace, pauseReason: snap.pauseReason, needUser: snap.needUserReason ?? snap.needUser ?? snap.pendingQuestion ?? null };
   }
 }
 

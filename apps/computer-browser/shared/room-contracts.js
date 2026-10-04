@@ -14,6 +14,8 @@ const MAX_CONTEXT_BYTES = 32 * 1024;
 const DEFAULT_MAX_TURNS = 6;
 const MAX_TURNS = 12;
 const MESSAGE_KINDS = Object.freeze(["say", "pass", "propose_task", "task_started", "notice"]);
+const DISCUSSION_REVIEW_SIGNALS = Object.freeze(["ambiguity", "high_impact", "conflict", "missing_evidence", "low_confidence", "repeated_failure"]);
+const MAX_DISCUSSION_REVIEW_SIGNALS = 3;
 
 class RoomContractError extends Error {
   constructor(code, message) {
@@ -39,8 +41,11 @@ function validateRoomTurn(reply) {
     return { kind: "pass" };
   }
   if (reply.kind === "say") {
-    if (keys !== "kind,text" || !nonEmptyText(reply.text, MAX_MESSAGE_CHARS)) fail(`of kind say needs text of 1..${MAX_MESSAGE_CHARS} characters`);
-    return { kind: "say", text: reply.text };
+    if (!["kind,text", "kind,reviewSignals,text"].includes(keys) || !nonEmptyText(reply.text, MAX_MESSAGE_CHARS)) fail(`of kind say needs text of 1..${MAX_MESSAGE_CHARS} characters`);
+    if (reply.reviewSignals !== undefined && (!Array.isArray(reply.reviewSignals) || reply.reviewSignals.length < 1 ||
+        reply.reviewSignals.length > MAX_DISCUSSION_REVIEW_SIGNALS || new Set(reply.reviewSignals).size !== reply.reviewSignals.length ||
+        reply.reviewSignals.some((signal) => !DISCUSSION_REVIEW_SIGNALS.includes(signal)))) fail("of kind say has invalid reviewSignals");
+    return { kind: "say", text: reply.text, ...(reply.reviewSignals ? { reviewSignals: [...reply.reviewSignals] } : {}) };
   }
   if (reply.kind === "propose_task") {
     if (keys !== "kind,request" || !nonEmptyText(reply.request, MAX_TASK_REQUEST_CHARS)) fail(`of kind propose_task needs request of 1..${MAX_TASK_REQUEST_CHARS} characters`);
@@ -52,7 +57,7 @@ function validateRoomTurn(reply) {
 // The only data a speaking agent sees: its own profile, its teammates'
 // names/titles (never their instructions), and the newest transcript that
 // fits under MAX_CONTEXT_BYTES.
-function buildRoomTurnContext({ team, speaker, members, messages }) {
+function buildRoomTurnContext({ team, speaker, members, messages, discussionReview }) {
   const names = new Map(members.map((member) => [member.id, member.name]));
   const authorName = (author) => (author === "user" ? "User" : author === "host" ? "HALO" : names.get(author) ?? "Former member");
   const context = {
@@ -62,6 +67,13 @@ function buildRoomTurnContext({ team, speaker, members, messages }) {
       you: { agentId: speaker.id, name: speaker.name, title: speaker.title ?? "", instructions: speaker.instructions ?? "" },
       members: members.map((member) => ({ agentId: member.id, name: member.name, title: member.title ?? "" })),
       transcript: [],
+      ...(discussionReview && Array.isArray(discussionReview.reasons) && discussionReview.reasons.length > 0 ? {
+        discussionReview: {
+          authority: "halo_orchestrator",
+          reasons: discussionReview.reasons.filter((signal) => DISCUSSION_REVIEW_SIGNALS.includes(signal)),
+          remainingReviewers: Math.max(0, Math.min(members.length, Number.isInteger(discussionReview.remainingReviewers) ? discussionReview.remainingReviewers : members.length)),
+        },
+      } : {}),
     },
   };
   const base = Buffer.byteLength(JSON.stringify(context), "utf8");
@@ -88,6 +100,8 @@ module.exports = {
   DEFAULT_MAX_TURNS,
   MAX_TURNS,
   MESSAGE_KINDS,
+  DISCUSSION_REVIEW_SIGNALS,
+  MAX_DISCUSSION_REVIEW_SIGNALS,
   RoomContractError,
   validateRoomTurn,
   buildRoomTurnContext,

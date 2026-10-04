@@ -499,7 +499,7 @@ for (const transition of ["stop", "pause", "takeOver"]) test(`${transition} afte
     await store.close();
     await fs.rm(storageRoot, { recursive: true, force: true });
   });
-  const controller = new TaskController({ store, planner: adapter,
+  const controller = new TaskController({ maxRecoveries: 0, store, planner: adapter,
     browser: { observe: async () => ({ id: "obs" }), execute: async () => { throw new Error("must not dispatch"); } },
     approve: async () => ({ decision: "deny", reasons: [] }), hostVerifier: () => false });
   await controller.start();

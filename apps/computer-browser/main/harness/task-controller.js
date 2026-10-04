@@ -23,6 +23,9 @@ const { AsyncLocalStorage } = require("node:async_hooks");
 const contracts = require("../../shared/harness-contracts");
 const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal, isQuickProfile } = require("../../shared/harness-profile");
 const { adaptiveEffort } = require("./planner-effort-policy");
+const { createRecoveryPolicy } = require("./recovery-policy");
+const { resolveTarget } = require("./screen-map");
+const { classifyTarget } = require("./effect-classifier");
 const { buildContext } = require("./context-builder");
 const { ContextRefCatalog } = require("./context-refs");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
@@ -45,7 +48,7 @@ const NOOP_MEMORY_MONITOR = { getPressureLevel: () => "normal" };
 // page it was proposed from -- otherwise a navigate/follow_link/scroll is
 // approved blind. Only derived from the host's own last observation, never
 // from planner-supplied free text.
-function describeActionTarget(action, lastObservation) {
+function describeActionTarget(action, lastObservation, screenTargets = null) {
   if (action.type === "navigate") {
     return typeof action.url === "string" ? action.url : null;
   }
@@ -67,9 +70,20 @@ function describeActionTarget(action, lastObservation) {
     const destination = element.formAction ? `${(element.formMethod || "get").toUpperCase()} ${element.formAction}` : element.href;
     return destination ? `${identity}; ${destination}` : identity;
   }
+  const landed = (observation) => {
+    // Text computer use only: name the control under the point so the approver
+    // sees "Delete" instead of bare coordinates. Derived from host geometry.
+    if (!screenTargets || screenTargets.observationId !== (observation?.id || action.observationId)) return "";
+    const hit = resolveTarget(screenTargets.targets, Number(action.x), Number(action.y));
+    if (!hit) return " -> no mapped control";
+    const flags = [hit.covered ? "covered" : "", hit.disabled ? "disabled" : ""].filter(Boolean).join(",");
+    return ` -> ${hit.role} ${JSON.stringify(hit.name)}${flags ? ` [${flags}]` : ""}`;
+  };
+  if (action.type === "press_key") return `${lastObservation?.id || action.observationId}; press ${action.key}`;
   if (["click_at", "type_at"].includes(action.type)) {
     const point = `(${Math.round(Number(action.x) * 100)}%, ${Math.round(Number(action.y) * 100)}%)`;
-    return action.type === "type_at" ? `screenshot ${lastObservation?.id || action.observationId} ${point}; insert ${JSON.stringify(action.text)}` : `screenshot ${lastObservation?.id || action.observationId} ${point}`;
+    const where = landed(lastObservation);
+    return action.type === "type_at" ? `screenshot ${lastObservation?.id || action.observationId} ${point}${where}; insert ${JSON.stringify(action.text)}` : `screenshot ${lastObservation?.id || action.observationId} ${point}${where}`;
   }
   return null;
 }
@@ -96,6 +110,20 @@ function observationKey(observation) {
 function hasComputerUseAdapter(taskProfile) {
   return Array.isArray(taskProfile?.capability?.adapters) &&
     taskProfile.capability.adapters.some((adapter) => adapter?.capabilityId === "computer_use");
+}
+
+// Auto-run only what cannot carry an external effect on its own. With a text
+// screen map the control under the point is classified by meaning (Delete, Buy,
+// Send ... go to the human); in image mode there is no geometry yet, so
+// coordinate clicks keep the action-type rule.
+function isAutoComputerUseAction(action, taskProfile, screenTargets = null) {
+  if (!hasComputerUseAdapter(taskProfile)) return false;
+  if (action.type === "press_key") return action.key !== "Enter";
+  if (action.type !== "click_at" && action.type !== "type_at") return false;
+  if (!screenTargets) return true;
+  if (screenTargets.observationId !== action.observationId) return false;
+  const hit = resolveTarget(screenTargets.targets, Number(action.x), Number(action.y));
+  return classifyTarget(hit, action.type).gate === "auto";
 }
 
 function hasMultiAgentCapability(taskProfile) {
@@ -190,6 +218,10 @@ class TaskController {
     memoryStore,
     permissionMode = "browse",
     observeRetryDelayMs = OBSERVE_RETRY_DELAY_MS,
+    maxRecoveries,
+    plannerImageInput = true,
+    visionAssist = null,
+    escalatePlanner = null,
     plannerEffort = "medium",
     adaptiveEffort: adaptiveEffortEnabled = false,
     onChildPlan,
@@ -410,6 +442,20 @@ class TaskController {
     this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
     this._scrollStreak = { url: null, count: 0 };
     this._recentPages = [];
+    this._needUserReason = null;
+    this._maxRecoveries = maxRecoveries;
+    this._recovery = createRecoveryPolicy(maxRecoveries);
+    // A planner without image input gets a text screen map instead of a
+    // screenshot (text computer use). visionAssist, when given, may describe
+    // the screen for sparse pages; its output is untrusted text.
+    this._plannerImageInput = plannerImageInput !== false;
+    this._screenTargets = null;
+    // Opt-in: when same-model recovery is spent on a planner problem, the host
+    // may hand back a stronger planner. At most once per task.
+    this._escalatePlanner = typeof escalatePlanner === "function" ? escalatePlanner : null;
+    this._escalations = 0;
+    this._visionAssist = typeof visionAssist === "function" ? visionAssist : null;
+    this._loopHint = false;
     this._errorUrls = [];
     this._approvalQueue = [];
     this._lastObservation = null;
@@ -543,6 +589,7 @@ class TaskController {
       segment: { ...this._segment },
       criteriaStatus: [...this._criteriaStatus.entries()].map(([criterionId, v]) => ({ criterionId, ...v })),
       approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor, widen, leaseOffer }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null, widen: !!widen, leaseOffer: leaseOffer ?? null })),
+      ...(this._task.pauseReason === "need_user" && this._needUserReason ? { needUserReason: this._needUserReason } : {}),
       leases: this._terminal()
         ? []
         : this._leases.filter((l) => isLeaseLive(l, this._monotonicNow())).map(({ id, action, origin, expiresAt, usesLeft }) => ({ id, action, origin, expiresAt, usesLeft })),
@@ -891,9 +938,38 @@ class TaskController {
     }
   }
 
+  // Bounded self-recovery: a transient failure or a loop gets a couple of
+  // automatic retries before the task pauses and asks the person. Never used
+  // for waits that belong to the person (need_user, approvals, takeover).
+  async _tryRecover(reason, step) {
+    const granted = this._recovery.tryConsume(reason);
+    if (!granted) return reason === "planner_error" || reason === "no_progress" ? this._tryEscalate(reason) : false;
+    await this._store.append({ type: "note", payload: { kind: "recovery", reason, step, attempt: granted.attempt, total: granted.total } }).catch(() => {});
+    return true;
+  }
+
+  async _tryEscalate(reason) {
+    if (!this._escalatePlanner || this._escalations >= 1) return false;
+    let next;
+    try { next = await this._escalatePlanner({ reason }); } catch { return false; }
+    if (!next || !next.planner || typeof next.planner.next !== "function") return false;
+    const previous = this._planner;
+    this._escalations += 1;
+    this._planner = next.planner;
+    this._plannerImageInput = next.imageInput !== false;
+    this._recovery = createRecoveryPolicy(this._maxRecoveries);
+    this._loopHint = false;
+    await this._store.append({ type: "note", payload: { kind: "planner_escalation", reason, from: String(next.from ?? ""), to: String(next.to ?? "") } }).catch(() => {});
+    await Promise.resolve(previous?.close?.()).catch(() => {});
+    return true;
+  }
+
   async _pauseWith(reason) {
     this._leaveActive();
     this._task = { state: "paused", pauseReason: reason };
+    // Pause reasons otherwise live only in the latest checkpoint; keep each one
+    // in the journal so "why does it keep pausing" can be answered afterwards.
+    await this._store.append({ type: "note", payload: { kind: "paused", reason } }).catch(() => {});
     await this._checkpoint();
     this._emit();
   }
@@ -1748,6 +1824,7 @@ class TaskController {
           }
           if (this._stopHappenedSince(epoch)) break;
           if (failed) {
+            if (await this._tryRecover("observation_error", "re-observe")) { this._reusableObservation = null; continue; }
             await this._pauseWith("observation_error");
             break;
           }
@@ -1765,6 +1842,7 @@ class TaskController {
           }
         } catch {
           if (this._stopHappenedSince(epoch)) break;
+          if (await this._tryRecover("context_error", "rebuild-context")) continue;
           await this._pauseWith("context_error");
           break;
         }
@@ -1777,6 +1855,7 @@ class TaskController {
           }
         } catch {
           if (this._stopHappenedSince(epoch)) break;
+          if (await this._tryRecover("context_error", "rebuild-context")) continue;
           await this._pauseWith("context_error");
           break;
         }
@@ -1805,7 +1884,7 @@ class TaskController {
         // each turn dispatches a different action (scroll, re-observe, search).
         {
           let pageKey = null;
-          try { const u = new URL(observation?.url); pageKey = u.origin + u.pathname; } catch {}
+          try { const u = new URL(observation?.url); pageKey = u.origin + u.pathname + u.search; } catch {}
           if (Number.isInteger(observation?.httpStatus) && typeof observation.url === "string" && !this._errorUrls.includes(observation.url)) {
             this._errorUrls.push(observation.url);
             if (this._errorUrls.length > ERROR_URLS_KEPT) this._errorUrls.shift();
@@ -1817,6 +1896,11 @@ class TaskController {
           const bouncing = this._recentPages.length === PAGE_LOOP_WINDOW && !this._recentPages.includes(null)
             && new Set(this._recentPages).size <= 2;
           if (stuckOnOne || bouncing) {
+            if (await this._tryRecover("no_progress", "page-loop-warning")) {
+              this._recentPages = [];
+              this._loopHint = true;
+              continue;
+            }
             await this._store.append({ type: "note", payload: { msg: "most recent turns stayed on one page; pausing" } });
             await this._pauseWith("no_progress");
             break;
@@ -1825,6 +1909,7 @@ class TaskController {
 
         let context;
         let visualCapture = null;
+        let textCapture = null;
         const contextStartedAt = this._onTiming ? performance.now() : null;
         try {
           const contextManifest = this._contextRefsEnabled ? this._refreshContextRefs() : undefined;
@@ -1832,7 +1917,28 @@ class TaskController {
             ? await this._readWorkGoalContext({ ...this._workGoalBinding, taskId: this._goal.taskId })
             : undefined;
           if (this._stopHappenedSince(epoch)) break;
-          if (hasComputerUseAdapter(this._store.taskProfile)) {
+          if (hasComputerUseAdapter(this._store.taskProfile) && !this._plannerImageInput) {
+            if (typeof this._browser.captureTextObservation !== "function") {
+              await this._pauseWith("computer_use_unavailable");
+              break;
+            }
+            try {
+              textCapture = await this._browser.captureTextObservation(observation);
+              if (!textCapture?.binding || textCapture.binding.observationId !== observation.id ||
+                  textCapture.binding.taskId !== this._goal.taskId || textCapture.binding.documentEpoch !== observation.documentEpoch ||
+                  typeof textCapture.screenMap?.text !== "string") {
+                throw new Error("invalid screen map binding");
+              }
+              if (textCapture.screenMap.sparse && this._visionAssist) {
+                // Best effort: a failed description leaves the plain map.
+                const described = await Promise.resolve(this._visionAssist(observation)).catch(() => null);
+                if (typeof described === "string" && described.trim()) textCapture = { ...textCapture, visionNote: described.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 2048) };
+              }
+            } catch {
+              await this._pauseWith("computer_use_capture_failed");
+              break;
+            }
+          } else if (hasComputerUseAdapter(this._store.taskProfile)) {
             if (typeof this._browser.captureComputerUseObservation !== "function") {
               await this._pauseWith("computer_use_unavailable");
               break;
@@ -1849,9 +1955,13 @@ class TaskController {
               break;
             }
           }
+          const targetList = textCapture ? textCapture.screenMap.targets : visualCapture?.screenTargets;
+          this._screenTargets = Array.isArray(targetList) ? { observationId: observation.id, targets: targetList } : null;
           const plannerObservation = visualCapture
             ? { ...observation, computerUse: { ...visualCapture.binding } }
-            : observation;
+            : textCapture
+              ? { ...observation, computerUse: { ...textCapture.binding, mode: "text" }, screenMap: textCapture.screenMap.text, ...(textCapture.visionNote ? { visionNote: textCapture.visionNote } : {}) }
+              : observation;
           context = buildContext({
             goal: this._goal,
             state: {
@@ -1862,6 +1972,7 @@ class TaskController {
               harnessProfile: this._harnessProfile,
               maxActionsPerProposal: this._maxActionsPerProposal,
               ...(this._harnessProfile === "fast" ? { fastMode: true } : {}),
+              ...(this._loopHint ? { loopWarning: true } : {}),
               ...(this._scrollStreak.count >= 3 ? { scrollStreak: this._scrollStreak.count } : {}),
               ...(this._errorUrls.length > 0 ? { errorUrls: [...this._errorUrls] } : {}),
               mcp: { enabled: this._mcpAvailableToPlanner(),
@@ -1907,6 +2018,7 @@ class TaskController {
         } catch {
           await visualCapture?.attachment?.dispose?.().catch(() => {});
           if (this._stopHappenedSince(epoch)) break;
+          if (await this._tryRecover("context_error", "rebuild-context")) continue;
           await this._pauseWith("context_error");
           break;
         }
@@ -1938,6 +2050,7 @@ class TaskController {
           }
           if (this._pendingMcpObservation) this._pendingMcpObservation = null;
           this._pendingContextRead = null;
+          this._loopHint = false;
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -1952,6 +2065,8 @@ class TaskController {
           // The pause reason alone hides why the planner failed; leave the
           // cause in the process log so a paused task can be diagnosed.
           try { console.warn(`[task-controller] planner failed task=${this._goal?.taskId ?? "?"} code=${error?.code ?? "none"}: ${String(error?.message ?? error).slice(0, 500)}`); } catch {}
+          if (!routinePause && error?.code !== "planner_unavailable" && error?.code !== "computer_use_provider_unavailable"
+              && await this._tryRecover("planner_error", "retry-planner")) continue;
           await this._pauseWith(routinePause || (error && error.code === "planner_unavailable" ? "planner_unavailable"
             : error?.code === "computer_use_provider_unavailable" ? "computer_use_provider_unavailable" : "planner_error"));
           break;
@@ -1999,7 +2114,7 @@ class TaskController {
         }
 
         const coordinateActions = validated.kind === "actions"
-          ? validated.actions.filter((action) => action.type === "click_at" || action.type === "type_at")
+          ? validated.actions.filter((action) => action.type === "click_at" || action.type === "type_at" || action.type === "press_key")
           : [];
         if (coordinateActions.length > 0 && (!hasComputerUseAdapter(this._store.taskProfile) ||
             coordinateActions.length !== 1 || validated.actions.length !== 1 ||
@@ -2037,6 +2152,9 @@ class TaskController {
         }
 
         if (validated.kind === "need_user") {
+          // The planner's question is what the person needs to answer; keep it
+          // (bounded) so the chat can show it instead of a bare "paused".
+          this._needUserReason = typeof validated.reason === "string" && validated.reason.trim() ? validated.reason.trim().slice(0, 600) : null;
           await this._pauseWith("need_user");
           break;
         }
@@ -2169,7 +2287,12 @@ class TaskController {
         }
         continue;
       }
-      const policy = gate.policy;
+      // Computer use: coordinate clicks, typing and non-Enter keys run on the
+      // approver's verdict alone. The mode, lock and one-use screen binding still
+      // apply; Enter (which can submit a form) keeps the human gate.
+      const policy = gate.policy.allowed && gate.policy.approval === "human" && isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets)
+        ? { ...gate.policy, approval: "approver" }
+        : gate.policy;
       // Mode-denied actions may be widened by the user, but never for
       // unattended runs or for actions this browser cannot perform.
       const widen = !policy.allowed;
@@ -2266,7 +2389,7 @@ class TaskController {
   }
 
   _describeAction(action, requestId, suffix = "") {
-    const target = describeActionTarget(action, this._lastObservation);
+    const target = describeActionTarget(action, this._lastObservation, this._screenTargets);
     return {
       requestId,
       action: action.type,
@@ -2445,6 +2568,11 @@ class TaskController {
         ? { url, count: this._scrollStreak.count + 1 }
         : { url, count: 1 };
       if (this._scrollStreak.count >= SCROLL_STREAK_LIMIT) {
+        if (await this._tryRecover("no_progress", "scroll-warning")) {
+          this._scrollStreak = { url: null, count: 0 };
+          this._loopHint = true;
+          return;
+        }
         await this._store.append({ type: "note", payload: { msg: "repeated scrolling on one page; pausing" } });
         await this._pauseWith("no_progress");
         return;
@@ -2517,6 +2645,9 @@ class TaskController {
       if (!this._noProgress.hasReplannedOnce) {
         this._noProgress = { lastKey: key, consecutive: 0, hasReplannedOnce: true };
         await this._store.append({ type: "note", payload: { msg: "no-progress streak detected; forcing one replan" } });
+      } else if (await this._tryRecover("no_progress", "repeat-warning")) {
+        this._noProgress = { lastKey: key, consecutive: 0, hasReplannedOnce: true };
+        this._loopHint = true;
       } else {
         await this._pauseWith("no_progress");
       }

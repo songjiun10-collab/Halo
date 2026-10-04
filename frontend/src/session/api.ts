@@ -30,6 +30,8 @@ export interface TaskSnapshot {
   leases?: LeaseView[]
   state: TaskState
   pauseReason: string | null
+  /** The agent's question when it paused with need_user. */
+  needUserReason?: string
   goalVersion: number
   budgets: Record<string, number>
   segment: Record<string, unknown>
@@ -74,6 +76,8 @@ export interface HostSettings {
   plannerModel?: string
   /** Opt-in faster planner tier; unset is off. */
   plannerFast?: boolean
+  plannerEscalation?: boolean
+  plannerRouting?: boolean
 }
 export interface HaloBrowserApi {
   getSnapshot: () => Promise<DirectBrowserSnapshot>
@@ -106,6 +110,7 @@ export interface HaloBrowserApi {
   getTaskBrowser(taskId: string): Promise<BrowserSnapshot>
   getChildPlan(taskId: string): Promise<ChildPlanSummary | null>
   getHostSettings(): Promise<HostSettings>
+  refreshPlannerModels(): Promise<{ nvidia: { id: string; label: string; discovered: boolean }[]; error: string | null }>
   updateHostSettings(patch: Partial<Omit<HostSettings, 'version'>>): Promise<HostSettings>
   taskBrowserAction(taskId: string, action: BrowserAction): Promise<BrowserSnapshot>
   setTaskViewport(taskId: string | null, viewport: BrowserViewport): Promise<unknown>

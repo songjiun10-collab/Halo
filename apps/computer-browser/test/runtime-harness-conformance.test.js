@@ -8,7 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
 
 const APP_ROOT = path.resolve(__dirname, "..");
-const HARNESS_NAMES = ["generic-mcp-broker", "mcp-schema-validator", "mcp-schema-worker", "message-port", "message-mailbox"];
+const HARNESS_NAMES = ["generic-mcp-broker", "mcp-schema-validator", "mcp-schema-worker", "message-port", "message-mailbox", "background-runtime-ui", "background-launch-agent", "recovery-policy", "model-tiers", "context-builder", "nvidia-model-catalog", "screen-map", "effect-classifier", "planner-escalation", "planner-routing", "slack-task-entry"];
 
 test("harness modules are generated from TypeScript sources", () => {
   for (const name of HARNESS_NAMES) {
@@ -21,6 +21,10 @@ test("harness modules are generated from TypeScript sources", () => {
 });
 
 test("generated harness modules keep their exact CommonJS export surface", () => {
+  const context = require("../main/harness/context-builder");
+  assert.deepEqual(Object.keys(context), ["ContextError", "buildContext"]);
+  const contextError = new context.ContextError("context_limit", "large packet");
+  assert.deepEqual(Object.keys(contextError), ["name", "code"]);
   const broker = require("../main/harness/generic-mcp-broker");
   assert.deepEqual(Object.keys(broker), ["GenericMcpBroker", "McpBrokerError"]);
   assert.deepEqual(Object.keys(require("../main/harness/mcp-schema-validator")), ["validateMcpArguments"]);
@@ -30,7 +34,14 @@ test("generated harness modules keep their exact CommonJS export surface", () =>
   assert.deepEqual(Object.keys(error), ["code"]);
 });
 
-test("harness TypeScript sources compile to exactly five CommonJS artifacts", (t) => {
+test("approval latency helper is generated from its strict TypeScript source", () => {
+  const output = fs.readFileSync(path.join(APP_ROOT, "integration/approval-latency.js"), "utf8");
+  assert.ok(output.startsWith('// Generated from runtime-src/integration/approval-latency.ts. Do not edit; run npm run build:runtime.\n'));
+  assert.deepEqual(Object.keys(require("../integration/approval-latency")), ["createApprovalLatencyTracker"]);
+  assert.doesNotMatch(output, /__esModule/);
+});
+
+test("harness TypeScript sources compile to the exact CommonJS cohort", (t) => {
   const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "halo-harness-conformance-"));
   fs.chmodSync(outputDirectory, 0o700);
   t.after(() => fs.rmSync(outputDirectory, { recursive: true, force: true }));

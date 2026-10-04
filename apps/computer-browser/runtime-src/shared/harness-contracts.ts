@@ -280,7 +280,7 @@ function validateLimits(limits: unknown, label: string) {
   assertPositiveInteger(limits.maxActiveMs, `${label}.maxActiveMs`);
 }
 
-const LOCK_ACTIONS = Object.freeze(["navigate", "follow_link", "click", "type", "click_at", "type_at", "submit_form"] as const);
+const LOCK_ACTIONS = Object.freeze(["navigate", "follow_link", "click", "type", "click_at", "type_at", "press_key", "submit_form"] as const);
 type LockAction = (typeof LOCK_ACTIONS)[number];
 type LockRule =
   | { kind: "deny_action"; action: LockAction }

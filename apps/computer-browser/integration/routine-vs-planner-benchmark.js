@@ -34,6 +34,7 @@ const { RoutineStore } = require("../main/harness/routine-store");
 const { RoutineRunner } = require("../main/harness/routine-runner");
 const { resolveTaskProfile } = require("../shared/task-profile-router");
 const { createSpanRecorder } = require("./stage-spans");
+const { createApprovalLatencyTracker } = require("./approval-latency");
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const PLANNER_SCRIPT = path.join(APP_ROOT, "fixtures", "scripted-planner-100.js");
@@ -242,6 +243,10 @@ async function runIteration({
     resolvedProfile: null,
     stages,
   };
+  const approvalLatency = createApprovalLatencyTracker({ onSample: ({ elapsedMs, outcome }) => {
+    spans?.record("approval_to_browser_result", elapsedMs, spanIds());
+    spans?.count(`approvalBrowserResult_${outcome}`);
+  } });
 
   let browser = null;
   let store = null;
@@ -260,7 +265,18 @@ async function runIteration({
       if (url && url !== "about:blank" && visitedUrls.at(-1) !== url) visitedUrls.push(url);
       return observation;
     });
-    browser.execute = timedCall(note, "browser_execute", browser.execute.bind(browser));
+    const execute = browser.execute.bind(browser);
+    browser.execute = timedCall(note, "browser_execute", async (...args) => {
+      try {
+        const result = await execute(...args);
+        approvalLatency.complete(result?.status === "ok" ? "success" : ["uncertain", "execution_uncertain"].includes(result?.status) ? "execution_uncertain" : "failed");
+        return result;
+      } catch (error) {
+        // A thrown dispatch is not proof that the external side effect failed.
+        approvalLatency.complete("execution_uncertain");
+        throw error;
+      }
+    });
 
     const goalInput = JSON.parse(JSON.stringify(scenario.goal));
     let routineMetadata = null;
@@ -373,8 +389,12 @@ async function runIteration({
         if (!item) throw new Error("awaiting_approval without a queued item");
         const approvalStarted = performance.now();
         humanWaitMs += Math.max(0, approvalStarted - snapshotAt);
+        approvalLatency.begin();
         try { await controller.approve(item.id); }
-        finally { note("approve_call_inclusive", performance.now() - approvalStarted); }
+        finally {
+          approvalLatency.clear();
+          note("approve_call_inclusive", performance.now() - approvalStarted);
+        }
         record.approvals += 1;
       } else if (snapshot.state === "running") {
         await delay(2);
@@ -424,6 +444,7 @@ async function runIteration({
     if (store) await store.close().catch(() => {});
     if (routineRoot) await fs.rm(routineRoot, { recursive: true, force: true }).catch(() => {});
     record.cleanupMs = performance.now() - cleanupStarted;
+    record.approvalToBrowserResult = approvalLatency.summary();
     sampler?.exit?.();
   }
   return record;

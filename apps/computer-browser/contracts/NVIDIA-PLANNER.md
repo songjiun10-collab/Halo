@@ -13,6 +13,7 @@ Choose NVIDIA in Settings or choose one of its models in the model picker:
 - DeepSeek V4 Flash (`deepseek-ai/deepseek-v4-flash`, default)
 - DeepSeek V4 Pro (`deepseek-ai/deepseek-v4-pro`)
 - Kimi K3 (`moonshotai/kimi-k3`)
+- DeepSeek V4.1 Flash (`deepseek-ai/deepseek-v4.1-flash`; id inferred from the build.nvidia.com URL, not yet confirmed against a live request)
 - Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b`)
 
 The key only goes to the selected built-in NVIDIA worker. It is not stored in
@@ -44,3 +45,7 @@ need a configured NVIDIA key and are separate from the local fixture result.
 
 Official catalog and API reference, checked 2026-10-03:
 https://docs.api.nvidia.com/nim/reference/llm-apis
+
+## Dynamic model recognition
+
+Opening Settings calls `refreshPlannerModels` (IPC `halo:refreshPlannerModels`). The host fetches the fixed endpoint `https://integrate.api.nvidia.com/v1/models` with `NVIDIA_API_KEY` (redirects refused, 10 s timeout, 1 MiB cap, ids shape-checked, embedding/guard/ASR-type ids dropped, at most 500) and adds the ids to the planner allowlist next to the built-in list. A failed lookup keeps the built-in list and returns a stable code (`authentication_failed`, `rate_limited`, `http_error`, `timeout`, `network_error`, `invalid_response`). Discovered ids are not tier-classified (`UNKNOWN_MODEL_TIER`), and appearing in the catalog does not guarantee the account may call the model.

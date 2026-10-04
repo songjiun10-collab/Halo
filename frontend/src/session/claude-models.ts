@@ -34,11 +34,12 @@ export const NVIDIA_MODELS = [
   { id: 'deepseek-ai/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
   { id: 'moonshotai/kimi-k3', label: 'Kimi K3' },
   { id: 'nvidia/nemotron-3-super-120b-a12b', label: 'Nemotron 3 Super' },
+  { id: 'deepseek-ai/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash' },
 ] as const
 export const DEFAULT_NVIDIA_MODEL = NVIDIA_MODELS[0].id
 
 /** Every selectable planner model, tagged with the provider that runs it. */
-export const PLANNER_MODELS: readonly PlannerModel[] = [
+export const PLANNER_MODELS: PlannerModel[] = [
   ...NVIDIA_MODELS.map((m) => ({ ...m, legacy: false, provider: 'nvidia' as const })),
   ...CLAUDE_MODELS.map((m) => ({ id: m.id, label: m.label, legacy: m.legacy, provider: 'claude_code' as const })),
   ...CODEX_MODELS.map((m) => ({ ...m, provider: 'codex_cli' as const })),
@@ -46,6 +47,22 @@ export const PLANNER_MODELS: readonly PlannerModel[] = [
   { id: 'cursor-auto', label: 'Cursor Auto', legacy: false, provider: 'cursor', description: 'Isolated Cursor CLI. Requires CURSOR_API_KEY; desktop login is not inherited.' },
   { id: 'opencode-default', label: 'OpenCode default', legacy: false, provider: 'opencode_cli', description: 'Uses the model and provider already selected in OpenCode.' },
 ]
+
+const STATIC_PLANNER_MODELS = PLANNER_MODELS.slice()
+
+/**
+ * Replace the host-discovered NVIDIA models in place (the built-in ones stay
+ * first), so every consumer of PLANNER_MODELS sees the dynamic list. Ids are
+ * shape-checked again here; the host already did, this is the second gate.
+ */
+export function mergeDiscoveredNvidia(entries: readonly { id: string; label: string; discovered: boolean }[]): void {
+  const known = new Set(STATIC_PLANNER_MODELS.map((m) => m.id))
+  const extra = entries
+    .filter((e) => e.discovered && /^[A-Za-z0-9][\w.-]{0,63}\/[A-Za-z0-9][\w.:-]{0,95}$/.test(e.id) && !known.has(e.id))
+    .map((e): PlannerModel => ({ id: e.id, label: e.label, legacy: false, provider: 'nvidia' }))
+  const lastNvidia = STATIC_PLANNER_MODELS.reduce((at, m, i) => (m.provider === 'nvidia' ? i : at), -1)
+  PLANNER_MODELS.splice(0, PLANNER_MODELS.length, ...STATIC_PLANNER_MODELS.slice(0, lastNvidia + 1), ...extra, ...STATIC_PLANNER_MODELS.slice(lastNvidia + 1))
+}
 
 /** What an unset plannerModel runs (the CLI's latest Opus). */
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5'

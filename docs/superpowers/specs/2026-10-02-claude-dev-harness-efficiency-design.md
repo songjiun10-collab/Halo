@@ -61,11 +61,23 @@ host가 monotonic clock으로 span을 생성한다. 식별자는 taskId/runId/tu
   JSONL은 iteration마다 span 줄들과 summary 한 줄로 이루어진다.
 - **미구현(완료로 보고하지 않음):**
   - cache hit/miss: 현재 context 경로에 캐시가 없다.
-  - 승인→브라우저 결과 mark.
   - parentSpanId: 지금의 span은 모두 겹치지 않는 구간이라 항상 null이다.
   - `long-horizon-100`, `profile-long-task` 벤치 연결: 실제 Electron 스크립트이고, `durable_store`처럼 append와 checkpoint를 감싸는 겹치는 라벨을 쓰므로 별도 매핑 결정이 필요하다.
 
+### 4.2 승인→브라우저 결과 계측 (2026-10-04)
+
+질문은 (1) 승인 호출 후 첫 브라우저 결과까지 얼마나 걸리는가, (2) 배치가 승인 횟수와 지연을 어떻게 바꾸는가, (3) 실패와 실행 불확실을 성공 지연과 구분할 수 있는가다.
+
+- `routine-vs-planner-benchmark`의 iteration별 `approvalToBrowserResult`는 `count`와 `outcomes.success/failed/execution_uncertain`별 nearest-rank p50/p75/p95/max/totalMs를 반환한다.
+- 타이머는 `controller.approve()` 호출 직전에 시작하며 해당 호출 중 첫 `browser.execute()`의 반환/예외에서 한 번만 종료한다. 배치의 첫 결과 지연이지 전체 배치 완료 지연이 아니다. approve 반환은 다음 planner 턴까지 포함할 수 있으므로 종료점으로 쓰지 않는다.
+- `status:ok`는 success, 반환된 uncertain/execution_uncertain은 execution_uncertain, 다른 반환 상태는 failed다. dispatch 예외는 외부 부작용 부재를 증명하지 못하므로 execution_uncertain으로 기록한다. 이 값은 벤치 관측 결과이며 durable journal의 최종 task 판정을 대체하지 않는다.
+- 승인 없이 실행하는 allow 모드는 count=0(미측정)이다. 빈 outcome 통계의 0은 실제 지연 0을 뜻하지 않으며 count를 함께 읽어야 한다. 결과 없이 끝난 승인의 타이머는 폐기한다.
+- 선택적 JSONL에는 inclusive `approval_to_browser_result` span과 고정 세 outcome counter를 기록한다. journal/browser 시간을 포함하므로 additive stage 합계에서 제외한다. secret/URL/요청 본문은 추가하지 않는다.
+- 승인/실행/재시도 정책, production controller, durable 기록은 변경하지 않는다. 이 벤치는 사람의 대기나 실제 모델 품질을 측정하지 않는다.
+
 ## 5. P1 Context manifest / 필요한 참조만 로딩
+
+2026-10-04 문맥 구성 최적화: pendingMessages admission에서 메시지마다 전체 packet을 다시 직렬화하지 않는다. 이미 계산한 빈 배열 packet의 UTF-8 byte 크기에 각 메시지의 JSON byte 크기와 배열 사이 쉼표를 더한다. host가 전달하는 평문 JSON 메시지의 순서·count/byte budget·64KiB total budget은 유지한다. 4개 메시지 테스트에서 전체 packet 직렬화는 6회에서 2회로 감소했다. 이는 문맥 구성 비용 개선이며 브라우저 E2E 성능 향상을 주장하지 않는다.
 
 기존 64KiB 총 JSON 한도를 유지한다. 필수 영역은 host goal/binding, 현재 state/budget, 현재 observation identity·document epoch, pending approval 요약이다. 이 영역은 모델 요약으로 대체하지 않는다.
 

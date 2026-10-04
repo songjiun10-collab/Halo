@@ -27,6 +27,17 @@
     "runtime-src/main/harness/mcp-schema-validator.ts",
     "runtime-src/main/harness/mcp-schema-worker.ts",
     "runtime-src/main/harness/message-port.ts",
-    "runtime-src/main/harness/message-mailbox.ts"
+    "runtime-src/main/harness/message-mailbox.ts",
+    "runtime-src/main/harness/background-runtime-ui.ts",
+    "runtime-src/main/harness/background-launch-agent.ts",
+    "runtime-src/main/harness/recovery-policy.ts",
+    "runtime-src/main/harness/model-tiers.ts",
+    "runtime-src/main/harness/context-builder.ts",
+    "runtime-src/main/harness/nvidia-model-catalog.ts",
+    "runtime-src/main/harness/screen-map.ts",
+    "runtime-src/main/harness/effect-classifier.ts",
+    "runtime-src/main/harness/planner-escalation.ts",
+    "runtime-src/main/harness/planner-routing.ts",
+    "runtime-src/main/harness/slack-task-entry.ts"
   ]
 }

@@ -5,7 +5,7 @@ import { PLANNER_MODELS } from '../session/claude-models'
 
 export const SHAPES: AvatarShape[] = ['circle', 'square', 'bag', 'star', 'drop', 'cloud', 'triangle', 'hex']
 export const COLORS: Record<AvatarColor, string> = { brown: 'oklch(.5 .07 55)', yellow: 'oklch(.84 .15 95)', blue: 'oklch(.66 .15 250)', gray: 'oklch(.64 .02 150)', red: 'oklch(.64 .19 25)', green: 'oklch(.7 .14 155)', purple: 'oklch(.64 .16 305)', orange: 'oklch(.73 .17 55)' }
-export type AgentBrand = 'claude_code' | 'codex_cli' | 'antigravity' | 'cursor' | 'nvidia'
+export type AgentBrand = 'claude_code' | 'codex_cli' | 'antigravity' | 'cursor' | 'nvidia' | 'opencode_cli'
 export const modelBrand = (model: string | null | undefined): AgentBrand | undefined => PLANNER_MODELS.find((m) => m.id === model)?.provider
 
 const AG_INK = '#1d1a17', AG_BLUSH = '#ff8fa3'
@@ -49,7 +49,7 @@ export function AgentDeskCredit() {
 /** Original Halo desk character; brand only selects an abstract color/silhouette, never upstream character art. */
 export function AgentCharacter({ brand, state, size = 34 }: { brand?: AgentBrand; state: AgentCharacterState; size?: number }) {
   const provider = brand ?? 'halo'
-  const brandName = brand ? ({ claude_code: 'Claude Code', codex_cli: 'Codex CLI', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA' })[brand] : 'Halo'
+  const brandName = brand ? ({ claude_code: 'Claude Code', codex_cli: 'Codex CLI', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA', opencode_cli: 'OpenCode' })[brand] : 'Halo'
   return <span className="hx-agent-character" data-brand={provider} data-state={state} style={{ width: size, height: size }} role="img" aria-label={`${brandName} · ${CHARACTER_COPY[state]}`}>
     <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true">
       {brand === 'claude_code' ? <>

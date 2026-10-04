@@ -61,7 +61,7 @@ test('compiler error preserves all previously published bytes', async t => {
   assert.equal((await fs.readdir(root)).some(n => n.includes('lock')), false);
 });
 
-test('unsupported compiler output path cannot write outside the four-file cohort', async t => {
+test('unsupported compiler output path cannot write outside the approved cohort', async t => {
   const root = await fixture(t);
   const before = await snapshot(root);
   const configPath = path.join(root, 'tsconfig.runtime.json');

@@ -31,6 +31,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 const SETTLED = new Set(["completed", "stopped"]);
 const CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_FOLLOW_UPS = 3; // follow-up rounds in a row for waiting messages
+const HIGH_IMPACT_REQUEST = /\b(send|submit|purchase|buy|pay|transfer|delete|cancel|book|publish|post|share|order|sign|authorize)\b|전송|발송|송금|결제|구매|삭제|취소|예약|게시|공유|서명|승인/i;
 
 // Stop must not wait for a worker that ignores the abort signal; its late
 // reply is dropped.
@@ -237,11 +238,43 @@ class RoomOrchestrator {
       return;
     }
     const maxTurns = members.length === 1 ? 1 : this._maxTurns;
+    const initialMessage = (await this._store.read(teamId)).find((message) => message.messageId === originMessageId);
+    const reviewReasons = new Set(HIGH_IMPACT_REQUEST.test(initialMessage?.text ?? "") && members.length > 1 ? ["high_impact"] : []);
+    const reviewAttempts = new Map();
+    const reviewCompleted = new Map();
+    // A member whose review turn failed is not asked again this round, so a
+    // permanently failing worker cannot stretch the review pass count.
+    const reviewFailed = new Set();
+    const addReviewReason = (reason) => {
+      reviewReasons.add(reason);
+      reviewAttempts.set(reason, new Set(reviewFailed));
+      reviewCompleted.set(reason, new Set());
+    };
+    for (const reason of reviewReasons) {
+      reviewAttempts.set(reason, new Set());
+      reviewCompleted.set(reason, new Set());
+    }
+    const pendingReviewReasons = (agentId) => [...reviewReasons].filter((reason) =>
+      !reviewCompleted.get(reason)?.has(agentId) && !reviewAttempts.get(reason)?.has(agentId));
+    const reviewWorkRemains = () => members.some((member) => [...reviewReasons].some((reason) =>
+      !reviewCompleted.get(reason)?.has(member.id) && !reviewAttempts.get(reason)?.has(member.id)));
+    const completeReviewCount = () => members.filter((member) => [...reviewReasons].every((reason) =>
+      reviewCompleted.get(reason)?.has(member.id))).length;
+    const recordReviewOutcome = async () => {
+      if (reviewReasons.size === 0 || completeReviewCount() === members.length) return;
+      await this._append(teamId, { author: "host", kind: "notice", text: `HALO review incomplete (${completeReviewCount()}/${members.length} reviewers completed); this advisory review does not replace existing approval.` });
+    };
+    if (HIGH_IMPACT_REQUEST.test(initialMessage?.text ?? "") && members.length === 1) {
+      await this._append(teamId, { author: "host", kind: "notice", text: "Independent peer review unavailable: this team has only one available member." });
+    }
+    if (reviewReasons.size > 0) {
+      await this._append(teamId, { author: "host", kind: "notice", text: `HALO requested a bounded read-only review for: ${[...reviewReasons].join(", ")}.` });
+    }
     let previous = null;
     let passes = 0;
     const failures = new Set();
     let failedTurns = 0;
-    while (round.turn < maxTurns && passes < members.length) {
+    while (round.turn < maxTurns && (passes < members.length || reviewWorkRemains())) {
       if (signal.aborted) return;
       let index = (this._rotation.get(teamId) ?? 0) % members.length;
       if (members.length > 1 && members[index].id === previous) index = (index + 1) % members.length;
@@ -254,7 +287,16 @@ class RoomOrchestrator {
       await Promise.resolve(round.lock?.refresh()).catch(() => {});
       const messages = await this._store.read(teamId);
       round.lastSeenId = messages.at(-1)?.messageId ?? null;
-      const context = contracts.buildRoomTurnContext({ team, speaker, members, messages });
+      const currentReviewReasons = pendingReviewReasons(speaker.id);
+      const reviewActive = currentReviewReasons.length > 0;
+      const remainingReviewers = reviewActive
+        ? members.filter((member) => [...reviewReasons].some((reason) =>
+          !reviewCompleted.get(reason)?.has(member.id) && !reviewAttempts.get(reason)?.has(member.id))).length
+        : 0;
+      const context = contracts.buildRoomTurnContext({
+        team, speaker, members, messages,
+        ...(reviewActive ? { discussionReview: { reasons: currentReviewReasons, remainingReviewers } } : {}),
+      });
       let reply;
       let error = null;
       try {
@@ -264,6 +306,39 @@ class RoomOrchestrator {
       }
       if (signal.aborted) return;
       previous = speaker.id;
+
+      const newReviewReasons = [];
+      if (reply?.kind === "say") for (const reason of reply.reviewSignals ?? []) {
+        if (!reviewReasons.has(reason)) newReviewReasons.push(reason);
+      }
+      if (error) {
+        const matchingFailures = (round.failureCounts ??= new Map());
+        matchingFailures.set(error, (matchingFailures.get(error) ?? 0) + 1);
+        if (matchingFailures.get(error) >= 2 && !reviewReasons.has("repeated_failure")) newReviewReasons.push("repeated_failure");
+      }
+      if (reviewActive) {
+        if (error) reviewFailed.add(speaker.id);
+        for (const reason of currentReviewReasons) {
+          reviewAttempts.get(reason)?.add(speaker.id);
+          if (!error && (reply?.kind === "say" || reply?.kind === "pass")) reviewCompleted.get(reason)?.add(speaker.id);
+        }
+      }
+      if (newReviewReasons.length > 0) {
+        // A new concern opens a fresh bounded pass only for unfinished
+        // review items. Completed items stay complete; failed attempts may
+        // be retried once in this new pass, not forever.
+        for (const reason of reviewReasons) {
+          if ([...reviewCompleted.get(reason)].length < members.length) reviewAttempts.set(reason, new Set(reviewFailed));
+        }
+        for (const reason of currentReviewReasons) reviewAttempts.get(reason)?.add(speaker.id);
+        for (const reason of newReviewReasons) addReviewReason(reason);
+        // The agent that raised a concern has already assessed that concern.
+        for (const reason of newReviewReasons) {
+          reviewAttempts.get(reason).add(speaker.id);
+          if (!error && reply?.kind === "say") reviewCompleted.get(reason).add(speaker.id);
+        }
+        await this._append(teamId, { author: "host", kind: "notice", text: `HALO requested a bounded read-only review for: ${newReviewReasons.join(", ")}.` });
+      }
 
       if (error) {
         failures.add(error);
@@ -276,16 +351,20 @@ class RoomOrchestrator {
       }
       passes = 0;
       if (reply.kind === "say") {
-        await this._append(teamId, { author: speaker.id, kind: "say", text: reply.text });
+        // Only signals that changed the review are recorded; a repeat of a
+        // reason already tracked this round has no effect and is not shown.
+        const effective = (reply.reviewSignals ?? []).filter((signal) => newReviewReasons.includes(signal));
+        await this._append(teamId, { author: speaker.id, kind: "say", text: reply.text, ...(effective.length > 0 ? { reviewSignals: effective } : {}) });
         continue;
       }
       await this._append(teamId, { author: speaker.id, kind: "propose_task", text: reply.request });
+      await recordReviewOutcome();
       if (await this._roomTaskRunning(teamId)) {
         await this._append(teamId, { author: "host", kind: "notice", text: "Not started: the room's task is already running." });
         continue;
       }
       try {
-        const { taskId } = await this._startTask({ teamId, request: reply.request, originMessageId });
+        const { taskId } = await this._startTask({ teamId, request: reply.request, originMessageId, intentText: initialMessage?.text ?? "" });
         this._roomTask.set(teamId, taskId);
         this._taskRoom.set(taskId, teamId);
         await this._append(teamId, { author: "host", kind: "task_started", text: reply.request, taskId, originMessageId });
@@ -295,6 +374,7 @@ class RoomOrchestrator {
       round.ended = "task";
       return; // at most one task per round, and a start (or a failed one) ends it
     }
+    await recordReviewOutcome();
     // Every turn failed: say so once rather than leaving silent passes.
     if (failedTurns > 0 && failedTurns === round.turn) {
       await this._append(teamId, { author: "host", kind: "notice", text: `Team members couldn't reply (${[...failures].join(", ")}). Their worker may not support team rooms.` });

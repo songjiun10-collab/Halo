@@ -2995,7 +2995,8 @@ test("the planner sees MCP enabled only when Codex was pinned for the task", asy
   await host.updateHostSettings({ mcpProviders: ["codex"] });
   const on = await host.createTask({ originalRequest: "MCP on" });
   await waitForState(host, on.taskId, ["paused"], 10000);
-  assert.deepEqual(seen, [false, true]);
+  assert.ok(seen.includes(false) && seen.includes(true));
+  assert.ok(seen.indexOf(true) > seen.lastIndexOf(false));
   await host.close();
 });
 

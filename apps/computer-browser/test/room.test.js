@@ -33,6 +33,19 @@ test("a room turn reply is exactly say, pass, or propose_task", () => {
   }
 });
 
+test("a say reply may raise only bounded adaptive review signals", () => {
+  assert.deepEqual(contracts.validateRoomTurn({ kind: "say", text: "uncertain", reviewSignals: ["missing_evidence"] }), {
+    kind: "say", text: "uncertain", reviewSignals: ["missing_evidence"],
+  });
+  for (const bad of [
+    { kind: "say", text: "x", reviewSignals: ["execute"] },
+    { kind: "say", text: "x", reviewSignals: ["conflict", "conflict"] },
+    { kind: "say", text: "x", reviewSignals: ["ambiguity", "high_impact", "conflict", "missing_evidence"] },
+    { kind: "pass", reviewSignals: ["conflict"] },
+    { kind: "propose_task", request: "do it", reviewSignals: ["conflict"] },
+  ]) assert.throws(() => contracts.validateRoomTurn(bad), { code: "invalid_room_turn" }, JSON.stringify(bad));
+});
+
 test("the turn context names the speaker, marks peers untrusted, and stays under the byte cap", () => {
   const team = { id: TEAM, name: "Trip" };
   const you = { id: A, name: "Ann", title: "Planner", instructions: "Be brief." };
@@ -75,6 +88,15 @@ test("the store appends 0600 JSONL, keeps the newest messages, and fails closed"
   await assert.rejects(new RoomStore({ storageRoot: linked }).read(TEAM), { code: "unsafe_path" });
 });
 
+test("adaptive review signals are durably preserved only on bounded agent say messages", async () => {
+  const store = new RoomStore({ storageRoot: await tmp() });
+  const saved = await store.append(TEAM, { author: A, kind: "say", text: "Not enough evidence.", reviewSignals: ["missing_evidence"] });
+  assert.deepEqual(saved.reviewSignals, ["missing_evidence"]);
+  assert.deepEqual((await store.read(TEAM))[0].reviewSignals, ["missing_evidence"]);
+  await assert.rejects(store.append(TEAM, { author: A, kind: "say", text: "bad", reviewSignals: ["approve"] }), { code: "invalid_message" });
+  await assert.rejects(store.append(TEAM, { author: A, kind: "pass", text: "", reviewSignals: ["conflict"] }), { code: "invalid_message" });
+});
+
 test("the store returns at most the newest MAX_ROOM_MESSAGES", async () => {
   const store = new RoomStore({ storageRoot: await tmp() });
   for (let i = 0; i < contracts.MAX_ROOM_MESSAGES + 3; i += 1) await store.append(TEAM, { author: "user", kind: "say", text: String(i) });
@@ -83,7 +105,7 @@ test("the store returns at most the newest MAX_ROOM_MESSAGES", async () => {
   assert.equal(messages[0].text, "3");
 });
 
-function harness({ replies = {}, members = [A, B, C], archived = false, startTask, taskState = () => "running", maxTurns, storageRoot } = {}) {
+function harness({ replies = {}, members = [A, B, C], archived = false, startTask, taskState = () => "running", maxTurns, storageRoot, requestTurn: requestTurnOverride } = {}) {
   const agents = { [A]: { id: A, name: "Ann", title: "", instructions: "", archived: false }, [B]: { id: B, name: "Bo", title: "", instructions: "", archived: false }, [C]: { id: C, name: "Cy", title: "", instructions: "", archived: false } };
   const calls = [];
   const started = [];
@@ -94,13 +116,13 @@ function harness({ replies = {}, members = [A, B, C], archived = false, startTas
       store,
       getTeam: async (id) => { if (id !== TEAM) throw Object.assign(new Error("no"), { code: "not_found" }); return { id: TEAM, name: "Trip", memberAgentIds: members, archived }; },
       getAgent: async (id) => agents[id],
-      requestTurn: async ({ agent, context }) => {
+      requestTurn: requestTurnOverride ?? (async ({ agent, context }) => {
         calls.push(agent.id);
         const queue = replies[agent.id] ?? [];
         const next = queue.length ? queue.shift() : { kind: "pass" };
         if (next instanceof Error) throw next;
         return typeof next === "function" ? next(context) : next;
-      },
+      }),
       startTask: startTask ?? (async ({ request }) => { started.push(request); return { taskId: `task-${started.length}` }; }),
       getTaskState: async (taskId) => taskState(taskId),
       emit: (event) => events.push(event),
@@ -120,6 +142,183 @@ test("a user message starts a round; members rotate and all passing ends it", as
   assert.equal(h.orchestrator.getRoundState(TEAM).active, false);
   assert.ok(h.events.some((e) => e.roomId === TEAM && e.message?.text === "Plan a trip"));
   assert.ok(h.events.some((e) => e.roomId === TEAM && e.round?.active === false));
+});
+
+test("adaptive discussion requests peer review after a reported evidence gap", async () => {
+  const contexts = [];
+  const replies = {
+    [A]: [{ kind: "say", text: "I found one source.", reviewSignals: ["missing_evidence"] }, { kind: "pass" }],
+    [B]: [{ kind: "pass" }, { kind: "pass" }],
+    [C]: [{ kind: "pass" }, { kind: "pass" }],
+  };
+  const h = await harness({
+    replies,
+    requestTurn: async ({ agent, context }) => {
+      contexts.push({ agentId: agent.id, review: context.roomTurn.discussionReview, transcript: context.roomTurn.transcript });
+      const queue = replies[agent.id] ?? [];
+      return queue.length ? queue.shift() : { kind: "pass" };
+    },
+  });
+  await h.orchestrator.post(TEAM, "Compare the available options.");
+  await h.orchestrator.idle(TEAM);
+  assert.deepEqual(contexts.map((entry) => entry.agentId), [A, B, C, A]);
+  assert.equal(contexts[0].review, undefined);
+  assert.deepEqual(contexts.slice(1, 3).map((entry) => entry.review?.reasons), [
+    ["missing_evidence"], ["missing_evidence"],
+  ]);
+  assert.deepEqual(contexts.slice(1, 3).map((entry) => entry.review.remainingReviewers), [2, 1]);
+  assert.equal(contexts[1].transcript.find((message) => message.author === A)?.reviewSignals, undefined, "past signals stay host state, not transcript, so a new round cannot re-trigger them");
+  assert.deepEqual((await h.store.read(TEAM)).find((message) => message.author === A && message.kind === "say")?.reviewSignals, ["missing_evidence"]);
+  assert.equal(contexts[3].review, undefined, "review request closes after all distinct members see it");
+  assert.ok((await h.store.read(TEAM)).some((message) => message.author === "host" && /bounded read-only review.*missing_evidence/.test(message.text)));
+});
+
+test("repeated room worker failures trigger one bounded read-only review", async () => {
+  const contexts = [];
+  let failedCalls = 0;
+  const h = await harness({ requestTurn: async ({ context }) => {
+    contexts.push(context.roomTurn.discussionReview);
+    if (failedCalls < 2) {
+      failedCalls += 1;
+      throw Object.assign(new Error("temporary failure"), { code: "timeout" });
+    }
+    return { kind: "pass" };
+  } });
+  await h.orchestrator.post(TEAM, "Compare these options.");
+  await h.orchestrator.idle(TEAM);
+  assert.equal(contexts.length, 4);
+  assert.equal(contexts[0], undefined);
+  assert.equal(contexts[1], undefined);
+  assert.ok(contexts.slice(2).every((review) => review?.reasons.includes("repeated_failure")));
+  assert.deepEqual(contexts.slice(2).map((review) => review.remainingReviewers), [2, 1]);
+});
+
+test("repeated review signals do not restart a completed pass and stay within the turn cap", async () => {
+  const contexts = [];
+  const h = await harness({ maxTurns: 4, requestTurn: async ({ context }) => {
+    contexts.push(context.roomTurn.discussionReview);
+    return { kind: "say", text: "Needs more review.", reviewSignals: ["conflict"] };
+  } });
+  await h.orchestrator.post(TEAM, "Compare two options.");
+  await h.orchestrator.idle(TEAM);
+  assert.equal(contexts.length, 4);
+  assert.deepEqual(contexts.slice(1).map((review) => review?.reasons ?? null), [["conflict"], ["conflict"], null]);
+});
+
+test("repeating an active review signal does not reset peers who already reviewed it", async () => {
+  const contexts = [];
+  const queues = {
+    [A]: [{ kind: "say", text: "Reviewed." }, { kind: "pass" }],
+    [B]: [{ kind: "say", text: "Reviewed." }, { kind: "pass" }],
+    [C]: [{ kind: "say", text: "Still high impact.", reviewSignals: ["high_impact"] }, { kind: "pass" }],
+  };
+  const h = await harness({ requestTurn: async ({ agent, context }) => {
+    contexts.push(context.roomTurn.discussionReview);
+    return queues[agent.id].shift() ?? { kind: "pass" };
+  } });
+  await h.orchestrator.post(TEAM, "Please purchase the selected ticket.");
+  await h.orchestrator.idle(TEAM);
+  assert.deepEqual(contexts.slice(0, 3).map((review) => review?.reasons), [
+    ["high_impact"], ["high_impact"], ["high_impact"],
+  ]);
+  assert.deepEqual(contexts.slice(3), [undefined, undefined, undefined], "the same reason does not reopen or restart the completed pass");
+});
+
+test("reasserting a completed review signal does not reopen the review", async () => {
+  const contexts = [];
+  let call = 0;
+  const h = await harness({ requestTurn: async ({ context }) => {
+    contexts.push(context.roomTurn.discussionReview);
+    call += 1;
+    if (call <= 3) return { kind: "say", text: "Reviewed." };
+    if (call === 4) return { kind: "say", text: "Still high impact.", reviewSignals: ["high_impact"] };
+    return { kind: "pass" };
+  } });
+  await h.orchestrator.post(TEAM, "Please purchase the selected ticket.");
+  await h.orchestrator.idle(TEAM);
+  assert.equal(contexts.length, 6, "the static round cap remains in force");
+  assert.ok(contexts.slice(0, 3).every((review) => review?.reasons.includes("high_impact")));
+  assert.ok(contexts.slice(3).every((review) => review === undefined), "a repeated reason after review cannot restart the pass");
+});
+
+test("a failed worker is attempted once per review pass and does not consume every remaining turn", async () => {
+  const contexts = [];
+  const h = await harness({ maxTurns: 8, requestTurn: async ({ context }) => {
+    contexts.push(context.roomTurn.discussionReview);
+    throw Object.assign(new Error("worker unavailable"), { code: "timeout" });
+  } });
+  await h.orchestrator.post(TEAM, "Please purchase the selected ticket.");
+  await h.orchestrator.idle(TEAM);
+  assert.equal(contexts.length, 3, "a member whose review turn failed is not asked again, so failures cannot stretch the pass");
+  assert.ok(contexts.every((review) => review?.reasons.includes("high_impact")));
+  const notices = (await h.store.read(TEAM)).filter((message) => message.author === "host" && message.kind === "notice");
+  assert.ok(notices.every((message) => !/for:\s*\.$/.test(message.text)), "an error does not append a review notice with an empty reason list");
+  assert.ok(notices.some((message) => /review incomplete.*0\/3/i.test(message.text)), "failed attempts are reported as incomplete, not successful review");
+});
+
+test("a newly raised review reason is seen by members who already reviewed an earlier reason", async () => {
+  const contexts = [];
+  const queues = {
+    [A]: [{ kind: "say", text: "Evidence is missing.", reviewSignals: ["missing_evidence"] }, { kind: "pass" }],
+    [B]: [{ kind: "say", text: "There is also a conflict.", reviewSignals: ["conflict"] }, { kind: "pass" }],
+    [C]: [{ kind: "pass" }, { kind: "pass" }],
+  };
+  const h = await harness({ requestTurn: async ({ agent, context }) => {
+    contexts.push(context.roomTurn.discussionReview?.reasons ?? null);
+    return queues[agent.id].shift() ?? { kind: "pass" };
+  } });
+  await h.orchestrator.post(TEAM, "Compare the available options.");
+  await h.orchestrator.idle(TEAM);
+  assert.deepEqual(contexts.slice(0, 5), [
+    null,
+    ["missing_evidence"],
+    ["missing_evidence", "conflict"],
+    ["conflict"],
+    null,
+  ]);
+});
+
+test("an incomplete high-impact review is recorded before a proposed task starts", async () => {
+  const contexts = [];
+  const h = await harness({ requestTurn: async ({ context }) => {
+    contexts.push(context.roomTurn.discussionReview?.reasons ?? null);
+    return { kind: "propose_task", request: "Continue with the selected ticket." };
+  } });
+  await h.orchestrator.post(TEAM, "Please purchase the selected ticket.");
+  await h.orchestrator.idle(TEAM);
+  assert.deepEqual(h.started, ["Continue with the selected ticket."]);
+  assert.equal(contexts.length, 1);
+  const messages = await h.store.read(TEAM);
+  const incomplete = messages.findIndex((message) => message.author === "host" && /review incomplete/i.test(message.text));
+  const started = messages.findIndex((message) => message.kind === "task_started");
+  assert.ok(incomplete >= 0 && incomplete < started, "the advisory review outcome is recorded before existing task dispatch");
+  assert.match(messages[incomplete].text, /existing approval/i, "review status does not replace action approval");
+});
+
+test("a one-member team reports that independent peer review is unavailable", async () => {
+  let review;
+  const h = await harness({ members: [A], requestTurn: async ({ context }) => {
+    review = context.roomTurn.discussionReview;
+    return { kind: "pass" };
+  } });
+  await h.orchestrator.post(TEAM, "Please purchase the selected ticket.");
+  await h.orchestrator.idle(TEAM);
+  assert.equal(review, undefined, "a singleton cannot be presented as an independent peer review");
+  assert.ok((await h.store.read(TEAM)).some((message) => message.author === "host" && /peer review unavailable/i.test(message.text)));
+});
+
+test("high-impact room requests begin in adaptive review without granting task authority", async () => {
+  const contexts = [];
+  const h = await harness({ requestTurn: async ({ agent, context }) => {
+    contexts.push(context.roomTurn.discussionReview);
+    const queue = { [A]: [{ kind: "pass" }], [B]: [{ kind: "pass" }], [C]: [{ kind: "pass" }] }[agent.id];
+    return queue.shift();
+  } });
+  await h.orchestrator.post(TEAM, "Please purchase the selected ticket.");
+  await h.orchestrator.idle(TEAM);
+  assert.equal(contexts.length, 3);
+  assert.deepEqual(contexts.map((review) => review?.reasons), [["high_impact"], ["high_impact"], ["high_impact"]]);
+  assert.deepEqual(h.started, [], "review signals never start tasks or approve actions");
 });
 
 test("a round never exceeds the turn cap and never repeats the previous speaker", async () => {
@@ -335,13 +534,13 @@ test("a live lock held by another host is never taken over, a symlinked lock is 
 
 test("a worker that cannot take room turns gets one notice instead of silent passes", async () => {
   const bad = Object.assign(new Error("not a room turn"), { code: "invalid_room_turn" });
-  const h = await harness({ members: [A, B], replies: { [A]: [bad, bad], [B]: [bad, bad] } });
+  const h = await harness({ members: [A, B], replies: { [A]: Array(3).fill(bad), [B]: Array(3).fill(bad) } });
   await h.orchestrator.post(TEAM, "hi");
   await h.orchestrator.idle(TEAM);
   const notices = (await h.store.read(TEAM)).filter((m) => m.kind === "notice");
-  assert.equal(notices.length, 1);
-  assert.match(notices[0].text, /couldn't reply/i);
-  assert.match(notices[0].text, /invalid_room_turn/);
+  const failureNotice = notices.find((message) => /couldn't reply/i.test(message.text));
+  assert.ok(failureNotice);
+  assert.match(failureNotice.text, /invalid_room_turn/);
 });
 
 test("a long log is read from its tail across chunk boundaries", async () => {
@@ -373,4 +572,28 @@ test("a message left waiting at the follow-up cap is answered with a notice, and
   await h.orchestrator.post(TEAM, "continue please");
   await h.orchestrator.idle(TEAM);
   assert.ok(h.calls.length > 4, "a new message after the notice runs a new round");
+});
+
+test("a repeated review signal is neither re-opened nor stored as if it had effect", async () => {
+  const queues = {
+    [A]: [{ kind: "say", text: "Evidence is missing.", reviewSignals: ["missing_evidence"] }, { kind: "pass" }],
+    [B]: [{ kind: "say", text: "Still missing evidence.", reviewSignals: ["missing_evidence"] }, { kind: "pass" }],
+    [C]: [{ kind: "pass" }, { kind: "pass" }],
+  };
+  const h = await harness({ requestTurn: async ({ agent }) => (queues[agent.id] ?? []).shift() ?? { kind: "pass" } });
+  await h.orchestrator.post(TEAM, "Compare the available options.");
+  await h.orchestrator.idle(TEAM);
+  const says = (await h.store.read(TEAM)).filter((message) => message.kind === "say" && message.author !== "user");
+  assert.deepEqual(says.map((message) => message.reviewSignals), [["missing_evidence"], undefined]);
+});
+
+test("a proposed task carries the person's own message so its intent survives rewording", async () => {
+  const calls = [];
+  const h = await harness({
+    replies: { [A]: [{ kind: "propose_task", request: "check the button" }] },
+    startTask: async (input) => { calls.push(input); return { taskId: "task-1" }; },
+  });
+  await h.orchestrator.post(TEAM, "컴퓨터 유즈로 버튼 확인해 줘");
+  await h.orchestrator.idle(TEAM);
+  assert.equal(calls[0].intentText, "컴퓨터 유즈로 버튼 확인해 줘");
 });

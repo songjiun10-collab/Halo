@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { HostSettings } from '../session/api'
-import { activeModel, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, DEFAULT_NVIDIA_MODEL, PLANNER_MODELS } from '../session/claude-models'
+import { activeModel, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, DEFAULT_NVIDIA_MODEL, mergeDiscoveredNvidia, PLANNER_MODELS } from '../session/claude-models'
 import { DEFAULT_EFFORT, type PlannerEffort } from '../session/planner-effort'
 import { EXECUTION_OPTIONS, fastModeSupport, PERMISSION_OPTIONS, saveSetting, type SettingsPatch } from '../session/settings'
 import { EffortSlider } from './EffortSlider'
@@ -109,6 +109,16 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
           <button type="button" className="hx-switch" role="switch" aria-label="Fast mode" aria-checked={fastOn} disabled={fast === 'no_planner' || fast === 'unsupported'} onClick={() => onChange({ plannerFast: !fastOn })}><span /></button>
         </div>
         <p className="hx-settings__hint">{FAST_NOTE[fast]} Applies to tasks started after the change.</p>
+        <div className="hx-settings__row">
+          <span>Escalate when stuck</span>
+          <button type="button" className="hx-switch" role="switch" aria-label="Escalate when stuck" aria-checked={settings.plannerEscalation === true} onClick={() => onChange({ plannerEscalation: settings.plannerEscalation !== true })}><span /></button>
+        </div>
+        <div className="hx-settings__row">
+          <span>Route by task length</span>
+          <button type="button" className="hx-switch" role="switch" aria-label="Route by task length" aria-checked={settings.plannerRouting === true} onClick={() => onChange({ plannerRouting: settings.plannerRouting !== true })}><span /></button>
+        </div>
+        <p className="hx-settings__hint">Fast tasks use a lighter model and long tasks a top-tier one, within the selected provider. Tasks pinned to a model are never rerouted.</p>
+        <p className="hx-settings__hint">When a task is stuck after retries, it moves up one model tier once. This can use a more expensive model.</p>
       </fieldset>
 
       <div className="hx-settings__section">
@@ -137,12 +147,23 @@ export function SettingsPanel({ leaving, onClose }: Props) {
   const [settings, setSettings] = useState<HostSettings | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [, setModelsVersion] = useState(0)
   const ref = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   useEffect(() => { closeRef.current = onClose }, [onClose])
   useEffect(() => {
     let current = true
     void window.haloBrowser?.getHostSettings().then((next) => { if (current) setSettings(next) }).catch(() => { if (current) setError('Could not load settings.') })
+    return () => { current = false }
+  }, [])
+  // Opening settings asks the host which NVIDIA models the account can use; a failed lookup keeps the built-in list.
+  useEffect(() => {
+    let current = true
+    void window.haloBrowser?.refreshPlannerModels?.().then((result) => {
+      if (!current || !result) return
+      mergeDiscoveredNvidia(result.nvidia)
+      setModelsVersion((v) => v + 1)
+    }).catch(() => {})
     return () => { current = false }
   }, [])
   useEffect(() => {

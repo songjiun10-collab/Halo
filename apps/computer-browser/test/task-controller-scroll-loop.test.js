@@ -1,6 +1,6 @@
 "use strict";
 
-const test = require("node:test");
+const { test, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const os = require("node:os");
@@ -9,7 +9,18 @@ const path = require("node:path");
 const { TaskStore } = require("../main/harness/task-store");
 const { TaskController } = require("../main/harness/task-controller");
 
-const makeStore = async () => TaskStore.create({ originalRequest: "goal" }, { storageRoot: await fs.mkdtemp(path.join(os.tmpdir(), "halo-scroll-")) });
+const openStores = new Set();
+afterEach(async () => {
+  const stores = [...openStores];
+  openStores.clear();
+  await Promise.all(stores.map((store) => store.close()));
+});
+
+const makeStore = async () => {
+  const store = await TaskStore.create({ originalRequest: "goal" }, { storageRoot: await fs.mkdtemp(path.join(os.tmpdir(), "halo-scroll-")) });
+  openStores.add(store);
+  return store;
+};
 
 function setup(actionFor) {
   let turn = 0;
@@ -30,7 +41,7 @@ function setup(actionFor) {
   return { planner, browser, seen };
 }
 
-const make = async (planner, browser) => new TaskController({ store: await makeStore(), planner, browser, approve: async () => ({ decision: "allow", reasons: [] }), hostVerifier: () => true, observeRetryDelayMs: 1 });
+const make = async (planner, browser) => new TaskController({ store: await makeStore(), planner, browser, approve: async () => ({ decision: "allow", reasons: [] }), hostVerifier: () => true, observeRetryDelayMs: 1, maxRecoveries: 0 });
 
 test("endless scrolling of one page pauses as no_progress and the planner is warned first", async () => {
   const { planner, browser, seen } = setup(() => ({ type: "scroll", direction: "down", amount: 600 }));
@@ -87,6 +98,17 @@ test("a hub page revisited between different pages does not trip the page-loop g
     return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "observe" }] };
   } };
   const browser = { supportsAction: () => true, observe: async () => { n += 1; return { id: `o${n}`, url: pages[n % pages.length], text: `t${n}`, elements: [] }; }, execute: async () => ({ status: "ok" }) };
+  const snapshot = await (await make(planner, browser)).start();
+  assert.ok(turn > 12, `guard fired early after ${turn} turns (${snapshot.pauseReason})`);
+});
+
+test("changing the query string on one path counts as moving to a different page", async () => {
+  let turn = 0, n = 0;
+  const planner = { next: async (context) => {
+    turn += 1;
+    return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: turn > 20 ? "scroll" : "observe", ...(turn > 20 ? { direction: "down", amount: 1 } : {}) }] };
+  } };
+  const browser = { supportsAction: () => true, observe: async () => { n += 1; return { id: `o${n}`, url: `https://hub.test/issues?q=term${n}`, text: `t${n}`, elements: [] }; }, execute: async () => ({ status: "ok" }) };
   const snapshot = await (await make(planner, browser)).start();
   assert.ok(turn > 12, `guard fired early after ${turn} turns (${snapshot.pauseReason})`);
 });

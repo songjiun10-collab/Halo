@@ -190,7 +190,7 @@ test("grants one free replan after 3 identical no-progress actions, then pauses 
       actions: [{ type: "observe" }], // always identical
     }),
   };
-  const controller = new TaskController({
+  const controller = new TaskController({ maxRecoveries: 0,
     store,
     planner,
     browser,
@@ -228,7 +228,7 @@ test("no-progress detection still catches an identical action/page even when the
       actions: [{ type: "observe" }], // always identical
     }),
   };
-  const controller = new TaskController({
+  const controller = new TaskController({ maxRecoveries: 0,
     store,
     planner,
     browser,
@@ -286,7 +286,7 @@ test("pauses with planner_error (does not crash or auto-retry) when the planner 
       throw new Error("simulated transport timeout");
     },
   };
-  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true });
+  const controller = new TaskController({ maxRecoveries: 0, store, planner, browser, approve: allowApprove(), hostVerifier: () => true });
   await controller.start();
 
   const snapshot = controller.getSnapshot();

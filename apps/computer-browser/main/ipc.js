@@ -38,6 +38,7 @@ const HARNESS_METHODS = {
   "halo:getTaskEvents": "getTaskEvents",
   "halo:getChildPlan": "getChildPlan",
   "halo:listMcpProviders": "listMcpProviders",
+  "halo:refreshPlannerModels": "refreshPlannerModels",
   "halo:getTaskBrowser": "getTaskBrowser",
   "halo:taskBrowserAction": "taskBrowserAction",
   "halo:setTaskViewport": "setTaskViewport",

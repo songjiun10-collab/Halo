@@ -166,6 +166,24 @@ test("admits pending messages in order up to the 4-message-per-turn cap", () => 
   assert.deepEqual(packet.pendingMessages.map((m) => m.messageId), ["m0", "m1", "m2", "m3"]);
 });
 
+test("message admission does not repeatedly serialize the full observation", () => {
+  const goal = makeGoal();
+  const messages = Array.from({ length: 4 }, (_, i) => makeMessage({ messageId: `m${i}`, text: '한글😀"\\'.repeat(30) }));
+  const stringify = JSON.stringify;
+  let fullPackets = 0;
+  JSON.stringify = function (value, ...args) {
+    if (value && Object.hasOwn(value, "observation") && Object.hasOwn(value, "pendingMessages")) fullPackets += 1;
+    return stringify(value, ...args);
+  };
+  let packet;
+  try {
+    packet = buildContext({ goal, state: makeState(), observation: { text: "x".repeat(40000) }, recentEvents: [], pendingMessages: messages });
+  } finally { JSON.stringify = stringify; }
+  assert.deepEqual(packet.pendingMessages, messages);
+  assert.ok(Buffer.byteLength(stringify(packet), "utf8") <= 65536);
+  assert.ok(fullPackets <= 2, `full packet serialized ${fullPackets} times instead of at most twice`);
+});
+
 test("stops admitting once the 8 KiB serialized-message-bytes budget would be exceeded", () => {
   const goal = makeGoal();
   const big = makeMessage({ messageId: "big", idempotencyKey: "idem-big", text: "x".repeat(7600) });

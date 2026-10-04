@@ -60,7 +60,7 @@ function bareOrigin(value) {
 }
 const UNSUPPORTED_ACTIONS = new Set(["download"]);
 const INTERACTION_ACTIONS = new Set(["click", "type", "submit_form"]);
-const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "observe", "click_at", "type_at", ...INTERACTION_ACTIONS]);
+const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "observe", "click_at", "type_at", "press_key", ...INTERACTION_ACTIONS]);
 
 class BrowserAdapterError extends Error {
   constructor(code, message) {
@@ -648,6 +648,54 @@ class BrowserAdapter {
     return observation;
   }
 
+  // Text computer use: viewport-normalized boxes for the current observation's
+  // bound nodes, read (never consumed) from the isolated-world binding. Only
+  // AgentViewportHost turns this into a visual binding.
+  async captureScreenGeometry(observation) {
+    if (this._disposed) throw new BrowserAdapterError("disposed", "captureScreenGeometry() called after dispose()");
+    if (this._pendingInteraction) throw new BrowserAdapterError("interaction_pending", "cannot read geometry while an interaction is unsettled");
+    const latest = this._latestObservation;
+    const binding = this._interactionBinding;
+    if (!observation || !latest || !binding || observation.id !== latest.id || observation.documentEpoch !== latest.documentEpoch ||
+        observation.url !== latest.url || this._documentEpoch !== latest.documentEpoch || binding.epoch !== this._documentEpoch) {
+      throw new BrowserAdapterError("stale_visual_observation", "screen geometry requires the current host observation");
+    }
+    const wc = this._view.webContents;
+    const bounds = this._view.getBounds?.();
+    if (!bounds || !Number.isSafeInteger(bounds.width) || !Number.isSafeInteger(bounds.height) || bounds.width < 1 || bounds.height < 1 ||
+        typeof wc.executeJavaScriptInIsolatedWorld !== "function" || typeof wc.getURL !== "function" || wc.getURL() !== observation.url) {
+      throw new BrowserAdapterError("visual_unavailable", "browser surface cannot provide screen geometry");
+    }
+    let boxes;
+    try {
+      boxes = await wc.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD_ID, [{ code: `(() => {
+        const state = globalThis[${JSON.stringify(binding.key)}];
+        if (!state || state.token !== ${JSON.stringify(binding.token)} || state.url !== document.baseURI) return null;
+        const vw = window.innerWidth, vh = window.innerHeight;
+        if (!(vw > 0 && vh > 0)) return null;
+        const out = [];
+        state.nodes.forEach((entry, index) => {
+          const node = entry.node;
+          if (!node?.isConnected || state.hidden(node)) return;
+          const r = node.getBoundingClientRect();
+          const left = Math.max(r.left, 0), top = Math.max(r.top, 0), right = Math.min(r.right, vw), bottom = Math.min(r.bottom, vh);
+          if (!(right - left > 0 && bottom - top > 0)) return;
+          const hit = document.elementFromPoint(Math.min((left + right) / 2, vw - 1), Math.min((top + bottom) / 2, vh - 1));
+          out.push({ elementId: String(index), x: left / vw, y: top / vh, w: (right - left) / vw, h: (bottom - top) / vh,
+            covered: !(hit && (hit === node || node.contains(hit) || hit.contains(node))) });
+        });
+        return out;
+      })()` }], false);
+    } catch {
+      throw new BrowserAdapterError("screenshot_failed", "browser surface geometry read failed");
+    }
+    if (!Array.isArray(boxes) || this._disposed || this._documentEpoch !== latest.documentEpoch || this._interactionBinding !== binding ||
+        wc.getURL() !== observation.url) {
+      throw new BrowserAdapterError("stale_visual_observation", "browser surface changed during geometry read");
+    }
+    return { observationId: observation.id, documentEpoch: observation.documentEpoch, url: observation.url, viewport: { width: bounds.width, height: bounds.height }, boxes };
+  }
+
   async captureScreenshot(observation) {
     if (this._disposed) throw new BrowserAdapterError("disposed", "captureScreenshot() called after dispose()");
     if (this._pendingInteraction) throw new BrowserAdapterError("interaction_pending", "cannot capture a screenshot while an interaction is unsettled");
@@ -776,6 +824,7 @@ class BrowserAdapter {
         return this._interact(action, { signal, documentEpoch, expectedOrigin });
       case "click_at":
       case "type_at":
+      case "press_key":
         return this._coordinateAction(action, { signal, documentEpoch, expectedOrigin });
       case "scroll":
         return this._scroll(action.direction, action.amount);
@@ -817,15 +866,27 @@ class BrowserAdapter {
       return { status: "failed", errorCode: "unsupported_action" };
     }
 
-    const x = Math.floor(normalized.x * binding.viewport.width);
-    const y = Math.floor(normalized.y * binding.viewport.height);
+    const x = normalized.type === "press_key" ? 0 : Math.floor(normalized.x * binding.viewport.width);
+    const y = normalized.type === "press_key" ? 0 : Math.floor(normalized.y * binding.viewport.height);
     // Consume before the first Chromium call. A lost result must never replay
     // the same approved visual action.
     this._visualBinding = null;
     try {
+      if (normalized.type === "press_key") {
+        wc.sendInputEvent({ type: "keyDown", keyCode: normalized.key });
+        if (normalized.key === "Enter") wc.sendInputEvent({ type: "char", keyCode: "Enter" });
+        wc.sendInputEvent({ type: "keyUp", keyCode: normalized.key });
+        return { status: "ok" };
+      }
+      // Hover first so pointer-driven widgets (menus, custom buttons) arm before the click.
+      wc.sendInputEvent({ type: "mouseMove", x, y });
       wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
       wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
-      if (normalized.type === "type_at") wc.insertText(normalized.text);
+      if (normalized.type === "type_at") {
+        // Like ordinary type, typing replaces the field: select what the click focused, then insert.
+        if (typeof wc.selectAll === "function") wc.selectAll();
+        wc.insertText(normalized.text);
+      }
       return { status: "ok" };
     } catch {
       return { status: "uncertain", errorCode: "coordinate_input_uncertain" };
@@ -889,6 +950,22 @@ class BrowserAdapter {
             node.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: action.text }));
             node.dispatchEvent(new Event("change", { bubbles: true }));
           } else if (action.type === "submit_form") {
+            // Script-driven search boxes (e.g. GitHub) use role=form/search on a
+            // plain element; submit them through their own visible Search button.
+            if (node.tagName !== "FORM" && !node.form && ["form", "search"].includes(node.getAttribute("role") || "")) {
+              const control = [...node.querySelectorAll("button, [role=button], input[type=submit]")]
+                .find((el) => /search|submit|go|검색/i.test(el.getAttribute("aria-label") || el.textContent || el.value || ""));
+              const field = node.querySelector("input:not([type=hidden]):not([type=password]):not([type=file]), [role=combobox], [role=searchbox]");
+              if ((!control || control.disabled) && !field) return failed("unsupported_form");
+              if (!valid()) return failed("stale_element");
+              started = true;
+              if (control && !control.disabled) HTMLElement.prototype.click.call(control);
+              else {
+                field.focus();
+                for (const type of ["keydown", "keypress", "keyup"]) field.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+              }
+              return { status: "ok" };
+            }
             const form = node.tagName === "FORM" ? node : node.form;
             const info = state.formInfo(node);
             if (!form || !info || !["get", "post"].includes(info.method) || !["", "_self"].includes(info.target)) return failed("unsupported_form");

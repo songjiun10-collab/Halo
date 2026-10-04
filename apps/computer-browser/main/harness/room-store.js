@@ -17,7 +17,7 @@ const fs = require("node:fs/promises");
 const fsConstants = require("node:fs").constants;
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
-const { MAX_MESSAGE_CHARS, MAX_ROOM_MESSAGES, MESSAGE_KINDS } = require("../../shared/room-contracts");
+const { MAX_MESSAGE_CHARS, MAX_ROOM_MESSAGES, MESSAGE_KINDS, DISCUSSION_REVIEW_SIGNALS, MAX_DISCUSSION_REVIEW_SIGNALS } = require("../../shared/room-contracts");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const OPTIONAL = ["taskId", "originMessageId", "error"];
@@ -56,6 +56,10 @@ function checkMessage(message, code) {
   for (const key of OPTIONAL) {
     if (message[key] !== undefined && (typeof message[key] !== "string" || message[key].length === 0 || message[key].length > 128)) fail(`${key} must be a short string`);
   }
+  if (message.reviewSignals !== undefined && (message.kind !== "say" || !Array.isArray(message.reviewSignals) ||
+      message.reviewSignals.length < 1 || message.reviewSignals.length > MAX_DISCUSSION_REVIEW_SIGNALS ||
+      new Set(message.reviewSignals).size !== message.reviewSignals.length ||
+      message.reviewSignals.some((signal) => !DISCUSSION_REVIEW_SIGNALS.includes(signal)))) fail("reviewSignals are invalid");
 }
 
 class RoomStore {
@@ -93,6 +97,7 @@ class RoomStore {
       text: input.text,
       at: new Date(this._now()).toISOString(),
       ...Object.fromEntries(OPTIONAL.filter((key) => input[key] !== undefined).map((key) => [key, input[key]])),
+      ...(input.reviewSignals !== undefined ? { reviewSignals: [...input.reviewSignals] } : {}),
     };
     const key = this._logPath(teamId);
     const operation = this._chain(teamId).then(async () => {

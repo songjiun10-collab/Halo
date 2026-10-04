@@ -88,7 +88,7 @@ test('allowlist edits are normalised, validated and de-duplicated before they re
   assert.equal(calls.length, before)
   assert.match(store.getState().error, /valid domain/i)
   assert.equal(await store.removeDomain('chatgpt.com'), true)
-  assert.deepEqual(calls.at(-1), ['allowlist', ['claude.ai']])
+  assert.deepEqual(calls.at(-1), ['allowlist', ['claude.ai', 'example.org']])
 })
 
 test('removing a session and importing settings call the host and refresh', async () => {

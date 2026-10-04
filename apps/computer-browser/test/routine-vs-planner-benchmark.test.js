@@ -110,6 +110,7 @@ for (const approvalMode of ["review", "allow"]) {
       assert.deepEqual(record.visitedUrls, scenario.expectedUrls);
       assert.equal(record.policyChecks, STEPS);
       assert.equal(record.approvals, approvalMode === "review" ? STEPS : 0);
+      assert.equal(record.approvalToBrowserResult.count, record.approvals);
       assert.ok(record.runMs > 0);
       assert.ok(record.cleanupMs >= 0);
       assert.equal(record.stages.profile_resolution.count, 1);
@@ -304,6 +305,7 @@ test("the scripted planner completes a scroll-heavy scenario under per-action re
     });
     assert.equal(record.success, true, record.error);
     assert.equal(record.actions, scenario.totalActions);
+    assert.equal(record.approvalToBrowserResult.count, record.approvals);
     approvals[batching] = record.approvals;
   }
   assert.equal(approvals[false], scenario.totalActions, "per-action review queues every action");
@@ -321,6 +323,10 @@ test("an iteration with a span recorder mirrors every stage count and adds conte
     const record = await bench.runIteration({ mode, scenario, approvalMode: "review", storageRoot: await mkTempRoot(), createBrowser: async () => makeChainBrowser(STEPS), spans });
     assert.equal(record.success, true, record.error);
     const summary = spans.summary();
+    assert.equal(record.approvalToBrowserResult.count, record.approvals);
+    assert.equal(record.approvalToBrowserResult.outcomes.success.count, record.approvals);
+    assert.equal(summary.labels.approval_to_browser_result.count, record.approvals);
+    assert.ok(!spans.toJsonl().split("\n").filter(Boolean).map(JSON.parse).some((row) => row.label === "approval_to_browser_result" && row.inclusive !== true));
     for (const [label, stage] of Object.entries(record.stages)) {
       assert.equal(summary.labels[label]?.count ?? 0, stage.count, `${mode}: ${label} is fed from the same timing point`);
     }
@@ -347,6 +353,23 @@ test("runBenchmark writes one JSONL span stream with a summary line per iteratio
   assert.equal(new Set(summaries.map((s) => s.runId)).size, report.iterations.length);
   assert.ok(lines.filter((line) => line.type === "span").every((span) => summaries.some((s) => s.runId === span.runId)));
   assert.equal(report.spansPath, spansPath);
+  for (const row of report.iterations) assert.equal(row.approvalToBrowserResult.count, 0);
+});
+
+test("a thrown dispatch is measured as uncertain, not a successful browser result", async () => {
+  const scenario = bench.buildScenario({ origin: ORIGIN, steps: STEPS });
+  const record = await bench.runIteration({ mode: "routine", scenario, approvalMode: "review", storageRoot: await mkTempRoot(), createBrowser: async () => ({ ...makeChainBrowser(STEPS), execute: async () => { throw new Error("dispatch lost"); } }) });
+  assert.equal(record.success, false);
+  assert.equal(record.approvalToBrowserResult.outcomes.success.count, 0);
+  assert.equal(record.approvalToBrowserResult.outcomes.execution_uncertain.count, 1);
+});
+
+test("a returned failed dispatch is measured separately from uncertain dispatch", async () => {
+  const scenario = bench.buildScenario({ origin: ORIGIN, steps: STEPS });
+  const record = await bench.runIteration({ mode: "routine", scenario, approvalMode: "review", storageRoot: await mkTempRoot(), createBrowser: async () => ({ ...makeChainBrowser(STEPS), execute: async () => ({ status: "failed" }) }) });
+  assert.equal(record.success, false);
+  assert.equal(record.approvalToBrowserResult.outcomes.failed.count, 1);
+  assert.equal(record.approvalToBrowserResult.outcomes.execution_uncertain.count, 0);
 });
 
 test("span summaries split wall time into active and approval wait and count duplicate dispatches", async () => {

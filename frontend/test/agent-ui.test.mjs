@@ -15,7 +15,7 @@ const { ChildPlanPanel } = await vite.ssrLoadModule('/src/agent/ChildPlanPanel.t
 const { RuntimeStatus } = await vite.ssrLoadModule('/src/agent/BackgroundRuntimePanel.tsx')
 const { ScheduleEditor, PersistentBrowserSetting } = await vite.ssrLoadModule('/src/agent/AgentSettings.tsx')
 const room = await vite.ssrLoadModule('/src/agent/Room.tsx')
-const { AgentCharacter, AgentDeskCredit } = await vite.ssrLoadModule('/src/agent/AgentUi.tsx')
+const { AgentCharacter, AgentDeskCredit, modelBrand } = await vite.ssrLoadModule('/src/agent/AgentUi.tsx')
 const BO = '33333333-3333-4333-8333-333333333333'
 test.after(() => vite.close())
 
@@ -132,6 +132,13 @@ test('the desk character uses a distinct Halo-owned shape for each supported age
   assert.match(codex, /data-brand="codex_cli"/)
   assert.match(halo, /data-brand="halo"/)
   assert.notEqual(claude.match(/<path[^>]*d="([^"]+)/)?.[1], codex.match(/<path[^>]*d="([^"]+)/)?.[1])
+})
+
+test('OpenCode planner models resolve to a supported, labelled agent brand', () => {
+  assert.equal(modelBrand('opencode-default'), 'opencode_cli')
+  const html = renderToStaticMarkup(React.createElement(AgentCharacter, { brand: modelBrand('opencode-default'), state: 'idle' }))
+  assert.match(html, /data-brand="opencode_cli"/)
+  assert.match(html, /aria-label="OpenCode · Idle"/)
 })
 
 test('the desk character exposes the live roster state to assistive technology', () => {
@@ -266,7 +273,7 @@ test('the transcript names speakers, hides passes, and links started tasks', () 
   const at = '2026-10-02T00:00:00.000Z'
   const messages = [
     { messageId: '1', roomId: TEAM, author: 'user', kind: 'say', text: 'Plan Jeju', at },
-    { messageId: '2', roomId: TEAM, author: AGENT, kind: 'say', text: 'Flights first.', at },
+    { messageId: '2', roomId: TEAM, author: AGENT, kind: 'say', text: 'Flights first.', reviewSignals: ['missing_evidence'], at },
     { messageId: '3', roomId: TEAM, author: BO, kind: 'pass', text: '', at },
     { messageId: '4', roomId: TEAM, author: AGENT, kind: 'propose_task', text: 'Search flights', at },
     { messageId: '5', roomId: TEAM, author: 'host', kind: 'task_started', text: 'Search flights', taskId: 'task-1', originMessageId: '1', at },
@@ -275,6 +282,7 @@ test('the transcript names speakers, hides passes, and links started tasks', () 
   const html = renderToStaticMarkup(React.createElement(room.RoomTranscript, { messages, agents, round: { active: true, turn: 2, speakerId: BO }, onOpenTask: () => {} }))
   assert.match(html, /Plan Jeju/)
   assert.match(html, /<b>Ann<\/b>/)
+  assert.match(html, /Review: missing evidence/)
   assert.doesNotMatch(html, /<b>Bo<\/b>[^<]*<\/span><p>/, 'a pass is not shown as a message')
   assert.match(html, /Proposed a task/)
   assert.match(html, /Task started/)

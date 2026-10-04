@@ -18,7 +18,7 @@ function originOf(url) {
 }
 
 function actionTargetOrigin(action, lastObservation) {
-  if (["click_at", "type_at"].includes(action.type)) return lastObservation && typeof lastObservation.url === "string" ? originOf(lastObservation.url) : null;
+  if (["click_at", "type_at", "press_key"].includes(action.type)) return lastObservation && typeof lastObservation.url === "string" ? originOf(lastObservation.url) : null;
   if (action.type === "navigate") return typeof action.url === "string" ? originOf(action.url) : null;
   if (action.type === "follow_link") {
     const element = lastObservation?.elements?.find((el) => el.elementId === action.elementId);

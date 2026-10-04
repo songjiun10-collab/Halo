@@ -25,6 +25,11 @@ const path = require("node:path");
 const { importClaudeUsage, importCodexUsage } = require("./usage-import");
 const { fetchClaudeSubscription } = require("./subscription-usage");
 const { TaskStore } = require("./task-store");
+const { fetchNvidiaModelIds } = require("./nvidia-model-catalog");
+const { escalationTarget } = require("./planner-escalation");
+const { routedModel } = require("./planner-routing");
+const { tierOf, modelsInTier, MODEL_TIERS } = require("./model-tiers");
+const { setDiscoveredNvidiaModels, listNvidiaModels } = require("./providers/nvidia-models");
 const { TaskController, TaskControllerError } = require("./task-controller");
 const { TaskQueue, TaskQueueError } = require("./task-queue");
 const { ResourceAdmission } = require("./resource-admission");
@@ -40,6 +45,8 @@ const { MCP_PROVIDER_IDS, MCP_PROVIDER_CATALOG } = require("./host-settings");
 const { PLANNER_PROVIDERS } = require("./planner-providers");
 
 // The planner provider whose allowlist holds this model id, or null.
+// What an unpinned plannerModel runs per provider (for tier lookup only).
+const DEFAULT_MODEL_BY_PROVIDER = Object.freeze({ claude_code: "claude-opus-5-5", codex_cli: "gpt-6.1-sol", antigravity: "antigravity-default", cursor: "cursor-auto", nvidia: "deepseek-ai/deepseek-v4-flash", opencode_cli: "opencode-default" });
 const providerForModel = (model) => Object.values(PLANNER_PROVIDERS).find((provider) => provider.isModel(model))?.id ?? null;
 const { effortForRoute, routeForProfile } = require("./planner-effort-policy");
 const { RoutineRunner } = require("./routine-runner");
@@ -96,6 +103,8 @@ class TaskHost {
     plannerProvider = "none",
     plannerModel,
     plannerFast,
+    plannerEscalation,
+    plannerRouting,
     mcpProviders = [],
     memoryStore,
     settingsStore,
@@ -148,6 +157,8 @@ class TaskHost {
     this._plannerProvider = plannerProvider;
     this._plannerModel = plannerModel;
     this._plannerFast = plannerFast === true;
+    this._plannerEscalation = plannerEscalation === true;
+    this._plannerRouting = plannerRouting === true;
     this._mcpProviders = Array.isArray(mcpProviders) ? [...mcpProviders] : [];
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
@@ -202,7 +213,7 @@ class TaskHost {
       getTeam: (teamId) => this._agentStore.getTeam(teamId),
       getAgent: (agentId) => this._agentStore.getAgent(agentId),
       requestTurn: (turn) => this._requestRoomTurn(turn),
-      startTask: ({ teamId, request }) => this.startAgentTask({ teamId, request }),
+      startTask: ({ teamId, request, intentText }) => this.startAgentTask({ teamId, request }, { intentText }),
       getTaskState: async (taskId) => {
         await this._ensureQueue();
         return (await this._listTaskSummaries()).find((task) => task.taskId === taskId)?.state ?? null;
@@ -384,6 +395,20 @@ class TaskHost {
     return MCP_PROVIDER_CATALOG.map(({ id, label }) => ({ id, label, enabled: this._mcpProviders.includes(id) }));
   }
 
+  // Dynamic NVIDIA model recognition: asks the hosted catalog which models the
+  // account can use, merges them into the planner allowlist, and returns the
+  // full list. A failed lookup keeps the built-in list and reports a code.
+  async refreshPlannerModels() {
+    this._assertOpen();
+    let error = null;
+    try {
+      setDiscoveredNvidiaModels(await fetchNvidiaModelIds({ apiKey: process.env.NVIDIA_API_KEY }));
+    } catch (caught) {
+      error = typeof caught?.code === "string" ? caught.code : "network_error";
+    }
+    return { nvidia: listNvidiaModels(), error };
+  }
+
   // The renderer's ChildPlanSummary for a parent task, or null. A corrupt
   // parent-child link has no displayable plan; the parent's own pause/
   // recovery state is what reports it, so selecting the task still works.
@@ -449,18 +474,26 @@ class TaskHost {
     let entry = null;
     try {
     browser = this._makeBrowser(store.taskId, taskProfile);
-    planner = routine ? routine.runner : this._makePlanner(store.taskId, this._plannerPin("parent", this._runScopes.get(store.taskId)?.plannerModel, { forceFast: taskProfile?.duration.id === "fast" }));
+    const pinnedModel = this._runScopes.get(store.taskId)?.plannerModel;
+    const parentPin = this._plannerPin("parent", pinnedModel ?? this._routedModel(taskProfile), { forceFast: taskProfile?.duration.id === "fast" });
+    planner = routine ? routine.runner : this._makePlanner(store.taskId, parentPin);
     // Profile selection is a host operation (design doc "Profile selection"):
     // TaskHost is the sole authority that decides harnessProfile, and passes
     // it in rather than letting the controller (or the task's own text)
     // infer it independently. The resolved durable task profile is canonical;
     // legacy tasks without one retain the deterministic routine default.
+    const escalationTried = new Set();
     const harnessProfile = taskProfile?.duration.id || selectHarnessProfile({ isRoutine: !!routine });
     controller = new TaskController({
       store,
       planner,
       browser,
       harnessProfile,
+      // Only the Codex route accepts a screenshot; every other planner uses
+      // the text screen map for computer use.
+      plannerImageInput: parentPin.plannerProvider === "codex_cli",
+      // Opt-in (plannerEscalation): a stuck task may move up one model tier.
+      ...(!routine && this._makePlanner ? { escalatePlanner: () => this._escalatePlanner(store.taskId, parentPin, taskProfile, escalationTried, (planner) => { if (entry) entry.planner = planner; }) } : {}),
       approve: (descriptor) => this._approve(store.taskId, descriptor),
       hostVerifier: this._hostVerifier,
       memoryMonitor: controllerMemoryMonitor,
@@ -1036,9 +1069,9 @@ class TaskHost {
     return this._rosterChange(input.kind, "pinned", await this._agentStore.setPinned(input));
   }
 
-  async startAgentTask(input) {
+  async startAgentTask(input, hostContext = undefined) {
     this._assertOpen();
-    const result = await this._agentService.startAgentTask(input);
+    const result = await this._agentService.startAgentTask(input, null, hostContext);
     this._emitRoster(input.agentId !== undefined ? "agent" : "team", input.agentId ?? input.teamId, "conversation_started");
     return result;
   }
@@ -2278,6 +2311,34 @@ class TaskHost {
     return this._settingsStore.load();
   }
 
+  // Opt-in (plannerRouting): a model of the configured provider whose tier fits
+  // the task duration, or null to keep the configured model.
+  _routedModel(taskProfile) {
+    if (!this._plannerRouting || !taskProfile) return null;
+    const provider = this._plannerProvider;
+    const current = this._plannerModel ?? DEFAULT_MODEL_BY_PROVIDER[provider];
+    if (!current) return null;
+    const candidates = Object.keys(MODEL_TIERS).filter((model) => providerForModel(model) === provider);
+    return routedModel({ durationId: taskProfile.duration.id, currentModel: current, candidates, tierOf });
+  }
+
+  // Picks the next stronger model the host can run and builds its planner, or
+  // returns null (escalation off, nothing stronger, or already tried).
+  _escalatePlanner(taskId, pin, taskProfile, tried, adopt) {
+    if (!this._plannerEscalation) return null;
+    const current = pin.plannerModel ?? DEFAULT_MODEL_BY_PROVIDER[pin.plannerProvider];
+    if (!current) return null;
+    tried.add(current);
+    const candidates = [...modelsInTier(1), ...modelsInTier(2)].filter((model) => providerForModel(model));
+    const target = escalationTarget({ currentModel: current, candidates, tried, tierOf });
+    if (!target) return null;
+    tried.add(target);
+    const provider = providerForModel(target);
+    const planner = this._makePlanner(taskId, this._plannerPin("parent", target, { forceFast: taskProfile?.duration.id === "fast" }));
+    adopt(planner);
+    return { planner, from: current, to: target, imageInput: provider === "codex_cli" };
+  }
+
   // The provider and (when chosen) model a new planner is pinned to. A task
   // pinned to a model (an Agent's choice) runs that model's provider.
   // A task on the "fast" harness profile always asks its planner CLI for the
@@ -2301,6 +2362,8 @@ class TaskHost {
     this._plannerProvider = settings.plannerProvider;
     this._plannerModel = settings.plannerModel;
     this._plannerFast = settings.plannerFast === true;
+    this._plannerEscalation = settings.plannerEscalation === true;
+    this._plannerRouting = settings.plannerRouting === true;
     this._mcpProviders = [...settings.mcpProviders];
     for (const entry of this._active.values()) {
       entry.controller.setPolicySettings({ ...settings, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });

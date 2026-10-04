@@ -27,6 +27,8 @@
 - 라운드 중에 올라온 사용자 글은 다음 발언자가 읽는 transcript에 들어간다.
 - 턴 한 번은 그 팀의 planner 요청 하나다. `makePlanner("room-<teamId>", { role: "child" })`로 만들기 때문에 child_plan을 제안할 수 없다.
 - 잘못된 응답, 오류, 시간 초과는 `pass`로 기록하고 `error` 코드를 남긴다.
+- 적응형 토론 강도는 고정 티어가 아니다. 호스트는 요청에 결제·송금·삭제·예약·게시처럼 고영향 동작이 포함된 경우, 같은 방 턴 오류가 반복된 경우, Agent가 제한된 `reviewSignals`(ambiguity/high_impact/conflict/missing_evidence/low_confidence)를 올린 경우 bounded read-only review를 요청한다. 요청과 Agent 신호는 room journal에 기록되고, 다음 멤버의 context에는 고정 enum 사유와 남은 검토자 수만 전달된다.
+- 각 신호의 제보자는 독립 검토자로 계산하지 않는다. 아직 보지 않은 팀원에게 검토를 요청하며, 고정 턴 상한(기본 6, 최대 12)을 늘리지 않는다. 추가 토론은 승인·실행·권한 확대·목표 수정 권한을 주지 않는다. `propose_task`는 계속 기존 TaskHost·approval 경로를 따른다.
 - context에 들어가는 것:
   - 자기 이름·직함·지시문
   - 팀원 이름·직함(다른 팀원의 지시문은 넣지 않음)

@@ -77,29 +77,38 @@ test("both CLI planners receive interaction shapes and fresh-observation instruc
   assert.match(prompt, /password/);
 });
 
-test("computer-use proposals keep the image out-of-band and wait in the ordinary approval queue", async t => {
+test("computer-use clicks keep the image out-of-band and run on the approver's verdict without a human gate", async t => {
   const action = { type: "click_at", observationId: "obs", x: 0.25, y: 0.75 };
   const { controller, executed, plannerOptions, attachmentDisposed } = await fixture(t, action, "interact", { computerUse: true });
-  const [item] = controller.getSnapshot().approvalQueue;
-  assert.equal(controller.getSnapshot().state, "awaiting_approval");
-  assert.match(item.target, /screenshot obs/);
-  assert.match(item.target, /25%, 75%/);
-  assert.equal(executed.length, 0);
-  assert.deepEqual(plannerOptions.attachments, [{ kind: "image", id: "attachment-1", path: "/private/fake.png" }]);
-  assert.equal(attachmentDisposed, true, "the temporary image is removed as soon as planning settles");
-  await controller.approve(item.id);
+  assert.equal(controller.getSnapshot().approvalQueue.length, 0);
   assert.equal(executed.length, 1);
   assert.deepEqual(executed[0].action, action);
   assert.equal(executed[0].options.documentEpoch, 7);
+  assert.deepEqual(plannerOptions.attachments, [{ kind: "image", id: "attachment-1", path: "/private/fake.png" }]);
+  assert.equal(attachmentDisposed, true, "the temporary image is removed as soon as planning settles");
 });
 
-test("computer-use team conversation can use screenshot actions through the parent approval queue", async t => {
-  const action = { type: "click_at", observationId: "obs", x: 0.25, y: 0.75 };
+test("computer-use Enter keeps the human approval queue", async t => {
+  const action = { type: "press_key", observationId: "obs", key: "Enter" };
+  const { controller, executed, plannerOptions, attachmentDisposed } = await fixture(t, action, "interact", { computerUse: true });
+  const [item] = controller.getSnapshot().approvalQueue;
+  assert.equal(controller.getSnapshot().state, "awaiting_approval");
+  assert.match(item.target, /press Enter/);
+  assert.equal(executed.length, 0);
+  assert.equal(plannerOptions.attachments.length, 1);
+  assert.equal(attachmentDisposed, true);
+  await controller.approve(item.id);
+  assert.equal(executed.length, 1);
+  assert.deepEqual(executed[0].action, action);
+});
+
+test("computer-use team conversation keeps Enter in the parent approval queue", async t => {
+  const action = { type: "press_key", observationId: "obs", key: "Enter" };
   const { controller, executed, plannerOptions, attachmentDisposed } = await fixture(t, action, "interact", { computerUse: true, capabilityId: "multi_agent_computer_use" });
   // Composite team tasks run CUA in the parent controller; children remain observe-only.
   const [item] = controller.getSnapshot().approvalQueue;
   assert.equal(controller.getSnapshot().state, "awaiting_approval");
-  assert.match(item.target, /screenshot obs/);
+  assert.match(item.target, /press Enter/);
   assert.equal(executed.length, 0);
   assert.equal(plannerOptions.attachments.length, 1);
   assert.equal(attachmentDisposed, true);
@@ -146,10 +155,8 @@ test("a lost coordinate-input result pauses as execution_uncertain and is never 
   });
   t.after(async () => { await controller.stop(); await store.close(); await fs.rm(storageRoot, { recursive: true, force: true }); });
   await controller.start();
-  const [approval] = controller.getSnapshot().approvalQueue;
-  assert.ok(approval);
-  await controller.approve(approval.id);
   const snapshot = controller.getSnapshot();
+  assert.equal(snapshot.approvalQueue.length, 0, "a computer-use click needs no human approval");
   assert.equal(snapshot.state, "paused");
   assert.equal(snapshot.pauseReason, "execution_uncertain");
   assert.equal(executeCalls, 1);

@@ -273,12 +273,13 @@ test("coordinate actions use only the host-authorized current screenshot and con
   const action = { type: "type_at", observationId: observation.id, x: 0.5, y: 0.25, text: "검색" };
   assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), { status: "ok" });
   assert.deepEqual(sent, [
+    { type: "mouseMove", x: 720, y: 225 },
     { type: "mouseDown", x: 720, y: 225, button: "left", clickCount: 1 },
     { type: "mouseUp", x: 720, y: 225, button: "left", clickCount: 1 },
     { type: "insertText", text: "검색" },
   ]);
   assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), { status: "failed", errorCode: "stale_visual_observation" });
-  assert.equal(sent.length, 3, "the screenshot binding is single-use");
+  assert.equal(sent.length, 4, "the screenshot binding is single-use");
 });
 
 test("coordinate actions reject stale, cross-origin, resized, and malformed bindings without input", async () => {

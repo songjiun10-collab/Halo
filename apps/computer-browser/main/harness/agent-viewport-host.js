@@ -34,6 +34,7 @@ const { BrowserWindow, WebContentsView } = require("electron");
 const { createHash } = require("node:crypto");
 const { BrowserAdapter } = require("./browser-adapter");
 const { createScreenshotAttachment } = require("./computer-use-contract");
+const { buildScreenMap } = require("./screen-map");
 
 const AGENT_WIDTH = 1440;
 const AGENT_HEIGHT = 900;
@@ -175,13 +176,47 @@ class AgentViewportHost {
       viewport: capture.viewport,
       capturedAt: Date.now(),
     });
+    // The same DOM geometry the text mode uses, kept host-side so a coordinate
+    // click can be judged by the control it lands on. If it cannot be read the
+    // list is empty, which sends every coordinate click to the human.
+    let screenTargets = [];
+    try {
+      const geometry = await entry.adapter.captureScreenGeometry(observation);
+      screenTargets = buildScreenMap(Array.isArray(observation.elements) ? observation.elements : [], geometry.boxes).targets;
+    } catch { screenTargets = []; }
     try {
       entry.adapter.authorizeVisualBinding(result.binding);
-      return result;
+      return { ...result, screenTargets };
     } catch (error) {
       await result.attachment.dispose();
       throw error;
     }
+  }
+
+  // Text computer use for planners without image input: the same one-use
+  // visual binding as a screenshot, but its digest covers the text screen map
+  // the planner will read instead of a PNG.
+  async captureTextObservation(taskId, observation) {
+    const entry = this._hosts.get(taskId);
+    if (!entry) {
+      const error = new Error("task-owned agent viewport is unavailable");
+      error.code = "visual_view_unavailable";
+      throw error;
+    }
+    const geometry = await entry.adapter.captureScreenGeometry(observation);
+    const screenMap = buildScreenMap(Array.isArray(observation.elements) ? observation.elements : [], geometry.boxes);
+    const binding = Object.freeze({
+      observationId: geometry.observationId,
+      taskId,
+      agentId: entry.agentId,
+      documentEpoch: geometry.documentEpoch,
+      origin: new URL(geometry.url).origin,
+      capturedAt: Date.now(),
+      viewport: Object.freeze({ ...geometry.viewport }),
+      digest: createHash("sha256").update(screenMap.text).digest("hex"),
+    });
+    entry.adapter.authorizeVisualBinding(binding);
+    return { binding, screenMap };
   }
 
   // One hidden view per child. Host-executed children preserve the existing
@@ -284,7 +319,7 @@ class AgentViewportHost {
 //     used instead of calling `agentAdapter.dispose()` directly so the
 //     caller can also destroy the hidden BrowserWindow container
 //     (AgentViewportHost.dispose(taskId)), not just the adapter.
-function makeDualSurfaceBrowser({ agentAdapter, visibleAdapter, disposeAgent, captureComputerUseObservation }) {
+function makeDualSurfaceBrowser({ agentAdapter, visibleAdapter, disposeAgent, captureComputerUseObservation, captureTextObservation }) {
   if (!agentAdapter || !visibleAdapter) {
     throw new TypeError("makeDualSurfaceBrowser requires agentAdapter and visibleAdapter");
   }
@@ -304,6 +339,9 @@ function makeDualSurfaceBrowser({ agentAdapter, visibleAdapter, disposeAgent, ca
     supportsAction: (type) => (typeof agentAdapter.supportsAction === "function" ? agentAdapter.supportsAction(type) : undefined),
     ...(typeof captureComputerUseObservation === "function"
       ? { captureComputerUseObservation: (...args) => captureComputerUseObservation(...args) }
+      : {}),
+    ...(typeof captureTextObservation === "function"
+      ? { captureTextObservation: (...args) => captureTextObservation(...args) }
       : {}),
     userNavigate: (...args) => visibleAdapter.userNavigate(...args),
     fillCredential: (...args) => visibleAdapter.fillCredential(...args),

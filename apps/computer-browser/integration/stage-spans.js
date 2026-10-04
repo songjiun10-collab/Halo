@@ -19,6 +19,7 @@ const STAGE_OF = Object.freeze({
   action_policy_decision: { stage: "decision", inclusive: false },
   approver_decision: { stage: "approval", inclusive: false },
   approve_call_inclusive: { stage: "approval", inclusive: true },
+  approval_to_browser_result: { stage: "approval", inclusive: true },
   browser_observe: { stage: "browser", inclusive: false },
   browser_execute: { stage: "browser", inclusive: false },
   journal_prepare: { stage: "journal_append", inclusive: false },

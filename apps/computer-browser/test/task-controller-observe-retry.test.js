@@ -28,7 +28,7 @@ function browserFailing(errors) {
   };
 }
 
-const make = async (browser) => new TaskController({ store: await makeStore(), planner: finisher(), browser, approve: async () => ({ decision: "allow", reasons: [] }), hostVerifier: () => true, observeRetryDelayMs: 1 });
+const make = async (browser) => new TaskController({ store: await makeStore(), planner: finisher(), browser, approve: async () => ({ decision: "allow", reasons: [] }), hostVerifier: () => true, observeRetryDelayMs: 1, maxRecoveries: 0 });
 
 test("a page that was still navigating is observed again instead of pausing the task", async () => {
   const browser = browserFailing([stale(), stale()]);

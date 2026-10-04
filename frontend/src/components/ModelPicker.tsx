@@ -55,7 +55,7 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
     aria-checked={isActive(m)} data-on={isActive(m) || undefined}
     disabled={savingProvider} title={`${m.description ? `${m.description} ` : ''}(${m.id}) · applies to new tasks`}
     onClick={() => { if (!isActive(m)) onSelectModel(m.id); setView('effort') }}>
-    {m.provider === 'codex_cli' || m.provider === 'claude_code' ? <img src={`./assets/model-icons/${m.provider === 'codex_cli' ? 'codex' : 'claude'}.png`} alt="" /> : <span aria-hidden="true">{m.provider === 'nvidia' ? 'N' : m.provider === 'cursor' ? 'U' : 'A'}</span>}<span>{m.label}</span>
+    {m.provider === 'codex_cli' || m.provider === 'claude_code' ? <img src={`./assets/model-icons/${m.provider === 'codex_cli' ? 'codex' : 'claude'}.png`} alt="" /> : <span aria-hidden="true">{m.provider === 'nvidia' ? 'N' : m.provider === 'cursor' ? 'U' : m.provider === 'opencode_cli' ? 'O' : 'A'}</span>}<span>{m.label}</span>
   </button>
 
   // One card for both providers; only the level names follow the app whose model runs.
@@ -67,7 +67,7 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
 
   return <div ref={ref} className="hx-mpick" data-open={open || undefined}>
     <button type="button" className="hx-mpick__toggle" aria-haspopup="true" aria-expanded={open} disabled={!settings} onClick={() => setOpen((o) => !o)}>
-      <span>{active ? `${({ codex_cli: 'Codex', claude_code: 'Claude', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA' })[active.provider]} ${active.label}` : 'Model'}</span>
+      <span>{active ? `${({ codex_cli: 'Codex', claude_code: 'Claude', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA', opencode_cli: 'OpenCode' })[active.provider]} ${active.label}` : 'Model'}</span>
       <svg className="hx-mpick__chev" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 9l6 6 6-6" /></svg>
     </button>
     {open && settings ? <div className="hx-mpick__pop" data-view={view} style={view === 'models' && maxHeight ? { maxHeight } : undefined}>

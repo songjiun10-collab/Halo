@@ -22,6 +22,10 @@
     "runtime-src/shared/harness-contracts.ts",
     "runtime-src/shared/task-profile-contracts.ts",
     "runtime-src/shared/harness-profile.ts",
-    "runtime-src/shared/capability-registry.ts"
+    "runtime-src/shared/capability-registry.ts",
+    "runtime-src/shared/task-profile-router.ts",
+    "runtime-src/shared/port-contracts.ts",
+    "runtime-src/shared/layout-constants.ts",
+    "runtime-src/shared/clamp-bounds.ts"
   ]
 }

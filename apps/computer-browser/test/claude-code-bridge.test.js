@@ -620,6 +620,28 @@ test("a room turn uses the room prompt and accepts only a room reply", async () 
   await assert.rejects(prose.pending, { code: "invalid_proposal_json" });
 });
 
+test("adaptive room review guidance is host-bounded and cannot grant permission", async () => {
+  const fakeChild = makeFakeChild();
+  const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+  const context = {
+    roomTurn: {
+      version: 1, team: { name: "Trip" },
+      you: { agentId: "a", name: "Ann", title: "", instructions: "" },
+      members: [{ agentId: "a", name: "Ann", title: "" }], transcript: [],
+      discussionReview: { authority: "halo_orchestrator", reasons: ["missing_evidence"], remainingReviewers: 1 },
+    },
+  };
+  const pending = bridge.start(context);
+  await flush();
+  const prompt = fakeChild.stdin.written[0];
+  assert.match(prompt, /bounded read-only review/);
+  assert.match(prompt, /grants no permission or approval/);
+  assert.match(prompt, /reviewSignals/);
+  fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify({ kind: "pass" })));
+  fakeChild.emit("close", 0);
+  assert.deepEqual(await pending, { kind: "pass" });
+});
+
 test("a child with a team board is told how to post to it and may return a send_message to its parent", async () => {
   const PARENT = "11111111-1111-4111-8111-111111111111";
   const run = async (context, resultText) => {
@@ -742,4 +764,9 @@ test("buildPrompt: addresses that already errored are listed as off limits", () 
   assert.doesNotMatch(buildPrompt(base), /never navigate to them again/);
   const prompt = buildPrompt({ ...base, progress: { ...base.progress, errorUrls: ["https://a.test/gone"] } });
   assert.match(prompt, /never navigate to them again[\s\S]*- https:\/\/a\.test\/gone/);
+});
+
+test("buildPrompt: a need_user reason is described as the person's chat reply", () => {
+  const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
+  assert.match(buildPrompt(makeContext()), /the person reads verbatim in the chat as/);
 });

@@ -404,6 +404,7 @@ function makeHarnessBrowser(surfaces, agentViewportHost) {
       agentAdapter,
       visibleAdapter,
       captureComputerUseObservation: (observation) => agentViewportHost.captureComputerUseObservation(taskId, observation),
+      captureTextObservation: (observation) => agentViewportHost.captureTextObservation(taskId, observation),
       disposeAgent: async () => {
         try { if (codexMcp) await agentAdapter.dispose?.(); }
         finally { await agentViewportHost.dispose(taskId); }
@@ -515,6 +516,8 @@ async function createHarnessHost(socketPath, hostWindow) {
     plannerProvider: settings.plannerProvider,
     plannerModel: settings.plannerModel,
     plannerFast: settings.plannerFast,
+    plannerEscalation: settings.plannerEscalation,
+    plannerRouting: settings.plannerRouting,
     mcpProviders: settings.mcpProviders,
     makeMcpBroker: makeHarnessMcpBroker,
     executionMode: settings.executionMode,

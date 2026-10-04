@@ -121,9 +121,9 @@ class AgentService {
 
   // unattended is host-internal (the Agent scheduler), never renderer input:
   // {reviewFallback: "queue"|"deny", maxPlannerCalls} from a saved schedule.
-  async startAgentTask(input, unattended = null) {
+  async startAgentTask(input, unattended = null, hostContext = undefined) {
     const { kind, ownerId } = target(input, { requireRequest: true });
-    const plan = kind === "agent" ? await this._agentPlan(ownerId) : await this._teamPlan(ownerId, input.request);
+    const plan = kind === "agent" ? await this._agentPlan(ownerId) : await this._teamPlan(ownerId, input.request, typeof hostContext?.intentText === "string" ? hostContext.intentText : "");
     const constraints = plan.constraints.map((textValue, index) => ({ id: `agent-role-${index + 1}`, text: textValue }));
     const result = await this._createTask(
       {
@@ -202,7 +202,9 @@ class AgentService {
     };
   }
 
-  async _teamPlan(teamId, request) {
+  // intentText is the person's own room message: a proposal that drops "computer
+  // use" from its wording must not silently downgrade what they asked for.
+  async _teamPlan(teamId, request, intentText = "") {
     const team = await this._load(this._store.getTeam, teamId);
     if (team.archived) throw new AgentServiceError("agent_unavailable", "archived teams cannot start tasks");
     const members = [];
@@ -216,7 +218,7 @@ class AgentService {
     // A team narrows only when every member does: the union of their subsets.
     const scoped = members.every((member) => Array.isArray(member.mcpProviders));
     return {
-      capabilityId: hasCapabilityIntent(request, "computer_use") || members.some((member) => member.capabilityId === "computer_use")
+      capabilityId: hasCapabilityIntent(request, "computer_use") || hasCapabilityIntent(intentText, "computer_use") || members.some((member) => member.capabilityId === "computer_use")
         ? "multi_agent_computer_use"
         : "multi_agent",
       mcpProviders: scoped ? [...new Set(members.flatMap((member) => member.mcpProviders))] : null,

@@ -4,6 +4,10 @@ import { Avatar } from './AgentUi'
 
 type Named = Pick<AgentRecord, 'id' | 'name' | 'avatar'>
 const IDLE: RoomRound = { active: false, turn: 0, speakerId: null }
+const REVIEW_LABELS: Record<string, string> = {
+  ambiguity: 'ambiguity', high_impact: 'high impact', conflict: 'conflict',
+  missing_evidence: 'missing evidence', low_confidence: 'low confidence', repeated_failure: 'repeated failure',
+}
 
 /** Pure view of a room log: passes are skipped, a started task links to the task UI. */
 export function RoomTranscript({ messages, agents, round, onOpenTask }: { messages: RoomMessage[]; agents: Named[]; round: RoomRound; onOpenTask: (taskId: string) => void }) {
@@ -21,7 +25,9 @@ export function RoomTranscript({ messages, agents, round, onOpenTask }: { messag
       const agent = byId.get(m.author)
       return <li key={m.messageId} className="hx-room__msg">
         {agent ? <Avatar avatar={agent.avatar} size={28} /> : <span className="hx-room__gone" aria-hidden />}
-        <div><span className="hx-room__who"><b>{agent ? agent.name : 'Removed agent'}</b>{m.kind === 'propose_task' ? <small>Proposed a task</small> : null}</span><p>{m.text}</p></div></li>
+        <div><span className="hx-room__who"><b>{agent ? agent.name : 'Removed agent'}</b>{m.kind === 'propose_task' ? <small>Proposed a task</small> : null}</span>
+          {m.reviewSignals?.length ? <small className="hx-room__review">Review: {m.reviewSignals.map((signal) => REVIEW_LABELS[signal] ?? 'review needed').join(', ')}</small> : null}
+          <p>{m.text}</p></div></li>
     })}
     {speaker ? <li className="hx-room__notice" role="status">{speaker.name} is replying…</li> : null}
   </ol>

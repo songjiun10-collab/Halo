@@ -11,9 +11,11 @@ const { spawn } = require('node:child_process');
 // Each cohort is one compiler project with a fixed root and an exact output set.
 const COHORTS = Object.freeze([
   Object.freeze({ config: 'tsconfig.runtime.json', source: 'runtime-src/shared', output: 'shared',
-    names: Object.freeze(['harness-contracts', 'task-profile-contracts', 'harness-profile', 'capability-registry']) }),
+    names: Object.freeze(['harness-contracts', 'task-profile-contracts', 'harness-profile', 'capability-registry', 'task-profile-router', 'port-contracts', 'layout-constants', 'clamp-bounds']) }),
   Object.freeze({ config: 'tsconfig.runtime-harness.json', source: 'runtime-src/main/harness', output: 'main/harness',
-    names: Object.freeze(['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker', 'message-port', 'message-mailbox']) }),
+    names: Object.freeze(['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker', 'message-port', 'message-mailbox', 'background-runtime-ui', 'background-launch-agent', 'recovery-policy', 'model-tiers', 'context-builder', 'nvidia-model-catalog', 'screen-map', 'effect-classifier', 'planner-escalation', 'planner-routing', 'slack-task-entry']) }),
+  Object.freeze({ config: 'tsconfig.runtime-integration.json', source: 'runtime-src/integration', output: 'integration',
+    names: Object.freeze(['approval-latency']) }),
 ]);
 const ARTIFACTS = COHORTS.flatMap(cohort => cohort.names.map(name => ({ cohort, name })));
 const LOCK = '.runtime-build.lock';

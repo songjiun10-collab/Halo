@@ -15,6 +15,7 @@
 
 const contracts = require("../../shared/harness-contracts");
 const { validateCoordinateAction } = require("./computer-use-contract");
+const COORDINATE_TYPES = new Set(["click_at", "type_at", "press_key"]);
 
 class ProgressError extends Error {
   constructor(code, message) {
@@ -63,12 +64,12 @@ function validateProposal(proposal, context) {
     throw new ProgressError("off_goal", `proposal references unknown criterionIds: ${unknown.join(", ")}`);
   }
   for (const [index, action] of validated.actions?.entries() || []) {
-    if (action.type === "click_at" || action.type === "type_at") {
+    if (COORDINATE_TYPES.has(action.type)) {
       try { validateCoordinateAction(action); }
       catch (error) { throw new ProgressError(error.code || "invalid_coordinate_action", `proposal.actions[${index}] is invalid`); }
     }
   }
-  if (validated.actions?.some((action) => action.type === "click_at" || action.type === "type_at") && validated.actions.length !== 1) {
+  if (validated.actions?.some((action) => COORDINATE_TYPES.has(action.type)) && validated.actions.length !== 1) {
     throw new ProgressError("invalid_coordinate_action", "coordinate actions must be proposed alone against one screenshot");
   }
   return validated;

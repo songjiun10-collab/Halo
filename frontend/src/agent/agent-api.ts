@@ -80,7 +80,8 @@ export const getAgentApi = () => agentApiFrom((globalThis as { haloBrowser?: unk
 
 // Team chat room (main/harness/room-orchestrator.js). A room is addressed by its team id.
 export type RoomMessageKind = 'say' | 'pass' | 'propose_task' | 'task_started' | 'notice'
-export interface RoomMessage { messageId: string; roomId: string; author: string; kind: RoomMessageKind; text: string; at: string; taskId?: string; originMessageId?: string; error?: string }
+export type RoomReviewSignal = 'ambiguity' | 'high_impact' | 'conflict' | 'missing_evidence' | 'low_confidence' | 'repeated_failure'
+export interface RoomMessage { messageId: string; roomId: string; author: string; kind: RoomMessageKind; text: string; at: string; taskId?: string; originMessageId?: string; error?: string; reviewSignals?: RoomReviewSignal[] }
 export interface RoomRound { active: boolean; turn: number; speakerId: string | null }
 export interface Room { roomId: string; teamId: string; messages: RoomMessage[]; round: RoomRound }
 export interface RoomSummary { roomId: string; teamId: string; name: string; archived: boolean; lastMessage: RoomMessage | null; active: boolean }

@@ -8,7 +8,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const APP_ROOT = path.resolve(__dirname, "..");
-const MODULE_NAMES = ["harness-contracts", "task-profile-contracts", "harness-profile", "capability-registry"];
+const MODULE_NAMES = ["harness-contracts", "task-profile-contracts", "harness-profile", "capability-registry", "task-profile-router", "port-contracts", "layout-constants", "clamp-bounds"];
 
 // Captured from the reviewed phase-one CommonJS interface at c2ea9fc. These
 // literals catch export = / named-export changes without deriving the expected
@@ -48,6 +48,10 @@ const EXPORT_KEYS = {
     "selectHarnessProfile", "maxActionsPerProposal", "isQuickProfile",
   ],
   "capability-registry": ["CAPABILITY_IDS", "CAPABILITY_REGISTRY_VERSION", "getCapabilityProfile"],
+  "task-profile-router": ["CLASSIFIER_VERSION", "TaskProfileRouterError", "resolveTaskProfile", "hasCapabilityIntent"],
+  "port-contracts": ["BROWSER_PORT", "PLANNER_PORT"],
+  "layout-constants": ["HEADER_HEIGHT", "FOOTER_HEIGHT", "SIDE_PANEL_WIDTH", "MOBILE_BREAKPOINT"],
+  "clamp-bounds": ["clampBrowserBounds"],
 };
 
 // Run this function in a fresh Node process: deleting selected require.cache
@@ -145,6 +149,7 @@ function conformanceCases(directory) {
   for (const [moduleName, className] of [
     ["harness-contracts", "ContractError"],
     ["harness-profile", "HarnessProfileError"],
+    ["task-profile-router", "TaskProfileRouterError"],
   ]) {
     cases.push([`${className} preserves Error own-key order and JSON serialization`, () => {
       const ErrorType = require(path.join(directory, `${moduleName}.js`))[className];
@@ -189,7 +194,7 @@ for (const [name, run] of conformanceCases(path.join(APP_ROOT, "shared"))) {
   test(`checked-in runtime: ${name}`, run);
 }
 
-test("TypeScript sources compile to exactly four disposable CommonJS artifacts with the same runtime contracts", async (t) => {
+test("TypeScript sources compile to the exact shared CommonJS cohort with the same runtime contracts", async (t) => {
   for (const name of MODULE_NAMES) {
     const source = path.join(APP_ROOT, "runtime-src", "shared", `${name}.ts`);
     assert.ok(fs.existsSync(source), `missing TypeScript source: runtime-src/shared/${name}.ts`);

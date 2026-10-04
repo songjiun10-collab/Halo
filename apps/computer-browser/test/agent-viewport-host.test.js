@@ -140,11 +140,13 @@ test("computer-use screenshot identity comes from the host-owned task and Agent 
   assert.equal(visual.binding.taskId, taskId);
   assert.equal(visual.binding.agentId, agentId);
   assert.equal(visual.binding.observationId, observation.id);
+  assert.deepEqual(visual.screenTargets, [], "geometry that cannot be read leaves no targets, so clicks go to the human");
   await assert.rejects(host.captureComputerUseObservation(taskId, observation), { code: "invalid_visual_binding" }, "one unspent screenshot may not be replaced for the same observation");
   await visual.attachment.dispose();
   const action = { type: "type_at", observationId: observation.id, x: 0.5, y: 0.25, text: "query" };
   assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), { status: "ok" });
   assert.deepEqual(inputEvents, [
+    { type: "mouseMove", x: 720, y: 225 },
     { type: "mouseDown", x: 720, y: 225, button: "left", clickCount: 1 },
     { type: "mouseUp", x: 720, y: 225, button: "left", clickCount: 1 },
     { type: "insertText", text: "query" },
@@ -422,4 +424,22 @@ test("makeDualSurfaceBrowser forwards visual capture only through the supplied h
   });
   assert.equal(await browser.captureComputerUseObservation(observation), expected);
   assert.equal(received, observation);
+});
+
+test("image-mode capture also returns host-side screen targets for click classification", async () => {
+  const { host, views } = setup();
+  const taskId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const adapter = host.ensure(taskId);
+  const wc = views[0].webContents;
+  views[0].getBounds = () => ({ x: 0, y: 0, width: AGENT_WIDTH, height: AGENT_HEIGHT });
+  wc.getURL = () => "https://example.com/";
+  wc.capturePage = async () => ({ toPNG: () => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), getSize: () => ({ width: AGENT_WIDTH, height: AGENT_HEIGHT }) });
+  wc.executeJavaScriptInIsolatedWorld = async (_world, scripts) => scripts[0].code.includes("getBoundingClientRect")
+    ? [{ elementId: "0", x: 0.6, y: 0.2, w: 0.2, h: 0.1, covered: false }]
+    : { url: "https://example.com/", title: "t", text: "", elements: [{ index: 0, role: "button", name: "Delete", parentIndex: null }] };
+  const observation = await adapter.observe();
+  const visual = await host.captureComputerUseObservation(taskId, observation);
+  assert.equal(visual.screenTargets.length, 1);
+  assert.equal(visual.screenTargets[0].name, "Delete");
+  await visual.attachment.dispose();
 });

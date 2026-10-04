@@ -38,7 +38,7 @@ function derive(s: SessionState): SessionState {
   const snapshot = s.snapshot
   const head = snapshot?.approvalQueue[0]
   const state = snapshot?.state
-  const activity: TabActivity | undefined = state === 'running' ? 'working' : state === 'awaiting_approval' || state === 'awaiting_verification' ? 'waiting' : state === 'paused' ? 'paused' : state === 'completed' || state === 'stopped' ? 'done' : undefined
+  const activity: TabActivity | undefined = state === 'running' ? 'working' : state === 'awaiting_approval' || state === 'awaiting_verification' ? 'waiting' : state === 'paused' ? (snapshot?.pauseReason === 'need_user' ? 'waiting' : 'paused') : state === 'completed' || state === 'stopped' ? 'done' : undefined
   return {
     ...s,
     task: s.goal?.originalRequest ?? s.tasks.find((t) => t.taskId === s.activeTaskId)?.originalRequest ?? '',
@@ -49,7 +49,7 @@ function derive(s: SessionState): SessionState {
       : s.tabs,
     activeTabId: s.activeTaskId ? (s.browser?.activeTabId ?? '') : s.activeTabId,
     approval: head && s.activeTaskId ? { taskId: s.activeTaskId, id: head.id, action: head.summary || head.action, request: head.action, createdAt: head.createdAt, widen: !!head.widen, leaseOffer: head.leaseOffer ?? null } : undefined,
-    messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text }))] : [],
+    messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text })), ...(snapshot?.pauseReason === 'need_user' && snapshot.needUserReason ? [{ from: 'claude' as const, text: snapshot.needUserReason }] : [])] : [],
     timeline: s.journal.map(describeEvent),
   }
 }

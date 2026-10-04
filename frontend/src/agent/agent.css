@@ -81,6 +81,7 @@
 .hx-room__msg{display:flex;gap:10px;align-items:flex-start}.hx-room__msg p{margin:2px 0 0;font:400 14px/1.45 var(--font-body);color:var(--foreground);white-space:pre-wrap;overflow-wrap:anywhere}
 .hx-room__msg--me{justify-content:flex-end}.hx-room__msg--me p{max-width:80%;padding:8px 12px;border-radius:14px;background:color-mix(in oklab,var(--brand) 16%,transparent)}
 .hx-room__who{display:flex;gap:8px;align-items:baseline;font-size:13px;color:var(--foreground)}.hx-room__who small{color:var(--muted-foreground)}
+.hx-room__review{display:block;color:var(--muted-foreground);font-size:11px;margin-top:2px}
 .hx-room__gone{flex:none;width:28px;height:28px;border-radius:50%;background:color-mix(in oklab,var(--foreground) 12%,transparent)}
 .hx-room__notice{align-self:center;font-size:12px;color:var(--muted-foreground)}
 .hx-room__task{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:14px}.hx-room__task span{display:flex;flex-direction:column;min-width:0}.hx-room__task small{color:var(--muted-foreground);overflow-wrap:anywhere}

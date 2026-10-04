@@ -4,7 +4,7 @@
 // one origin, for a few minutes and a few uses. Pure helpers only; the task
 // controller owns the list and journals every grant, use and revoke.
 
-const LEASE_ACTIONS = Object.freeze(["navigate", "follow_link", "click", "type", "click_at", "type_at", "submit_form"]);
+const LEASE_ACTIONS = Object.freeze(["navigate", "follow_link", "click", "type", "click_at", "type_at", "press_key", "submit_form"]);
 const LEASE_DEFAULTS = Object.freeze({ minutes: 10, uses: 3 });
 
 class LeaseError extends Error {

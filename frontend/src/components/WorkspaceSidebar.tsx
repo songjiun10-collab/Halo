@@ -37,7 +37,7 @@ function TaskButton({ task, active, onClick }: { task: TaskSummary; active: bool
       <span className="hx-sidebar__fav" aria-hidden="true">{task.originalRequest.trim().slice(0, 1) || '·'}</span>
       <span className="hx-sidebar__task-copy">
         <span className="hx-sidebar__task-title">{task.originalRequest}</span>
-        <small className="hx-sidebar__task-state">{stateLabel[task.state]}</small>
+        <small className="hx-sidebar__task-state">{task.state === 'paused' && task.pauseReason === 'need_user' ? 'Needs your reply' : stateLabel[task.state]}</small>
       </span>
     </button>
   )

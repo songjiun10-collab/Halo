@@ -7,10 +7,13 @@ const path = require("node:path");
 
 const MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024;
 const MAX_VIEWPORT_DIMENSION = 8192;
+// Navigation/editing keys only: no modifiers, no function keys, no shortcuts.
+const ALLOWED_KEYS = Object.freeze(["Enter", "Tab", "Escape", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COORDINATE_ACTION_KEYS = Object.freeze({
   click_at: ["type", "observationId", "x", "y"],
   type_at: ["type", "observationId", "x", "y", "text"],
+  press_key: ["type", "observationId", "key"],
 });
 
 class ComputerUseContractError extends Error {
@@ -66,6 +69,10 @@ function validateCoordinateAction(action) {
   const keys = COORDINATE_ACTION_KEYS[action.type];
   if (!keys || Object.keys(action).length !== keys.length || Object.keys(action).some((key) => !keys.includes(key)) || keys.some((key) => !Object.hasOwn(action, key))) invalid();
   if (typeof action.observationId !== "string" || action.observationId.length < 1 || action.observationId.length > 128 || /[\u0000-\u001f\u007f]/.test(action.observationId)) invalid();
+  if (action.type === "press_key") {
+    if (!ALLOWED_KEYS.includes(action.key)) invalid();
+    return action;
+  }
   if (!Number.isFinite(action.x) || !Number.isFinite(action.y) || action.x < 0 || action.x >= 1 || action.y < 0 || action.y >= 1) invalid();
   if (action.type === "type_at" && (typeof action.text !== "string" || Buffer.byteLength(action.text, "utf8") > 4096)) invalid();
   return action;
@@ -148,6 +155,7 @@ async function createScreenshotAttachment(input) {
 }
 
 module.exports = {
+  ALLOWED_KEYS,
   ComputerUseContractError,
   MAX_SCREENSHOT_BYTES,
   MAX_VIEWPORT_DIMENSION,

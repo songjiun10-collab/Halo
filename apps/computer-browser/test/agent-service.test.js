@@ -113,6 +113,16 @@ test("a Computer Use Agent in a group equips the parent with CUA even when the p
   assert.equal(created[0].selectors.requestedCapabilityProfile, "multi_agent_computer_use");
 });
 
+test("a room proposal that drops the wording still gets computer use from the person's own message", async () => {
+  const { store, service, created } = await setup();
+  const a = await agent(store, { name: "Writer" });
+  const team = await store.saveTeam({ name: "Plain Team", title: "", description: "", avatar, memberAgentIds: [a.id] });
+  await service.startAgentTask({ teamId: team.id, request: "MDN 버튼 확인" }, null, { intentText: "컴퓨터 유즈로 MDN 버튼 확인해 줘" });
+  await service.startAgentTask({ teamId: team.id, request: "MDN 버튼 확인" }, null, { intentText: "MDN 버튼 확인해 줘" });
+  assert.equal(created[0].selectors.requestedCapabilityProfile, "multi_agent_computer_use");
+  assert.equal(created[1].selectors.requestedCapabilityProfile, "multi_agent");
+});
+
 test("archived agents, teams, or members refuse to start and create nothing", async () => {
   const { store, service, created } = await setup();
   const a = await agent(store);
