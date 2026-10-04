@@ -277,6 +277,15 @@ code { font-family: var(--font-mono); }
 .hx-home__form .hx-btn .hx-ic { width: 20px; height: 20px; }
 .hx-home__recent { margin-top: 28px; display: flex; flex-direction: column; gap: 2px; text-align: left; }
 .hx-home__recent p { margin: 0 4px 6px; font: 600 12px var(--font-body); color: var(--muted-foreground); }
+/* Liquid glass: translucent fill, blur, and a lit top edge (design system home). */
+.hx-home__input, .hx-home__form .hx-mpick__toggle {
+  background: linear-gradient(135deg, color-mix(in oklab, var(--foreground) 16%, transparent), color-mix(in oklab, var(--foreground) 5%, transparent) 55%, color-mix(in oklab, var(--foreground) 10%, transparent)), color-mix(in oklab, var(--toolbar) 45%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.7); backdrop-filter: blur(24px) saturate(1.7);
+  border: 1px solid color-mix(in oklab, var(--foreground) 18%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, #fff 40%, transparent), inset 0 -1px 0 color-mix(in oklab, #fff 8%, transparent), 0 2px 8px rgba(0, 0, 0, .14);
+}
+.hx-home__form .hx-btn--primary { box-shadow: inset 0 1px 0 #fff, 0 2px 8px rgba(0, 0, 0, .2); }
+.hx-rc:hover, .hx-home__try button:hover { box-shadow: inset 0 1px 0 color-mix(in oklab, #fff 18%, transparent); }
 .hx-rc { display: flex; align-items: center; gap: 10px; border: 0; background: transparent; color: var(--foreground); cursor: pointer; border-radius: 12px; padding: 10px 12px; font: 500 14px var(--font-body); text-align: left; }
 .hx-rc i { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted-foreground); }
 .hx-rc i[data-s=run] { background: var(--success); }
