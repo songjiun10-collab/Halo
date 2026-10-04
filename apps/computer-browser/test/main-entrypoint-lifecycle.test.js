@@ -128,6 +128,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
         return Reflect.get(target, key);
       } }) },
     "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } } },
+    "./harness/api-key-store": { ApiKeyStore: class { load() { return Promise.resolve(); } env() { return {}; } } },
     "./harness/local-memory-store": { LocalMemoryStore: class {} },
     "./harness/activity-journal-store": { ActivityJournalStore: class {} },
     "./harness/providers/nvidia-models": { loadDiscoveredNvidiaModels() {} },

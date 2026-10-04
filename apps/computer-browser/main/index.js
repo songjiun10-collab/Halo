@@ -28,6 +28,7 @@ const { AgentViewportHost, makeDualSurfaceBrowser, agentBrowserPartition } = req
 const { resolvePlannerCommand } = require("./harness/planner-command");
 const { parseOperatorOverride, selectPlannerLaunch, plannerProviderEnv } = require("./harness/planner-providers");
 const { HostSettingsStore } = require("./harness/host-settings");
+const { ApiKeyStore } = require("./harness/api-key-store");
 const { LocalMemoryStore } = require("./harness/local-memory-store");
 const { ActivityJournalStore } = require("./harness/activity-journal-store");
 const { createPageVisitSink } = require("./activity-capture");
@@ -452,6 +453,9 @@ function makeChildHarnessBrowser(parentTaskId, childId, origin, execution = "hos
 // 2026-10-01-planner-router-design.md): an operator HALO_PLANNER_* override
 // always wins; otherwise the task's pinned settings plannerProvider selects a
 // host-allowlisted worker; "none" keeps the planner honestly unavailable.
+// Keys registered in Settings; process.env still wins when both are set.
+const apiKeyStore = new ApiKeyStore({ storageRoot: path.join(app.getPath("userData"), "harness-data"), safeStorage: require("electron").safeStorage });
+
 function makeHarnessPlanner(usageLedger) {
   const { command: plannerCommand, env: plannerEnv } = resolvePlannerCommand();
   const override = parseOperatorOverride(process.env, plannerCommand);
@@ -465,7 +469,7 @@ function makeHarnessPlanner(usageLedger) {
       command: launch.command,
       args: launch.args,
       cwd: REPO_ROOT,
-      env: { ...plannerEnv, ...plannerProviderEnv(launch) },
+      env: { ...plannerEnv, ...plannerProviderEnv(launch, { ...apiKeyStore.env(), ...process.env }) },
       role,
       onUsage: (usage) => {
         // A settings-selected worker may only report usage for its own provider.
@@ -491,6 +495,7 @@ async function createHarnessHost(socketPath, hostWindow) {
   const nvidiaModelsFile = path.join(dataRoot, "nvidia-models.json");
   require("./harness/providers/nvidia-models").loadDiscoveredNvidiaModels(nvidiaModelsFile);
   const settings = await settingsStore.load();
+  await apiKeyStore.load().catch((error) => console.error("[harness] registered API keys unavailable:", error?.code ?? error));
   const memoryStore = new LocalMemoryStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
   // Context Awareness: off unless the user turned it on. The setting is read
   // live (cached briefly) so toggling it takes effect without a restart.
@@ -542,6 +547,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     executionMode: settings.executionMode,
     settingsStore,
     credentialVault,
+    apiKeyStore,
     profileImporter,
     // Same non-persistent partition the task's views use, so cookies injected
     // here are what the first navigation sends.

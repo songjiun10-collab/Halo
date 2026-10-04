@@ -113,6 +113,10 @@ export interface HaloBrowserApi {
   getChildPlan(taskId: string): Promise<ChildPlanSummary | null>
   getHostSettings(): Promise<HostSettings>
   clearActivity?(): Promise<boolean>
+  /** Planner API keys registered in Settings; the key itself never comes back. */
+  getApiKeyStatus?(): Promise<Record<string, boolean>>
+  setApiKey?(provider: string, key: string): Promise<Record<string, boolean>>
+  clearApiKey?(provider: string): Promise<Record<string, boolean>>
   refreshPlannerModels(): Promise<{ nvidia: { id: string; label: string; discovered: boolean }[]; error: string | null }>
   updateHostSettings(patch: Partial<Omit<HostSettings, 'version'>>): Promise<HostSettings>
   taskBrowserAction(taskId: string, action: BrowserAction): Promise<BrowserSnapshot>

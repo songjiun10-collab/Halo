@@ -754,3 +754,21 @@ html, body, #root { background: transparent !important; }
 
 /* The design system's .hx-switch draws its own ::after knob; the settings switches already render a <span> knob. */
 .hx-switch[role="switch"]::after { content: none; }
+
+.hx-model-row { flex-wrap: wrap; }
+.hx-keybtn { margin-left: auto; margin-right: 10px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, white 6%, transparent); color: var(--muted-foreground); font: 500 11px/1.4 var(--font-body); cursor: pointer; }
+.hx-keybtn[data-set] { color: var(--foreground); border-color: color-mix(in srgb, var(--brand) 60%, transparent); }
+.hx-keybtn:hover { color: var(--foreground); }
+.hx-keyform { flex: 0 0 100%; display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; }
+.hx-keyform input { flex: 1 1 200px; min-width: 0; padding: 7px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--well); color: var(--foreground); font: 13px var(--font-mono, monospace); outline: none; }
+.hx-keyform input:focus { border-color: var(--brand); }
+.hx-keyform button { padding: 6px 14px; border-radius: 10px; border: 1px solid var(--border); background: color-mix(in srgb, white 8%, transparent); color: var(--foreground); font: 500 12px var(--font-body); cursor: pointer; }
+.hx-keyform__remove { color: #ff8a80 !important; }
+.hx-keyform p { flex: 0 0 100%; margin: 0; color: var(--muted-foreground); font-size: 11px; }
+.hx-keyform .hx-keyform__error { color: #ff8a80; }
+
+/* The design system's .hx-chat fixes 460px with overflow:visible; keep the panel inside its host so a long task list can't push the thread and composer out of it. */
+section.hx-chat { max-height: calc(100% - 20px); overflow: hidden; min-height: 0; }
+section.hx-chat .hx-chat__head, section.hx-chat .hx-chat__composer { flex: none; }
+section.hx-chat .hx-chat__recent { flex: 0 1 auto; max-height: 34%; overflow-y: auto; min-height: 0; }
+section.hx-chat .hx-chat__thread { flex: 1 1 0; min-height: 60px; overflow-y: auto; }

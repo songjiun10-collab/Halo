@@ -47,6 +47,9 @@ const HARNESS_METHODS = {
   "halo:setUsageLimit": "setUsageLimit",
   "halo:syncUsage": "syncUsage",
   "halo:updateHostSettings": "updateHostSettings",
+  "halo:getApiKeyStatus": "getApiKeyStatus",
+  "halo:setApiKey": "setApiKey",
+  "halo:clearApiKey": "clearApiKey",
   "halo:listCredentials": "listCredentials",
   "halo:saveCredential": "saveCredential",
   "halo:removeCredential": "removeCredential",
@@ -111,6 +114,7 @@ const CODED_CHANNELS = new Set([
   "halo:setAgentPinned", "halo:listAgentSchedules", "halo:saveAgentSchedule",
   "halo:deleteAgentSchedule", "halo:listMcpProviders", "halo:getChildPlan",
   "halo:listRooms", "halo:getRoom", "halo:postRoomMessage", "halo:stopRoomRound",
+  "halo:getApiKeyStatus", "halo:setApiKey", "halo:clearApiKey",
 ]);
 const ERROR_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
 

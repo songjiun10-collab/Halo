@@ -25,7 +25,17 @@ interface ViewProps {
   /** Providers switched on besides the active one; the container persists it. */
   enabledPlanners?: string[] | null
   onEnabledPlanners?: (next: string[]) => void
+  /** Which key-taking providers have a registered API key, and the provider whose key form is open. */
+  apiKeys?: Record<string, boolean>
+  keyEditing?: string | null
+  keyError?: string | null
+  onKeyEditing?: (provider: string | null) => void
+  onSaveKey?: (provider: string, key: string) => void
+  onClearKey?: (provider: string) => void
 }
+
+/** Providers whose worker reads an API key from its environment; the others sign in through their own CLI. */
+const KEYED = new Set(['antigravity', 'cursor', 'nvidia'])
 
 /** External adapter keys come from the host environment, not this UI. */
 const PROVIDERS = [
@@ -52,7 +62,7 @@ function Cards<T extends string>({ label, options, value, disabled, onPick }: { 
 }
 
 /** The settings content, without host calls. */
-export function SettingsView({ settings, saving, error, onChange, onClose, leaving, enabledPlanners: enabledList = null, onEnabledPlanners: setEnabledList = () => {} }: ViewProps) {
+export function SettingsView({ settings, saving, error, onChange, onClose, leaving, enabledPlanners: enabledList = null, onEnabledPlanners: setEnabledList = () => {}, apiKeys = {}, keyEditing = null, keyError = null, onKeyEditing = () => {}, onSaveKey = () => {}, onClearKey = () => {} }: ViewProps) {
   const head = (
     <header className="hx-settings__head">
       <button type="button" className="hx-settings__back" aria-label="Close settings" onClick={onClose}><Back /></button>
@@ -93,7 +103,17 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
                 <span className="hx-model-row__name">{p.name}</span>
                 <span className="hx-model-row__meta" data-mono="">{activeId === p.id && model ? `planner · ${model.label}` : p.cli}</span>
               </span>
+              {KEYED.has(p.id) ? <button type="button" className="hx-keybtn" data-set={apiKeys[p.id] || undefined} aria-label={`${p.name} API key`} onClick={() => onKeyEditing(keyEditing === p.id ? null : p.id)}>{apiKeys[p.id] ? 'Key set' : 'Add key'}</button> : null}
               <button type="button" className="hx-switch" role="switch" aria-label={`Use ${p.name}`} aria-checked={on} disabled={saving} onClick={toggle}><span /></button>
+              {KEYED.has(p.id) && keyEditing === p.id ? (
+                <form className="hx-keyform" onSubmit={(e) => { e.preventDefault(); const field = e.currentTarget.elements.namedItem('key') as HTMLInputElement | null; const value = field?.value.trim() ?? ''; if (value) { onSaveKey(p.id, value); if (field) field.value = '' } }}>
+                  <input name="key" type="password" autoComplete="off" spellCheck={false} autoFocus aria-label={`${p.name} API key`} placeholder={apiKeys[p.id] ? 'Paste a new key to replace it' : 'Paste API key'} />
+                  <button type="submit" className="hx-keyform__save">Save</button>
+                  {apiKeys[p.id] ? <button type="button" className="hx-keyform__remove" onClick={() => onClearKey(p.id)}>Remove</button> : null}
+                  <p>Stored encrypted in your macOS keychain. A key set in the environment takes precedence.</p>
+                  {keyError ? <p role="alert" className="hx-keyform__error">{keyError}</p> : null}
+                </form>
+              ) : null}
             </div>
           )
         })}
@@ -223,5 +243,14 @@ export function SettingsPanel({ leaving, onClose }: Props) {
     setSaving(false)
   }
   const [enabledPlanners, setEnabledPlanners] = useEnabledPlanners()
-  return <div ref={ref} className="hx-settings__host"><SettingsView settings={settings} saving={saving} error={error} onChange={(p) => void change(p)} onClose={onClose} leaving={leaving} enabledPlanners={enabledPlanners} onEnabledPlanners={setEnabledPlanners} /></div>
+  const [apiKeys, setApiKeys] = useState<Record<string, boolean>>({})
+  const [keyEditing, setKeyEditing] = useState<string | null>(null)
+  const [keyError, setKeyError] = useState<string | null>(null)
+  useEffect(() => { window.haloBrowser?.getApiKeyStatus?.().then(setApiKeys).catch(() => {}) }, [])
+  const keyCall = async (call: Promise<Record<string, boolean>> | undefined, done: boolean) => {
+    setKeyError(null)
+    try { if (call) { setApiKeys(await call); if (done) setKeyEditing(null) } else setKeyError('API keys are not available in this build.') }
+    catch (caught) { setKeyError((caught as { code?: string })?.code === 'encryption_unavailable' ? 'Secure keychain storage is unavailable, so the key was not saved.' : 'Could not save that key.') }
+  }
+  return <div ref={ref} className="hx-settings__host"><SettingsView settings={settings} saving={saving} error={error} onChange={(p) => void change(p)} onClose={onClose} leaving={leaving} enabledPlanners={enabledPlanners} onEnabledPlanners={setEnabledPlanners} apiKeys={apiKeys} keyEditing={keyEditing} keyError={keyError} onKeyEditing={(id) => { setKeyError(null); setKeyEditing(id) }} onSaveKey={(id, key) => void keyCall(window.haloBrowser?.setApiKey?.(id, key), true)} onClearKey={(id) => void keyCall(window.haloBrowser?.clearApiKey?.(id), true)} /></div>
 }

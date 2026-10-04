@@ -116,6 +116,7 @@ class TaskHost {
     subscriptionPlatform,
     subscriptionExecFn,
     credentialVault,
+    apiKeyStore,
     profileImporter,
     getTaskSession,
     workGoalStore,
@@ -174,6 +175,7 @@ class TaskHost {
     this._subscriptionPlatform = subscriptionPlatform;
     this._subscriptionExecFn = subscriptionExecFn;
     this._credentialVault = credentialVault || null;
+    this._apiKeyStore = apiKeyStore || null;
     this._profileImporter = profileImporter || null;
     this._getTaskSession = typeof getTaskSession === "function" ? getTaskSession : null;
     this._workGoalStore = workGoalStore || new WorkGoalStore({ storageRoot, now });
@@ -407,7 +409,7 @@ class TaskHost {
     this._assertOpen();
     let error = null;
     try {
-      setDiscoveredNvidiaModels(await fetchNvidiaModelIds({ apiKey: process.env.NVIDIA_API_KEY }));
+      setDiscoveredNvidiaModels(await fetchNvidiaModelIds({ apiKey: process.env.NVIDIA_API_KEY || this._apiKeyStore?.env().NVIDIA_API_KEY }));
       if (this._nvidiaModelsFile) { try { saveDiscoveredNvidiaModels(this._nvidiaModelsFile); } catch { /* still valid for this run */ } }
     } catch (caught) {
       error = typeof caught?.code === "string" ? caught.code : "network_error";
@@ -2379,6 +2381,25 @@ class TaskHost {
       entry.controller.setPolicySettings({ ...settings, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
     }
     return settings;
+  }
+
+  // Planner API keys registered in Settings: presence only ever leaves the host.
+  async getApiKeyStatus() {
+    this._assertOpen();
+    if (!this._apiKeyStore) throw new TaskHostError("api_keys_unavailable", "API key storage is unavailable");
+    return this._apiKeyStore.status();
+  }
+
+  async setApiKey(provider, key) {
+    this._assertOpen();
+    if (!this._apiKeyStore) throw new TaskHostError("api_keys_unavailable", "API key storage is unavailable");
+    return this._apiKeyStore.set(provider, key);
+  }
+
+  async clearApiKey(provider) {
+    this._assertOpen();
+    if (!this._apiKeyStore) throw new TaskHostError("api_keys_unavailable", "API key storage is unavailable");
+    return this._apiKeyStore.clear(provider);
   }
 
   async listCredentials() {

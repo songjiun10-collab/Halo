@@ -36,6 +36,7 @@ const HARNESS_METHODS = [
   "createTask", "listTasks", "resumeSavedTask", "amendTask", "confirmCriterion", "getTaskDetail",
   "taskApprove", "taskDeny", "taskLend", "taskRevokeLease", "taskPause", "taskStop", "taskTakeOver", "getTaskEvents", "getChildPlan", "listMcpProviders", "refreshPlannerModels",
   "getTaskBrowser", "taskBrowserAction", "setTaskViewport", "getHostSettings", "updateHostSettings", "getUsage", "setUsageLimit", "syncUsage",
+  "getApiKeyStatus", "setApiKey", "clearApiKey",
   "listCredentials", "saveCredential", "removeCredential",
   "listActivity", "clearActivity",
   "listMemories", "saveMemory", "removeMemory",
