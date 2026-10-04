@@ -64,3 +64,21 @@ export function BrandIcon({ host, size = 28 }: { host: string; size?: number }) 
     <svg viewBox="0 0 24 24" width={size * 0.64} height={size * 0.64} focusable="false">{brand.glyph}</svg>
   </span>
 }
+
+/** Provider marks for Settings; keyed by planner provider id. */
+const PROVIDERS: Record<string, Brand> = {
+  claude_code: { bg: '#d97757', glyph: text('✻') },
+  codex_cli: { bg: '#10a37f', glyph: text('◎') },
+  antigravity: { bg: '#4285f4', glyph: text('▲') },
+  cursor: { bg: '#111', glyph: text('◧') },
+  nvidia: { bg: '#76b900', fg: '#111', glyph: text('N') },
+  opencode_cli: { bg: '#1f1f23', glyph: text('{}') },
+}
+
+export function ProviderIcon({ id, size = 28 }: { id: string; size?: number }) {
+  const brand = PROVIDERS[id]
+  if (!brand) return null
+  return <span className="hx-brand" aria-hidden="true" style={{ width: size, height: size, background: brand.bg, color: brand.fg ?? '#fff' }}>
+    <svg viewBox="0 0 24 24" width={size * 0.64} height={size * 0.64} focusable="false">{brand.glyph}</svg>
+  </span>
+}

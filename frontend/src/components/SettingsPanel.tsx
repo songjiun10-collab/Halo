@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { HaloMark } from './Logo'
+import { ProviderIcon } from './BrandIcon'
 import type { HostSettings } from '../session/api'
 import { activeModel, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, DEFAULT_NVIDIA_MODEL, mergeDiscoveredNvidia, PLANNER_MODELS } from '../session/claude-models'
 import { DEFAULT_EFFORT, type PlannerEffort } from '../session/planner-effort'
@@ -99,7 +100,7 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
           }
           return (
             <div key={p.id} className="hx-model-row" data-provider={p.id}>
-              <span className="hx-model-row__mark" aria-hidden="true">{p.mark}</span>
+              <span className="hx-model-row__mark" aria-hidden="true"><ProviderIcon id={p.id} size={28} /></span>
               <span className="hx-model-row__body">
                 <span className="hx-model-row__name">{p.name}</span>
                 <span className="hx-model-row__meta" data-mono="">{activeId === p.id && model ? `planner · ${model.label}` : p.cli}</span>
