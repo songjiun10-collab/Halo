@@ -644,7 +644,7 @@ class ClaudeCodeBridge {
       }
 
       try {
-        child = this._spawnFn(this._command, this._argsFor(effort), {
+        child = this._spawnFn(this._command, this._argsFor(effort, room), {
           cwd: this._cwd,
           env,
           shell: false,
@@ -730,8 +730,13 @@ class ClaudeCodeBridge {
     return buildEnv(this._env);
   }
 
-  _argsFor(effort) {
-    return [...this._cliArgs, ...this._fastArgs, "--effort", claudeEffort(effort)];
+  _argsFor(effort, room = false) {
+    // The proposal schema would force a browser-action envelope; a team-chat
+    // reply is say/pass/propose_task and is validated by parseRoomTurn instead.
+    const args = [...this._cliArgs];
+    const at = args.indexOf("--json-schema");
+    if (room && at >= 0) args.splice(at, 2);
+    return [...args, ...this._fastArgs, "--effort", claudeEffort(effort)];
   }
 
   _exitMessage(stdout, code) {
