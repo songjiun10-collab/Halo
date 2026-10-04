@@ -340,6 +340,10 @@ export default function App() {
             inert={overviewOpen || !!approval}
             onNewTask={onNewTask}
             onSelectTask={(taskId) => void store.selectTask(taskId)}
+            tabs={tabsForDisplay.map((t) => ({ id: t.id, title: tabTitle(t) }))}
+            activeTabId={tab.id}
+            onSelectTab={(id) => void store.selectBrowserTab(id)}
+            onOpenUrl={(url) => void store.navigate({ type: 'navigate', url })}
             agents={<SidebarAgents onOpen={(owner) => openAgents({ n: 'detail', owner })} onSeeAll={() => openAgents({ n: 'hub' })} onNew={() => openAgents({ n: 'hub' })} />}
           />
           <div className="hx-content-col">

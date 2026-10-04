@@ -708,3 +708,19 @@ kbd {
 @media (prefers-reduced-motion: no-preference) { .hx-lease__dot { animation: hx-lease-blink 1.6s ease-in-out infinite; } }
 @keyframes hx-lease-blink { 50% { opacity: .35; } }
 .hx-sheet__actions { flex-wrap: wrap; }
+
+/* Sidebar from the design system: shortcut tiles, project folders. */
+.hx-scs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 8px; flex: none; }
+.hx-sidebar[data-open="false"] .hx-scs { display: none; }
+.hx-sc { min-width: 0; width: 100%; height: 38px; border: 0; border-radius: 12px; cursor: pointer; display: grid; place-items: center; font: 600 16px/1 var(--font-body);
+  background: color-mix(in oklab, var(--foreground) 9%, transparent); box-shadow: inset 0 1px 0 color-mix(in oklab, #fff 22%, transparent); }
+.hx-sc:hover { filter: brightness(1.15); }
+.hx-sc--empty { background: transparent; color: var(--muted-foreground); font-weight: 400; font-size: 18px; box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--foreground) 18%, transparent); }
+.hx-sidebar__label--row { display: flex; align-items: center; justify-content: space-between; }
+.hx-sidebar__add { background: none; border: 0; color: var(--muted-foreground); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; border-radius: 4px; }
+.hx-sidebar__add:hover { color: var(--foreground); background: var(--hover); }
+.hx-proj { display: flex; }
+.hx-proj > .hx-sidebar__item { flex: 1; min-width: 0; }
+.hx-sidebar__item--child { padding-left: 20px; color: var(--muted-foreground); }
+.hx-sidebar__rename { width: 100%; min-width: 0; background: var(--hover); color: var(--foreground); border: 1px solid var(--border-strong); border-radius: 6px; font: inherit; padding: 1px 4px; }
+.hx-more { color: var(--muted-foreground); }

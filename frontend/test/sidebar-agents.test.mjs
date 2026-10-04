@@ -81,12 +81,15 @@ test('the home screen opens in Agent mode when the sidebar asked for an agent vi
   assert.equal(nav.homeModeFor('agent'), 'agent')
 })
 
-test('the workspace sidebar places the agents block after the task list', async () => {
+test('the workspace sidebar keeps agents & routines behind a toggle after the tabs and projects', async () => {
   const { WorkspaceSidebar } = await vite.ssrLoadModule('/src/components/WorkspaceSidebar.tsx')
   const html = renderToStaticMarkup(React.createElement(WorkspaceSidebar, {
     tasks: [], activeTaskId: null, open: true, onNewTask: noop, onSelectTask: noop,
+    tabs: [{ id: 'home', title: 'New tab' }], activeTabId: 'home', onSelectTab: noop, onOpenUrl: noop,
     agents: React.createElement('p', { id: 'agents-slot' }, 'slot'),
   }))
-  assert.ok(html.indexOf('Recent tasks') < html.indexOf('agents-slot'))
-  assert.ok(html.indexOf('agents-slot') < html.indexOf('hx-sidebar__foot'))
+  assert.ok(html.indexOf('Tabs') < html.indexOf('Projects'))
+  assert.ok(html.indexOf('Projects') < html.indexOf('Agents &amp; routines'))
+  assert.ok(html.indexOf('Agents &amp; routines') < html.indexOf('hx-sidebar__foot'))
+  assert.ok(!html.includes('agents-slot'), 'collapsed by default, as in the design')
 })
