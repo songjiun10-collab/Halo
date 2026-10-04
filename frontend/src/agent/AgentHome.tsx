@@ -135,7 +135,7 @@ function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: str
       <div className="hx-ag__grid">{teams.map((t) => <button type="button" key={t.id} className="hx-acard hx-gl" data-archived={t.archived || undefined} onClick={() => open({ kind: 'team', id: t.id })}>
           {t.archived ? null : <i className="hx-dot" data-s={dot(t.id)} title={dot(t.id)} />}{t.pinned ? <span className="hx-pin" aria-label="Pinned"><Ic d="M12 17v5M8 3h8l-1 6 3 4H6l3-4z" s={13} /></span> : null}
           <Stack ids={t.memberAgentIds} agents={agents} /><b>{t.name}</b><span>{t.memberAgentIds.length} members</span>{t.archived ? <i className="hx-badge">Archived</i> : null}</button>)}
-        <button type="button" className="hx-acard hx-acard--new" disabled={teams.length >= LIM.teams || !agents.some((a) => !a.archived)} onClick={() => setV({ n: 'teamForm' })}><span className="hx-plus">+</span><b>New team</b>{teams.length >= LIM.teams ? <span>Limit reached</span> : null}</button></div>
+        <button type="button" className="hx-acard hx-acard--new" disabled={nT >= LIM.teams || !agents.some((a) => !a.archived)} onClick={() => setV({ n: 'teamForm' })}><span className="hx-plus">+</span><b>New team</b>{nT >= LIM.teams ? <span>Limit reached</span> : null}</button></div>
       <h3 className="hx-ag__h">Recent conversations</h3>
       {loaded ? <ConvoList rows={convos.slice(0, 8)} owners={owners} showOwner onOpen={(c) => openTask(c.taskId, { kind: c.kind, id: c.ownerId })} /> : <p className="hx-ag__empty">Loading…</p>}
       <h3 className="hx-ag__h">Background service</h3>
