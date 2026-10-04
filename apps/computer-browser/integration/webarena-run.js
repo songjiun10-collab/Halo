@@ -280,21 +280,48 @@ async function main() {
   const results = [];
   let exitCode = 0;
   try {
+    // Resume after a crash: tasks already in summary.jsonl are not run again.
+    const doneIds = new Set();
+    try {
+      for (const line of (await fs.readFile(path.join(outDir, "summary.jsonl"), "utf8")).split("\n")) {
+        if (line.trim()) { const prior = JSON.parse(line); doneIds.add(String(prior.taskId ?? prior.task_id)); results.push(prior); }
+      }
+    } catch { /* first run */ }
+    const infraFailure = (result) => /^error/.test(String(result.state)) || ["planner_error", "planner_unavailable", "browser_unavailable"].includes(result.pauseReason);
     for (const task of tasks) {
-      const partition = `halo-wa-${task.task_id}-${Date.now()}`;
-      const har = createHarRecorder();
-      har.attach(session.fromPartition(partition));
-      await injectStorageState(session.fromPartition(partition), task, sites);
-      const result = await runTask({
-        task, sites, arm, outDir, timeoutMs, har,
-        createBrowser: async () => {
-          const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition } });
-          win.contentView.addChildView(view);
-          view.setBounds({ x: 0, y: 0, width: 1440, height: 900 });
-          view.setVisible(false);
-          return new BrowserAdapter({ view });
-        },
-      });
+      if (doneIds.has(String(task.task_id))) { console.error(`[webarena-run] ${task.task_id}: skipped (already done)`); continue; }
+      let result;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        // Wait for the site to answer before spending a planner run on it.
+        const origin = new URL(String(task.start_url || "").replace(/__([A-Z_]+)__/g, (m, k) => sites[m] || m) || "http://localhost").origin;
+        for (let wait = 0; wait < 20; wait += 1) {
+          const ok = await fetch(origin, { signal: AbortSignal.timeout(20000) }).then((r) => r.status < 500).catch(() => false);
+          if (ok) break;
+          console.error(`[webarena-run] ${task.task_id}: site ${origin} not answering, waiting (${wait + 1}/20)`);
+          await new Promise((resolve) => setTimeout(resolve, 15000));
+        }
+        const partition = `halo-wa-${task.task_id}-${Date.now()}`;
+        const har = createHarRecorder();
+        har.attach(session.fromPartition(partition));
+        try {
+          await injectStorageState(session.fromPartition(partition), task, sites);
+          result = await runTask({
+            task, sites, arm, outDir, timeoutMs, har,
+            createBrowser: async () => {
+              const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition } });
+              win.contentView.addChildView(view);
+              view.setBounds({ x: 0, y: 0, width: 1440, height: 900 });
+              view.setVisible(false);
+              return new BrowserAdapter({ view });
+            },
+          });
+        } catch (error) {
+          result = { task_id: task.task_id, arm, status: "UNKNOWN_ERROR", state: `error: ${String(error?.message || error).slice(0, 120)}`, totalMs: 0 };
+        }
+        if (!infraFailure(result) || attempt === 3) break;
+        console.error(`[webarena-run] ${task.task_id}: infra failure (${result.state}/${result.pauseReason}), retry ${attempt}/2`);
+        await new Promise((resolve) => setTimeout(resolve, 20000));
+      }
       results.push(result);
       await fs.appendFile(path.join(outDir, "summary.jsonl"), `${JSON.stringify(result)}\n`);
       console.error(`[webarena-run] ${task.task_id}: ${result.status} (${result.state}) ${result.totalMs}ms`);
