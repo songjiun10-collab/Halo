@@ -71,8 +71,11 @@ code { font-family: var(--font-mono); }
 .hx-app { height: 100%; padding: 12px; }
 .hx-window {
   position: relative; display: flex; flex-direction: column; height: 100%;
-  border-radius: var(--radius-lg); overflow: hidden; background: var(--backdrop); box-shadow: var(--shadow-window);
+  border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-window);
+  background: linear-gradient(180deg, #1d3a73 0%, #2a3566 28%, #4a3b63 62%, #5b3d4a 100%);
 }
+:root[data-theme="light"] .hx-window { background: linear-gradient(180deg, #9ec1ff 0%, #c9b8e8 60%, #f0c4b8 100%); }
+.hx-window::before { content: none; }
 /* Chrome Glass: the browser's own surface, almost opaque. It's a bar, not a floating card —
    no drop shadow here. Just enough translucency to read as "a layer", not "a panel". */
 .hx-chrome {
@@ -217,15 +220,9 @@ code { font-family: var(--font-mono); }
 .hx-sidebar__task-state { color: var(--muted-foreground); font-size: 10px; line-height: 1.3; }
 .hx-sidebar__empty { margin: 0 8px; color: var(--muted-foreground); font-size: 12px; }
 .hx-sidebar__foot { display: flex; align-items: center; gap: 7px; margin-top: auto; padding: 10px 8px 2px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 11px; }
-/* Liquid-glass panel from the design system sidebar. */
+/* Design-system sidebar: no panel, it sits on the window's own backdrop; only tiles and the selected row are glass. */
 @media (min-width: 681px) {
-  .hx-sidebar {
-    margin: 8px 0 8px 8px; border-radius: 18px; border: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent);
-    background: linear-gradient(160deg, rgba(255, 255, 255, .08), rgba(255, 255, 255, 0) 55%), rgba(6, 7, 7, .58);
-    -webkit-backdrop-filter: blur(30px) saturate(1.7); backdrop-filter: blur(30px) saturate(1.7);
-    box-shadow: inset -1px 0 0 color-mix(in oklab, #fff 10%, transparent), inset 0 1px 0 color-mix(in oklab, #fff 22%, transparent), 4px 0 16px #00000026;
-  }
-  :root[data-theme="light"] .hx-sidebar { background: linear-gradient(160deg, rgba(255, 255, 255, .8), rgba(255, 255, 255, .4) 60%), rgba(255, 255, 255, .5); }
+  .hx-sidebar { margin: 0 0 0 8px; border-radius: 0; border: 0; background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
   .hx-sidebar__item, .hx-sidebar__task { border-radius: 12px; }
   .hx-sidebar__task[data-selected], .hx-sidebar__item[data-selected] {
     background: color-mix(in oklab, var(--foreground) 14%, transparent); box-shadow: inset 0 1px 0 color-mix(in oklab, #fff 22%, transparent);
@@ -724,3 +721,14 @@ kbd {
 .hx-sidebar__item--child { padding-left: 20px; color: var(--muted-foreground); }
 .hx-sidebar__rename { width: 100%; min-width: 0; background: var(--hover); color: var(--foreground); border: 1px solid var(--border-strong); border-radius: 6px; font: inherit; padding: 1px 4px; }
 .hx-more { color: var(--muted-foreground); }
+
+/* The window's own backdrop shows through the chrome and sidebar (design system); only the content card stays dark. */
+@media (min-width: 681px) {
+  .hx-window .hx-chrome, .hx-window .hx-toolbar, .hx-window .hx-strip { background: transparent !important; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; border-color: transparent; }
+  .hx-window .hx-sidebar { margin: 0 0 8px 8px; border: 0 !important; border-radius: 0; background: transparent !important; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
+  .hx-window .hx-content-col { margin: 0 8px 8px 8px; border-radius: 18px; overflow: hidden; background: var(--backdrop); }
+}
+
+/* Design-system .hx-window (loaded later) paints a glass fill; keep the gradient backdrop on top of it. */
+.hx-window { background: linear-gradient(180deg,#1d3a73 0%,#2a3566 28%,#4a3b63 62%,#5b3d4a 100%) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
+:root[data-theme="light"] .hx-window { background: linear-gradient(180deg,#9ec1ff 0%,#c9b8e8 60%,#f0c4b8 100%) !important; }
