@@ -41,10 +41,11 @@ const { buildAgentResponse } = require("./webarena/response");
 // HALO_WA_PROVIDER=claude (default, local `claude` login) or nvidia (hosted NIM;
 // NVIDIA_API_KEY comes from the environment and is passed only to the worker).
 const PROVIDER = process.env.HALO_WA_PROVIDER || "claude";
-if (!["claude", "nvidia"].includes(PROVIDER)) throw new RangeError("HALO_WA_PROVIDER must be claude or nvidia");
-const WORKER = path.resolve(__dirname, "..", "main", "harness", "providers", PROVIDER === "nvidia" ? "nvidia-planner-worker.js" : "claude-code-worker.js");
+if (!["claude", "nvidia", "codex"].includes(PROVIDER)) throw new RangeError("HALO_WA_PROVIDER must be claude, nvidia or codex");
+const WORKER = path.resolve(__dirname, "..", "main", "harness", "providers", ({ nvidia: "nvidia-planner-worker.js", codex: "codex-planner-worker.js" })[PROVIDER] || "claude-code-worker.js");
 const { DEFAULT_NVIDIA_MODEL, isNvidiaModel } = require("../main/harness/providers/nvidia-models");
-const isModelOf = PROVIDER === "nvidia" ? isNvidiaModel : isClaudeModel;
+const { isCodexModel } = require("../main/harness/providers/codex-models");
+const isModelOf = PROVIDER === "nvidia" ? isNvidiaModel : PROVIDER === "codex" ? isCodexModel : isClaudeModel;
 const APP_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_MODEL = process.env.HALO_WA_MODEL || (PROVIDER === "nvidia" ? DEFAULT_NVIDIA_MODEL : null);
 
@@ -68,28 +69,42 @@ function makePlanner(model) {
   });
 }
 
+
+// Parses the extraction reply: a JSON object (task names keys) or a JSON array.
+function parseExtracted(text) {
+  const source = String(text);
+  const start = source.search(/[\[{]/);
+  if (start < 0) return null;
+  const open = source[start];
+  const end = source.lastIndexOf(open === "[" ? "]" : "}");
+  if (end <= start) return null;
+  try {
+    const value = JSON.parse(source.slice(start, end + 1));
+    if (Array.isArray(value)) return value.every((item) => typeof item === "string" || typeof item === "number") ? value : null;
+    return value && typeof value === "object" ? value : null;
+  } catch { return null; }
+}
+
 // One tool-less model call: the task and the last page text in, a JSON array of
 // strings out. Returns null if it cannot produce one.
 async function extractAnswerNvidia({ intent, pageText }) {
-  const prompt = `Task: ${intent}\n\nFinal page text:\n${pageText.slice(0, 12000)}\n\nIf the task asks for information, reply with ONLY a JSON array of strings holding the answer values found on the page. If the page does not contain the answer, reply with []. No other text.`;
+  const prompt = `Task: ${intent}\n\nFinal page text:\n${pageText.slice(0, 12000)}\n\nIf the task asks for information, reply with ONLY the JSON the task asks for: a JSON object when the task names keys (use numbers for numeric values), otherwise a JSON array of the answer values (strings or numbers). If the page does not contain the answer, reply with []. No other text.`;
   try {
     const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(90000),
       headers: { "content-type": "application/json", authorization: `Bearer ${process.env.NVIDIA_API_KEY}` },
-      body: JSON.stringify({ model: DEFAULT_MODEL, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: 1024 }),
+      body: JSON.stringify({ model: DEFAULT_NVIDIA_MODEL, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: 1024 }),
     });
     if (!response.ok) return null;
     const text = (await response.json())?.choices?.[0]?.message?.content ?? "";
-    const match = String(text).match(/\[[\s\S]*\]/);
-    const parsed = JSON.parse(match ? match[0] : "");
-    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : null;
+    return parseExtracted(text);
   } catch { return null; }
 }
 
 function extractAnswer({ intent, pageText }) {
-  if (PROVIDER === "nvidia") return extractAnswerNvidia({ intent, pageText });
+  if (PROVIDER !== "claude") return extractAnswerNvidia({ intent, pageText });
   return new Promise((resolve) => {
-    const prompt = `Task: ${intent}\n\nFinal page text:\n${pageText.slice(0, 12000)}\n\nIf the task asks for information, reply with ONLY a JSON array of strings holding the answer values found on the page. If the page does not contain the answer, reply with []. No other text.`;
+    const prompt = `Task: ${intent}\n\nFinal page text:\n${pageText.slice(0, 12000)}\n\nIf the task asks for information, reply with ONLY the JSON the task asks for: a JSON object when the task names keys (use numbers for numeric values), otherwise a JSON array of the answer values (strings or numbers). If the page does not contain the answer, reply with []. No other text.`;
     const child = spawn("claude", ["-p", "--output-format", "text"], { stdio: ["pipe", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill(), 90000);
@@ -97,27 +112,48 @@ function extractAnswer({ intent, pageText }) {
     child.on("error", () => { clearTimeout(timer); resolve(null); });
     child.on("close", () => {
       clearTimeout(timer);
-      const match = out.match(/\[[\s\S]*\]/);
-      try { const parsed = JSON.parse(match ? match[0] : ""); resolve(Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : null); }
-      catch { resolve(null); }
+      resolve(parseExtracted(out));
     });
     child.stdin.end(prompt);
   });
 }
 
+// Loads a Playwright storage_state (from the benchmark's own login helper) into
+// the task's Electron session, so a logged-in task starts logged in.
+async function injectStorageState(electronSession, task, sites) {
+  const stateFile = process.env.HALO_WA_STATE_DIR && task.storage_state ? path.join(process.env.HALO_WA_STATE_DIR, path.basename(task.storage_state)) : null;
+  if (!stateFile) return;
+  const state = JSON.parse(await fs.readFile(stateFile, "utf8"));
+  for (const cookie of state.cookies || []) {
+    const host = String(cookie.domain || "").replace(/^\./, "");
+    const origin = Object.values(sites).find((url) => new URL(url).hostname === host) || `http://${host}`;
+    await electronSession.cookies.set({
+      url: origin, name: cookie.name, value: cookie.value, path: cookie.path || "/",
+      secure: false, httpOnly: !!cookie.httpOnly,
+      ...(cookie.expires && cookie.expires > 0 ? { expirationDate: cookie.expires } : {}),
+    }).catch(() => {});
+  }
+}
+
 async function runTask({ task, sites, arm, outDir, timeoutMs, createBrowser, har }) {
   const intent = fillSites(task.intent, sites);
-  const startUrl = fillSites((task.start_urls || [])[0] || "", sites);
+  const startUrl = fillSites((task.start_urls || [])[0] || task.start_url || "", sites);
   // The dataset keeps the operation under eval[].expected.task_type.
-  const taskType = task.task_type || (task.eval || []).map((entry) => entry?.expected?.task_type).find(Boolean) || "NAVIGATE";
+  // The original WebArena config has eval.eval_types: an answer is only asked
+  // for when the task has reference answers; otherwise it is judged by URL/DOM.
+  const originalType = task.eval && !Array.isArray(task.eval) && Array.isArray(task.eval.eval_types)
+    ? (task.eval.reference_answers && Object.keys(task.eval.reference_answers).length ? "RETRIEVE" : "NAVIGATE") : null;
+  const taskType = originalType || task.task_type || (Array.isArray(task.eval) ? task.eval : []).map((entry) => entry?.expected?.task_type).find(Boolean) || "NAVIGATE";
   const startedAt = performance.now();
-  const counts = { plannerCalls: 0, escalations: 0 };
+  const counts = { plannerCalls: 0, escalations: 0, userPrompts: 0, replyAnswers: 0 };
   let lastPageText = "";
+  let lastUrl = startUrl;
 
   const browser = await createBrowser();
   const observe = browser.observe.bind(browser);
   browser.observe = async (...args) => {
     const observation = await observe(...args);
+    if (typeof observation?.url === "string" && observation.url) lastUrl = observation.url;
     lastPageText = [observation?.text || "", ...(observation?.elements || []).map((item) => item.name || "")].join("\n");
     return observation;
   };
@@ -136,7 +172,12 @@ async function runTask({ task, sites, arm, outDir, timeoutMs, createBrowser, har
   const wrap = (inner) => ({
     warm: () => inner.warm?.(),
     close: () => inner.close(),
-    next: async (context, options) => { counts.plannerCalls += 1; return inner.next(context, options); },
+    next: async (context, options) => {
+      counts.plannerCalls += 1;
+      const proposal = await inner.next(context, options);
+      if (process.env.HALO_WA_TRACE) (counts.proposals ||= []).push(JSON.stringify(proposal?.proposal ?? proposal).slice(0, 260));
+      return proposal;
+    },
   });
   let counted = wrap(makePlanner(currentModel));
     const escalatePlanner = arm === "escalation" ? async () => {
@@ -162,33 +203,59 @@ async function runTask({ task, sites, arm, outDir, timeoutMs, createBrowser, har
     ...(escalatePlanner ? { escalatePlanner } : {}),
   });
 
+  let replyAnswer = null;
   let state = "unknown";
   let pauseReason = null;
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.stop().catch(() => {}); }, timeoutMs);
   try {
-    const snapshot = await controller.start();
+    let snapshot = await controller.start();
+    // No human in a benchmark: answer a need_user pause once per round with a
+    // fixed "decide yourself" amendment (max 3, counted in the result).
+    // For RETRIEVE, Halo delivers an answer to an information request as the
+    // need_user reason (the planner's `finish` has no answer field). Treat a
+    // need_user that yields an answer as the agent's reply, not as being stuck.
+    const takeReply = async () => {
+      if (taskType !== "RETRIEVE" || snapshot.state !== "paused" || snapshot.pauseReason !== "need_user") return false;
+      const reason = String(snapshot.needUserReason || "");
+      if (!reason.trim()) return false;
+      const found = await extractAnswer({ intent, pageText: `Agent reply: ${reason}\n\n${lastPageText}` });
+      if (!found || found.length === 0) return false;
+      replyAnswer = found; counts.replyAnswers += 1;
+      return true;
+    };
+    while (!(await takeReply()) && snapshot.state === "paused" && snapshot.pauseReason === "need_user" && counts.userPrompts < 3 && !timedOut) {
+      counts.userPrompts += 1;
+      (counts.questions ||= []).push(String(snapshot.needUserReason || "").slice(0, 300));
+      await controller.amend({ text: "No user is available to answer questions. Decide on your own using the best interpretation and continue; finish when the goal is reached.", supersedesConstraintIds: [], newConstraints: [], newCriteria: [] });
+      snapshot = await controller.resume();
+    }
     state = snapshot.state; pauseReason = snapshot.pauseReason ?? null;
+    if (replyAnswer) { state = "completed"; pauseReason = null; }
   } catch (error) {
     state = `error: ${String(error.message).slice(0, 120)}`;
   } finally {
     clearTimeout(timer);
   }
 
+  const trace = (await store.getEvents().catch(() => [])).filter((ev) => ev.type === "note" || ev.type === "action_outcome").slice(-14).map((ev) => ev.type === "note" ? `note:${String(ev.payload?.msg || "").slice(0, 80)}` : `out:${JSON.stringify(ev.payload).slice(0, 230)}`);
   const pendingApprovals = (controller.getSnapshot().approvalQueue || []).map((item) => `${item.action}: ${String(item.summary).slice(0, 160)}`);
-  let answer = null;
-  if (taskType === "RETRIEVE" && (state === "completed" || state === "awaiting_verification")) answer = await extractAnswer({ intent, pageText: lastPageText });
+  let answer = replyAnswer;
+  if (!answer && taskType === "RETRIEVE" && (state === "completed" || state === "awaiting_verification")) answer = await extractAnswer({ intent, pageText: lastPageText });
   const response = buildAgentResponse({ taskType, state, pauseReason, answer, timedOut });
 
   const dir = path.join(outDir, String(task.task_id));
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "agent_response.json"), JSON.stringify(response, null, 2));
   await fs.writeFile(path.join(dir, "network.har"), JSON.stringify(har.toHar()));
+  // Input for the original WebArena evaluators: the final answer string and URL.
+  const answerText = Array.isArray(answer) ? answer.join(", ") : answer && typeof answer === "object" ? JSON.stringify(answer) : "";
+  await fs.writeFile(path.join(dir, "original.json"), JSON.stringify({ task_id: task.task_id, answer: answerText, final_url: lastUrl, state, pauseReason, timedOut }));
   await counted.close().catch(() => {});
   await browser.dispose().catch(() => {});
   await store.close().catch(() => {});
   await fs.rm(storageRoot, { recursive: true, force: true }).catch(() => {});
-  return { task_id: task.task_id, arm, taskType, state, pauseReason, timedOut, ...(pendingApprovals.length ? { pendingApprovals } : {}), status: response.status, totalMs: Math.round(performance.now() - startedAt), ...counts };
+  return { task_id: task.task_id, arm, taskType, state, pauseReason, timedOut, ...(pendingApprovals.length ? { pendingApprovals } : {}), ...(process.env.HALO_WA_TRACE ? { trace } : {}), status: response.status, totalMs: Math.round(performance.now() - startedAt), ...counts };
 }
 
 async function main() {
@@ -199,7 +266,7 @@ async function main() {
   if (!["baseline", "escalation"].includes(arm)) throw new RangeError("HALO_WA_ARM must be baseline or escalation");
   const tasksFile = process.env.HALO_WA_TASKS;
   const outDir = path.resolve(process.env.HALO_WA_OUT || "out/webarena");
-  if (PROVIDER === "nvidia" && !process.env.NVIDIA_API_KEY) throw new Error("NVIDIA_API_KEY is required for HALO_WA_PROVIDER=nvidia");
+  if (PROVIDER !== "claude" && !process.env.NVIDIA_API_KEY) throw new Error("NVIDIA_API_KEY is required for answer extraction (nvidia and codex providers)");
   if (!tasksFile) throw new Error("HALO_WA_TASKS is required");
   const sites = JSON.parse(process.env.HALO_WA_SITES || "{}");
   const ids = process.env.HALO_WA_IDS ? new Set(process.env.HALO_WA_IDS.split(",").map((id) => id.trim())) : null;
@@ -217,6 +284,7 @@ async function main() {
       const partition = `halo-wa-${task.task_id}-${Date.now()}`;
       const har = createHarRecorder();
       har.attach(session.fromPartition(partition));
+      await injectStorageState(session.fromPartition(partition), task, sites);
       const result = await runTask({
         task, sites, arm, outDir, timeoutMs, har,
         createBrowser: async () => {

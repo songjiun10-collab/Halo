@@ -46,3 +46,10 @@ test("RETRIEVE needs an extracted answer array", () => {
   assert.deepEqual([ok.status, ok.retrieved_data, ok.error_details], ["SUCCESS", ["42"], null]);
   assert.throws(() => buildAgentResponse({ taskType: "WRITE", state: "completed" }), RangeError);
 });
+
+test("RETRIEVE accepts a keyed object answer (e.g. price range)", () => {
+  const r = buildAgentResponse({ taskType: "RETRIEVE", state: "completed", answer: { min: 3.5, max: 99 } });
+  assert.equal(r.status, "SUCCESS");
+  assert.deepEqual(r.retrieved_data, { min: 3.5, max: 99 });
+  assert.equal(buildAgentResponse({ taskType: "RETRIEVE", state: "completed", answer: {} }).status, "NOT_FOUND_ERROR");
+});

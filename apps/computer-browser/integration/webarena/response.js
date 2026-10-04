@@ -14,6 +14,8 @@ function buildAgentResponse({ taskType, state, pauseReason = null, answer = null
   if (timedOut) return { ...base, status: "UNKNOWN_ERROR", error_details: "run hit the time limit" };
   if (state === "completed" || state === "awaiting_verification") {
     if (taskType === "RETRIEVE") {
+      const isObject = answer && typeof answer === "object" && !Array.isArray(answer) && Object.keys(answer).length > 0;
+      if (isObject) return { ...base, status: "SUCCESS", retrieved_data: answer, error_details: null };
       if (!Array.isArray(answer) || answer.length === 0) return { ...base, status: "NOT_FOUND_ERROR", error_details: "finished without an extracted answer" };
       return { ...base, status: "SUCCESS", retrieved_data: answer.slice(0, MAX_ITEMS), error_details: null };
     }
