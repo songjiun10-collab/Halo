@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { HaloMark } from './Logo'
 import type { HostSettings } from '../session/api'
 import { activeModel, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, DEFAULT_NVIDIA_MODEL, mergeDiscoveredNvidia, PLANNER_MODELS } from '../session/claude-models'
 import { DEFAULT_EFFORT, type PlannerEffort } from '../session/planner-effort'
@@ -66,7 +67,7 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
   const head = (
     <header className="hx-settings__head">
       <button type="button" className="hx-settings__back" aria-label="Close settings" onClick={onClose}><Back /></button>
-      <h2>Settings</h2>
+      <h2><HaloMark className="hx-sheet__mark" /> Settings</h2>
     </header>
   )
   if (!settings) {

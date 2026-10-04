@@ -561,6 +561,7 @@ async function createWindow(socketPath, attachedClient = undefined) {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    icon: path.join(__dirname, "..", "assets", "icon.png"),
     // macOS: the window is real glass; the desktop behind it shows through the translucent chrome.
     ...(process.platform === "darwin" ? { vibrancy: "under-window", visualEffectState: "active", backgroundColor: "#00000000" } : {}),
     webPreferences: {
@@ -656,6 +657,7 @@ function startMemoryPolling() {
 applyPageTheme({ app, nativeTheme, env: process.env });
 
 app.whenReady().then(async () => {
+  try { app.dock?.setIcon(path.join(__dirname, "..", "assets", "icon.png")); } catch {}
   socketDir = makeSocketDir();
   const socketPath = path.join(socketDir, "approver.sock");
   approverProcess = spawnApprover(socketPath);

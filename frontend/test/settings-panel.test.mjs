@@ -52,7 +52,7 @@ test('the settings view shows every runtime setting with its current value', () 
 test('settings is a full panel with a back header, labelled sections and selectable cards', () => {
   const html = renderToStaticMarkup(React.createElement(SettingsView, { settings: base, saving: false, error: null, onChange: () => {}, onClose: () => {} }))
   assert.match(html, /class="hx-settings"/, 'a full panel, not the floating activity card')
-  assert.match(html, /class="hx-settings__head"[\s\S]*aria-label="Close settings"[\s\S]*<h2>Settings<\/h2>/)
+  assert.match(html, /class="hx-settings__head"[\s\S]*aria-label="Close settings"[\s\S]*<h2>(?:<svg[\s\S]*?<\/svg> )?Settings<\/h2>/)
   for (const label of ['Planner', 'What the agent may do', 'Running tasks']) assert.match(html, new RegExp(`class="hx-settings__label"[^>]*>${label}<`))
   assert.match(html, /class="hx-perm"[^>]*data-selected=""[^>]*aria-checked="true"[^>]*>[\s\S]*?Browse/, 'the selected permission is a card')
   assert.match(html, /role="radiogroup"[^>]*aria-label="Permission mode"/)

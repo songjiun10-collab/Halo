@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { LIM, applyRoomEvent, errText, type AgentRecord, type RoomApi, type RoomMessage, type RoomRound } from './agent-api'
 import { Avatar } from './AgentUi'
+import { HaloMark } from '../components/Logo'
 
 type Named = Pick<AgentRecord, 'id' | 'name' | 'avatar'>
 const IDLE: RoomRound = { active: false, turn: 0, speakerId: null }
@@ -48,7 +49,7 @@ export function TeamRoom({ api, teamId, agents, members = agents, archived, onOp
       .catch((e) => { if (live) setErr(errText(e)) })
     return () => { live = false; off() }
   }, [api, teamId])
-  useEffect(() => { end.current?.scrollIntoView?.({ block: 'nearest' }) }, [state.messages.length])
+  useEffect(() => { end.current?.scrollIntoView?.({ block: 'end', behavior: 'smooth' }) }, [state.messages.length, state.round.speakerId])
   const send = async () => {
     const text = draft.trim()
     if (!text || sending || archived) return
@@ -58,7 +59,7 @@ export function TeamRoom({ api, teamId, agents, members = agents, archived, onOp
   const stop = async () => { try { await api.stopRoomRound(teamId) } catch (e) { setErr(errText(e)) } }
   return <section className="hx-room hx-gl" aria-label="Team room">
     {state.messages.length ? <RoomTranscript messages={state.messages} agents={agents} round={state.round} onOpenTask={onOpenTask} />
-      : <p className="hx-ag__empty">Ask the team something. Members reply in turn.</p>}
+      : <p className="hx-ag__empty"><HaloMark className="hx-sheet__mark" /> Ask the team something. Members reply in turn.</p>}
     <div ref={end} />
     <p className="hx-ag__note">When the team agrees on work, it starts one task automatically. Anything with an effect still needs your approval.</p>
     {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
