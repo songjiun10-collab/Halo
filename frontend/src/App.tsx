@@ -4,7 +4,6 @@ import { ControllerChip } from './components/ControllerChip'
 import { HaloButton } from './components/HaloButton'
 import { HaloChat } from './components/HaloChat'
 import { HaloSheet } from './components/HaloSheet'
-import { Back, Forward } from './components/Icons'
 import { Notice } from './components/Notice'
 import { SettingsPanel } from './components/SettingsPanel'
 import { ShortcutsHelp } from './components/ShortcutsHelp'
@@ -61,12 +60,6 @@ export default function App() {
   }, [toast])
   const [seen, setSeen] = useState(0)
   const [dismissedNotice, setDismissedNotice] = useState<number | null>(null)
-  const [swipeHint, setSwipeHint] = useState<'back' | 'forward' | null>(null)
-  useEffect(() => {
-    if (!swipeHint) return
-    const id = window.setTimeout(() => setSwipeHint(null), 500)
-    return () => window.clearTimeout(id)
-  }, [swipeHint])
 
   // Surface a real backend failure once, as a toast, then clear it so it doesn't repeat.
   useEffect(() => {
@@ -179,9 +172,17 @@ export default function App() {
   }), [store, onNewTask, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp, toggleSettings, tab.id])
   useShortcuts(s, approval, shortcutHandlers)
 
+  // Safari-style swipe: the page you leave slides off in the swipe's direction. The native view
+  // can't be animated, so it is hidden for the slide while its still moves in its place.
+  const [swipeDir, setSwipeDir] = useState<'back' | 'forward' | null>(null)
+  useEffect(() => {
+    if (!swipeDir) return
+    const id = window.setTimeout(() => setSwipeDir(null), 340)
+    return () => window.clearTimeout(id)
+  }, [swipeDir])
   const trackpadHandlers = useMemo(() => ({
-    onBack: () => { void store.navigate({ type: 'back' }); setSwipeHint('back') },
-    onForward: () => { void store.navigate({ type: 'forward' }); setSwipeHint('forward') },
+    onBack: () => { setSwipeDir('back'); void store.navigate({ type: 'back' }) },
+    onForward: () => { setSwipeDir('forward'); void store.navigate({ type: 'forward' }) },
     onToggleOverview: toggleOverview,
   }), [store, toggleOverview])
   useTrackpad(!approval, overviewOpen, trackpadHandlers)
@@ -238,7 +239,7 @@ export default function App() {
   const settingsShown = usePresence(settingsOpen ? true : null)
 
   const nativeSurfaceVisible = ((!!s.activeTaskId && !!s.browser) || (!s.activeTaskId && s.directBrowser)) && !approval && !activityOpen && !chatOpen &&
-    !overviewOpen && !helpOpen && !settingsOpen && !noticeShown.item && !toastShown.item
+    !overviewOpen && !helpOpen && !settingsOpen && !noticeShown.item && !toastShown.item && !swipeDir
   // A native view draws above the DOM, so overlays hide it. A still of the page stays in the
   // slot meanwhile: taken while the page is still on screen, then the view is hidden.
   const [snapshot, setSnapshot] = useState<string | null>(null)
@@ -369,7 +370,7 @@ export default function App() {
                   aria-label="Page rendered in the isolated browser surface"
                   tabIndex={-1}
                 >
-                  {snapshot && !nativeSurfaceVisible && <img className="hx-snapshot" src={snapshot} alt="" aria-hidden="true" draggable={false} />}
+                  {snapshot && !nativeSurfaceVisible && <img className="hx-snapshot" data-swipe={swipeDir || undefined} src={snapshot} alt="" aria-hidden="true" draggable={false} />}
                 </main>
               ) : (
                 <Viewport
@@ -381,11 +382,6 @@ export default function App() {
                 />
               )}
               <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
-              {swipeHint && (
-                <span className={`hx-swipe hx-swipe--${swipeHint}`} aria-hidden="true">
-                  {swipeHint === 'back' ? <Back /> : <Forward />}
-                </span>
-              )}
             </div>
             {/* One Halo surface at a time: a surface a newer one supersedes cuts instantly rather
               than cross-fading underneath it, so the glass never stacks two deep. */}
