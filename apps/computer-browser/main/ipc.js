@@ -119,6 +119,7 @@ const CODED_CHANNELS = new Set([
 const ERROR_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
 
 function withErrorCode(error) {
+  if (!(typeof error?.code === "string" && ERROR_CODE_RE.test(error.code))) console.error("[ipc] handler failed:", error?.stack ?? error);
   const code = error?.code;
   if (typeof code !== "string" || !ERROR_CODE_RE.test(code)) throw error;
   const coded = new Error(`[${code}] ${error.message}`, { cause: error });
@@ -206,7 +207,7 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
       addHandler(channel, (event, ...args) => {
         const owner = findContext(event);
         if (!owner?.taskHost) return Promise.reject(new Error(`${channel}: rejected untrusted sender`));
-        if (!CODED_CHANNELS.has(channel)) return owner.taskHost[method](...args);
+        if (!CODED_CHANNELS.has(channel)) return Promise.resolve().then(() => owner.taskHost[method](...args)).catch((error) => { console.error(`[ipc] ${channel} failed:`, error?.stack ?? error); throw error; });
         return Promise.resolve().then(() => owner.taskHost[method](...args)).catch(withErrorCode);
       });
     }
