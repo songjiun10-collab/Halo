@@ -27,7 +27,7 @@ interface Props {
 
 export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onShare, onOverview, onActivity, onNavigate, onSettings, sidebarOpen, onToggleSidebar, controller, halo }: Props) {
   const url = currentUrl(tab)
-  const addressUrl = url.startsWith('halo://') ? '' : url
+  const addressUrl = url.startsWith('halo://') || url === 'about:blank' ? '' : url
   const [address, setAddress] = useState(addressUrl)
   useEffect(() => setAddress(addressUrl), [addressUrl])
   const submitAddress = (event: FormEvent) => {

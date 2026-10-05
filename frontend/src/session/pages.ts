@@ -4,6 +4,9 @@ import type { Tab } from './types'
 /** Stand-in page titles; a real page engine supplies these once it's wired in. */
 const titles: Record<string, string> = {
   [NEW_TAB_URL]: 'New tab',
+  // A page view that has not navigated yet (e.g. a task about to open its first page).
+  'about:blank': 'New tab',
+  '': 'New tab',
 }
 
 export const pageTitle = (url: string) => titles[url] ?? url
