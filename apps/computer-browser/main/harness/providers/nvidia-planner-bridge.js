@@ -2,7 +2,7 @@
 const contracts = require("../../../shared/harness-contracts");
 const { normalizeUsage } = require("../../../shared/usage");
 const { buildPrompt, buildRoomPrompt, isRoomTurn, parseRoomTurn, parseAndValidateProposal, stripCodeFence, MAX_CLI_STDOUT_BYTES } = require("./claude-code-bridge");
-const { DEFAULT_NVIDIA_MODEL, isNvidiaModel } = require("./nvidia-models");
+const { DEFAULT_NVIDIA_MODEL, isNvidiaModel, nvidiaReasoningKwargs } = require("./nvidia-models");
 const { getModelPromptGuidance } = require("./model-prompt-guidance");
 const ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions";
 const failure = (code) => Object.assign(new Error(`NVIDIA planner: ${code}`), { code });
@@ -30,7 +30,8 @@ class NvidiaPlannerBridge {
     const room = isRoomTurn(context);
     const promptGuidance = getModelPromptGuidance("nvidia", this._model, context.progress?.plannerEffort);
     const prompt = room ? buildRoomPrompt(context, promptGuidance) : buildPrompt(context, promptGuidance);
-    const body = JSON.stringify({ model: this._model, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: room ? ROOM_MAX_TOKENS : 8192 });
+    const reasoning = nvidiaReasoningKwargs(this._model, context.progress?.plannerEffort);
+    const body = JSON.stringify({ model: this._model, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: room ? ROOM_MAX_TOKENS : 8192, ...(reasoning ? { chat_template_kwargs: reasoning } : {}) });
     if (Buffer.byteLength(body) > contracts.MAX_PLANNER_FRAME_BYTES) throw failure("invalid_field");
     const controller = new AbortController(); this._abort = controller; this._usage = null;
     const cancel = () => controller.abort(failure("cancelled"));

@@ -99,3 +99,13 @@ test("the NVIDIA worker accepts a well-formed catalog-discovered model id, which
   assert.deepEqual(parseNvidiaWorkerArgs(["--model", "z-ai/glm-5.3-flash"]), { model: "z-ai/glm-5.3-flash" });
   assert.throws(() => parseNvidiaWorkerArgs(["--model", "not a model id"]));
 });
+
+test("planner effort maps to the model's reasoning knob; models without one send nothing extra", () => {
+  const { nvidiaReasoningKwargs } = require("../main/harness/providers/nvidia-models");
+  assert.deepEqual(nvidiaReasoningKwargs("z-ai/glm-5.3-flash", "medium"), { reasoning_effort: "low" });
+  assert.deepEqual(nvidiaReasoningKwargs("z-ai/glm-5.3-flash", "high"), { reasoning_effort: "high" });
+  assert.deepEqual(nvidiaReasoningKwargs("z-ai/glm-5.3-flash", "max"), { reasoning_effort: "max" });
+  assert.equal(nvidiaReasoningKwargs("deepseek-ai/deepseek-v4.1-flash", "medium"), null);
+  assert.deepEqual(nvidiaReasoningKwargs("deepseek-ai/deepseek-v4.1-flash", "high"), { thinking: true, reasoning_effort: "high" });
+  assert.equal(nvidiaReasoningKwargs("nvidia/nemotron-3-super-120b-a12b", "max"), null);
+});
