@@ -611,6 +611,13 @@ async function createWindow(socketPath, attachedClient = undefined) {
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
+  // A dead UI renderer leaves a blank grey window with nothing in the log;
+  // record why it went and bring the UI back instead of stranding the user.
+  win.webContents.on("render-process-gone", (_event, details) => {
+    console.error("[window] UI renderer gone:", JSON.stringify(details));
+    if (details.reason === "clean-exit") return;
+    setTimeout(() => { if (!win.isDestroyed()) win.webContents.reload(); }, 300);
+  });
   win.loadFile(path.join(__dirname, "..", "renderer", "dist", "index.html"));
   return win;
 }
@@ -655,6 +662,16 @@ function startMemoryPolling() {
 }
 
 applyPageTheme({ app, nativeTheme, env: process.env });
+
+// Process deaths (task views, hidden agent viewports, GPU) are otherwise silent.
+app.on("render-process-gone", (_event, wc, details) => {
+  let url = "";
+  try { url = wc.getURL(); } catch { /* webContents already torn down */ }
+  console.error("[app] render process gone:", url, JSON.stringify(details));
+});
+app.on("child-process-gone", (_event, details) => {
+  console.error("[app] child process gone:", JSON.stringify(details));
+});
 
 app.whenReady().then(async () => {
   try { app.dock?.setIcon(path.join(__dirname, "..", "assets", "icon.png")); } catch {}
