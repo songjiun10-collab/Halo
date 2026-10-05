@@ -352,6 +352,11 @@ export class SessionStore {
     if (this.state.tabs.length <= 1) return Promise.resolve(false)
     return this.directTabCommand('closeTab', () => this.api!.closeTab(tabId))
   }
+  /** Copy through the host clipboard; false when the host cannot (the renderer then tries its own). */
+  copyText = async (text: string) => {
+    if (!this.api?.copyText) return false
+    try { return await this.api.copyText(text) } catch { return false }
+  }
   newWindow = async () => {
     if (!this.api || this.state.busy) return false
     try { await this.api.newWindow(); return true }

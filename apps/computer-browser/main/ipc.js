@@ -3,6 +3,7 @@
 const { isTrustedSender } = require("./harness/trusted-sender");
 const { BackgroundRuntimeUi } = require("./harness/background-runtime-ui");
 const { captureVisibleSurface } = require("./surface-snapshot");
+const { clipboard } = require("electron");
 const registries = new WeakMap();
 
 // Exactly the method surface preload exposes as window.haloBrowser. No
@@ -191,6 +192,14 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
       return Promise.reject(new Error("halo:newWindow: rejected untrusted sender or unsupported window"));
     }
     return owner.onNewWindow();
+  });
+
+  // Share copies the page link here: the renderer's own clipboard needs a live user gesture and a permission.
+  addHandler("halo:copyText", (event, text) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:copyText: rejected untrusted sender"));
+    if (typeof text !== "string" || text.length === 0 || text.length > 4096) return Promise.reject(new Error("halo:copyText: invalid text"));
+    clipboard.writeText(text);
+    return Promise.resolve(true);
   });
 
   // A still of the showing page, painted under Halo overlays while the native view is hidden.

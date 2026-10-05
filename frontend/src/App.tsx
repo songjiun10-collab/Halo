@@ -122,13 +122,22 @@ export default function App() {
   const onShare = useCallback(async () => {
     const url = currentUrl(tab)
     if (url.startsWith('halo://')) { setToast('Open a web page to share it'); return }
-    try {
-      if (navigator.share) await navigator.share({ title: tabTitle(tab), url })
-      else { await navigator.clipboard.writeText(url); setToast('Link copied') }
-    } catch (err) {
-      if ((err as DOMException)?.name !== 'AbortError') setToast('Unable to share this page')
+    // The host clipboard first: it needs neither a user gesture nor a permission.
+    if (await store.copyText(url)) { setToast('Link copied'); return }
+    // Otherwise copy inside the click itself; awaiting anything first could spend the user gesture.
+    const field = document.createElement('textarea')
+    field.value = url
+    field.setAttribute('readonly', '')
+    field.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
+    document.body.appendChild(field)
+    field.select()
+    let copied = false
+    try { copied = document.execCommand('copy') } catch { copied = false } finally { field.remove() }
+    if (!copied) {
+      try { await navigator.clipboard.writeText(url); copied = true } catch { copied = false }
     }
-  }, [tab])
+    setToast(copied ? 'Link copied' : 'Unable to share this page')
+  }, [tab, store])
   const onNewWindow = useCallback(() => { void store.newWindow() }, [store])
   const leases = s.snapshot?.leases ?? []
   const [leaseNow, setLeaseNow] = useState(() => Date.now())

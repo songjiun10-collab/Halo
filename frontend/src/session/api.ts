@@ -95,6 +95,8 @@ export interface HaloBrowserApi {
   newWindow: () => Promise<{ opened: boolean }>
   /** Optional: older hosts lack it. */
   captureSurface?: () => Promise<string | null>
+  /** Optional: older hosts lack it. */
+  copyText?: (text: string) => Promise<boolean>
   setBrowserBounds: (bounds: BrowserViewport) => Promise<unknown>
   onEvent: (callback: (event: { snapshot: DirectBrowserSnapshot }) => void) => () => void
   createTask(input: GoalInput): Promise<{ taskId: string; snapshot: TaskSnapshot; goal: GoalSpec }>
