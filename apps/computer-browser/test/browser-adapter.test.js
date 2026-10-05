@@ -1029,3 +1029,11 @@ test("a page with its own text never triggers the PDF fetch", async () => {
   const observation = await new BrowserAdapter({ view }).observe();
   assert.equal(observation.text, "hello");
 });
+
+test("section headings stay in the observation after the element cap is full of earlier links", () => {
+  const links = Array.from({ length: 5 }, (_, i) => new FakeElement("a", { text: `link ${i}`, attrs: { href: `/l${i}` } }));
+  const heading = new FakeElement("h4", { text: "3.1.2. GPT-6 Sol" });
+  const observation = runObserveScriptAgainst(new FakeElement("body", { children: [...links, heading] }), { maxElements: 3 });
+  assert.equal(observation.elements.filter((entry) => entry.role === "link").length, 3);
+  assert.ok(observation.elements.some((entry) => entry.role === "heading" && entry.name === "3.1.2. GPT-6 Sol"));
+});

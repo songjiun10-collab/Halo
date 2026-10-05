@@ -40,6 +40,7 @@
 // maxTextBytes, which are unchanged.
 const MAX_NODES_VISITED = 3000;
 const MAX_ELEMENTS = 100; // section 6: "100개 element"
+const HEADING_RESERVE = 40; // extra headings kept after MAX_ELEMENTS is reached
 const MAX_TEXT_BYTES = 12 * 1024; // section 6: "text 12 KiB"
 // A PDF tab shows nothing to page scripts, so its text comes from the file.
 const MAX_PDF_TEXT_BYTES = 2 * MAX_TEXT_BYTES;
@@ -216,7 +217,10 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
           const role = roleOf(node);
           const isTextNode = ["P", "LI", "LABEL", "DT", "DD", "FIGCAPTION"].includes(node.tagName);
           const shouldInclude = role && !hidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
-          const name = shouldInclude && elements.length < ${maxElements} ? nameOf(node, role) : "";
+          // Headings get a small reserve past the element cap: on long articles the
+          // nav and table-of-contents links fill the cap before the first section title.
+          const withinCap = elements.length < ${maxElements} || (/^H[1-6]$/.test(node.tagName) && elements.length < ${maxElements} + ${HEADING_RESERVE});
+          const name = shouldInclude && withinCap ? nameOf(node, role) : "";
           // A visible leaf represented by its accessible name does not also
           // consume the free-text channel. This avoids sending button/link/
           // heading labels twice while preserving unstructured page copy.
@@ -228,7 +232,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
               textBytes += encodedBytes;
             }
           }
-          if (shouldInclude && elements.length < ${maxElements}) {
+          if (shouldInclude && withinCap) {
             const index = elements.length;
             let parent = node.parentElement;
             while (parent && !included.has(parent)) parent = parent.parentElement;
