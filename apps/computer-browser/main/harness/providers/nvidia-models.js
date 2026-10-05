@@ -33,5 +33,8 @@ const listNvidiaModels = () => [
   ...NVIDIA_MODELS.map((entry) => ({ id: entry.id, label: entry.label, discovered: false })),
   ...[...discovered].sort().map((id) => ({ id, label: id, discovered: true })),
 ];
+// The host validated the saved model against the catalog; a worker process has
+// no copy of the discovered list, so it accepts a well-formed id from its argv.
+const isNvidiaModelId = (model) => typeof model === "string" && ID_RE.test(model);
 const isNvidiaModel = (model) => NVIDIA_MODELS.some((entry) => entry.id === model) || (typeof model === "string" && discovered.has(model));
-module.exports = { NVIDIA_MODELS, DEFAULT_NVIDIA_MODEL, isNvidiaModel, setDiscoveredNvidiaModels, loadDiscoveredNvidiaModels, saveDiscoveredNvidiaModels, listNvidiaModels };
+module.exports = { isNvidiaModelId, NVIDIA_MODELS, DEFAULT_NVIDIA_MODEL, isNvidiaModel, setDiscoveredNvidiaModels, loadDiscoveredNvidiaModels, saveDiscoveredNvidiaModels, listNvidiaModels };

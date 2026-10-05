@@ -93,3 +93,9 @@ test("NVIDIA supports room turns and rejects oversized response bodies", async (
   const huge = new NvidiaPlannerBridge({ apiKey: "test-only", fetchFn: async () => new Response("x".repeat(1024 * 1024 + 1)) });
   await assert.rejects(huge.start({}), { code: "output_too_large" }); await huge.close();
 });
+
+test("the NVIDIA worker accepts a well-formed catalog-discovered model id, which only the host process knows", () => {
+  const { parseNvidiaWorkerArgs } = require("../main/harness/providers/nvidia-planner-worker");
+  assert.deepEqual(parseNvidiaWorkerArgs(["--model", "z-ai/glm-5.3-flash"]), { model: "z-ai/glm-5.3-flash" });
+  assert.throws(() => parseNvidiaWorkerArgs(["--model", "not a model id"]));
+});
