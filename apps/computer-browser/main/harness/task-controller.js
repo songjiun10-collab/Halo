@@ -25,6 +25,7 @@ const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal, isQ
 const { adaptiveEffort } = require("./planner-effort-policy");
 const { createRecoveryPolicy } = require("./recovery-policy");
 const { resolveTarget } = require("./screen-map");
+const { TaskBranchManager } = require("./task-branch-manager");
 const { classifyTarget } = require("./effect-classifier");
 const { buildContext } = require("./context-builder");
 const { ContextRefCatalog } = require("./context-refs");
@@ -232,6 +233,8 @@ class TaskController {
     noProgressThreshold,
     memoryStore,
     activityRecall,
+    branchRunner,
+    branchLimits,
     permissionMode = "browse",
     observeRetryDelayMs = OBSERVE_RETRY_DELAY_MS,
     maxRecoveries,
@@ -396,6 +399,16 @@ class TaskController {
     this._memoryMonitor = memoryMonitor || NOOP_MEMORY_MONITOR;
     this._memoryStore = memoryStore || null;
     this._activityRecall = typeof activityRecall === "function" ? activityRecall : null;
+    // Task Branches: read-only side reads while an approval waits. Off unless the
+    // host supplies a runner; the manager is the whole safety envelope.
+    this._branches = typeof branchRunner === "function"
+      ? new TaskBranchManager({
+        runner: branchRunner,
+        ...(branchLimits ?? {}),
+        onEvent: (kind, payload) => { void this._store.append({ type: "note", payload: { kind, ...payload } }).catch(() => {}); },
+        onChange: () => this._emit(),
+      })
+      : null;
     const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
     if (!PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_config", "permissionMode is invalid");
     this._permissionMode = permissionMode;
@@ -608,6 +621,7 @@ class TaskController {
       segment: { ...this._segment },
       criteriaStatus: [...this._criteriaStatus.entries()].map(([criterionId, v]) => ({ criterionId, ...v })),
       autoHandled: this._autoHandled,
+      branches: this._branches ? this._branches.list() : [],
       approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor, widen, leaseOffer }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null, widen: !!widen, leaseOffer: leaseOffer ?? null })),
       ...(this._task.pauseReason === "need_user" && this._needUserReason ? { needUserReason: this._needUserReason } : {}),
       leases: this._terminal()
@@ -796,8 +810,10 @@ class TaskController {
         const idx = this._approvalQueue.findIndex((q) => q.id === item.id);
         if (idx !== -1) this._approvalQueue.splice(idx, 1);
         if (isMcpItem(item)) item.mcp.settle({ allowed: false });
+        this._branches?.resolve(item.id, "cancelled");
       }
     }
+    if (finalState === "stopped") this._branches?.closeAll("stopped");
     // Stop and takeOver hand control back to the person: every lent
     // permission ends with them. Revoked before the drain so an in-flight
     // loop can no longer spend one (_useLease re-checks after its append).
@@ -1252,6 +1268,8 @@ class TaskController {
     if (index === -1) return this.getSnapshot();
     const [item] = this._approvalQueue.splice(index, 1);
     if (isMcpItem(item)) return this._approveMcp(item);
+    const stale = this._stopHappenedSince(item.epoch) || this._monotonicNow() >= item.deadline;
+    this._branches?.resolve(item.id, stale ? "expired" : "approved");
     const wasAwaitingApproval = !this._approvalQueue.some((q) => !isMcpItem(q)) && this._task.state === "awaiting_approval";
     if (wasAwaitingApproval) {
       this._task = { state: "running", pauseReason: null };
@@ -1295,6 +1313,7 @@ class TaskController {
     // there is no action lifecycle event to close out here, only the queue
     // entry to drop.
     const [item] = this._approvalQueue.splice(index, 1);
+    this._branches?.resolve(item.id, "rejected");
     if (isMcpItem(item)) {
       item.mcp.settle({ allowed: false });
       this._emit();
@@ -1869,6 +1888,10 @@ class TaskController {
         if (this._stopHappenedSince(epoch)) break;
         // Context Awareness: pages the user read that match this request. Best
         // effort and untrusted like any memory entry; a failure never pauses work.
+        if (this._branches) {
+          const merged = this._branches.takeMerged();
+          if (merged.length) customMemory = [...customMemory, ...merged];
+        }
         if (this._activityRecall) {
           try {
             const recalled = await this._activityRecall(this._goal.originalRequest ?? "");
@@ -2414,6 +2437,8 @@ class TaskController {
         });
         this._leaveActive();
         this._task = { state: "awaiting_approval", pauseReason: null };
+        // Independent reads the planner named run on a read-only side surface while the user decides.
+        this._branches?.offer({ approvalId: requestId, steps: proposal?.waitingWork, pendingOrigin: targetOrigin ?? null });
         await this._checkpoint();
         this._emit();
         return "stop_loop";

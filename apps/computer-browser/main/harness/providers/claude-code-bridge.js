@@ -135,6 +135,8 @@ const PROPOSAL_JSON_SCHEMA = Object.freeze({
     actions: { type: "array", items: { type: "object" } },
     reason: { type: "string" },
     evidenceIds: { type: "array", items: { type: "string" } },
+    // kind "actions" only: independent pages the host may read in the background while an approval waits.
+    waitingWork: { type: "array", maxItems: 3, items: { type: "object" } },
     // kind "send_message": a child posting to its team board (its parent).
     recipientTaskId: { type: "string" },
     messageKind: { type: "string" },
@@ -320,7 +322,10 @@ function buildPrompt(context, modelGuidance) {
     "                already present, verified, in context.progress.criteriaStatus).",
     "",
     'Field rules (a proposal with any other field for its kind is rejected outright):',
-    '  kind "actions"   -> only "actions" (no "reason", no "evidenceIds").',
+    '  kind "actions"   -> only "actions" (no "reason", no "evidenceIds"), plus an optional',
+    '                     "waitingWork": up to 3 {"url": "<https URL>", "purpose": "<why>"} pages that do NOT',
+    '                     depend on this batch. Only if a step needs the user\'s approval, the host reads them',
+    '                     read-only in the background while the user decides; omit it otherwise.',
     '  kind "replan" / "need_user" -> only "reason" (no "actions", no "evidenceIds").',
     '  kind "finish"    -> only "evidenceIds" (no "actions", no "reason").',
     "",

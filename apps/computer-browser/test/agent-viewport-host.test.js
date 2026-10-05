@@ -248,6 +248,14 @@ test("host-executed ensureChild() preserves the parent's session partition", () 
   assert.equal(win.opts.height, AGENT_HEIGHT);
 });
 
+test("isolated ensureChild() (Task Branches) never shares the parent's session partition", () => {
+  const { host, views } = setup();
+  host.ensureChild("parent-1", "branch-1", { assignedOrigin: "https://example.com", execution: "isolated" });
+  const partition = views[0].opts.webPreferences.partition;
+  assert.notEqual(partition, "halo-task-parent-1");
+  assert.equal(partition.startsWith("persist:"), false, "non-persistent: nothing survives the branch");
+});
+
 test("ensureChild() constructs its adapter at permissionMode observe, not overridable by the caller", async () => {
   const { host } = setup();
   const adapter = host.ensureChild("parent-1", "child-1", { assignedOrigin: "https://example.com" });

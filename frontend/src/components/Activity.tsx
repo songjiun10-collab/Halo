@@ -3,6 +3,8 @@ import { AGENT } from '../session/session'
 import type { Actor, SessionState } from '../session/types'
 import { ChildPlanPanel } from '../agent/ChildPlanPanel'
 
+const host = (url: string) => { try { return new URL(url).hostname } catch { return url } }
+
 const actorName: Record<Actor, string> = { claude: AGENT, you: 'You', halo: 'Halo' }
 
 interface Props {
@@ -49,6 +51,12 @@ export function Activity({ session, leaving, onClose }: Props) {
     <section id="hx-activity" className="hx-activity" data-leaving={leaving || undefined} inert={leaving} role="dialog" aria-label="Halo events" tabIndex={-1} ref={ref}>
       <p className="hx-activity__task">{session.task}</p>
       <ChildPlanPanel plan={session.childPlan} />
+      {(session.snapshot?.branches ?? []).filter((b) => b.state === 'running' || b.state === 'merged').map((b) => (
+        <p key={b.id} className="hx-activity__auto">
+          {b.state === 'running' ? 'Reading in the background while you decide' : 'Background reading added to the task'}
+          {b.steps[0] ? ` — ${b.steps[0].purpose || host(b.steps[0].url)}` : ''}
+        </p>
+      ))}
       {!!session.snapshot?.autoHandled && <p className="hx-activity__auto">{session.snapshot.autoHandled} {session.snapshot.autoHandled === 1 ? 'step' : 'steps'} ran without asking you.</p>}
       {notable.length === 0 ? (
         <p className="hx-activity__empty">Nothing needed you so far.</p>

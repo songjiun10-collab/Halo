@@ -1,5 +1,6 @@
 "use strict";
 
+const { createBranchRunner } = require("./branch-runner");
 const crypto = require("node:crypto");
 
 // TaskHost (Task 5): the multi-task coordinator behind the new IPC surface
@@ -519,6 +520,10 @@ class TaskHost {
       // never receive onChildPlan, which is exactly what prevents nested
       // child agents.
       onChildPlan: (proposal) => this._onChildPlan(store.taskId, store, proposal),
+      // Task Branches: read-only side reads while an approval waits (needs the hidden child surface).
+      ...(this._makeChildBrowser && !routine ? {
+        branchRunner: createBranchRunner({ makeBrowser: (branchId, origin) => this._makeChildBrowser(store.taskId, branchId, origin, "isolated") }),
+      } : {}),
       // Lets the parent's planner know whether a plan already runs, so it is
       // offered a split only when one could be accepted.
       readChildPlan: () => this._childCoordinator.getPlanSummary(store.taskId),

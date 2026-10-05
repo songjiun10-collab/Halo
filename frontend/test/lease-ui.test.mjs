@@ -62,3 +62,12 @@ test('expired leases are hidden', () => {
   const leases = [{ id: 'l1', action: 'navigate', origin: 'https://github.com', expiresAt: 100, usesLeft: 2 }]
   assert.equal(renderToStaticMarkup(React.createElement(LeaseChip, { leases, now: 100, agent: 'Atlas', onRevoke: noop })), '')
 })
+
+test('Activity names a running or merged background branch without leaking findings', async () => {
+  const { Activity } = await vite.ssrLoadModule('/src/components/Activity.tsx')
+  const branch = (state) => ({ id: 'b', approvalId: 'r', state, steps: [{ url: 'https://rival.test/p', purpose: 'compare prices' }], findings: 1, startedAt: 0 })
+  const render = (state) => renderToStaticMarkup(React.createElement(Activity, { leaving: false, onClose: noop, session: { task: 't', timeline: [], snapshot: { branches: [branch(state)] } } }))
+  assert.match(render('running'), /Reading in the background while you decide — compare prices/)
+  assert.match(render('merged'), /Background reading added to the task/)
+  assert.doesNotMatch(render('discarded'), /background/i)
+})

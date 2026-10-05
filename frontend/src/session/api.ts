@@ -39,6 +39,8 @@ export interface TaskSnapshot {
   approvalQueue: ApprovalRequest[]
   /** Steps that ran without asking the user (approver-only or lease). */
   autoHandled?: number
+  /** Read-only side reads running or finished while an approval waits. Findings stay host-side. */
+  branches?: TaskBranchSummary[]
 }
 export interface TaskSummary { taskId: string; originalRequest: string; state: TaskState; pauseReason: string | null; active: boolean; /** 1-based FIFO position while waiting for admission. */ queuePosition?: number }
 export interface TaskDetail { taskId: string; goal: GoalSpec; snapshot?: TaskSnapshot; active: boolean; recoveryReason?: string }
@@ -135,3 +137,12 @@ export interface HaloBrowserApi {
   onBackgroundRuntimeEvent(callback: (snapshot: BackgroundRuntimeSnapshot) => void): () => void
 }
 declare global { interface Window { haloBrowser?: HaloBrowserApi } }
+
+export interface TaskBranchSummary {
+  id: string
+  approvalId: string
+  state: 'running' | 'done' | 'failed' | 'aborted' | 'merged' | 'discarded'
+  steps: { url: string; purpose: string }[]
+  findings: number
+  startedAt: number
+}

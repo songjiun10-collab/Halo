@@ -937,6 +937,7 @@ function validateProposalEnvelope(proposal, label = "proposal", { maxActions } =
         "actions",
         "reason",
         "evidenceIds",
+        "waitingWork",
         ...CHILD_PLAN_FIELDS,
         ...SEND_MESSAGE_FIELDS,
     ], label);
@@ -998,6 +999,21 @@ function validateProposalEnvelope(proposal, label = "proposal", { maxActions } =
         }
         proposal.actions.forEach((a, i) => assertPlainObject(a, `${label}.actions[${i}]`));
         disallow(["reason", "evidenceIds", ...CHILD_PLAN_FIELDS, ...SEND_MESSAGE_FIELDS]);
+        // Task Branches: independent reads the host may run while an approval waits.
+        if (proposal.waitingWork !== undefined) {
+            if (!Array.isArray(proposal.waitingWork) || proposal.waitingWork.length > 3) {
+                throw new ContractError("invalid_field", `${label}.waitingWork must be an array of at most 3 items`);
+            }
+            proposal.waitingWork.forEach((w, i) => {
+                assertPlainObject(w, `${label}.waitingWork[${i}]`);
+                assertNoUnknownKeys(w, ["url", "purpose"], `${label}.waitingWork[${i}]`);
+                assertString(w.url, `${label}.waitingWork[${i}].url`, { maxChars: 2048 });
+                assertString(w.purpose, `${label}.waitingWork[${i}].purpose`, { maxChars: 200 });
+            });
+        }
+    }
+    if (proposal.kind !== "actions" && proposal.waitingWork !== undefined) {
+        throw new ContractError("invalid_shape", `${label} kind=${proposal.kind} must not include "waitingWork"`);
     }
     return proposal;
 }

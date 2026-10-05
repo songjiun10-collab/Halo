@@ -228,8 +228,8 @@ class AgentViewportHost {
   // -- Global Constraints: child policy is exactly observe+scroll, and this
   // is the one call site that constructs a child's adapter.
   ensureChild(parentTaskId, childId, { assignedOrigin, execution = "host" } = {}) {
-    if (execution !== "host" && execution !== "docker") {
-      const error = new TypeError("Child execution mode must be host or docker");
+    if (execution !== "host" && execution !== "docker" && execution !== "isolated") {
+      const error = new TypeError("Child execution mode must be host, docker or isolated");
       error.code = "invalid_child_execution";
       throw error;
     }
@@ -242,7 +242,8 @@ class AgentViewportHost {
       }
       return existing.adapter;
     }
-    const partition = execution === "docker" ? childBrowserPartition(childId) : `halo-task-${parentTaskId}`;
+    // "isolated" (Task Branches) and "docker" get a throwaway partition: no cookies from the parent.
+    const partition = execution === "docker" || execution === "isolated" ? childBrowserPartition(childId) : `halo-task-${parentTaskId}`;
     const { host, view } = this._createHiddenViewPair(partition);
     const adapter = new BrowserAdapter({ view, assignedOrigin, permissionMode: "observe" });
     this._childHosts.set(childId, { host, view, adapter, parentTaskId, assignedOrigin, execution });
