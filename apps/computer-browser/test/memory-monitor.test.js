@@ -67,7 +67,7 @@ test("parallel admission requires a fresh, fully measurable sample and conservat
   assert.deepEqual(monitor.canAdmitTask({ reserveBytes: mb(500) }).allowed, false);
   await monitor.sample();
   assert.equal(monitor.canAdmitTask({ reserveBytes: mb(500) }).allowed, true);
-  assert.equal(monitor.canAdmitTask({ reserveBytes: mb(1100) }).reason, "memory_budget_exceeded");
+  assert.equal(monitor.canAdmitTask({ reserveBytes: mb(1700) }).reason, "memory_budget_exceeded");
   now += 8_000;
   assert.equal(monitor.canAdmitTask({ reserveBytes: mb(100) }).reason, "memory_sample_stale");
 });
@@ -238,23 +238,23 @@ test("does not attribute a successful stale RSS lookup after the registered proc
 
 // --- Three-tier pressure level at 70/80/90% of the (<=1GB) cap.
 
-test("getPressureLevel reports normal/caution/pause/emergency at the right thresholds of the default 1.5GB cap", async () => {
+test("getPressureLevel reports normal/caution/pause/emergency at the right thresholds of the default 2GB cap", async () => {
   let total = 0;
   const monitor = new MemoryMonitor({ getAppMetrics: () => [{ pid: 1, type: "Browser", memory: { workingSetSize: total / 1024 } }] });
 
-  total = mb(1049);
+  total = mb(1399);
   await monitor.sample();
   assert.equal(monitor.getPressureLevel(), "normal");
 
-  total = mb(1051);
+  total = mb(1401);
   await monitor.sample();
   assert.equal(monitor.getPressureLevel(), "caution");
 
-  total = mb(1201);
+  total = mb(1601);
   await monitor.sample();
   assert.equal(monitor.getPressureLevel(), "pause");
 
-  total = mb(1351);
+  total = mb(1801);
   await monitor.sample();
   assert.equal(monitor.getPressureLevel(), "emergency");
 });
@@ -280,16 +280,16 @@ test("a lower configured limitBytes scales the 70/80/90% thresholds down with it
   assert.equal(monitor.getPressureLevel(), "caution");
 });
 
-test("constructing with limitBytes above 1,500,000,000 is rejected outright", () => {
+test("constructing with limitBytes above 2,000,000,000 is rejected outright", () => {
   assert.throws(
-    () => new MemoryMonitor({ getAppMetrics: () => [], limitBytes: 1_500_000_001 }),
+    () => new MemoryMonitor({ getAppMetrics: () => [], limitBytes: 2_000_000_001 }),
     MemoryMonitorError,
   );
 });
 
-test("setLimitBytes() also rejects raising the cap above 1,500,000,000", () => {
+test("setLimitBytes() also rejects raising the cap above 2,000,000,000", () => {
   const monitor = new MemoryMonitor({ getAppMetrics: () => [] });
-  assert.throws(() => monitor.setLimitBytes(2_000_000_000), MemoryMonitorError);
+  assert.throws(() => monitor.setLimitBytes(2_000_000_001), MemoryMonitorError);
   // Lowering it further is fine.
   monitor.setLimitBytes(mb(500));
 });
