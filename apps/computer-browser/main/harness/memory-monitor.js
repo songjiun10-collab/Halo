@@ -19,7 +19,7 @@
 // This does not excuse skipping real measurement or the pressure response;
 // it is a real, disclosed bound on what polling can promise.
 
-const DEFAULT_LIMIT_BYTES = 1_000_000_000; // decimal 1GB cap -- see class doc
+const DEFAULT_LIMIT_BYTES = 1_500_000_000; // decimal 1.5GB cap (raised from 1GB: one task page load measured ~910MB) -- see class doc
 const CAUTION_FRACTION = 0.7;
 const PAUSE_FRACTION = 0.8;
 const EMERGENCY_FRACTION = 0.9;
@@ -63,7 +63,7 @@ class MemoryMonitor {
       throw new MemoryMonitorError("invalid_field", "limitBytes must be a positive finite number");
     }
     if (limitBytes > DEFAULT_LIMIT_BYTES) {
-      throw new MemoryMonitorError("limit_too_high", `limitBytes ${limitBytes} exceeds the 1,000,000,000-byte hard cap`);
+      throw new MemoryMonitorError("limit_too_high", `limitBytes ${limitBytes} exceeds the 1,500,000,000-byte hard cap`);
     }
     this._limitBytes = limitBytes;
   }
