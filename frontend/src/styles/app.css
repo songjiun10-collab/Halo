@@ -785,3 +785,9 @@ section.hx-chat .hx-chat__thread { flex: 1 1 0; min-height: 60px; overflow-y: au
 .hx-sc:has(.hx-brand) { padding: 0; background: transparent; }
 .hx-sidebar__fav:has(.hx-brand), .hx-tab__fav:has(.hx-brand) { background: transparent; padding: 0; }
 .hx-model-row__mark:has(.hx-brand) { background: transparent; padding: 0; }
+
+/* Light theme: the window is real glass too; panels are frosted white, not opaque grey. */
+@media (min-width: 681px) {
+  :root[data-theme="light"] .hx-window .hx-content-col { background: rgba(255, 255, 255, 0.42); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); }
+  :root[data-theme="light"] .hx-window .hx-sidebar { background: rgba(255, 255, 255, 0.28) !important; border-color: rgba(255, 255, 255, 0.5) !important; }
+}
