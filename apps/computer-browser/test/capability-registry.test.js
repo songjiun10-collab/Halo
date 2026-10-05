@@ -17,8 +17,11 @@ test("registry is a closed, versioned allowlist with only implemented adapters a
   });
   assert.equal(getCapabilityProfile("routine").available, true);
   assert.equal(getCapabilityProfile("multi_agent").available, true);
-  assert.equal(getCapabilityProfile("research").available, false);
-  assert.equal(getCapabilityProfile("research").reasonCode, "capability_unavailable");
+  assert.equal(getCapabilityProfile("research").available, true);
+  assert.deepEqual(getCapabilityProfile("research").adapters, [
+    { capabilityId: "browser", adapterId: "planner-browser", adapterVersion: 1 },
+    { capabilityId: "research", adapterId: "source-grounded-playbook", adapterVersion: 1 },
+  ]);
   assert.deepEqual(getCapabilityProfile("computer_use"), {
     id: "computer_use", available: true, dependencies: ["browser", "computer_use"],
     adapters: [

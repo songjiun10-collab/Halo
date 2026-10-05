@@ -41,6 +41,9 @@
 const MAX_NODES_VISITED = 3000;
 const MAX_ELEMENTS = 100; // section 6: "100개 element"
 const MAX_TEXT_BYTES = 12 * 1024; // section 6: "text 12 KiB"
+// A PDF tab shows nothing to page scripts, so its text comes from the file.
+const MAX_PDF_TEXT_BYTES = 2 * MAX_TEXT_BYTES;
+const { extractPdfText, formatPdfObservationText, looksLikePdfUrl } = require("./pdf-text");
 const NAVIGATION_TIMEOUT_MS = 30000; // matches control-api.js's existing bound
 const { randomUUID } = require("node:crypto");
 const INTERACTION_WORLD_ID = 1001;
@@ -645,9 +648,29 @@ class BrowserAdapter {
       }),
       at: this._now(),
     };
+    const pdfText = await this._readPdfTextIfEmpty(wc, raw);
+    if (pdfText) observation.text = pdfText;
     this._visualBinding = null;
     this._latestObservation = { id: observation.id, documentEpoch: observation.documentEpoch, url: observation.url };
     return observation;
+  }
+
+  // The PDF viewer leaves the document empty. Only an empty page, or a URL that
+  // names a .pdf, is worth one extra request; the file is checked for the PDF
+  // signature before it is parsed, so any other empty page costs one discarded fetch.
+  async _readPdfTextIfEmpty(wc, raw) {
+    const fetchImpl = typeof wc.session?.fetch === "function" ? (url, init) => wc.session.fetch(url, init) : null;
+    if (!fetchImpl || typeof raw?.url !== "string") return "";
+    const empty = (!raw.text || !raw.text.trim()) && Array.isArray(raw.elements) && raw.elements.length === 0;
+    if (!empty && !looksLikePdfUrl(raw.url)) return "";
+    try {
+      const result = await extractPdfText(raw.url, { fetchImpl });
+      if (process.env.HALO_DEBUG_ACTIONS) console.log(`[browser-adapter] pdf text url=${raw.url} pages=${result?.pageCount ?? "none"} scanned=${result?.scanned ?? "-"}`);
+      return result ? formatPdfObservationText(result, { maxBytes: MAX_PDF_TEXT_BYTES }) : "";
+    } catch {
+      // Reading is best effort: a failure leaves the observation as it was.
+      return "";
+    }
   }
 
   // Text computer use: viewport-normalized boxes for the current observation's

@@ -49,11 +49,12 @@ const REGISTRY = deepFreeze({
     },
     research: {
         id: "research",
-        available: false,
-        reasonCode: "capability_unavailable",
-        reason: "source identity and evidence verification are not implemented",
+        available: true,
         dependencies: ["browser", "research"],
-        adapters: [],
+        adapters: [
+            { capabilityId: "browser", adapterId: "planner-browser", adapterVersion: 1 },
+            { capabilityId: "research", adapterId: "source-grounded-playbook", adapterVersion: 1 },
+        ],
     },
     routine: {
         id: "routine",

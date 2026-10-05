@@ -1011,3 +1011,21 @@ test("execute(scroll) that never returns fails as scroll_failed instead of hangi
   const result = await adapter.execute({ type: "scroll", direction: "down" });
   assert.deepEqual([result.status, result.errorCode], ["failed", "scroll_failed"]);
 });
+
+test("an empty page that is really a PDF gets its text from the file", async () => {
+  const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length 41 >>\nstream\nBT /F1 12 Tf 20 100 Td (card text) Tj ET\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\ntrailer\n<< /Size 6 /Root 1 0 R >>\n%%EOF\n", "latin1");
+  const requested = [];
+  const view = makeFakeView({ getURL: () => "https://example.com/card", executeJavaScript: async () => ({ url: "https://example.com/card", title: "", text: "", elements: [] }) });
+  view.webContents.session = { fetch: async (url) => { requested.push(url); return new Response(pdf, { headers: { "content-type": "application/pdf" } }); } };
+  const adapter = new BrowserAdapter({ view });
+  const observation = await adapter.observe();
+  assert.deepEqual(requested, ["https://example.com/card"]);
+  assert.match(observation.text, /card text/);
+});
+
+test("a page with its own text never triggers the PDF fetch", async () => {
+  const view = makeFakeView({ getURL: () => "https://example.com/", executeJavaScript: async () => ({ url: "https://example.com/", title: "T", text: "hello", elements: [] }) });
+  view.webContents.session = { fetch: async () => { throw new Error("must not fetch"); } };
+  const observation = await new BrowserAdapter({ view }).observe();
+  assert.equal(observation.text, "hello");
+});

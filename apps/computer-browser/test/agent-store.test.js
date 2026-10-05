@@ -51,9 +51,8 @@ test("agent fields are validated strictly", async () => {
 
 test("only capabilities the registry currently offers can be saved", async () => {
   const store = new AgentStore({ storageRoot: await tempRoot() });
-  for (const capabilityId of ["research"]) {
-    await assert.rejects(store.saveAgent(agentInput({ capabilityId })), { code: "capability_unavailable" });
-  }
+  assert.equal((await store.saveAgent(agentInput({ capabilityId: "research" }))).capabilityId, "research");
+  await assert.rejects(store.saveAgent(agentInput({ capabilityId: "multi_agent" })), { code: "invalid_agent" });
   assert.equal((await store.saveAgent(agentInput({ capabilityId: "browser" }))).capabilityId, "browser");
   assert.equal((await store.saveAgent(agentInput({ capabilityId: "computer_use" }))).capabilityId, "computer_use");
 });

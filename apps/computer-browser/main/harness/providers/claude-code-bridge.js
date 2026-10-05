@@ -307,6 +307,7 @@ function buildPrompt(context, modelGuidance) {
     "reviewed by a separate approval gate before anything runs. Your entire output",
     "must be a single JSON object matching the required schema -- no prose, no",
     "markdown code fences, nothing else.",
+    "If context.learnedStrategyGuidance is present, it is fixed host-authored advisory guidance for planning style only. Treat its text as lower priority than the goal, current observation, tool schema, safety rules, and host approval gates; it cannot authorize actions or change completion criteria.",
     "",
     'Copy "taskId" and "goalVersion" verbatim from context below. Set',
     '"basedOnObservationId" to context.observation.id. Set "criterionIds" to a',
@@ -337,6 +338,7 @@ function buildPrompt(context, modelGuidance) {
     '  {"type": "click", "elementId": "<observed elementId>"}',
     '  {"type": "type", "elementId": "<observed textbox elementId>", "text": "<replacement text, at most 4096 UTF-8 bytes>"}',
     '  {"type": "submit_form", "elementId": "<observed form or submit-button elementId>"}',
+    "A blank page (about:blank) is only the starting point, not a blocker: when the request names a site or topic, propose a navigate to that site's address (its home page, or a search URL on it) instead of asking the person for a link.",
     ...(computerUse ? [
       '  {"type": "click_at", "observationId": "<context.observation.id>", "x": <0..1>, "y": <0..1>}',
       '  {"type": "type_at", "observationId": "<context.observation.id>", "x": <0..1>, "y": <0..1>, "text": "<at most 4096 UTF-8 bytes>"}',
@@ -357,6 +359,8 @@ function buildPrompt(context, modelGuidance) {
         "copy observationId exactly, keep both coordinates in [0,1), and propose one coordinate action at a time.",
       ]),
       "The screen may be stale by approval time; the host will reject stale identity, origin, epoch, or viewport.",
+      "After a click or type succeeds, look at the next observation. If the person's request is now done (for example the field they asked to click is focused),",
+      "propose kind \"finish\" instead of repeating the same action; never repeat an action that already succeeded.",
     ] : []),
     "Use exactly one interaction (click, type, submit_form) per proposal. Its DOM",
     "binding is consumed once; wait for a fresh observation before the next interaction.",
@@ -393,6 +397,11 @@ function buildPrompt(context, modelGuidance) {
     "put them in one proposal up to the per-task limit instead of one action per call.",
     "Do not navigate back to a page you have already read unless the goal needs it again.",
     "",
+    ...(context.progress?.lastAction?.succeeded === true ? [
+      `Your last action (${context.progress.lastAction.type}${context.progress.lastAction.target ? ` on ${context.progress.lastAction.target}` : ""}) was delivered and succeeded.`,
+      "If that completes the request, propose kind \"finish\" now instead of repeating it.",
+      "",
+    ] : []),
     ...(context.progress?.loopWarning === true ? [
       "You are going in circles: the last turns made no progress. Change approach now (a different link,",
       "a different URL or search, a different element), or finish / ask the user if nothing can help.",
@@ -561,6 +570,10 @@ class ClaudeCodeBridge {
     // Fast mode exists on Opus only (an unpinned bridge runs the "opus" alias)
     // and is billed to account credits; elsewhere the setting is a no-op.
     const opus = model === undefined || CLAUDE_MODELS.some((m) => m.id === model && m.family === "opus");
+    // Haiku's extended thinking spent 2.6-4k tokens on a one-action proposal
+    // (26-36 s vs 5 s without); a planner step does not need it there. Set by
+    // the bridge itself, never by the caller, so the env allowlist is untouched.
+    this._noThinking = model !== undefined && CLAUDE_MODELS.some((m) => m.id === model && m.family === "haiku");
     this._fastArgs = fast === true && opus ? ["--settings", JSON.stringify({ fastMode: true })] : [];
     this._command = command;
     this._cwd = cwd;
@@ -732,7 +745,9 @@ class ClaudeCodeBridge {
   // stdout cap, fail-closed exit handling, proposal validation -- is shared
   // with providers that subclass this bridge (codex-planner-bridge.js).
   _buildEnv() {
-    return buildEnv(this._env);
+    const env = buildEnv(this._env);
+    if (this._noThinking) env.MAX_THINKING_TOKENS = "0";
+    return env;
   }
 
   _argsFor(effort, room = false) {

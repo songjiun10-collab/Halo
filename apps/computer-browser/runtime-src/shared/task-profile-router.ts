@@ -22,7 +22,7 @@ const DURATION_RULES = Object.freeze({
   long: Object.freeze(["long-running", "long task", "extended task", "장기 작업", "오래 걸리는 작업"]),
 });
 const CAPABILITY_RULES = Object.freeze({
-  research: Object.freeze(["research", "find sources", "cite sources", "compare sources", "조사해", "출처 찾아", "출처를 찾아", "근거를 인용", "자료 비교"]),
+  research: Object.freeze(["research", "find sources", "cite sources", "compare sources", "조사해", "출처 찾아", "출처를 찾아", "근거를 인용", "자료 비교", "근거 url", "신뢰할 만한 출처", "출처와 함께"]),
   computer_use: Object.freeze(["computer use", "use the mouse", "use the keyboard", "screenshot coordinates", "컴퓨터 유즈", "마우스로", "키보드로", "스크린샷 좌표", "좌표 클릭"]),
   multi_agent: Object.freeze(["parallel agents", "sub-agents", "delegate to agents", "병렬 에이전트", "서브 에이전트", "에이전트에게 분담"]),
 });

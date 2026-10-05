@@ -21,7 +21,7 @@ Decision: Mac app download. Packaging, signing and notarization are excluded for
 - Decide default permission mode (Full vs Interact). Beta users should not start in Full.
 - Quit behavior: closing the window keeps the app alive on macOS, and the quit prompt hides behind windows. Choose A (close window quits) or B (prompt always in front).
 - Memory budget is now 2GB (was 1.5GB, originally 1GB). A heavy page such as namu.wiki still paused the task at 1.5GB. Say so in the beta notes; consider reducing the per-task page cost later. `HALO_DEBUG_ACTIONS=1` logs `[memory-pause]` with the measured total and unmeasurable processes, to find out why a pause fired below the threshold I saw in RSS.
-- "Research" tasks (for example "조사해서 요약") fail at creation: `research capability is not available`. Either hide that wording route or add the capability.
+- Research mode (lightweight, 2026-10-05): `research` capability is now available (browser adapter + `source-grounded-playbook`); the playbook tells the planner to stop browsing after 2-3 sources and answer with source URLs. Not yet live-verified with a real planner. Strict mode (source identity / evidence verification per claim) is still to design.
 - Real Codex and Antigravity logos (user SVGs).
 - Dark-theme translucency check; merged approval cards; finish-card evidence summary.
 - Untested by hand: Resume agent, effort slider reset, "In parallel", Go with real typing, clipboard after Share, swipe animation.

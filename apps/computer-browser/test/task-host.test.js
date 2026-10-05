@@ -760,17 +760,13 @@ test("createTask resolves and durably records the profile before browser or plan
   assert.equal(observedAtConstruction.length, 1);
 });
 
-test("unavailable or invalid routing creates no task store and constructs no resources", async () => {
+test("invalid routing creates no task store and constructs no resources", async () => {
   const storageRoot = await mkTempRoot();
   let resources = 0;
   const host = makeHost(storageRoot, {
     makeBrowser: () => { resources += 1; throw new Error("unexpected browser construction"); },
     makePlanner: () => { resources += 1; throw new Error("unexpected planner construction"); },
   });
-  await assert.rejects(() => host.createTask(
-    { originalRequest: "inspect the page" },
-    { requestedCapabilityProfile: "research" },
-  ), { code: "capability_unavailable" });
   await assert.rejects(() => host.createTask(
     { originalRequest: "inspect the page" },
     { requestedDurationProfile: "Long" },
