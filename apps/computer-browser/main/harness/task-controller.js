@@ -1051,6 +1051,10 @@ class TaskController {
   }
 
   async _pauseForMemoryPressure(pressure) {
+    if (process.env.HALO_DEBUG_ACTIONS) {
+      const sample = this._memoryMonitor.getLastSample?.();
+      console.error("[memory-pause]", pressure, sample ? `${Math.round(sample.totalBytes / 1048576)}MB unmeasurable=${JSON.stringify(sample.unmeasurable)}` : "no sample");
+    }
     if (pressure === "emergency") {
       await this._pauseForMemoryEmergency();
     } else {
@@ -2032,6 +2036,7 @@ class TaskController {
               maxActionsPerProposal: this._maxActionsPerProposal,
               ...(this._harnessProfile === "fast" ? { fastMode: true } : {}),
               ...(this._loopHint ? { loopWarning: true } : {}),
+              ...(this._lastActionNote ? { lastAction: this._lastActionNote } : {}),
               ...(this._scrollStreak.count >= 3 ? { scrollStreak: this._scrollStreak.count } : {}),
               ...(this._errorUrls.length > 0 ? { errorUrls: [...this._errorUrls] } : {}),
               mcp: { enabled: this._mcpAvailableToPlanner(),
@@ -2617,6 +2622,16 @@ class TaskController {
     this._budgets.actionsUsed += 1;
     this._lastActionType = action.type;
     this._lastActionStatus = result.status;
+    // What the last action did, in the host's words: "ok" alone left a small
+    // planner unsure a click had worked, so it repeated the same click.
+    if (action.type === "click" || action.type === "click_at") {
+      const el = action.type === "click" ? this._lastObservation?.elements?.find((e) => e.elementId === action.elementId) : null;
+      const hit = action.type === "click_at" && this._screenTargets ? resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y)) : null;
+      const target = el ? `${el.role} ${JSON.stringify(String(el.name ?? "").slice(0, 60))}` : hit ? `${hit.role} ${JSON.stringify(String(hit.name ?? "").slice(0, 60))}` : null;
+      this._lastActionNote = result.status === "ok" ? { type: action.type, target, succeeded: true } : { type: action.type, target, succeeded: false };
+    } else {
+      this._lastActionNote = undefined;
+    }
     this._easyStreak = result.status === "ok" && ["navigate", "follow_link"].includes(action.type) ? this._easyStreak + 1 : 0;
     // durable:false: the NEXT action_started's own durable append (same
     // loop, common case) or the checkpoint at whatever pause/stop follows
@@ -2626,7 +2641,16 @@ class TaskController {
     // sees an open action_started with no outcome and reports
     // execution_uncertain, the same fail-closed result as today; it never
     // reports success for something that did not durably complete.
-    if (result.status !== "ok" && process.env.HALO_DEBUG_ACTIONS) console.error("[action-fail]", action.type, JSON.stringify(action).slice(0, 200), result.errorCode);
+    if (process.env.HALO_DEBUG_ACTIONS) {
+      if (result.status !== "ok") console.error("[action-fail]", action.type, JSON.stringify(action).slice(0, 200), result.errorCode);
+      else if (action.type === "click") {
+        const el = this._lastObservation?.elements?.find((e) => e.elementId === action.elementId);
+        console.error("[action-ok] click", action.elementId, el ? `${el.role} ${JSON.stringify(el.name)}` : "unknown element");
+      } else if (action.type === "click_at" || action.type === "type_at") {
+        const hit = this._screenTargets ? resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y)) : null;
+        console.error("[action-ok]", action.type, `(${action.x},${action.y})`, hit ? `${hit.role} ${JSON.stringify(hit.name)}` : "no mapped control");
+      }
+    }
     await this._store.append({ type: "action_outcome", payload: { actionId, status: result.status } }, { durable: false });
     return { ...result, actionId, action, descriptor };
   }
