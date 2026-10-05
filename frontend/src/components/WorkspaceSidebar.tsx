@@ -1,3 +1,4 @@
+import { waitReasonLabel } from '../session/wait-reason'
 import { BrandIcon, brandFor } from './BrandIcon'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Plus } from './Icons'
@@ -70,7 +71,7 @@ function TaskButton({ task, active, onClick, child }: { task: TaskSummary; activ
       <span className="hx-sidebar__fav" aria-hidden="true">{task.originalRequest.trim().slice(0, 1) || '·'}</span>
       <span className="hx-sidebar__task-copy">
         <span className="hx-sidebar__task-title">{task.originalRequest}</span>
-        <small className="hx-sidebar__task-state">{task.state === 'paused' && task.pauseReason === 'need_user' ? 'Needs your reply' : stateLabel[task.state]}</small>
+        <small className="hx-sidebar__task-state">{task.state === 'paused' && task.pauseReason === 'need_user' ? 'Needs your reply' : task.state === 'queued' ? waitReasonLabel(task.waitReason) ?? stateLabel[task.state] : stateLabel[task.state]}</small>
       </span>
     </button>
   )

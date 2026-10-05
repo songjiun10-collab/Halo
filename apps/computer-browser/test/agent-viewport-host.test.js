@@ -45,7 +45,10 @@ function fakeCreateWindow() {
     const win = {
       opts,
       destroyed: false,
-      contentView: { addChildView: (v) => children.push(v) },
+      contentView: {
+        addChildView: (v) => children.push(v),
+        removeChildView: (v) => { const i = children.indexOf(v); if (i >= 0) children.splice(i, 1); },
+      },
       children,
       destroy() { this.destroyed = true; },
     };
@@ -72,7 +75,7 @@ test("ensure() creates a hidden, fixed 1440x900, never-shown host + view with th
   assert.equal(win.opts.show, false);
   assert.equal(win.opts.width, AGENT_WIDTH);
   assert.equal(win.opts.height, AGENT_HEIGHT);
-  assert.equal(win.opts.webPreferences.partition, "halo-task-task-1");
+  assert.equal(win.opts.webPreferences.partition, undefined, "the shared window carries no partition; each view does");
   assert.equal(win.opts.webPreferences.sandbox, true);
   assert.equal(win.opts.webPreferences.contextIsolation, true);
   assert.equal(win.opts.webPreferences.nodeIntegration, false);
@@ -167,7 +170,7 @@ test("different tasks get isolated hidden views with distinct session partitions
   const { host, views, windows } = setup();
   host.ensure("task-a");
   host.ensure("task-b");
-  assert.equal(windows.length, 2);
+  assert.equal(windows.length, 1, "agent views share one hidden window");
   assert.equal(views.length, 2);
   assert.notEqual(views[0].opts.webPreferences.partition, views[1].opts.webPreferences.partition);
 });
@@ -241,7 +244,6 @@ test("host-executed ensureChild() preserves the parent's session partition", () 
   assert.equal(views.length, 1);
   const [win] = windows;
   const [view] = views;
-  assert.equal(win.opts.webPreferences.partition, "halo-task-parent-1");
   assert.equal(view.opts.webPreferences.partition, "halo-task-parent-1");
   assert.equal(win.opts.show, false);
   assert.equal(win.opts.width, AGENT_WIDTH);
@@ -284,10 +286,10 @@ test("host-executed sibling children get distinct views while retaining the pare
   const { host, views, windows } = setup();
   host.ensureChild("parent-1", "child-1", { assignedOrigin: "https://a.example" });
   host.ensureChild("parent-1", "child-2", { assignedOrigin: "https://b.example" });
-  assert.equal(windows.length, 2);
+  assert.equal(windows.length, 1);
   assert.equal(views.length, 2);
   assert.equal(views[0].opts.webPreferences.partition, views[1].opts.webPreferences.partition);
-  assert.notEqual(windows[0], windows[1], "each child still gets its own distinct hidden view/window");
+  assert.notEqual(views[0], views[1], "each child still gets its own distinct hidden view");
 });
 
 test("Docker-selected ensureChild() uses an isolated in-memory partition per child", () => {
@@ -450,4 +452,39 @@ test("image-mode capture also returns host-side screen targets for click classif
   assert.equal(visual.screenTargets.length, 1);
   assert.equal(visual.screenTargets[0].name, "Delete");
   await visual.attachment.dispose();
+});
+
+test("every agent view lives in one shared hidden window", () => {
+  const { host, windows, views } = setup();
+  host.ensure("task-a");
+  host.ensure("task-b");
+  host.ensureChild("task-a", "child-1", { assignedOrigin: "https://example.com", execution: "host" });
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].children.length, 3);
+  assert.equal(views.length, 3);
+  assert.equal(windows[0].opts.show, false);
+  assert.equal(windows[0].opts.width, AGENT_WIDTH);
+  assert.equal(windows[0].opts.height, AGENT_HEIGHT);
+});
+
+test("disposing one view keeps the shared window; disposing the last one destroys it", async () => {
+  const { host, windows } = setup();
+  host.ensure("task-a");
+  host.ensure("task-b");
+  await host.dispose("task-a");
+  assert.equal(windows[0].destroyed, false);
+  assert.equal(windows[0].children.length, 1);
+  await host.dispose("task-b");
+  assert.equal(windows[0].destroyed, true);
+});
+
+test("a view created after the shared window was destroyed gets a fresh window", async () => {
+  const { host, windows } = setup();
+  host.ensure("task-a");
+  await host.dispose("task-a");
+  host.ensure("task-b");
+  assert.equal(windows.length, 2);
+  assert.equal(windows[0].destroyed, true);
+  assert.equal(windows[1].destroyed, false);
+  assert.equal(windows[1].children.length, 1);
 });

@@ -29,6 +29,9 @@ class FakeWebContents extends EventEmitter {
   getURL() { return this.url; }
   getTitle() { return this.url ? new URL(this.url).hostname : ""; }
   isLoading() { return false; }
+  close() { this.closed = true; }
+  isCurrentlyAudible() { return this.audible === true; }
+  isAudioMuted() { return this.muted === true; }
   stop() {}
   reload() {}
   executeJavaScript() { return Promise.resolve(null); }
@@ -1136,4 +1139,91 @@ test("_findFirstOutboundLink records a dom_read error outcome when the page read
 
   assert.equal(link, null);
   assert.deepEqual(api.getMetricsSummary().dom_read.outcomes, { error: 1 });
+});
+
+function tabApi(clock) {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { now: clock.now });
+  const removed = [];
+  api._window = { contentView: { addChildView() {}, removeChildView: (view) => removed.push(view) } };
+  return { api, removed };
+}
+
+test("an idle inactive tab is discarded: its view closes, its record stays, selecting it restores the page", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api, removed } = tabApi(clock);
+  const first = await api.navigate("https://first.example");
+  const firstView = fakeViews.at(-1);
+  await api.newTab();
+  clock.advance(11 * 60_000);
+
+  assert.equal(api.discardIdleTabs(10 * 60_000), 1);
+  const snap = api.getSnapshot();
+  assert.equal(snap.tabs[0].discarded, true);
+  assert.equal(snap.tabs[0].url, "https://first.example/");
+  assert.equal(snap.tabs[1].discarded, false);
+  assert.deepEqual(removed, [firstView]);
+  assert.equal(firstView.webContents.closed, true);
+
+  const restored = await api.selectTab(first.tabs[0].id);
+  assert.equal(restored.page.url, "https://first.example/");
+  assert.equal(api.getSnapshot().tabs[0].discarded, false);
+  assert.equal(fakeViews.at(-1).webContents.url, "https://first.example/");
+});
+
+test("a tab is not discarded until it has been inactive for the idle window", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock);
+  await api.navigate("https://first.example");
+  clock.advance(60 * 60_000);
+  await api.newTab(); // first tab stops being active only now
+  clock.advance(60_000);
+  assert.equal(api.discardIdleTabs(10 * 60_000), 0);
+  clock.advance(10 * 60_000);
+  assert.equal(api.discardIdleTabs(10 * 60_000), 1);
+});
+
+test("the active tab, blank tabs, audible tabs and queued-action origin tabs are never discarded", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock);
+  const first = await api.navigate("https://a.example");
+  const tabA = first.tabs[0].id;
+  const viewA = fakeViews.at(-1);
+  await api.newTab();
+  await api.navigate("https://b.example");
+  const tabB = api.getSnapshot().tabs[1].id;
+  const third = await api.newTab();
+  clock.advance(60 * 60_000);
+
+  assert.equal(api.discardTab(third.activeTabId), false, "active (and blank) tab");
+  viewA.webContents.audible = true;
+  assert.equal(api.discardTab(tabA), false, "audible tab");
+  viewA.webContents.audible = false;
+  api._approvalQueue.push({ _originTabId: tabA });
+  assert.equal(api.discardTab(tabA), false, "origin of a queued action");
+  api._approvalQueue.length = 0;
+  assert.equal(api.discardTab(tabB), true);
+  assert.equal(api.discardTab(tabB), false, "already discarded");
+});
+
+test("closing a discarded tab works and does not touch a missing view", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock);
+  const first = await api.navigate("https://a.example");
+  await api.newTab();
+  clock.advance(60 * 60_000);
+  api.discardIdleTabs(10 * 60_000);
+  const after = await api.closeTab(first.tabs[0].id);
+  assert.equal(after.tabs.length, 1);
+});
+
+test("a muted tab that still reports an audio stream can be discarded", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock);
+  const first = await api.navigate("https://a.example");
+  const view = fakeViews.at(-1);
+  await api.newTab();
+  view.webContents.audible = true;
+  assert.equal(api.discardTab(first.tabs[0].id), false, "audible and not muted");
+  view.webContents.muted = true;
+  assert.equal(api.discardTab(first.tabs[0].id), true, "muted: the user hears nothing");
 });

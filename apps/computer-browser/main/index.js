@@ -155,6 +155,18 @@ function withConnectorObservation(browser) {
 // task's hidden view is disposed via its own browser.dispose() call (see
 // makeHarnessBrowser below), not tied to the visible window's lifecycle.
 const agentViewportHost = new AgentViewportHost();
+const TAB_IDLE_DISCARD_MS = 10 * 60_000;
+// Windows register a callback that discards their inactive tabs. When task admission
+// is refused for memory, every inactive tab is given back before the task is refused.
+const tabReclaimers = new Set();
+async function reclaimMemory() {
+  let freed = 0;
+  for (const reclaim of tabReclaimers) freed += reclaim();
+  if (freed === 0) return false;
+  await new Promise((resolve) => setTimeout(resolve, 1500)); // renderers need a moment to exit
+  await memoryMonitor.sample();
+  return true;
+}
 
 function makeSocketDir() {
   // 0700, owned by this process's uid -- the same contract
@@ -531,6 +543,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     hostVerifier: defaultHostVerifier,
     approve: makeHarnessApprove(socketPath),
     memoryMonitor,
+    reclaimMemory,
     memoryStore,
     activityJournal,
     nvidiaModelsFile,
@@ -574,6 +587,11 @@ async function createWindow(socketPath, attachedClient = undefined) {
   });
 
   const controlApi = new ControlApi({ window: win, socketPath, onPageVisit: (wc) => pageVisitSink?.(wc) });
+  // Inactive tabs idle for 10 minutes give their renderer back; selecting one reloads its url.
+  const tabSweep = setInterval(() => controlApi.discardIdleTabs(TAB_IDLE_DISCARD_MS), 60_000);
+  const reclaimTabs = () => controlApi.discardIdleTabs(0);
+  tabReclaimers.add(reclaimTabs);
+  win.once("closed", () => { clearInterval(tabSweep); tabReclaimers.delete(reclaimTabs); });
   let taskHost;
   try {
     taskHost = attachedClient === undefined ? await createHarnessHost(socketPath, win) : attachedClient;

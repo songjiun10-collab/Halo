@@ -98,17 +98,55 @@ class AgentViewportHost {
     // separate from `_hosts` -- a child's hidden view and session partition
     // are never shared with its parent or a sibling.
     this._childHosts = new Map(); // childId -> {host, view, adapter}
+    // One hidden window holds every agent view. A BrowserWindow per view cost a
+    // window and a webContents each; the views stay independent renderers, so
+    // only the container is shared, and it is destroyed with its last view.
+    this._sharedHost = null;
+    this._sharedViewCount = 0;
+  }
+
+  _acquireHiddenHost() {
+    const sh = this._sharedHost;
+    const gone = !sh || sh.destroyed === true || sh.isDestroyed?.() === true;
+    if (gone) {
+      this._sharedHost = this._createWindow({
+        show: false,
+        width: AGENT_WIDTH,
+        height: AGENT_HEIGHT,
+        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+      });
+      this._sharedViewCount = 0;
+    }
+    this._sharedViewCount += 1;
+    return this._sharedHost;
+  }
+
+  _releaseHiddenHost(host, view) {
+    try {
+      host.contentView.removeChildView?.(view);
+    } catch {
+      // The view may already be gone with its webContents.
+    }
+    if (host !== this._sharedHost) {
+      try { host.destroy(); } catch { /* best effort */ }
+      return;
+    }
+    this._sharedViewCount -= 1;
+    if (this._sharedViewCount <= 0) {
+      this._sharedHost = null;
+      this._sharedViewCount = 0;
+      try {
+        host.destroy();
+      } catch {
+        // Best-effort teardown; a window already gone is not a safety issue.
+      }
+    }
   }
 
   // Shared by ensure()/ensureChild(): builds one hidden, fixed-size,
-  // never-shown host + view pair on the given session partition.
+  // never-shown view on the shared hidden window, on the given session partition.
   _createHiddenViewPair(partition) {
-    const host = this._createWindow({
-      show: false,
-      width: AGENT_WIDTH,
-      height: AGENT_HEIGHT,
-      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition },
-    });
+    const host = this._acquireHiddenHost();
     const view = this._createView({
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition, offscreen: true },
     });
@@ -265,11 +303,7 @@ class AgentViewportHost {
     try {
       await entry.adapter.dispose?.();
     } finally {
-      try {
-        entry.host.destroy();
-      } catch {
-        // Best-effort teardown; a window already gone is not a safety issue.
-      }
+      this._releaseHiddenHost(entry.host, entry.view);
     }
   }
 

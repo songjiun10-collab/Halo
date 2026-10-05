@@ -42,7 +42,7 @@ export interface TaskSnapshot {
   /** Read-only side reads running or finished while an approval waits. Findings stay host-side. */
   branches?: TaskBranchSummary[]
 }
-export interface TaskSummary { taskId: string; originalRequest: string; state: TaskState; pauseReason: string | null; active: boolean; /** 1-based FIFO position while waiting for admission. */ queuePosition?: number }
+export interface TaskSummary { taskId: string; originalRequest: string; state: TaskState; pauseReason: string | null; active: boolean; /** 1-based FIFO position while waiting for admission. */ queuePosition?: number; /** Why a queued task has not started (an internal code; show it with waitReasonLabel). */ waitReason?: string | null }
 export interface TaskDetail { taskId: string; goal: GoalSpec; snapshot?: TaskSnapshot; active: boolean; recoveryReason?: string }
 export interface BrowserSnapshot {
   tabs: { id: string; url: string; title: string; canGoBack: boolean; canGoForward: boolean }[]

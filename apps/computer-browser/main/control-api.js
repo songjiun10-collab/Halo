@@ -165,7 +165,7 @@ class ControlApi {
   getSnapshot() {
     return {
       page: { ...this._page },
-      tabs: this._tabs.map(({ id, title, url }) => ({ id, title, url })),
+      tabs: this._tabs.map(({ id, title, url, view }) => ({ id, title, url, discarded: !view })),
       activeTabId: this._activeTabId,
       task: { ...this._task },
       // Only public fields cross the IPC boundary. Each queue item also
@@ -222,8 +222,16 @@ class ControlApi {
     return this._createTab();
   }
 
-  _createTab() {
-    if (this._view) this._view.setVisible(false);
+  // Closes a tab's renderer for real: webContents.close() releases it, while
+  // removing the view alone only detaches it.
+  _closeView(view) {
+    this._window.contentView.removeChildView?.(view);
+    const wc = view.webContents;
+    if (typeof wc.close === "function") wc.close();
+    else wc.destroy?.();
+  }
+
+  _buildTabView(tab) {
     const view = new this._WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
     this._window.contentView.addChildView(view);
     view.setVisible(false);
@@ -236,10 +244,7 @@ class ControlApi {
       view.setBounds(this._pendingBounds);
       this._lastBoundsKey = JSON.stringify(this._pendingBounds);
     }
-    const tab = { id: randomUUID(), title: "New tab", url: "", view };
-    this._tabs.push(tab);
-    this._activeTabId = tab.id;
-    this._view = view;
+    tab.view = view;
     const wc = view.webContents;
     wc.on("did-start-navigation", () => { if (this._view === view) this._syncPageState({ loadState: "loading" }); });
     wc.on("did-navigate", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url, loadState: "ready" }); });
@@ -251,9 +256,52 @@ class ControlApi {
       if (code !== -3) this._pushTimeline("navigation", `Load failed: ${description}`, "error");
       this._syncPageState({ loadState: "error" });
     });
+    return view;
+  }
+
+  // Idle time counts from the moment a tab stops being the active one.
+  _touchActiveTab() {
+    const active = this._tabs.find((candidate) => candidate.id === this._activeTabId);
+    if (active) active.lastActiveAt = this._now();
+  }
+
+  _createTab() {
+    this._touchActiveTab();
+    if (this._view) this._view.setVisible(false);
+    const tab = { id: randomUUID(), title: "New tab", url: "", view: null, lastActiveAt: this._now() };
+    const view = this._buildTabView(tab);
+    this._tabs.push(tab);
+    this._activeTabId = tab.id;
+    this._view = view;
     this._page = { url: tab.url, title: tab.title, loadState: "idle", canGoBack: false, canGoForward: false, hasPage: false };
     this._emit();
     return view;
+  }
+
+  // Frees the renderer of an inactive tab while keeping its record (id, title,
+  // url). selectTab() brings it back by loading the saved url on a new view.
+  discardTab(tabId) {
+    const tab = this._tabs.find((candidate) => candidate.id === tabId);
+    if (!tab || !tab.view || !tab.url) return false;
+    if (tab.id === this._activeTabId || tab.view === this._view) return false;
+    // A muted tab can still report an audio stream; only sound the user can hear protects a tab.
+    const wc = tab.view.webContents;
+    if (wc.isCurrentlyAudible?.() && !wc.isAudioMuted?.()) return false;
+    if (this._approvalQueue.some((item) => item._originTabId === tab.id)) return false;
+    tab.view.setVisible(false);
+    this._closeView(tab.view);
+    tab.view = null;
+    return true;
+  }
+
+  discardIdleTabs(idleMs) {
+    const cutoff = this._now() - idleMs;
+    let count = 0;
+    for (const tab of this._tabs) {
+      if (tab.view && tab.lastActiveAt <= cutoff && this.discardTab(tab.id)) count += 1;
+    }
+    if (count > 0) this._emit();
+    return count;
   }
 
   _syncPageState(patch) {
@@ -441,10 +489,16 @@ class ControlApi {
   async selectTab(tabId) {
     const tab = this._tabs.find((candidate) => candidate.id === tabId);
     if (!tab) throw new RangeError("Unknown browser tab");
+    if (!tab.view) {
+      this._buildTabView(tab);
+      tab.view.webContents.loadURL(tab.url).catch(() => {});
+    }
     if (this._view !== tab.view) {
+      this._touchActiveTab();
       if (this._view) this._view.setVisible(false);
       this._view = tab.view;
       this._activeTabId = tab.id;
+      tab.lastActiveAt = this._now();
       if (this._pendingBounds) tab.view.setBounds(this._pendingBounds);
       tab.view.setVisible(Boolean(tab.url));
       const wc = tab.view.webContents;
@@ -467,13 +521,11 @@ class ControlApi {
     if (tab.view === this._view) {
       const next = this._tabs[Math.min(index, this._tabs.length - 1)];
       tab.view.setVisible(false);
-      this._window.contentView.removeChildView?.(tab.view);
-      tab.view.webContents.destroy?.();
+      this._closeView(tab.view);
       this._view = null;
       await this.selectTab(next.id);
-    } else {
-      this._window.contentView.removeChildView?.(tab.view);
-      tab.view.webContents.destroy?.();
+    } else if (tab.view) {
+      this._closeView(tab.view);
     }
     this._pushTimeline("navigation", `Closed tab ${tab.title || tab.url || "New tab"}`, "info");
     this._emit();

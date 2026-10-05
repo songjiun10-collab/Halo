@@ -91,6 +91,7 @@ class TaskHost {
     hostVerifier,
     approve,
     memoryMonitor,
+    reclaimMemory,
     now,
     segmentRotationCalls,
     noProgressThreshold,
@@ -292,6 +293,7 @@ class TaskHost {
       maxParallelTasks: this._maxParallelTasks,
       parallelTaskReserveBytes: this._parallelTaskReserveBytes,
       isAdmissionBlocked: () => this._terminalTeardowns.size > 0,
+      reclaimMemory,
     });
     // Task 3: parent<->child linkage/lifecycle authority, shared across every
     // task this host manages (a child's own coordination never depends on
@@ -1559,7 +1561,7 @@ class TaskHost {
         const goal = store.getGoal();
         await this._closeUnattachedTaskStore(store);
         onAgentBrowserProfileAttached?.();
-        return { taskId: store.taskId, snapshot: { state: "queued", queuePosition: this._queue.pendingIds().indexOf(store.taskId) + 1 }, goal };
+        return { taskId: store.taskId, snapshot: { state: "queued", queuePosition: this._queue.pendingIds().indexOf(store.taskId) + 1, waitReason: this._coordinator.getWaitReason(store.taskId, this._queue.pendingIds().indexOf(store.taskId) + 1) }, goal };
       }
       let attached;
       try {
@@ -1994,6 +1996,7 @@ class TaskHost {
         const index = pending.indexOf(summary.taskId);
         if (index !== -1) {
           summary.queuePosition = index + 1;
+          summary.waitReason = this._coordinator.getWaitReason(summary.taskId, index + 1);
           if (summary.state === "idle") summary.state = "queued";
         }
       }

@@ -1,3 +1,4 @@
+import { waitReasonLabel } from '../session/wait-reason'
 import { useEffect, useState } from 'react'
 import { nonEmptyVerbatim } from '../session/composer'
 import { Forward, Up } from './Icons'
@@ -118,7 +119,7 @@ export function HomeScreen({ activeTask, onSelectTab, onSubmit }: Props) {
             <button type="button" key={task.taskId} className="hx-rc" onClick={() => onSelectTab(task.taskId)}>
               <i data-s={dotFor(task.state)} />
               <span className="hx-rc__t">{task.originalRequest}</span>
-              <span className="hx-rc__s">{STATE_LABEL[task.state] ?? task.state}</span>
+              <span className="hx-rc__s">{task.state === 'queued' ? waitReasonLabel(task.waitReason) ?? STATE_LABEL[task.state] : STATE_LABEL[task.state] ?? task.state}</span>
               <span aria-hidden="true">›</span>
             </button>
           ))}
