@@ -800,3 +800,14 @@ section.hx-chat .hx-chat__thread { flex: 1 1 0; min-height: 60px; overflow-y: au
 .hx-home__form .hx-btn { width: 52px !important; }
 .hx-home__form .hx-mpick { display: flex; align-items: stretch; }
 .hx-home__form .hx-mpick__toggle { display: inline-flex; align-items: center; }
+
+/* Same material for the input and the model picker. */
+.hx-home__form .hx-home__input,
+.hx-home__form .hx-mpick__toggle {
+  background: color-mix(in oklab, var(--foreground) 7%, transparent) !important;
+  border: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent) !important;
+  box-shadow: none !important; color: var(--foreground);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4);
+}
+.hx-home__form .hx-mpick__toggle::before, .hx-home__form .hx-mpick__toggle::after { box-shadow: none !important; }
+.hx-home__form .hx-btn--primary { box-shadow: none; }
