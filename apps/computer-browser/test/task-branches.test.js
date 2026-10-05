@@ -139,3 +139,24 @@ test("branch runner reads each page in a fresh observe-only surface, always disp
   await runner({ branchId: "c", steps: [{ url: "https://a.test/1", purpose: "p" }], signal: ctl.signal, report: () => assert.fail("no report after abort") });
   assert.equal(made.length, 0);
 });
+
+test("computer use starts from a blank page: capture is skipped until the first navigation", async (t) => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-cu-blank-"));
+  const store = await TaskStore.create({ originalRequest: "open wikipedia" }, { storageRoot });
+  store.taskProfile = { capability: { id: "computer_use", adapters: [{ capabilityId: "computer_use", adapterId: "x", adapterVersion: 1 }] } };
+  let captured = 0; let turns = 0; let sawComputerUse = null;
+  const browser = { supportsAction: () => true,
+    observe: async () => ({ id: "o", documentEpoch: 1, url: "about:blank", elements: [] }),
+    captureTextObservation: async () => { captured += 1; throw new Error("no boxes on a blank page"); },
+    execute: async () => ({ status: "ok" }) };
+  const controller = new TaskController({ store, browser, permissionMode: "browse", hostVerifier: () => true,
+    approve: async () => ({ decision: "allow", reasons: [] }),
+    planner: { next: async (c) => { sawComputerUse = c.observation.computerUse ?? null;
+      const base = { taskId: c.taskId, goalVersion: c.goalVersion, basedOnObservationId: c.observation.id, criterionIds: [] };
+      return turns++ === 0 ? { ...base, kind: "actions", actions: [{ type: "navigate", url: "https://en.wikipedia.org/" }] } : { ...base, kind: "need_user", reason: "stop here" }; } } });
+  t.after(async () => { await controller.stop(); await store.close(); await fs.rm(storageRoot, { recursive: true, force: true }); });
+  await controller.start(); await tick();
+  assert.equal(captured, 0);
+  assert.equal(sawComputerUse, null);
+  assert.notEqual(controller.getSnapshot().pauseReason, "computer_use_capture_failed");
+});

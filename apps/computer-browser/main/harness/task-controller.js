@@ -1969,7 +1969,10 @@ class TaskController {
             ? await this._readWorkGoalContext({ ...this._workGoalBinding, taskId: this._goal.taskId })
             : undefined;
           if (this._stopHappenedSince(epoch)) break;
-          if (hasComputerUseAdapter(this._store.taskProfile) && !this._plannerImageInput) {
+          // A blank start page has no boxes to read; the planner navigates first, then the next
+          // observation is captured normally.
+          const computerUseReady = hasComputerUseAdapter(this._store.taskProfile) && /^https?:/i.test(observation?.url ?? "");
+          if (computerUseReady && !this._plannerImageInput) {
             if (typeof this._browser.captureTextObservation !== "function") {
               await this._pauseWith("computer_use_unavailable");
               break;
@@ -1986,11 +1989,12 @@ class TaskController {
                 const described = await Promise.resolve(this._visionAssist(observation)).catch(() => null);
                 if (typeof described === "string" && described.trim()) textCapture = { ...textCapture, visionNote: described.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 2048) };
               }
-            } catch {
+            } catch (error) {
+              await this._store.append({ type: "note", payload: { kind: "computer_use_capture_error", code: String(error?.code ?? error?.message ?? "unknown").slice(0, 120) } }).catch(() => {});
               await this._pauseWith("computer_use_capture_failed");
               break;
             }
-          } else if (hasComputerUseAdapter(this._store.taskProfile)) {
+          } else if (computerUseReady) {
             if (typeof this._browser.captureComputerUseObservation !== "function") {
               await this._pauseWith("computer_use_unavailable");
               break;
@@ -2002,7 +2006,8 @@ class TaskController {
                   !visualCapture.attachment || typeof visualCapture.attachment.path !== "string" || typeof visualCapture.attachment.dispose !== "function") {
                 throw new Error("invalid screenshot attachment binding");
               }
-            } catch {
+            } catch (error) {
+              await this._store.append({ type: "note", payload: { kind: "computer_use_capture_error", code: String(error?.code ?? error?.message ?? "unknown").slice(0, 120) } }).catch(() => {});
               await this._pauseWith("computer_use_capture_failed");
               break;
             }
