@@ -791,3 +791,12 @@ section.hx-chat .hx-chat__thread { flex: 1 1 0; min-height: 60px; overflow-y: au
   :root[data-theme="light"] .hx-window .hx-content-col { background: rgba(255, 255, 255, 0.42); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); }
   :root[data-theme="light"] .hx-window .hx-sidebar { background: rgba(255, 255, 255, 0.28) !important; border-color: rgba(255, 255, 255, 0.5) !important; }
 }
+
+/* Home composer: input, model picker and send button share one height and centre line. */
+.hx-home__form { align-items: stretch; }
+.hx-home__form .hx-home__input,
+.hx-home__form .hx-mpick__toggle,
+.hx-home__form .hx-btn { height: 52px !important; min-height: 52px !important; box-sizing: border-box; }
+.hx-home__form .hx-btn { width: 52px !important; }
+.hx-home__form .hx-mpick { display: flex; align-items: stretch; }
+.hx-home__form .hx-mpick__toggle { display: inline-flex; align-items: center; }
