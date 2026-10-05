@@ -92,6 +92,7 @@ export default function App() {
     setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id)
   }, [notableCount, lastBlock])
   const closeActivity = useCallback(() => { setActivityOpen(false); setSeen(notableCount) }, [notableCount])
+  const toggleActivity = useCallback(() => { if (activityOpen) closeActivity(); else openActivity() }, [activityOpen, closeActivity, openActivity])
   const openChat = useCallback(() => {
     setChatOpen(true); setActivityOpen(false); setOverviewOpen(false); setHelpOpen(false); setSettingsOpen(false)
     setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id)
@@ -303,7 +304,7 @@ export default function App() {
             onForward={() => void store.navigate({ type: 'forward' })}
             onShare={onShare}
             onOverview={toggleOverview}
-            onActivity={openActivity}
+            onActivity={toggleActivity}
             onNavigate={(url) => void store.navigate({ type: 'navigate', url })}
             onSettings={toggleSettings}
             sidebarOpen={sidebarOpen}

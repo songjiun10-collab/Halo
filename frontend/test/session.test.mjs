@@ -86,10 +86,18 @@ test('direct tab controls cannot cross into an active task-owned browser', async
     closeTab: async () => { calls.push('closeTab'); return {} },
   })
   await store.selectTask('task')
-  assert.equal(await store.newBrowserTab(), false)
   assert.equal(await store.selectBrowserTab('other'), false)
   assert.equal(await store.closeBrowserTab('page'), false)
   assert.deepEqual(calls, [])
+})
+
+test('the new-tab control leaves the active task and opens a direct tab instead of doing nothing', async () => {
+  const calls = []
+  const { store } = harness({ newTab: async () => { calls.push('newTab'); return { page: { url: '', title: '', canGoBack: false, canGoForward: false, hasPage: false }, tabs: [{ id: 'two', url: '', title: 'New tab' }], activeTabId: 'two', task: { state: 'idle' }, approvalQueue: [], timeline: [] } } })
+  await store.selectTask('task')
+  assert.equal(await store.newBrowserTab(), true)
+  assert.equal(store.getState().activeTaskId, null)
+  assert.deepEqual(calls, ['newTab'])
 })
 
 test('late task details and events cannot replace a newer selected task', async () => {
