@@ -16,6 +16,9 @@ async function fixture(t, action, permissionMode = "interact", { computerUse = f
     observe: async () => ({ id: "obs", documentEpoch: 7, url: "https://page.test/", elements: [
       { elementId: "0", role: "textbox", name: "Title" },
       { elementId: "1", role: "button", name: "Submit", formAction: "https://submit.test/save", formMethod: "post" },
+      { elementId: "2", role: "textbox", name: "Title", inputType: "password" },
+      { elementId: "3", role: "link", name: "Pricing", href: "https://example.test/pricing" },
+      { elementId: "4", role: "button", name: "Delete" },
     ] }),
     ...(computerUse ? { captureComputerUseObservation: async (observation) => ({
       binding: { observationId: observation.id, taskId: store.taskId, agentId: "22222222-2222-4222-8222-222222222222", documentEpoch: observation.documentEpoch, origin: "https://page.test", capturedAt: 1, viewport: { width: 1440, height: 900 }, digest: "a".repeat(64) },
@@ -47,8 +50,24 @@ async function fixture(t, action, permissionMode = "interact", { computerUse = f
   await controller.start(); return { controller, executed, store, get plannerOptions() { return plannerOptions; }, get attachmentDisposed() { return attachmentDisposed; } };
 }
 
-test("typing review shows target and exact input, and approval keeps the observation epoch", async t => {
+test("typing into an ordinary text field runs on the approver's verdict without a human gate", async t => {
   const action = { type: "type", elementId: "0", text: "New title" };
+  const { controller, executed } = await fixture(t, action);
+  assert.equal(controller.getSnapshot().approvalQueue.length, 0);
+  assert.equal(executed.length, 1);
+});
+
+test("clicking a plain link is not queued for the human, but an effect-named button still is", async t => {
+  const link = await fixture(t, { type: "click", elementId: "3" });
+  assert.equal(link.controller.getSnapshot().approvalQueue.length, 0);
+  assert.equal(link.executed.length, 1);
+  const risky = await fixture(t, { type: "click", elementId: "4" });
+  assert.equal(risky.controller.getSnapshot().approvalQueue.length, 1);
+  assert.equal(risky.executed.length, 0);
+});
+
+test("typing review shows target and exact input, and approval keeps the observation epoch", async t => {
+  const action = { type: "type", elementId: "2", text: "New title" };
   const { controller, executed } = await fixture(t, action);
   const [item] = controller.getSnapshot().approvalQueue;
   assert.equal(controller.getSnapshot().state, "awaiting_approval");

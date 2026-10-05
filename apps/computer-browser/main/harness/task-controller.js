@@ -126,6 +126,21 @@ function isAutoComputerUseAction(action, taskProfile, screenTargets = null) {
   return classifyTarget(hit, action.type).gate === "auto";
 }
 
+// Same idea for DOM actions: a click on a link/tab/menu item or a button that
+// only moves around the page, or typing into an ordinary text field, cannot
+// carry an external effect on its own, so the approver alone decides. Anything
+// the classifier flags (Send, Buy, Delete ...), cannot rule out, or any
+// password field keeps the human gate.
+function isAutoDomAction(action, observation) {
+  if (action.type !== "click" && action.type !== "type") return false;
+  const element = observation?.elements?.find((el) => el.elementId === action.elementId);
+  if (!element || typeof element.role !== "string") return false;
+  if (action.type === "type" && element.inputType === "password") return false;
+  if (action.type === "click" && element.formAction) return false;
+  const target = { role: element.role, name: typeof element.name === "string" ? element.name : "", covered: false, disabled: !!element.disabled };
+  return classifyTarget(target, action.type === "type" ? "type_at" : "click_at").gate === "auto";
+}
+
 function hasMultiAgentCapability(taskProfile) {
   return ["multi_agent", "multi_agent_computer_use"].includes(taskProfile?.capability?.id);
 }
@@ -2318,7 +2333,8 @@ class TaskController {
       // Computer use: coordinate clicks, typing and non-Enter keys run on the
       // approver's verdict alone. The mode, lock and one-use screen binding still
       // apply; Enter (which can submit a form) keeps the human gate.
-      const policy = gate.policy.allowed && gate.policy.approval === "human" && isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets)
+      const policy = gate.policy.allowed && gate.policy.approval === "human" &&
+        (isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets) || isAutoDomAction(action, this._lastObservation))
         ? { ...gate.policy, approval: "approver" }
         : gate.policy;
       // Mode-denied actions may be widened by the user, but never for
