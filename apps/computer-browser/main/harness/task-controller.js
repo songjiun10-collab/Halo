@@ -233,6 +233,7 @@ class TaskController {
     noProgressThreshold,
     memoryStore,
     activityRecall,
+    strategyGuidance,
     branchRunner,
     branchLimits,
     permissionMode = "browse",
@@ -399,6 +400,7 @@ class TaskController {
     this._memoryMonitor = memoryMonitor || NOOP_MEMORY_MONITOR;
     this._memoryStore = memoryStore || null;
     this._activityRecall = typeof activityRecall === "function" ? activityRecall : null;
+    this._strategyGuidance = typeof strategyGuidance === "string" && strategyGuidance.length <= 4096 ? strategyGuidance : null;
     // Task Branches: read-only side reads while an approval waits. Off unless the
     // host supplies a runner; the manager is the whole safety envelope.
     this._branches = typeof branchRunner === "function"
@@ -2041,6 +2043,7 @@ class TaskController {
             observation: plannerObservation,
             recentEvents: this._store.eventsSinceCheckpoint || [],
             customMemory,
+            strategyGuidance: this._strategyGuidance,
             pendingMessages,
             ...(teamBoard ? { teamBoard } : {}),
             ...(this._workGoalBinding ? { workGoalBinding: this._workGoalBinding, workGoal } : {}),
@@ -2623,6 +2626,7 @@ class TaskController {
     // sees an open action_started with no outcome and reports
     // execution_uncertain, the same fail-closed result as today; it never
     // reports success for something that did not durably complete.
+    if (result.status !== "ok" && process.env.HALO_DEBUG_ACTIONS) console.error("[action-fail]", action.type, JSON.stringify(action).slice(0, 200), result.errorCode);
     await this._store.append({ type: "action_outcome", payload: { actionId, status: result.status } }, { durable: false });
     return { ...result, actionId, action, descriptor };
   }

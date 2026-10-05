@@ -978,12 +978,13 @@ class BrowserAdapter {
             if (!valid()) return failed("stale_element");
             started = true; HTMLFormElement.prototype.requestSubmit.call(form, submitter);
           } else {
-            const allowed = ["button", "link", "checkbox", "radio", "switch", "tab", "menuitem"];
+            const allowed = ["button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "textbox", "searchbox", "combobox"];
             if (!allowed.includes(state.nodes[Number(action.elementId)].node.getAttribute("role") || ${JSON.stringify(entry.role)}) ||
                 (node.tagName === "INPUT" && ["file", "password"].includes((node.getAttribute("type") || "").toLowerCase())) || node.hasAttribute("download")) return failed("unsupported_click");
             const info = state.formInfo(node);
             if (info && !["", "_self"].includes(info.target)) return failed("unsupported_form");
             started = true; HTMLElement.prototype.click.call(node);
+            if (["INPUT", "TEXTAREA"].includes(node.tagName) || node.isContentEditable) node.focus();
           }
           return { status: "ok" };
         } catch { return started ? { status: "uncertain", errorCode: "interaction_uncertain" } : failed("interaction_failed"); }
