@@ -93,8 +93,9 @@ export function HaloChat({ taskLabel, messages, recentTasks = [], pendingCriteri
         )}
         {pendingCriteria.map((criterion) => (
           <div key={`${criterion.criterionId}:${criterion.evidenceId}`} className="hx-msg hx-msg--criterion" data-from="halo" data-evidence-id={criterion.evidenceId}>
-            <span className="hx-msg__who">Halo · Verification required</span>
-            <p>{criterion.criterionId}: {criterion.text}</p>
+            <span className="hx-msg__who">Halo · Ready to finish</span>
+            <p>{criterion.text.startsWith('originalRequest') ? `Does the result match what you asked for? “${taskLabel}”` : criterion.text}</p>
+            <details className="hx-msg__more"><summary>Details</summary><code>Criterion {criterion.criterionId} · evidence {criterion.evidenceId}</code></details>
             <div className="hx-msg__actions">
               <button type="button" className="hx-btn hx-btn--secondary hx-btn--compact" aria-label={`Reject criterion ${criterion.criterionId}`} onClick={() => onConfirmCriterion(criterion, 'rejected')}>Reject</button>
               <button type="button" className="hx-btn hx-btn--primary hx-btn--compact" aria-label={`Confirm criterion ${criterion.criterionId}`} onClick={() => onConfirmCriterion(criterion, 'verified')}>Confirm</button>

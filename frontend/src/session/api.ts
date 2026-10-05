@@ -37,6 +37,8 @@ export interface TaskSnapshot {
   segment: Record<string, unknown>
   criteriaStatus: CriterionStatus[]
   approvalQueue: ApprovalRequest[]
+  /** Steps that ran without asking the user (approver-only or lease). */
+  autoHandled?: number
 }
 export interface TaskSummary { taskId: string; originalRequest: string; state: TaskState; pauseReason: string | null; active: boolean; /** 1-based FIFO position while waiting for admission. */ queuePosition?: number }
 export interface TaskDetail { taskId: string; goal: GoalSpec; snapshot?: TaskSnapshot; active: boolean; recoveryReason?: string }

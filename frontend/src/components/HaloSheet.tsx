@@ -48,7 +48,10 @@ export function HaloSheet({ approval, leaving, onApprove, onDeny, onTakeOver, on
         <button className="hx-btn hx-btn--secondary" onClick={onDeny}>Deny</button>
         {offer && onLend && (lending
           ? <button className="hx-btn hx-btn--secondary" onClick={() => onLend(terms)}>Lend</button>
-          : <button className="hx-btn hx-btn--secondary" onClick={() => setLending(true)}>Lend…</button>)}
+          : <>
+              <button className="hx-btn hx-btn--secondary" onClick={() => setLending(true)}>Adjust…</button>
+              <button className="hx-btn hx-btn--secondary" title={lendSummary(offer, { minutes: 10, uses: 3 })} onClick={() => onLend({ minutes: 10, uses: 3 })}>Allow {host(offer.origin)} · 10 min</button>
+            </>)}
         <button className="hx-btn hx-btn--primary" onClick={onApprove}>Allow once</button>
       </div>
       <code className="hx-sheet__request" id="hx-sheet-request" title="Exact request">{approval.request}</code>

@@ -812,3 +812,8 @@ section.hx-chat .hx-chat__thread { flex: 1 1 auto; min-height: 120px; overflow-y
 .hx-home__form .hx-mpick__toggle::before, .hx-home__form .hx-mpick__toggle::after { box-shadow: none !important; }
 .hx-home__form .hx-btn--primary { box-shadow: none; }
 .hx-home__form .hx-mpick { background: none !important; border: 0 !important; box-shadow: none !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; padding: 0 !important; }
+
+.hx-activity__auto { margin: 0 0 8px; font-size: 12px; opacity: .7; }
+.hx-msg__more { margin-top: 6px; font-size: 12px; opacity: .75; }
+.hx-msg__more summary { cursor: pointer; }
+.hx-msg__more code { display: block; margin-top: 4px; overflow-wrap: anywhere; }

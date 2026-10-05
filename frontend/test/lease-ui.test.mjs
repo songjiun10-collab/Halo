@@ -19,10 +19,11 @@ const approval = { taskId: 't', id: 'r', action: 'Open github.com', request: 'na
 
 test('the sheet offers Lend only when the request has a lease offer, and says when the mode is widened', () => {
   const html = renderToStaticMarkup(React.createElement(HaloSheet, { approval, onApprove: noop, onDeny: noop, onTakeOver: noop, onLend: noop }))
-  assert.match(html, />Lend…</)
+  assert.match(html, />Adjust…</)
+  assert.match(html, /Allow github.com · 10 min/)
   assert.match(html, /outside the current permission mode/)
   const plain = renderToStaticMarkup(React.createElement(HaloSheet, { approval: { ...approval, widen: false, leaseOffer: null }, onApprove: noop, onDeny: noop, onTakeOver: noop, onLend: noop }))
-  assert.doesNotMatch(plain, /Lend…/)
+  assert.doesNotMatch(plain, /Adjust…|10 min/)
   assert.doesNotMatch(plain, /outside the current permission mode/)
 })
 

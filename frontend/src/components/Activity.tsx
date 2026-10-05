@@ -49,6 +49,7 @@ export function Activity({ session, leaving, onClose }: Props) {
     <section id="hx-activity" className="hx-activity" data-leaving={leaving || undefined} inert={leaving} role="dialog" aria-label="Halo events" tabIndex={-1} ref={ref}>
       <p className="hx-activity__task">{session.task}</p>
       <ChildPlanPanel plan={session.childPlan} />
+      {!!session.snapshot?.autoHandled && <p className="hx-activity__auto">{session.snapshot.autoHandled} {session.snapshot.autoHandled === 1 ? 'step' : 'steps'} ran without asking you.</p>}
       {notable.length === 0 ? (
         <p className="hx-activity__empty">Nothing needed you so far.</p>
       ) : (

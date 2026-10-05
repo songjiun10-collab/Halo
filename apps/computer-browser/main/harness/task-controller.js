@@ -399,6 +399,8 @@ class TaskController {
     const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
     if (!PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_config", "permissionMode is invalid");
     this._permissionMode = permissionMode;
+    // Steps that ran without asking the user (approver-only or lease). Session-local, for the report.
+    this._autoHandled = 0;
     this._observeRetryDelayMs = Number.isFinite(observeRetryDelayMs) && observeRetryDelayMs >= 0 ? observeRetryDelayMs : OBSERVE_RETRY_DELAY_MS;
     this._plannerEffort = plannerEffort;
     this._adaptiveEffort = adaptiveEffortEnabled === true;
@@ -605,6 +607,7 @@ class TaskController {
       budgets: { ...this._budgets },
       segment: { ...this._segment },
       criteriaStatus: [...this._criteriaStatus.entries()].map(([criterionId, v]) => ({ criterionId, ...v })),
+      autoHandled: this._autoHandled,
       approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor, widen, leaseOffer }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null, widen: !!widen, leaseOffer: leaseOffer ?? null })),
       ...(this._task.pauseReason === "need_user" && this._needUserReason ? { needUserReason: this._needUserReason } : {}),
       leases: this._terminal()
@@ -2333,10 +2336,9 @@ class TaskController {
       // Computer use: coordinate clicks, typing and non-Enter keys run on the
       // approver's verdict alone. The mode, lock and one-use screen binding still
       // apply; Enter (which can submit a form) keeps the human gate.
-      const policy = gate.policy.allowed && gate.policy.approval === "human" &&
-        (isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets) || isAutoDomAction(action, this._lastObservation))
-        ? { ...gate.policy, approval: "approver" }
-        : gate.policy;
+      const autoRun = gate.policy.allowed && gate.policy.approval === "human" &&
+        (isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets) || isAutoDomAction(action, this._lastObservation));
+      const policy = autoRun ? { ...gate.policy, approval: "approver" } : gate.policy;
       // Mode-denied actions may be widened by the user, but never for
       // unattended runs or for actions this browser cannot perform.
       const widen = !policy.allowed;
@@ -2426,6 +2428,7 @@ class TaskController {
       }
 
       const dispatched = await this._dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch, { widenedBy });
+      if (!dispatched.stale && (autoRun || widenedBy)) this._autoHandled += 1;
       if (dispatched.stale || this._stopHappenedSince(epoch)) return "stop_loop";
       if (this._stopHappenedSince(epoch) || this._task.state !== "running") return "stop_loop";
     }
