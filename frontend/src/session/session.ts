@@ -49,7 +49,7 @@ function derive(s: SessionState): SessionState {
       : s.tabs,
     activeTabId: s.activeTaskId ? (s.browser?.activeTabId ?? '') : s.activeTabId,
     approval: head && s.activeTaskId ? { taskId: s.activeTaskId, id: head.id, action: head.summary || head.action, request: head.action, createdAt: head.createdAt, widen: !!head.widen, leaseOffer: head.leaseOffer ?? null } : undefined,
-    messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text })), ...(snapshot?.pauseReason === 'need_user' && snapshot.needUserReason ? [{ from: 'claude' as const, text: snapshot.needUserReason }] : [])] : [],
+    messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text })), ...(snapshot?.pauseReason === 'need_user' ? [{ from: 'claude' as const, text: snapshot.needUserReason || 'The agent paused and needs your input to continue.' }] : [])] : [],
     timeline: s.journal.map(describeEvent),
   }
 }

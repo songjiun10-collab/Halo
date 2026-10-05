@@ -2166,6 +2166,7 @@ class TaskController {
           // The planner's question is what the person needs to answer; keep it
           // (bounded) so the chat can show it instead of a bare "paused".
           this._needUserReason = typeof validated.reason === "string" && validated.reason.trim() ? validated.reason.trim().slice(0, 600) : null;
+          try { console.warn(`[task-controller] planner asked for the user task=${this._goal?.taskId ?? "?"} reason=${JSON.stringify(this._needUserReason)}`); } catch {}
           await this._pauseWith("need_user");
           break;
         }
