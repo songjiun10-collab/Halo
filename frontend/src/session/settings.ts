@@ -7,7 +7,7 @@ export type SettingsPatch = Partial<Omit<HostSettings, 'version'>>
 export const PERMISSION_OPTIONS: readonly { value: HostSettings['permissionMode']; label: string; hint: string }[] = [
   { value: 'observe', label: 'Observe', hint: 'Reads and scrolls the page only.' },
   { value: 'browse', label: 'Browse', hint: 'Also opens pages and follows links, each checked by the approver.' },
-  { value: 'interact', label: 'Interact', hint: 'Also clicks and types; you approve each one.' },
+  { value: 'interact', label: 'Interact', hint: 'Also clicks and types; you approve anything that could send, buy or delete.' },
   { value: 'full', label: 'Full', hint: 'Also submits forms. Skips approval for every allowed action.' },
 ]
 
