@@ -56,6 +56,11 @@ const HARNESS_METHODS = {
   "halo:removeCredential": "removeCredential",
   "halo:listActivity": "listActivity",
   "halo:clearActivity": "clearActivity",
+  "halo:getStrategyLearningState": "getStrategyLearningState",
+  "halo:evaluateStrategyCandidate": "evaluateStrategyCandidate",
+  "halo:promoteStrategyCandidate": "promoteStrategyCandidate",
+  "halo:rollbackStrategyGuidance": "rollbackStrategyGuidance",
+  "halo:clearStrategyLearning": "clearStrategyLearning",
   "halo:listMemories": "listMemories",
   "halo:saveMemory": "saveMemory",
   "halo:removeMemory": "removeMemory",
@@ -152,7 +157,7 @@ const SHARED_RUNTIME_METHODS = new Set(["setMemoryPolicy", "setLaunchAtLogin"]);
 //     snapshot (main/harness/background-runtime-ui.js).
 //   launchAgent: optional {isInstalled, enable, disable} for "start at
 //     login" (main/harness/background-launch-agent.js).
-module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNewWindow, launchAgentInstalled, launchAgent } = {}) {
+module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNewWindow, launchAgentInstalled, launchAgent, captureAgentFrame, captureTaskFrame, sendTaskInput } = {}) {
   const ipc = ipcMain || require("electron").ipcMain;
   let registry = registries.get(ipc);
   if (!registry) {
@@ -207,6 +212,24 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
     const owner = findContext(event);
     if (!owner) return Promise.reject(new Error("halo:captureSurface: rejected untrusted sender"));
     return captureVisibleSurface(owner.win);
+  });
+
+  // The agent works in a hidden page; this is the trusted window's read-only look at it.
+  addHandler("halo:captureAgentFrame", (event, taskId) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:captureAgentFrame: rejected untrusted sender"));
+    if (typeof taskId !== "string" || !taskId || typeof captureAgentFrame !== "function") return Promise.resolve(null);
+    return Promise.resolve(captureAgentFrame(taskId));
+  });
+
+  addHandler("halo:captureTaskFrame", (event, taskId) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:captureTaskFrame: rejected untrusted sender"));
+    if (typeof taskId !== "string" || !taskId || typeof captureTaskFrame !== "function") return Promise.resolve(null);
+    return Promise.resolve(captureTaskFrame(taskId));
+  });
+  addHandler("halo:sendTaskInput", (event, taskId, input) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:sendTaskInput: rejected untrusted sender"));
+    if (typeof taskId !== "string" || !taskId || typeof sendTaskInput !== "function") return Promise.resolve(false);
+    return Promise.resolve(sendTaskInput(taskId, input));
   });
 
   if (taskHost) registry.harnessEnabled = true;

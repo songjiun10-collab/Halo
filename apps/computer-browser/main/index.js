@@ -31,6 +31,7 @@ const { HostSettingsStore } = require("./harness/host-settings");
 const { ApiKeyStore } = require("./harness/api-key-store");
 const { LocalMemoryStore } = require("./harness/local-memory-store");
 const { ActivityJournalStore } = require("./harness/activity-journal-store");
+const { StrategyLearningStore } = require("./harness/strategy-learning-store");
 const { createPageVisitSink } = require("./activity-capture");
 const { LocalCredentialVault } = require("./harness/local-credential-vault");
 const { SessionVault } = require("./harness/profile-import/session-vault");
@@ -154,13 +155,18 @@ function withConnectorObservation(browser) {
 // memoryMonitor: it outlives any single visible BrowserWindow, and every
 // task's hidden view is disposed via its own browser.dispose() call (see
 // makeHarnessBrowser below), not tied to the visible window's lifecycle.
-const agentViewportHost = new AgentViewportHost();
+// Bring-your-own Chromium: stays inert (createPage returns null) until Settings selects the
+// "chromium" engine, so the default path is exactly the Electron one.
+const cdpEngine = new (require("./harness/cdp-engine").CdpEngine)();
+// Agent surfaces idle past a few seconds freeze and, past two minutes or over six live renderers, are
+// discarded and restored by one GET on next use; the pool also gives memory back under pressure.
+const agentViewportHost = new AgentViewportHost({ createPage: (partition) => cdpEngine.createPage(partition), lifecycle: true, onIdle: () => cdpEngine.release() });
 const TAB_IDLE_DISCARD_MS = 10 * 60_000;
 // Windows register a callback that discards their inactive tabs. When task admission
 // is refused for memory, every inactive tab is given back before the task is refused.
 const tabReclaimers = new Set();
 async function reclaimMemory() {
-  let freed = 0;
+  let freed = await agentViewportHost.relieveMemory("hard");
   for (const reclaim of tabReclaimers) freed += reclaim();
   if (freed === 0) return false;
   await new Promise((resolve) => setTimeout(resolve, 1500)); // renderers need a moment to exit
@@ -507,11 +513,19 @@ async function createHarnessHost(socketPath, hostWindow) {
   const nvidiaModelsFile = path.join(dataRoot, "nvidia-models.json");
   require("./harness/providers/nvidia-models").loadDiscoveredNvidiaModels(nvidiaModelsFile);
   const settings = await settingsStore.load();
+  cdpEngine.configure(settings);
+  // Later Settings changes re-point the engine; tasks already running keep the browser they started on.
+  const updateSettings = settingsStore.update.bind(settingsStore);
+  settingsStore.update = async (...args) => { const next = await updateSettings(...args); cdpEngine.configure(next); return next; };
   await apiKeyStore.load().catch((error) => console.error("[harness] registered API keys unavailable:", error?.code ?? error));
   const memoryStore = new LocalMemoryStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
   // Context Awareness: off unless the user turned it on. The setting is read
   // live (cached briefly) so toggling it takes effect without a restart.
   const journalStore = new ActivityJournalStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
+  const strategyLearningStore = new StrategyLearningStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
+  if (settings.strategyLearning === true) await strategyLearningStore.setEnabled(true).catch((error) => {
+    console.error("[harness] strategy learning remains unavailable:", error?.code ?? error);
+  });
   let awarenessCache = { at: 0, on: false };
   const awarenessOn = async () => {
     if (Date.now() - awarenessCache.at > 3000) awarenessCache = { at: Date.now(), on: (await settingsStore.load()).contextAwareness === true };
@@ -530,6 +544,7 @@ async function createHarnessHost(socketPath, hostWindow) {
   let taskHost;
   const surfaces = new BrowserSurfaces(hostWindow, { isUserControlled: (taskId) => taskHost.canUseTaskBrowser(taskId) });
   taskHost = new TaskHost({
+    releaseViewsOnReview: true,
     storageRoot: path.join(app.getPath("userData"), "harness-tasks"),
     makeBrowser: makeHarnessBrowser(surfaces, agentViewportHost),
     makeChildBrowser: makeChildHarnessBrowser,
@@ -544,8 +559,12 @@ async function createHarnessHost(socketPath, hostWindow) {
     approve: makeHarnessApprove(socketPath),
     memoryMonitor,
     reclaimMemory,
+    captureAgentFrame: (taskId) => agentViewportHost.captureFrame(taskId),
+    captureTaskFrame: (taskId) => surfaces.captureFrame(taskId),
+    sendTaskInput: (taskId, input) => surfaces.sendInput(taskId, input),
     memoryStore,
     activityJournal,
+    strategyLearning: strategyLearningStore,
     nvidiaModelsFile,
     permissionMode: settings.permissionMode,
     plannerEffort: settings.plannerEffort,
@@ -576,7 +595,7 @@ async function createWindow(socketPath, attachedClient = undefined) {
     height: 800,
     icon: path.join(__dirname, "..", "assets", "icon.png"),
     // macOS: the window is real glass; the desktop behind it shows through the translucent chrome.
-    ...(process.platform === "darwin" ? { vibrancy: "under-window", visualEffectState: "active", backgroundColor: "#00000000" } : {}),
+    ...(process.platform === "darwin" ? { transparent: true, backgroundColor: "#00000000", titleBarStyle: "hidden", trafficLightPosition: { x: 16, y: 20 } } : {}),
     webPreferences: {
       preload: path.join(__dirname, "..", "preload", "index.js"),
       contextIsolation: true,
@@ -614,6 +633,11 @@ async function createWindow(socketPath, attachedClient = undefined) {
   });
   registerIpc(win, controlApi, {
     taskHost,
+    // An attached UI has no agent views of its own; the service process owns them.
+    captureAgentFrame: (taskId) => (attachedClient ? attachedClient.captureAgentFrame(taskId) : agentViewportHost.captureFrame(taskId)),
+    // Only an attached UI needs these: its task views live in the service process.
+    captureTaskFrame: (taskId) => (attachedClient ? attachedClient.captureTaskFrame(taskId) : null),
+    sendTaskInput: (taskId, input) => (attachedClient ? attachedClient.sendTaskInput(taskId, input) : false),
     launchAgent: getBackgroundLaunchAgent() ?? undefined,
     onNewWindow: async () => {
       const client = await connectRuntimeClient();
@@ -772,6 +796,7 @@ app.on("before-quit", (event) => {
       if (result.status === "rejected") console.error("[harness] failed to close task resources:", result.reason);
     }
     await agentViewportHost.disposeAll();
+    await cdpEngine.release();
     await codexMcp?.close();
     await sharedCodexMcp?.close();
     removeOwnRuntimeCapability();

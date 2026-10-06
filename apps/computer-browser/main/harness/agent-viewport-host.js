@@ -30,11 +30,13 @@
 // only makes autonomous execution real against the hidden view; it does not
 // implement any "show agent page" action.
 
+const { installAgentRequestFilter } = require("./agent-request-filter");
 const { BrowserWindow, WebContentsView } = require("electron");
 const { createHash } = require("node:crypto");
 const { BrowserAdapter } = require("./browser-adapter");
 const { createScreenshotAttachment } = require("./computer-use-contract");
 const { buildScreenMap } = require("./screen-map");
+const { ParkableView, SurfacePool, wakeOnUse } = require("./renderer-lifecycle");
 
 const AGENT_WIDTH = 1440;
 const AGENT_HEIGHT = 900;
@@ -87,10 +89,28 @@ function applyBrowserHardening(webContents) {
     if (!/^https?:\/\//i.test(url)) event.preventDefault();
   });
   webContents.session.on("will-download", (event) => event.preventDefault());
+  installAgentRequestFilter(webContents.session);
+}
+
+// A change fingerprint of a downscaled copy of the page. It is cheap enough to
+// run every poll and only decides whether to repeat the JPEG encode.
+function frameFingerprint(image) {
+  const small = image.resize({ width: 64, quality: "good" });
+  return createHash("sha1").update(small.toBitmap()).digest("hex");
 }
 
 class AgentViewportHost {
-  constructor({ createWindow, createView } = {}) {
+  // `createPage(partition)` swaps the whole Electron window/view pair for an
+  // externally owned browser page (the Chromium engine). The page must already
+  // enforce the hardening below itself; it is built synchronously and may finish
+  // starting in the background.
+  constructor({ createWindow, createView, createPage, lifecycle, onIdle } = {}) {
+    const onIdleBrowser = typeof onIdle === "function" ? onIdle : undefined;
+    // `lifecycle` (pool policy, or true for defaults) lets idle agent surfaces freeze and be
+    // discarded under a live-renderer cap; off by default so a plain host is unchanged.
+    this._pool = lifecycle ? new SurfacePool(lifecycle === true ? {} : lifecycle, { onIdle: onIdleBrowser }) : null;
+    this._pool?.start();
+    this._createPage = typeof createPage === "function" ? createPage : null;
     this._createWindow = createWindow || ((opts) => new BrowserWindow(opts));
     this._createView = createView || ((opts) => new WebContentsView(opts));
     this._hosts = new Map(); // taskId -> {host, view, adapter}
@@ -103,6 +123,7 @@ class AgentViewportHost {
     // only the container is shared, and it is destroyed with its last view.
     this._sharedHost = null;
     this._sharedViewCount = 0;
+    this._lastFrames = new Map(); // taskId -> {fingerprint, dataUrl}
   }
 
   _acquireHiddenHost() {
@@ -146,6 +167,32 @@ class AgentViewportHost {
   // Shared by ensure()/ensureChild(): builds one hidden, fixed-size,
   // never-shown view on the shared hidden window, on the given session partition.
   _createHiddenViewPair(partition) {
+    if (!this._pool) return this._rawViewPair(partition);
+    const view = new ParkableView({
+      lazy: true,
+      getSession: () => require("electron").session.fromPartition(partition),
+      width: AGENT_WIDTH,
+      height: AGENT_HEIGHT,
+      create: () => {
+        const pair = this._rawViewPair(partition);
+        return { view: pair.view, dispose: () => this._releaseHiddenHost(pair.host, pair.view) };
+      },
+    });
+    return { host: { contentView: { removeChildView() {} }, destroy() {} }, view };
+  }
+
+  async relieveMemory(level) {
+    return this._pool ? this._pool.relieve(level) : 0;
+  }
+
+  surfaceCounts() {
+    return this._pool ? this._pool.counts() : null;
+  }
+
+  _rawViewPair(partition) {
+    // A null page means the Electron engine is selected right now.
+    const page = this._createPage ? this._createPage(partition) : null;
+    if (page) return { host: { contentView: { removeChildView() {} }, destroy() {} }, view: page };
     const host = this._acquireHiddenHost();
     const view = this._createView({
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition, offscreen: true },
@@ -185,12 +232,39 @@ class AgentViewportHost {
     // (verified by Codex's integration/agent-viewport-spike.js, read-only).
     const { host, view } = this._createHiddenViewPair(partition);
     const adapter = new BrowserAdapter({ view });
+    if (this._pool) wakeOnUse(adapter, view);
+    this._pool?.register(`task:${taskId}`, view);
     this._hosts.set(taskId, { host, view, adapter, agentId });
     return adapter;
   }
 
   hasView(taskId) {
     return this._hosts.has(taskId);
+  }
+
+  // A read-only still of what the agent's hidden page shows right now, for the
+  // user's live view of the agent working. Pixels only; no page content leaves.
+  async captureFrame(taskId) {
+    const view = this._hosts.get(taskId)?.view;
+    if (!view || view.webContents.isDestroyed()) return null;
+    // A parked or frozen surface is not woken for the mirror: the last frame stands.
+    if (typeof view.isLive === "function" && !view.isLive()) return this._lastFrames.get(taskId)?.dataUrl ?? null;
+    try {
+      const image = await view.webContents.capturePage();
+      if (!image || image.isEmpty()) return null;
+      // An unchanged page returns the previous string untouched, so the caller's
+      // state update is a no-op and nothing is re-encoded, re-rendered or re-decoded.
+      const fingerprint = frameFingerprint(image);
+      const last = this._lastFrames.get(taskId);
+      if (last && last.fingerprint === fingerprint) return last.dataUrl;
+      const sized = image.getSize().width > 1200 ? image.resize({ width: 1200, quality: "good" }) : image;
+      const jpeg = typeof sized.encodeJpegAsync === "function" ? await sized.encodeJpegAsync(65) : sized.toJPEG(65);
+      const dataUrl = `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+      this._lastFrames.set(taskId, { fingerprint, dataUrl });
+      return dataUrl;
+    } catch {
+      return null;
+    }
   }
 
   async captureComputerUseObservation(taskId, observation) {
@@ -284,6 +358,8 @@ class AgentViewportHost {
     const partition = execution === "docker" || execution === "isolated" ? childBrowserPartition(childId) : `halo-task-${parentTaskId}`;
     const { host, view } = this._createHiddenViewPair(partition);
     const adapter = new BrowserAdapter({ view, assignedOrigin, permissionMode: "observe" });
+    if (this._pool) wakeOnUse(adapter, view);
+    this._pool?.register(`child:${childId}`, view);
     this._childHosts.set(childId, { host, view, adapter, parentTaskId, assignedOrigin, execution });
     return adapter;
   }
@@ -300,6 +376,8 @@ class AgentViewportHost {
     const entry = map.get(id);
     if (!entry) return;
     map.delete(id);
+    this._pool?.unregister(`${map === this._childHosts ? "child" : "task"}:${id}`);
+    this._lastFrames.delete(id);
     try {
       await entry.adapter.dispose?.();
     } finally {
@@ -316,6 +394,7 @@ class AgentViewportHost {
   }
 
   async disposeAll() {
+    this._pool?.stop();
     await Promise.allSettled([
       ...[...this._hosts.keys()].map((taskId) => this.dispose(taskId)),
       ...[...this._childHosts.keys()].map((childId) => this.disposeChild(childId)),

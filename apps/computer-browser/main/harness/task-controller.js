@@ -31,6 +31,7 @@ const { buildContext } = require("./context-builder");
 const { ContextRefCatalog } = require("./context-refs");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
 const { isReadOnlyAction } = require("./permission-policy");
+const { looksLikeCaptcha } = require("../../shared/captcha-heuristics");
 const { evaluateGate, actionTargetOrigin } = require("./action-gate");
 const { LEASE_ACTIONS, lendTerms, createLease, isLeaseLive, LeaseError } = require("./capability-lease");
 
@@ -155,6 +156,11 @@ const PLANNER_RETRYABLE_CODES = ["invalid_proposal", "invalid_proposal_json"];
 const SCROLL_STREAK_LIMIT = 6;
 // Planner turns spent on one page (query and hash ignored) within the recent window.
 const PAGE_LOOP_WINDOW = 12;
+const VISITED_PAGES_KEPT = 500;
+// Minimum gap between page loads on the same site; keeps agent browsing polite and less likely to trip bot checks.
+const SAME_SITE_NAV_INTERVAL_MS = 1500;
+// Sites that may show a human check before the task is handed to the person.
+const CAPTCHA_SITES_TRIED = 2;
 const PAGE_LOOP_LIMIT = 8;
 const ERROR_URLS_KEPT = 5;
 const OBSERVE_STALE_RETRIES = 2;
@@ -224,6 +230,7 @@ class TaskController {
     store,
     planner,
     browser,
+    releaseViewsOnReview = false,
     approve,
     hostVerifier,
     memoryMonitor,
@@ -238,6 +245,7 @@ class TaskController {
     branchLimits,
     permissionMode = "browse",
     observeRetryDelayMs = OBSERVE_RETRY_DELAY_MS,
+    navIntervalMs = SAME_SITE_NAV_INTERVAL_MS,
     maxRecoveries,
     plannerImageInput = true,
     visionAssist = null,
@@ -476,6 +484,11 @@ class TaskController {
     this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
     this._scrollStreak = { url: null, count: 0 };
     this._recentPages = [];
+    this._visitedPages = new Set();
+    this._lastNavAt = new Map();
+    this._captchaOrigins = new Set();
+    this._onCaptchaPage = false;
+    this._navIntervalMs = Number.isFinite(navIntervalMs) ? navIntervalMs : SAME_SITE_NAV_INTERVAL_MS;
     this._needUserReason = null;
     this._maxRecoveries = maxRecoveries;
     this._recovery = createRecoveryPolicy(maxRecoveries);
@@ -493,6 +506,8 @@ class TaskController {
     this._errorUrls = [];
     this._approvalQueue = [];
     this._lastObservation = null;
+    this._viewsReleased = false;
+    this._releaseViewsOnReview = releaseViewsOnReview === true;
     this._pendingMcpObservation = null;
     // Reusable-across-turns iff the last dispatched action was itself an
     // "observe" (see the reuse gate in the main loop and its assignment in
@@ -1050,10 +1065,36 @@ class TaskController {
     this._emit();
   }
 
+  // Awaiting the person's review needs no live page: keep the final URL and
+  // title in the journal, then free both renderers so an unconfirmed task
+  // stops costing memory. The store and planner stay for confirmCriterion().
+  async _releaseViewsForReview() {
+    try {
+      const tab = this._browser.getBrowserSnapshot?.()?.tabs?.[0];
+      await this._store.append({ type: "note", payload: { kind: "result_snapshot", url: tab?.url ?? null, title: tab?.title ?? null } }).catch(() => {});
+      if (typeof this._browser.dispose === "function") {
+        await this._browser.dispose();
+        this._viewsReleased = true;
+      }
+    } catch {
+      // best-effort -- the views are released again on terminal teardown
+    }
+  }
+
+  // True once the review hand-off freed the views and a rejection also
+  // closed the planner and store: only a fresh TaskHost re-attachment works.
+  get needsReattach() { return this._needsReattach === true; }
+
+  async _releaseForReattach() {
+    this._needsReattach = true;
+    try { await this._planner.close?.(); } catch { /* best-effort */ }
+    try { await this._store.close(); } catch { /* best-effort */ }
+  }
+
   async _pauseForMemoryPressure(pressure) {
     if (process.env.HALO_DEBUG_ACTIONS) {
       const sample = this._memoryMonitor.getLastSample?.();
-      console.error("[memory-pause]", pressure, sample ? `${Math.round(sample.totalBytes / 1048576)}MB unmeasurable=${JSON.stringify(sample.unmeasurable)}` : "no sample");
+      console.error("[memory-pause]", pressure, sample ? `${Math.round(sample.totalBytes / 1048576)}MB unmeasurable=${JSON.stringify(sample.unmeasurable)} by=${JSON.stringify(Object.entries((sample.byProcess ?? []).reduce((acc, p) => { acc[p.label] = (acc[p.label] ?? 0) + (p.bytes ?? 0); return acc; }, {})).map(([k, v]) => `${k}:${Math.round(v / 1048576)}MB`))} n=${(sample.byProcess ?? []).length}` : "no sample");
     }
     if (pressure === "emergency") {
       await this._pauseForMemoryEmergency();
@@ -1085,7 +1126,7 @@ class TaskController {
         "resume() from execution_uncertain requires resume({confirmed: true}) -- the dangling action is never auto-replayed",
       );
     }
-    if (this._task.pauseReason === "memory_emergency") {
+    if (this._task.pauseReason === "memory_emergency" || this._needsReattach) {
       // This controller's own browser/planner were already disposed when
       // emergency pressure hit -- there is nothing left here to resume into,
       // and no confirmed:true can rescue that (unlike execution_uncertain,
@@ -1263,6 +1304,9 @@ class TaskController {
         // already accepts, with a pauseReason that names why.
         this._task = { state: "paused", pauseReason: "evidence_rejected" };
         await this._checkpoint();
+        // Views were released at the review hand-off; resume() cannot reuse
+        // them, so recover through a fresh re-attachment like an emergency.
+        if (this._viewsReleased) await this._releaseForReattach();
       }
     }
     return this.getSnapshot();
@@ -1947,6 +1991,30 @@ class TaskController {
             this._errorUrls.push(observation.url);
             if (this._errorUrls.length > ERROR_URLS_KEPT) this._errorUrls.shift();
           }
+          // An anti-bot challenge is the person's to pass: hand the browser over
+          // before any planner call, never try to click through it.
+          // The first block on a site is routed around by asking the planner for another
+          // source (the challenged URL goes into errorUrls); a repeat, a third site, or any
+          // action other than leaving the page hands the task to the person.
+          this._onCaptchaPage = false;
+          if (looksLikeCaptcha(observation?.url, observation?.title)) {
+            let origin = null;
+            try { origin = new URL(observation.url).origin; } catch {}
+            if (origin === null || this._captchaOrigins.has(origin) || this._captchaOrigins.size >= CAPTCHA_SITES_TRIED) {
+              await this._pauseWith("captcha");
+              break;
+            }
+            this._captchaOrigins.add(origin);
+            this._onCaptchaPage = true;
+            if (!this._errorUrls.includes(observation.url)) this._errorUrls.push(observation.url);
+          }
+          // A page this task has never been on is real progress: it refills the recovery
+          // budget. Looping among pages already seen never does, so a stuck task stays bounded.
+          if (pageKey !== null && !this._visitedPages.has(pageKey)) {
+            this._visitedPages.add(pageKey);
+            if (this._visitedPages.size > VISITED_PAGES_KEPT) this._visitedPages.delete(this._visitedPages.values().next().value);
+            this._recovery.noteProgress();
+          }
           this._recentPages.push(pageKey);
           if (this._recentPages.length > PAGE_LOOP_WINDOW) this._recentPages.shift();
           const stuckOnOne = pageKey !== null && this._recentPages.filter((k) => k === pageKey).length >= PAGE_LOOP_LIMIT;
@@ -2178,6 +2246,18 @@ class TaskController {
           continue;
         }
 
+        if (this._onCaptchaPage && validated.kind === "actions") {
+          const staysOut = validated.actions.every((action) => {
+            if (action.type === "observe") return true;
+            if (action.type !== "navigate" && action.type !== "follow_link") return false;
+            try { return !this._captchaOrigins.has(new URL(describeActionTarget(action, this._lastObservation)).origin); } catch { return false; }
+          });
+          if (!staysOut) {
+            await this._pauseWith("captcha");
+            break;
+          }
+        }
+
         const coordinateActions = validated.kind === "actions"
           ? validated.actions.filter((action) => action.type === "click_at" || action.type === "type_at" || action.type === "press_key")
           : [];
@@ -2212,6 +2292,7 @@ class TaskController {
             this._task = { state: "awaiting_verification", pauseReason: null };
           }
           await this._checkpoint();
+          if (this._releaseViewsOnReview && this._task.state === "awaiting_verification") await this._releaseViewsForReview();
           this._emit();
           break;
         }
@@ -2588,8 +2669,27 @@ class TaskController {
   // "cancelled" once action_started may already be durable. A concurrent
   // pause/stop/takeOver instead WAITS for this call's true outcome via
   // _dispatchApprovedAndApplyTracked's entry in _inFlightOps.
+  // Waits out the same-site gap before a page load. Runs before action_started so a
+  // stop during the wait leaves no open action; returns false if a stop happened.
+  async _paceNavigation(action, epoch) {
+    if (!["navigate", "follow_link"].includes(action.type) || this._navIntervalMs <= 0) return true;
+    let origin = null;
+    try { origin = new URL(describeActionTarget(action, this._lastObservation)).origin; } catch { return true; }
+    for (;;) {
+      const wait = (this._lastNavAt.get(origin) ?? 0) + this._navIntervalMs - Date.now();
+      if (wait <= 0) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 250)));
+      if (this._stopHappenedSince(epoch)) return false;
+    }
+    this._lastNavAt.set(origin, Date.now());
+    return true;
+  }
+
   async _dispatchApproved(descriptor, action, epoch, { durable = true, widenedBy = null } = {}) {
     if (this._stopHappenedSince(epoch)) {
+      return { status: "not_dispatched", actionId: null, action, descriptor };
+    }
+    if (!(await this._paceNavigation(action, epoch))) {
       return { status: "not_dispatched", actionId: null, action, descriptor };
     }
     const actionId = randomUUID();
@@ -2736,6 +2836,7 @@ class TaskController {
     }
 
     if (madeProgress) {
+      this._recovery.noteProgress();
       this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
       return;
     }

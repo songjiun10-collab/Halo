@@ -39,6 +39,12 @@
     "runtime-src/main/harness/planner-escalation.ts",
     "runtime-src/main/harness/planner-routing.ts",
     "runtime-src/main/harness/slack-task-entry.ts",
-    "runtime-src/main/harness/activity-journal.ts"
+    "runtime-src/main/harness/activity-journal.ts",
+    "runtime-src/main/harness/strategy-learning.ts",
+    "runtime-src/main/harness/strategy-learning-store.ts",
+    "runtime-src/main/harness/cdp-web-contents.ts",
+    "runtime-src/main/harness/cdp-browser-host.ts",
+    "runtime-src/main/harness/cdp-engine.ts",
+    "runtime-src/main/harness/renderer-lifecycle.ts"
   ]
 }

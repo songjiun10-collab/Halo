@@ -3046,3 +3046,61 @@ test("a fast-profile task pins its planner to the provider's fast tier; other pr
   assert.equal(pins[0].plannerFast, true);
   assert.equal(pins[1].plannerFast, undefined);
 });
+
+test("stopTask() on a memory_emergency task frees its queue slot for the next task", async () => {
+  const storageRoot = await mkTempRoot();
+  const memoryMonitor = { getPressureLevel: () => "emergency" };
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => ({ observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }), dispose: async () => {} }),
+    makePlanner: () => ({
+      next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "observe" }] }),
+      close: async () => {},
+    }),
+    memoryMonitor,
+  });
+  const { taskId } = await host.createTask({ originalRequest: "first" });
+  assert.equal((await host.getTaskDetail(taskId)).snapshot.pauseReason, "memory_emergency");
+  assert.equal(host._queue.activeIds().includes(taskId), true, "the emergency task still holds the slot");
+
+  const stopped = await host.stopTask(taskId);
+  assert.equal(stopped.state, "stopped");
+  memoryMonitor.getPressureLevel = () => "normal";
+  assert.equal(host._queue.activeIds().includes(taskId), false, "stop must release the slot");
+});
+
+test("captureAgentFrame returns the injected frame source's result, or null without one", async () => {
+  const base = { hostVerifier: () => true, approve: async () => ({ decision: "allow", reasons: [] }), storageRoot: await fs.mkdtemp(path.join(os.tmpdir(), "halo-frame-")), makeBrowser: () => ({}), makePlanner: () => ({}) };
+  const withSource = new TaskHost({ ...base, captureAgentFrame: async (id) => `frame-of-${id}` });
+  assert.equal(await withSource.captureAgentFrame("t1"), "frame-of-t1");
+  assert.equal(await withSource.captureAgentFrame(""), null);
+  const without = new TaskHost(base);
+  assert.equal(await without.captureAgentFrame("t1"), null);
+});
+
+test("takeover frame/input only flow while the user owns the task, and input is strictly validated", async () => {
+  const sent = [];
+  const base = { hostVerifier: () => true, approve: async () => ({ decision: "allow", reasons: [] }), storageRoot: await fs.mkdtemp(path.join(os.tmpdir(), "halo-takeover-")), makeBrowser: () => ({}), makePlanner: () => ({}) };
+  const host = new TaskHost({ ...base, captureTaskFrame: async (id) => `still-${id}`, sendTaskInput: async (id, input) => { sent.push([id, input]); return true; } });
+  hostsToClose.add(host);
+  let owned = false;
+  host.canUseTaskBrowser = () => owned;
+
+  assert.equal(await host.captureTaskFrame("t1"), null, "no frame while the agent drives");
+  assert.equal(await host.sendTaskInput("t1", { type: "mouseMove", nx: 0.5, ny: 0.5 }), false, "no input while the agent drives");
+  owned = true;
+  assert.equal(await host.captureTaskFrame("t1"), "still-t1");
+  assert.equal(await host.sendTaskInput("t1", { type: "mouseDown", nx: 0.2, ny: 0.9, button: "left", clickCount: 2 }), true);
+  assert.equal(await host.sendTaskInput("t1", { type: "keyDown", key: "a", modifiers: ["shift"] }), true);
+  assert.equal(sent.length, 2);
+
+  for (const bad of [
+    null, "x", { type: "eval" }, { type: "mouseMove", nx: 2, ny: 0 }, { type: "mouseMove", nx: "0", ny: 0 },
+    { type: "mouseWheel", nx: 0, ny: 0, deltaY: Infinity }, { type: "keyDown", key: "" }, { type: "keyDown", key: "x".repeat(17) },
+    { type: "mouseDown", nx: 0, ny: 0, button: "back" }, { type: "mouseDown", nx: 0, ny: 0, clickCount: 9 },
+    { type: "keyDown", key: "a", modifiers: ["super"] },
+  ]) {
+    await assert.rejects(host.sendTaskInput("t1", bad), TaskHostError, JSON.stringify(bad));
+  }
+  assert.equal(sent.length, 2, "rejected inputs never reach the page");
+  assert.equal(await new TaskHost(base).captureTaskFrame("t1"), null, "no frame source -> null");
+});

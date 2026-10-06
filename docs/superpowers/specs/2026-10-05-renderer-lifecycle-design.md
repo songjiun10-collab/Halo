@@ -14,7 +14,7 @@ Halo's beta must survive users who run ~20 agents, ~80 tabs, ~10 background task
 | Child agent | 1 hidden view + 1 hidden window + its own planner worker subtree | `child-agent-coordinator.js:61`, `agent-viewport-host.js:247` |
 | User tab | 1 view, always live; no discard/freeze path | `control-api.js:225-258`, `control-api.js:462-481` |
 
-The task's visible view is never driven by the agent: `makeDualSurfaceBrowser` routes `observe`/`execute` to the hidden agent adapter only (`agent-viewport-host.js:340-377`). The visible view is created at attach even when nobody is looking at the task.
+The task's visible view is never driven by the agent: `makeDualSurfaceBrowser` routes `observe`/`execute` to the hidden agent adapter only (`agent-viewport-host.js:340-377`). The visible view is created at attach, but it stays an unloaded view (no renderer process) until the user takes over.
 
 Existing seams to build on:
 - A user tab is already a record `{ id, title, url, view }`; the view can be dropped while the record stays.
@@ -64,7 +64,7 @@ Existing seams to build on:
 
 ### Structural reductions that need no new concept
 
-1. Create a task's visible view lazily, only when the user opens that task (halves per-task renderers).
+1. ~~Create a task's visible view lazily.~~ Dropped after measurement (2026-10-06): a `WebContentsView` that never loads a URL spawns no renderer process (10 blank views: +1 MB each, process count unchanged); the task's visible view is only loaded on user takeover (`userNavigate`), because `observe`/`execute` go to the hidden agent adapter. Loading `about:blank` costs ~80 MB and one process per view, which is what the agent views already pay. So the per-task renderer count is 1, not 2, and the savings are in parking agent views (Phase 2), not in the visible view.
 2. One shared hidden `BrowserWindow` for all agent views instead of one per view.
 3. Stop painting for hidden agent views whenever no capture is requested.
 
@@ -81,7 +81,22 @@ Existing seams to build on:
 
 ### Companion change: agent mirror
 
-While an agent works, the user's native view is replaced by a still refreshed every 600 ms (`frontend/src/App.tsx:244-259`, `!agentFrame` hides the native surface). This is the likely cause of "plays fine, then stutters while the agent runs". Show the agent mirror as a small picture-in-picture panel instead and keep the user's page live; refresh faster only when the mirrored page changes. Separate from the pool work, can ship first.
+While an agent works, the user's native view is replaced by a still refreshed on a timer (`frontend/src/App.tsx`, `!agentFrame` hides the native surface). The mirror stays a replacement of the native view, not a picture-in-picture panel. Two changes make it cheap and smooth:
+
+- Refresh every 250 ms instead of 600 ms. Measured with 10 windows (5 video, 5 working): 0 dropped frames, main-thread lag max 68 ms.
+- Deduplicate frames: `AgentViewportHost.captureFrame` fingerprints a 64 px downscale (sha1 of the bitmap) and returns the cached JPEG when the page has not changed, so an idle agent page costs no re-encode and no new IPC payload.
+
+Status: the fingerprint and the 250 ms interval are implemented in the working tree but depend on the uncommitted mirror feature, so they ship with it. Separate from the pool work.
+
+## Beta scope decision (2026-10-06)
+
+The beta ships on Phase 1 plus reclaim-before-refuse. Agent-view park/restore (Phase 2) is deferred until a measured target is missed.
+
+Why: `BrowserAdapter` binds to one `WebContentsView` for its lifetime (listeners, `_documentEpoch`, interaction and visual bindings, the Intent Lock). Parking means re-binding a live adapter to a new view, or swapping the adapter under a running `TaskController`, in the class that enforces effect safety. A restore bug there could replay or misdirect an action; a missed memory target only queues a task. The epoch machinery already makes a restore safe in principle (`did-navigate` bumps `_documentEpoch` and clears the bindings, so any observation or approval from before is rejected as stale), but that has to be proven by tests before it ships, which is more risk than a beta needs.
+
+What protects the beta today: memory admission (queue, never reject), reclaim of inactive tabs before refusing, a visible wait reason, sequential execution by default, and the 2 GB hard cap.
+
+Revisit when: a 20-task, 80-tab run on a 16 GB Mac misses the provisional targets, or users hit "Waiting for memory" often with no tab left to reclaim.
 
 ## Limits (stated honestly)
 
@@ -118,3 +133,31 @@ Move beyond Electron-level pooling only if, after Phase 2, a measured target is 
 1. Idle timeout for tab discard (proposal: 10 minutes, and immediately under memory pressure).
 2. Whether Teams share a hidden window per team or globally (proposal: global, sessions isolated by partition).
 3. Whether to expose "pin this tab/agent" to the user in Phase 2 or Phase 3.
+
+## Phase 2 implemented (2026-10-06)
+
+The deferral above is lifted by the product owner. Agent surfaces now follow ACTIVE, FROZEN, DISCARDED
+(`apps/computer-browser/runtime-src/main/harness/renderer-lifecycle.ts`).
+
+- `ParkableView` is the stable view the adapter binds to. Its `webContents` forwards the live renderer's events, so
+  `BrowserAdapter` is unchanged. A discard keeps the URL and title and releases the renderer; the partition keeps the
+  session. A restore loads the saved URL only, which fires `did-navigate`, so the adapter bumps its epoch and drops every
+  earlier observation and approval binding. Synchronous input never wakes a surface (it fails closed).
+- The host wakes a surface before `observe`/`execute`/screenshot calls (`wakeOnUse`), so the restore's navigation never
+  lands inside an observation in flight. Surfaces start parked and get a renderer on first use.
+- `SurfacePool` freezes idle surfaces (`Page.setWebLifecycleState`), discards the least recently used ones beyond a cap
+  (default 6) and anything idle for 2 minutes, never touches a surface mid-call or pinned, and gives memory back on demand
+  (`relieve("soft"|"hard")`, called from memory admission before a task is refused).
+- Off by default in `AgentViewportHost`; `main/index.js` turns it on.
+
+Measured (16 GB M5, 30 logical agents, one page each, run in waves of 5, cap 5):
+
+| | peak RSS | steady, 5 live | restore + observe |
+|---|---|---|---|
+| Electron 44 | 1.5 GB | 0.9 GB | 88 ms |
+| Chromium 157 Trial (component build) | 8.7 GB | 4.0 GB | about 2.3 s |
+
+Without the pool the same 30 agents scale linearly (10 agents: Electron 1.4 GB, Chromium 6.1-6.5 GB). Freezing saves CPU, not
+RSS. On Chromium a closed renderer takes 20-40 s to exit, so a discard is not instant relief there.
+Limits: a restore reloads the URL, so in-page JS state, unsent form text and history entries are lost; the live-renderer
+cap and idle timers are provisional.

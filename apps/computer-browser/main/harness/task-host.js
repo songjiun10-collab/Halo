@@ -74,6 +74,9 @@ const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
 // rounded-up per-task half plus margin. Planner subtree reserve is added
 // dynamically from the measured live worker high-water mark below.
 
+const TASK_INPUT_TYPES = new Set(["mouseMove", "mouseDown", "mouseUp", "mouseWheel", "keyDown", "keyUp"]);
+const TASK_INPUT_MODIFIERS = new Set(["shift", "control", "alt", "meta"]);
+
 class TaskHostError extends Error {
   constructor(code, message) {
     super(message);
@@ -85,6 +88,7 @@ class TaskHostError extends Error {
 class TaskHost {
   constructor({
     storageRoot,
+    releaseViewsOnReview = false,
     makeBrowser,
     makePlanner,
     makeChildBrowser,
@@ -92,6 +96,9 @@ class TaskHost {
     approve,
     memoryMonitor,
     reclaimMemory,
+    captureAgentFrame,
+    captureTaskFrame,
+    sendTaskInput,
     now,
     segmentRotationCalls,
     noProgressThreshold,
@@ -110,6 +117,7 @@ class TaskHost {
     mcpProviders = [],
     memoryStore,
     activityJournal,
+    strategyLearning,
     nvidiaModelsFile,
     settingsStore,
     usageLedger,
@@ -137,7 +145,11 @@ class TaskHost {
       throw new TaskHostError("invalid_config", "makeMcpBroker must be a function when provided");
     }
 
+    this._releaseViewsOnReview = releaseViewsOnReview === true;
     this._storageRoot = storageRoot;
+    this._captureAgentFrame = captureAgentFrame;
+    this._captureTaskFrame = captureTaskFrame;
+    this._sendTaskInput = sendTaskInput;
     this._makeBrowser = makeBrowser;
     this._makePlanner = makePlanner;
     this._makeChildBrowser = makeChildBrowser || null;
@@ -169,6 +181,7 @@ class TaskHost {
     this._memoryStore = memoryStore || null;
     // { store, isEnabled }: the Context Awareness journal (local host only).
     this._activityJournal = activityJournal || null;
+    this._strategyLearning = strategyLearning || null;
     this._nvidiaModelsFile = typeof nvidiaModelsFile === "string" ? nvidiaModelsFile : null;
     this._settingsStore = settingsStore || null;
     this._usageLedger = usageLedger || null;
@@ -487,6 +500,9 @@ class TaskHost {
     browser = this._makeBrowser(store.taskId, taskProfile);
     const pinnedModel = this._runScopes.get(store.taskId)?.plannerModel;
     const parentPin = this._plannerPin("parent", pinnedModel ?? this._routedModel(taskProfile), { forceFast: taskProfile?.duration.id === "fast" });
+    const strategyGuidance = this._strategyLearning
+      ? await this._strategyLearning.activeGuidance(parentPin.plannerModel ?? DEFAULT_MODEL_BY_PROVIDER[parentPin.plannerProvider]).catch(() => null)
+      : null;
     planner = routine ? routine.runner : this._makePlanner(store.taskId, parentPin);
     // Profile selection is a host operation (design doc "Profile selection"):
     // TaskHost is the sole authority that decides harnessProfile, and passes
@@ -499,6 +515,7 @@ class TaskHost {
       store,
       planner,
       browser,
+      releaseViewsOnReview: this._releaseViewsOnReview,
       harnessProfile,
       // Only the Codex route accepts a screenshot; every other planner uses
       // the text screen map for computer use.
@@ -509,6 +526,7 @@ class TaskHost {
       hostVerifier: this._hostVerifier,
       memoryMonitor: controllerMemoryMonitor,
       memoryStore: this._memoryStore,
+      strategyGuidance,
       ...(this._activityJournal ? { activityRecall: async (query) => (await this._activityJournal.isEnabled()) ? this._activityJournal.store.recall(query) : [] } : {}),
       permissionMode: this._permissionMode,
       plannerEffort: this._effortForProfile(taskProfile),
@@ -569,6 +587,23 @@ class TaskHost {
       entry.snapshot = snapshot;
       this._emit(store.taskId, snapshot, { goal: controller.getGoal(), browser: browser.getBrowserSnapshot?.() });
       const binding = store.taskProfile?.workGoalBinding;
+      if (this._strategyLearning && (snapshot.state === "completed" || snapshot.state === "paused")) {
+        const modelId = parentPin.plannerModel ?? DEFAULT_MODEL_BY_PROVIDER[parentPin.plannerProvider];
+        const profile = taskProfile?.duration?.id;
+        void this._strategyLearning.recordEpisode({
+          // A durable checkpoint sequence distinguishes a later retry episode
+          // from the same task pausing again for the same stable reason.
+          id: `${store.taskId}:${store.lastCheckpoint?.seq ?? store._nextSeq ?? 0}:${snapshot.state}:${snapshot.pauseReason ?? "none"}`,
+          modelId,
+          duration: profile,
+          outcome: snapshot.state === "completed" ? "completed" : "paused",
+          failureCode: snapshot.state === "paused" ? snapshot.pauseReason : null,
+          actionClass: "unknown",
+          verifiedCriteria: snapshot.criteriaStatus?.filter((item) => item.status === "verified").length ?? 0,
+          plannerCalls: snapshot.budgets?.plannerCallsUsed ?? 0,
+          at: new Date().toISOString(),
+        }).catch(() => {});
+      }
       const phase = WORK_GOAL_BLOCKER_PHASE[snapshot.pauseReason];
       if (binding && snapshot.state === "paused") {
         // Controller pause transitions checkpoint before notifying listeners.
@@ -1142,7 +1177,7 @@ class TaskHost {
   async postRoomMessage(input) {
     this._assertOpen();
     await this._recoverRooms();
-    if (!isPlainObject(input) || Object.keys(input).sort().join(",") !== "teamId,text") {
+    if (!(input && typeof input === "object" && !Array.isArray(input)) || Object.keys(input).sort().join(",") !== "teamId,text") {
       throw new RoomError("invalid_message", "postRoomMessage takes exactly {teamId, text}");
     }
     return this._rooms.post(input.teamId, input.text);
@@ -2048,7 +2083,7 @@ class TaskHost {
     // have failed, so the old worker's exit is confirmed here first: a
     // failure propagates and keeps the stale entry, and no replacement
     // adapter is minted while the previous one may still be running.
-    if (entry && entry.controller.getSnapshot().pauseReason === "memory_emergency") {
+    if (entry && (entry.controller.getSnapshot().pauseReason === "memory_emergency" || entry.controller.needsReattach)) {
       await entry.planner?.close?.();
       this._unsubscribe(entry);
       this._active.delete(taskId);
@@ -2188,6 +2223,14 @@ class TaskHost {
   async stopTask(taskId) {
     const { controller } = this._require(taskId);
     const retryingTeardown = this._terminalTeardownFailures.has(taskId);
+    // After a memory emergency (or a rejected review) the controller already
+    // closed its store, so controller.stop() would throw and the task would
+    // hold the queue slot forever. Run the terminal path directly instead.
+    if (controller.needsReattach || controller.getSnapshot().pauseReason === "memory_emergency") {
+      await this._recordTerminal(taskId, "stopped");
+      await this._queueTransition;
+      return { ...controller.getSnapshot(), state: "stopped", pauseReason: null };
+    }
     const snapshot = await controller.stop();
     // Terminal notification schedules durable FIFO cleanup and resource
     // teardown on this shared chain. Do not report a stopped task while its
@@ -2245,6 +2288,48 @@ class TaskHost {
     const entry = this._active.get(taskId);
     if (entry) return entry.controller.getEvents(options);
     return TaskStore.readEvents(taskId, { storageRoot: this._storageRoot }, options);
+  }
+
+  // Latest still of a task's hidden agent view, for a UI attached from another process.
+  async captureAgentFrame(taskId) {
+    if (typeof taskId !== "string" || !taskId || typeof this._captureAgentFrame !== "function") return null;
+    return (await this._captureAgentFrame(taskId)) ?? null;
+  }
+
+  // Latest still of a task's visible page while the user drives it from a UI
+  // attached from another process. Only while the user owns the task.
+  async captureTaskFrame(taskId) {
+    if (typeof taskId !== "string" || !taskId || typeof this._captureTaskFrame !== "function") return null;
+    if (!this.canUseTaskBrowser(taskId)) return null;
+    return (await this._captureTaskFrame(taskId)) ?? null;
+  }
+
+  // One user input (normalised 0..1 coordinates) for that same page. Strictly
+  // validated: this is the remote-control surface, so it accepts nothing else.
+  async sendTaskInput(taskId, input) {
+    this._assertOpen();
+    if (typeof taskId !== "string" || !taskId || typeof this._sendTaskInput !== "function") return false;
+    if (!isPlainObject(input) || !TASK_INPUT_TYPES.has(input.type)) {
+      throw new TaskHostError("invalid_field", "unsupported input type");
+    }
+    const unit = (value) => Number.isFinite(value) && value >= 0 && value <= 1;
+    const mouse = input.type.startsWith("mouse");
+    if (mouse && !(unit(input.nx) && unit(input.ny))) throw new TaskHostError("invalid_field", "input requires nx and ny in 0..1");
+    if (input.type === "mouseWheel" && !(Number.isFinite(input.deltaX ?? 0) && Number.isFinite(input.deltaY ?? 0))) {
+      throw new TaskHostError("invalid_field", "wheel deltas must be finite");
+    }
+    if (!mouse && !(typeof input.key === "string" && input.key.length >= 1 && input.key.length <= 16)) {
+      throw new TaskHostError("invalid_field", "key input requires a short key name");
+    }
+    if (input.button !== undefined && !["left", "middle", "right"].includes(input.button)) throw new TaskHostError("invalid_field", "unknown button");
+    if (input.modifiers !== undefined && !(Array.isArray(input.modifiers) && input.modifiers.every((m) => TASK_INPUT_MODIFIERS.has(m)))) {
+      throw new TaskHostError("invalid_field", "unknown modifier");
+    }
+    if (input.clickCount !== undefined && !(Number.isInteger(input.clickCount) && input.clickCount >= 1 && input.clickCount <= 3)) {
+      throw new TaskHostError("invalid_field", "clickCount must be 1..3");
+    }
+    if (!this.canUseTaskBrowser(taskId)) return false;
+    return Boolean(await this._sendTaskInput(taskId, input));
   }
 
   getTaskBrowser(taskId) {
@@ -2378,7 +2463,18 @@ class TaskHost {
     if (!this._settingsStore) throw new TaskHostError("settings_unavailable", "host settings are unavailable");
     // Only this trusted host method is exposed through the allowlisted UI
     // action. The renderer never supplies or selects an audit actor.
-    const settings = await this._settingsStore.update(patch, { actor: "user" });
+    const previousSettings = await this._settingsStore.load();
+    if (this._strategyLearning && typeof patch.strategyLearning === "boolean") {
+      await this._strategyLearning.setEnabled(patch.strategyLearning);
+    }
+    let settings;
+    try { settings = await this._settingsStore.update(patch, { actor: "user" }); }
+    catch (error) {
+      if (this._strategyLearning && typeof patch.strategyLearning === "boolean") {
+        await this._strategyLearning.setEnabled(previousSettings.strategyLearning === true).catch(() => {});
+      }
+      throw error;
+    }
     this._executionMode = settings.executionMode;
     this._permissionMode = settings.permissionMode;
     this._plannerEffort = settings.plannerEffort;
@@ -2393,6 +2489,41 @@ class TaskHost {
       entry.controller.setPolicySettings({ ...settings, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
     }
     return settings;
+  }
+
+  async getStrategyLearningState() {
+    this._assertOpen();
+    if (!this._strategyLearning) throw new TaskHostError("strategy_learning_unavailable", "strategy learning is unavailable");
+    const data = await this._strategyLearning.snapshot();
+    return { enabled: data.enabled, candidates: data.candidates, revisions: data.revisions.map(({ agentMd, ...revision }) => revision), activeRevisionId: data.activeRevisionId };
+  }
+
+  async evaluateStrategyCandidate(candidateId) {
+    this._assertOpen();
+    if (!this._strategyLearning) throw new TaskHostError("strategy_learning_unavailable", "strategy learning is unavailable");
+    const data = await this._strategyLearning.evaluate(candidateId);
+    const candidate = data.candidates.find((item) => item.id === candidateId);
+    return candidate ? { id: candidate.id, status: candidate.status, evaluation: candidate.evaluation } : null;
+  }
+
+  async promoteStrategyCandidate(candidateId, expectedActiveRevisionId) {
+    this._assertOpen();
+    if (!this._strategyLearning) throw new TaskHostError("strategy_learning_unavailable", "strategy learning is unavailable");
+    const data = await this._strategyLearning.promote(candidateId, expectedActiveRevisionId);
+    return { activeRevisionId: data.activeRevisionId };
+  }
+
+  async rollbackStrategyGuidance(targetRevisionId, expectedActiveRevisionId) {
+    this._assertOpen();
+    if (!this._strategyLearning) throw new TaskHostError("strategy_learning_unavailable", "strategy learning is unavailable");
+    const data = await this._strategyLearning.rollback(targetRevisionId, expectedActiveRevisionId);
+    return { activeRevisionId: data.activeRevisionId };
+  }
+
+  async clearStrategyLearning() {
+    this._assertOpen();
+    if (!this._strategyLearning) throw new TaskHostError("strategy_learning_unavailable", "strategy learning is unavailable");
+    return this._strategyLearning.clear();
   }
 
   // Planner API keys registered in Settings: presence only ever leaves the host.

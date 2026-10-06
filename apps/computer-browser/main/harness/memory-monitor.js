@@ -147,7 +147,7 @@ class MemoryMonitor {
     const degraded = unmeasurable.length > 0;
     this._lastTotalBytes = degraded ? Math.max(totalBytes, this._lastTotalBytes) : totalBytes;
     this._lastSampleDegraded = degraded;
-    this._lastSample = { totalBytes, unmeasurable: [...unmeasurable], sampledAt: this._now() };
+    this._lastSample = { totalBytes, unmeasurable: [...unmeasurable], sampledAt: this._now(), byProcess: byProcess.map(({ label, bytes }) => ({ label, bytes })) };
     return { totalBytes, unmeasurable, byProcess, sampledAt: this._lastSample.sampledAt };
   }
 

@@ -18,7 +18,7 @@ const { BackgroundRuntimeClient } = require("../main/harness/background-runtime-
 
 const RUNTIME_DIR = path.join(os.homedir(), "Library/Application Support/halo-computer-browser/background-runtime");
 const SETTLED = new Set(["awaiting_verification", "completed", "stopped"]);
-const PAUSE_GIVE_UP = new Set(["memory_pressure", "memory_emergency", "need_user", "goal_not_reached"]);
+const PAUSE_GIVE_UP = new Set(["memory_pressure", "memory_emergency", "need_user", "goal_not_reached", "captcha", "planner_error", "planner_unavailable"]);
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(`--${name}`);
@@ -49,7 +49,7 @@ async function runTask(client, item, timeoutMs) {
     state: timedOut ? "timeout" : snapshot.state, pauseReason: snapshot?.pauseReason ?? null,
     durationMs: Date.now() - started,
     // For an information task the planner's answer arrives as need_user.
-    answer: snapshot?.needUserReason ?? null,
+    answer: snapshot?.needUserReason ?? snapshot?.finalAnswer ?? snapshot?.summary ?? snapshot?.resultSummary ?? null,
   };
 }
 

@@ -109,3 +109,10 @@ test("planner effort maps to the model's reasoning knob; models without one send
   assert.deepEqual(nvidiaReasoningKwargs("deepseek-ai/deepseek-v4.1-flash", "high"), { thinking: true, reasoning_effort: "high" });
   assert.equal(nvidiaReasoningKwargs("nvidia/nemotron-3-super-120b-a12b", "max"), null);
 });
+
+test("Nemotron guidance tells the planner to put the answer in need_user instead of asking the person to confirm", () => {
+  const { getModelPromptGuidance } = require("../main/harness/providers/model-prompt-guidance");
+  const text = getModelPromptGuidance("nvidia", "nvidia/nemotron-3-super-120b-a12b");
+  assert.match(text, /answer itself/);
+  assert.match(text, /never end it by asking the person to confirm/);
+});

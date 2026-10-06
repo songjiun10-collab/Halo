@@ -39,6 +39,7 @@ const HARNESS_METHODS = [
   "getApiKeyStatus", "setApiKey", "clearApiKey",
   "listCredentials", "saveCredential", "removeCredential",
   "listActivity", "clearActivity",
+  "getStrategyLearningState", "evaluateStrategyCandidate", "promoteStrategyCandidate", "rollbackStrategyGuidance", "clearStrategyLearning",
   "listMemories", "saveMemory", "removeMemory",
   "fillCredential",
   "listRoutines", "getRoutine", "saveRoutine", "deleteRoutine", "runRoutine",
@@ -58,7 +59,7 @@ const HARNESS_METHODS = [
   "setMemoryPolicy", "stopBackgroundService", "setBackgroundLaunchAtLogin",
 ];
 
-const WINDOW_METHODS = ["newWindow", "captureSurface", "copyText"];
+const WINDOW_METHODS = ["newWindow", "captureSurface", "copyText", "captureAgentFrame", "captureTaskFrame", "sendTaskInput"];
 
 const api = {};
 for (const method of METHODS) {

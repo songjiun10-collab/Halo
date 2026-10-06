@@ -488,3 +488,45 @@ test("a view created after the shared window was destroyed gets a fresh window",
   assert.equal(windows[1].destroyed, false);
   assert.equal(windows[1].children.length, 1);
 });
+
+function fakeImage(bytes, width = 1440) {
+  return {
+    isEmpty: () => false,
+    getSize: () => ({ width, height: 900 }),
+    toBitmap: () => Buffer.from(bytes),
+    resize() { return this; },
+    toJPEG: () => Buffer.from(`jpeg:${bytes.join(",")}`),
+  };
+}
+
+test("captureFrame returns the previous frame without re-encoding when the page is unchanged", async () => {
+  const { host, views } = setup();
+  host.ensure("task-a");
+  let encodes = 0;
+  let next = fakeImage([1, 2, 3, 4]);
+  views[0].webContents.capturePage = async () => {
+    const image = next;
+    const original = image.toJPEG;
+    image.toJPEG = (...args) => { encodes += 1; return original(...args); };
+    return image;
+  };
+  const first = await host.captureFrame("task-a");
+  const second = await host.captureFrame("task-a");
+  assert.match(first, /^data:image\/jpeg;base64,/);
+  assert.equal(first, second);
+  assert.equal(encodes, 1, "an unchanged page is encoded once");
+  next = fakeImage([9, 9, 9, 9]);
+  const third = await host.captureFrame("task-a");
+  assert.notEqual(third, first);
+  assert.equal(encodes, 2);
+});
+
+test("captureFrame cache is dropped with the view", async () => {
+  const { host, views } = setup();
+  host.ensure("task-a");
+  views[0].webContents.capturePage = async () => fakeImage([1, 1, 1, 1]);
+  assert.ok(await host.captureFrame("task-a"));
+  await host.dispose("task-a");
+  assert.equal(await host.captureFrame("task-a"), null);
+  assert.equal(host._lastFrames.has("task-a"), false);
+});

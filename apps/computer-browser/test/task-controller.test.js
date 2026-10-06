@@ -792,7 +792,7 @@ test("a task reloaded after reaching completed reports completed, not paused/rec
 // must reject a stale goalVersion/evidenceId rather than blindly trust
 // whatever the caller (main/ipc.js, ultimately the renderer) sends.
 
-async function driveToAwaitingVerification({ criterionVerification = "user" } = {}) {
+async function driveToAwaitingVerification({ criterionVerification = "user", extraBrowser = {}, releaseViewsOnReview = false } = {}) {
   const { store } = await makeStore({
     originalRequest: "goal needing a human look",
     criteria: [{ id: "c1", text: "human confirms", required: true, verification: criterionVerification }],
@@ -800,6 +800,7 @@ async function driveToAwaitingVerification({ criterionVerification = "user" } = 
   const browser = {
     observe: async () => ({ id: "obs" }),
     execute: async () => ({ status: "ok", evidenceCandidate: { kind: "artifact", observationId: "obs" } }),
+    ...extraBrowser,
   };
   let plannerCalls = 0;
   const planner = {
@@ -811,7 +812,7 @@ async function driveToAwaitingVerification({ criterionVerification = "user" } = 
       return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: ["c1"], kind: "finish", evidenceIds: [] };
     },
   };
-  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true });
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true, releaseViewsOnReview });
   await controller.start();
   assert.equal(controller.getSnapshot().state, "awaiting_verification");
   const pending = controller.getSnapshot().criteriaStatus.find((c) => c.criterionId === "c1");
@@ -2789,4 +2790,14 @@ test("only a Multi-agent parent with a host child_plan hook is told it may split
     assert.deepEqual(seen, expected, `${profile} hook=${hook}`);
     await store.close();
   }
+});
+
+test("awaiting_verification frees the browser views once", async () => {
+  let disposed = 0;
+  const { controller, store } = await driveToAwaitingVerification({
+    releaseViewsOnReview: true,
+    extraBrowser: { dispose: async () => { disposed += 1; }, getBrowserSnapshot: () => ({ tabs: [{ url: "https://a.test/", title: "A" }] }) },
+  });
+  assert.equal(disposed, 1);
+  await store.close();
 });

@@ -47,6 +47,52 @@ class BrowserSurfaces {
     return { visible: Boolean(taskId && bounds.visible && this._views.has(taskId)) };
   }
 
+  // Still of the task's visible page, for a UI attached from another process
+  // (the view lives in this process, so the UI cannot draw it natively).
+  async captureFrame(taskId) {
+    const view = this._views.get(taskId);
+    if (!view || view.webContents.isDestroyed()) return null;
+    try {
+      const image = await view.webContents.capturePage();
+      if (!image || image.isEmpty()) return null;
+      const sized = image.getSize().width > 1200 ? image.resize({ width: 1200, quality: "good" }) : image;
+      return `data:image/jpeg;base64,${sized.toJPEG(70).toString("base64")}`;
+    } catch {
+      return null;
+    }
+  }
+
+  // Forwards one already-validated user input to the visible page. Fails closed
+  // unless the user owns the task, same as the before-input guard above.
+  sendInput(taskId, input) {
+    const view = this._views.get(taskId);
+    if (!view || view.webContents.isDestroyed() || !this._isUserControlled(taskId)) return false;
+    const wc = view.webContents;
+    const bounds = view.getBounds();
+    const x = Math.round(input.nx * bounds.width);
+    const y = Math.round(input.ny * bounds.height);
+    const modifiers = input.modifiers ?? [];
+    switch (input.type) {
+      case "mouseMove":
+        wc.sendInputEvent({ type: "mouseMove", x, y, modifiers });
+        return true;
+      case "mouseDown":
+      case "mouseUp":
+        wc.sendInputEvent({ type: input.type, x, y, button: input.button ?? "left", clickCount: input.clickCount ?? 1, modifiers });
+        return true;
+      case "mouseWheel":
+        wc.sendInputEvent({ type: "mouseWheel", x, y, deltaX: input.deltaX ?? 0, deltaY: input.deltaY ?? 0, modifiers });
+        return true;
+      case "keyDown":
+      case "keyUp":
+        wc.sendInputEvent({ type: input.type, keyCode: input.key, modifiers });
+        if (input.type === "keyDown" && input.key.length === 1) wc.sendInputEvent({ type: "char", keyCode: input.key, modifiers });
+        return true;
+      default:
+        return false;
+    }
+  }
+
   _layout() {
     if (this._win.isDestroyed()) return;
     for (const view of this._views.values()) view.setVisible(false);
