@@ -12,13 +12,14 @@ interface Props {
   activeTask?: { text: string; tabId: string }
   onSelectTab: (id: string) => void
   onStartTask: (text: string, lock?: IntentLockInput) => void
+  onNavigate: (url: string) => void
 }
 
 /**
  * Stand-in for the page engine's surface. The page keeps the site's own look;
  * HALO draws only where Claude is about to act.
  */
-export function Viewport({ tab, target, driven, activeTask, onSelectTab, onStartTask }: Props) {
+export function Viewport({ tab, target, driven, activeTask, onSelectTab, onStartTask, onNavigate }: Props) {
   const url = currentUrl(tab)
 
   // halo://newtab is Halo's own surface, not a web page: it gets the dark chrome look,
@@ -26,7 +27,7 @@ export function Viewport({ tab, target, driven, activeTask, onSelectTab, onStart
   if (url === NEW_TAB_URL) {
     return (
       <main id="hx-page" className="hx-site hx-site--home" role="tabpanel" aria-labelledby={`tab-${tab.id}`} tabIndex={-1}>
-        <HomeScreen activeTask={activeTask} onSelectTab={onSelectTab} onSubmit={onStartTask} />
+        <HomeScreen activeTask={activeTask} onSelectTab={onSelectTab} onSubmit={onStartTask} onNavigate={onNavigate} />
       </main>
     )
   }

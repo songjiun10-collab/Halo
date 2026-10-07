@@ -19,7 +19,7 @@ function fakeInner(log) {
   wc.getURL = () => wc.url;
   wc.getTitle = () => "title";
   wc.session = { name: "s" };
-  wc.rawCmd = async (method, params) => { log.push(["cmd", method, params.state]); };
+  wc.rawCmd = async (method, params) => { log.push(["cmd", method, params?.state]); };
   wc.loadURL = async (url) => { wc.url = url; wc.emit("did-navigate", {}, url, 200); log.push(["load", url]); };
   wc.executeJavaScript = async () => "ran";
   wc.sendInputEvent = () => log.push(["input"]);
@@ -28,6 +28,38 @@ function fakeInner(log) {
 }
 
 function clock() { const c = { t: 0 }; c.now = () => c.t; return c; }
+
+test("wake waits for initial Chromium readiness before starting adapter deadlines", async () => {
+  const inner = fakeInner([]);
+  let ready;
+  inner.view.webContents.ready = new Promise((resolve) => { ready = resolve; });
+  const view = new ParkableView({ create: () => inner });
+  let started = false;
+  const adapter = wakeOnUse({ execute: async () => { started = true; return "ok"; } }, view);
+  const call = adapter.execute();
+  await new Promise((resolve) => setImmediate(resolve));
+  const premature = started;
+  ready();
+  assert.equal(await call, "ok");
+  assert.equal(premature, false);
+  view.webContents.close();
+});
+
+test("parkable surfaces expose direct JPEG only when supported and pin captures", async () => {
+  const plain = new ParkableView({ create: () => fakeInner([]) });
+  assert.equal(plain.webContents.captureJpeg, undefined);
+  let finish;
+  const inner = fakeInner([]);
+  inner.view.webContents.captureJpeg = () => new Promise((resolve) => { finish = resolve; });
+  const view = new ParkableView({ create: () => inner });
+  const capture = view.webContents.captureJpeg({ maxWidth: 1200, quality: 65 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await view.discard(), false);
+  finish(Buffer.from("jpeg"));
+  assert.equal((await capture).toString(), "jpeg");
+  view.webContents.close();
+  plain.webContents.close();
+});
 
 test("a discarded surface restores with one GET and tells the adapter the document changed", async () => {
   const log = [];
@@ -54,7 +86,7 @@ test("freeze and thaw are lifecycle commands, and a failing freeze never blocks 
   assert.throws(() => view.webContents.sendInputEvent({}), /surface_frozen/);
   await view.webContents.executeJavaScript("1");
   assert.equal(view.state, "active");
-  assert.deepEqual(log.filter((e) => e[0] === "cmd").map((e) => e[2]), ["frozen", "active"]);
+  assert.deepEqual(log.filter((e) => e[0] === "cmd" && e[1] === "Page.setWebLifecycleState").map((e) => e[2]), ["frozen", "active"]);
 
   const broken = new ParkableView({ create: () => { const i = fakeInner([]); i.view.webContents.rawCmd = async () => { throw new Error("no"); }; return i; } });
   assert.equal(await broken.freeze(), false);
@@ -96,15 +128,22 @@ test("pool: over-cap surfaces are discarded least-recently-used first, pinned on
 test("pool: idle surfaces freeze, then discard, and memory pressure acts on demand", async () => {
   const c = clock();
   const pool = new SurfacePool({ maxActive: 10, freezeAfterMs: 10_000, discardAfterMs: 100_000 });
-  const view = new ParkableView({ create: () => fakeInner([]), now: c.now });
+  const logA = [];
+  const view = new ParkableView({ create: () => fakeInner(logA), now: c.now });
   pool.register("a", view);
-  c.t = 11_000; await pool.sweep(); assert.equal(view.state, "frozen");
+  c.t = 11_000; await pool.sweep();
+  assert.equal(view.state, "frozen");
+  assert.ok(logA.some(([kind, method]) => kind === "cmd" && method === "Memory.forciblyPurgeJavaScriptMemory"));
   c.t = 101_000; await pool.sweep(); assert.equal(view.state, "discarded");
-  const other = new ParkableView({ create: () => fakeInner([]), now: c.now });
+  const logB = [];
+  const other = new ParkableView({ create: () => fakeInner(logB), now: c.now });
   pool.register("b", other);
   c.t += 5_000;
-  assert.equal(await pool.relieve("soft"), 1); assert.equal(other.state, "frozen");
-  assert.equal(await pool.relieve("hard"), 1); assert.equal(other.state, "discarded");
+  assert.equal(await pool.relieve("soft"), 1);
+  assert.equal(other.state, "frozen");
+  assert.ok(logB.some(([kind, method]) => kind === "cmd" && method === "Memory.forciblyPurgeJavaScriptMemory"));
+  assert.equal(await pool.relieve("hard"), 1);
+  assert.equal(other.state, "discarded");
 });
 
 test("closing a parked surface emits destroyed once and leaves no renderer", async () => {
@@ -179,15 +218,18 @@ test("real Chromium: after the whole browser is released on idle, the next use c
   pool.register("a", view);
 
   assert.equal((await adapter.execute({ type: "navigate", url: `${base}/a` })).status, "ok");
-  const generation = engine.generation;
+  const { transport: oldTransport } = await engine.connect();
   await new Promise((resolve) => setTimeout(resolve, 20));
   await pool.sweep();
   assert.equal(view.state, "discarded");
   await new Promise((resolve) => setTimeout(resolve, 20));
   await pool.sweep();
-  assert.equal(engine.generation, generation + 1, "idle released the browser");
+  await assert.rejects(oldTransport.send("Browser.getVersion"), /cdp_closed/, "idle released the old browser connection");
 
   const after = await adapter.observe();
   assert.match(after.url, /\/a$/, "restored on a freshly launched browser");
+  const { transport: newTransport } = await engine.connect();
+  assert.notEqual(newTransport, oldTransport, "restoration uses a new live connection");
+  assert.ok((await newTransport.send("Browser.getVersion")).product);
   await adapter.dispose();
 });

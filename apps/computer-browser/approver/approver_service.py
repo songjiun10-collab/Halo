@@ -17,6 +17,7 @@ No free-form LLM call is anywhere in this path.
 from __future__ import annotations
 
 import argparse
+import socket
 import sys
 from pathlib import Path
 
@@ -166,7 +167,8 @@ def serve_forever(socket_path: Path) -> None:
             # would otherwise loop silently forever with no visible symptom
             # except the executor's requests always timing out; print it so
             # a systemic misconfiguration is diagnosable, not silent.
-            if not isinstance(error, TimeoutError):
+            # Python < 3.10: socket.timeout is not a TimeoutError subclass.
+            if not isinstance(error, (TimeoutError, socket.timeout)):
                 print(f"[approver] listen/recv/send failed: {error}", file=sys.stderr, flush=True)
             continue
 

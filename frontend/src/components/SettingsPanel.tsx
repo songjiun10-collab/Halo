@@ -163,6 +163,12 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
         </div>
         <p className="hx-settings__hint">Remembers the title and a short excerpt of pages you read in Halo, on this Mac only and encrypted, for 14 days. Sign-in, payment, mail and bank pages, and pages with password or card fields, are never saved. Tasks can recall matching pages. Off by default.</p>
         <ActivityClear />
+        <div className="hx-settings__row">
+          <span>Learn strategies for GPT-6 Luna</span>
+          <button type="button" className="hx-switch" role="switch" aria-label="Learn strategies for GPT-6 Luna" aria-checked={settings.strategyLearning === true} onClick={() => onChange({ strategyLearning: settings.strategyLearning !== true })}><span /></button>
+        </div>
+        <p className="hx-settings__hint">Opt-in. Keeps encrypted outcome metadata only, not prompts or page content. Repeated patterns create candidates; synthetic replay is not a model-performance benchmark. You must review and promote each passing candidate. Applies to newly attached Luna tasks.</p>
+        <StrategyLearningReview />
       </fieldset>
 
       <div className="hx-settings__section">
@@ -179,6 +185,31 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
       </div>
     </section>
   )
+}
+
+function StrategyLearningReview() {
+  const [state, setState] = useState<{ enabled: boolean; activeRevisionId: string | null; candidates: { id: string; strategyId: string; support: number; status: string; evaluation: { result: string } | null }[]; revisions: { id: string; event: string; parentId: string | null }[] } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const refresh = async () => { try { setState(await window.haloBrowser?.getStrategyLearningState?.() ?? null) } catch { setMessage('Local strategy-learning store is unavailable.') } }
+  useEffect(() => { void refresh() }, [])
+  const call = async (fn: () => Promise<unknown>, success: string) => {
+    setBusy(true); setMessage('')
+    try { await fn(); setMessage(success); await refresh() } catch { setMessage('Action failed; no policy change was applied.') } finally { setBusy(false) }
+  }
+  if (!state) return <p className="hx-settings__hint">Loading local strategy candidates…</p>
+  return <div className="hx-settings__section" aria-label="Strategy learning review">
+    <p className="hx-settings__label">Agent.md review · GPT-6 Luna only</p>
+    <p className="hx-settings__hint">Replay checks deterministic selector behavior on synthetic cases. It does not prove the model will improve.</p>
+    {state.candidates.length === 0 ? <p className="hx-settings__hint">No repeated failure pattern yet. At least three matching episodes are required.</p> : state.candidates.map((candidate) => <div className="hx-model-row" key={candidate.id}>
+      <span className="hx-model-row__body"><span className="hx-model-row__name">{candidate.strategyId}</span><span className="hx-model-row__meta" data-mono="">{candidate.support} episodes · {candidate.evaluation?.result ?? 'not evaluated'}</span></span>
+      <button type="button" className="hx-keybtn" disabled={busy || !state.enabled} onClick={() => void call(() => window.haloBrowser!.evaluateStrategyCandidate!(candidate.id), 'Replay complete. Review the result before promotion.')}>Evaluate</button>
+      <button type="button" className="hx-keybtn" disabled={busy || !state.enabled || candidate.evaluation?.result !== 'pass'} onClick={() => void call(() => window.haloBrowser!.promoteStrategyCandidate!(candidate.id, state.activeRevisionId), 'Strategy promoted. New tasks will use it.')}>Promote</button>
+    </div>)}
+    {state.activeRevisionId ? <button type="button" className="hx-keybtn" disabled={busy} onClick={() => { const prior = [...state.revisions].reverse().find((revision) => revision.id !== state.activeRevisionId); void call(() => window.haloBrowser!.rollbackStrategyGuidance!(prior?.id ?? 'builtin', state.activeRevisionId), 'Rollback recorded as a new revision.') }}>Rollback to prior revision</button> : null}
+    {state.candidates.length || state.revisions.length ? <button type="button" className="hx-keybtn" disabled={busy} onClick={() => { if (window.confirm('Delete local strategy-learning episodes, candidates, and revisions?')) void call(() => window.haloBrowser!.clearStrategyLearning!(), 'Local strategy-learning data deleted.') }}>Clear learning data</button> : null}
+    {message ? <p className="hx-settings__hint" role="status">{message}</p> : null}
+  </div>
 }
 
 interface Props {

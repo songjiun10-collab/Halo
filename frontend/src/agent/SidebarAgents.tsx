@@ -52,12 +52,16 @@ function Row({ row, onOpen }: { row: SidebarRow; onOpen: () => void }) {
 interface ViewProps { rows: SidebarRows; loaded: boolean; onOpen: (owner: OwnerRef) => void; onSeeAll: () => void; onNew: () => void }
 
 export function SidebarAgentsView({ rows, loaded, onOpen, onSeeAll, onNew }: ViewProps) {
+  const [folded, setFolded] = useState<OwnerKind[]>([])
+  const toggle = (kind: OwnerKind) => setFolded((now) => now.includes(kind) ? now.filter((k) => k !== kind) : [...now, kind])
   const section = (title: string, kind: OwnerKind, list: SidebarRow[]) => (
     <div className="hx-sidebar__section">
-      <p className="hx-sidebar__label hx-sbr__label">{title}<button type="button" className="hx-sbr__add" aria-label={kind === 'agent' ? 'New agent' : 'New team'} onClick={onNew}>+</button></p>
+      <p className="hx-sidebar__label hx-sbr__label"><button type="button" className="hx-sidebar__label--fold hx-sidebar__foldbtn" aria-expanded={!folded.includes(kind)} onClick={() => toggle(kind)}><span className="hx-sidebar__chev" aria-hidden="true">›</span>{title}</button><button type="button" className="hx-sbr__add" aria-label={kind === 'agent' ? 'New agent' : 'New team'} onClick={onNew}>+</button></p>
+      {folded.includes(kind) ? null : <>
       {loaded && !list.length ? <p className="hx-sidebar__empty">No {kind}s yet · Create one in Agent tab</p> : null}
       {list.slice(0, SIDEBAR_MAX).map((row) => <Row key={row.id} row={row} onOpen={() => onOpen({ kind: row.kind, id: row.id })} />)}
       {list.length > SIDEBAR_MAX ? <button type="button" className="hx-sbr hx-sbr__all" onClick={onSeeAll}>See all {list.length}</button> : null}
+      </>}
     </div>
   )
   return <>{section('Agents', 'agent', rows.agents)}{section('Teams', 'team', rows.teams)}</>

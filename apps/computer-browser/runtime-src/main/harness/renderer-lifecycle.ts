@@ -128,16 +128,38 @@ class ParkableView {
       await this.lifecycleCommand("active");
       this.state = "active";
     }
+    // Startup/hardening is not navigation. Do not spend the adapter's action
+    // deadline waiting for the initial CDP page to become ready.
+    await this.inner?.view.webContents.ready;
+    if (this.closed) throw new SurfaceError("surface_closed", "the agent surface was closed");
+  }
+
+  async purgeMemory(): Promise<void> {
+    if (!this.inner || this.closed) return;
+    const wc = this.inner.view.webContents;
+    if (typeof wc.purgeMemory === "function") {
+      await wc.purgeMemory().catch(() => undefined);
+      return;
+    }
+    const dbg = wc.debugger;
+    if (dbg && dbg.isAttached?.()) {
+      await dbg.sendCommand("Memory.forciblyPurgeJavaScriptMemory").catch(() => undefined);
+    }
   }
 
   private async lifecycleCommand(state: "frozen" | "active"): Promise<void> {
     const wc = this.inner?.view.webContents;
     if (!wc) return;
-    if (typeof wc.rawCmd === "function") { await wc.rawCmd("Page.setWebLifecycleState", { state }); return; }
+    if (typeof wc.rawCmd === "function") {
+      await wc.rawCmd("Page.setWebLifecycleState", { state });
+      if (state === "frozen") await wc.rawCmd("Memory.forciblyPurgeJavaScriptMemory").catch(() => undefined);
+      return;
+    }
     const dbg = wc.debugger;
     if (!dbg) throw new SurfaceError("freeze_unsupported", "no debugger channel");
     if (!dbg.isAttached()) dbg.attach("1.3");
     await dbg.sendCommand("Page.setWebLifecycleState", { state });
+    if (state === "frozen") await dbg.sendCommand("Memory.forciblyPurgeJavaScriptMemory").catch(() => undefined);
   }
 
   private hook(inner: InnerPage) {
@@ -182,6 +204,11 @@ class ParkableView {
     proxy.getTitle = () => (self.inner ? safeCall(() => self.inner!.view.webContents.getTitle(), self.savedTitle) : self.savedTitle);
     proxy.isDestroyed = () => self.closed;
     Object.defineProperty(proxy, "session", { get: () => self.session });
+    Object.defineProperty(proxy, "captureJpeg", {
+      get: () => typeof self.inner?.view.webContents.captureJpeg === "function"
+        ? (...args: unknown[]) => self.use(true, (wc) => wc.captureJpeg(...args))
+        : undefined,
+    });
     Object.defineProperty(proxy, "navigationHistory", {
       get: () => self.inner?.view.webContents.navigationHistory ?? { canGoBack: () => false, canGoForward: () => false, getActiveIndex: () => 0, length: () => 1 },
     });
@@ -292,11 +319,20 @@ class SurfacePool {
     await Promise.resolve(this.onIdle()).catch(() => undefined);
   }
 
-  // Memory pressure: "soft" freezes everything idle, "hard" discards idle surfaces, oldest first.
+  // Memory pressure: "soft" freezes everything idle and purges memory, "hard" discards idle surfaces, oldest first.
   async relieve(level: "soft" | "hard", minIdleMs = this.policy.minIdleMs): Promise<number> {
     let changed = 0;
     for (const [, view] of this.candidates().filter(([, v]) => v.idleMs() >= minIdleMs).sort((a, b) => b[1].idleMs() - a[1].idleMs())) {
-      if (level === "hard" ? await view.discard() : view.state === "active" && (await view.freeze())) changed += 1;
+      if (level === "hard") {
+        if (await view.discard()) changed += 1;
+      } else {
+        if (view.state === "active") {
+          if (await view.freeze()) changed += 1;
+        } else if (view.state === "frozen") {
+          await view.purgeMemory();
+          changed += 1;
+        }
+      }
     }
     return changed;
   }

@@ -74,8 +74,7 @@ const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
 // rounded-up per-task half plus margin. Planner subtree reserve is added
 // dynamically from the measured live worker high-water mark below.
 
-const TASK_INPUT_TYPES = new Set(["mouseMove", "mouseDown", "mouseUp", "mouseWheel", "keyDown", "keyUp"]);
-const TASK_INPUT_MODIFIERS = new Set(["shift", "control", "alt", "meta"]);
+const { validateBrowserInput } = require("./browser-input");
 
 class TaskHostError extends Error {
   constructor(code, message) {
@@ -2309,25 +2308,7 @@ class TaskHost {
   async sendTaskInput(taskId, input) {
     this._assertOpen();
     if (typeof taskId !== "string" || !taskId || typeof this._sendTaskInput !== "function") return false;
-    if (!isPlainObject(input) || !TASK_INPUT_TYPES.has(input.type)) {
-      throw new TaskHostError("invalid_field", "unsupported input type");
-    }
-    const unit = (value) => Number.isFinite(value) && value >= 0 && value <= 1;
-    const mouse = input.type.startsWith("mouse");
-    if (mouse && !(unit(input.nx) && unit(input.ny))) throw new TaskHostError("invalid_field", "input requires nx and ny in 0..1");
-    if (input.type === "mouseWheel" && !(Number.isFinite(input.deltaX ?? 0) && Number.isFinite(input.deltaY ?? 0))) {
-      throw new TaskHostError("invalid_field", "wheel deltas must be finite");
-    }
-    if (!mouse && !(typeof input.key === "string" && input.key.length >= 1 && input.key.length <= 16)) {
-      throw new TaskHostError("invalid_field", "key input requires a short key name");
-    }
-    if (input.button !== undefined && !["left", "middle", "right"].includes(input.button)) throw new TaskHostError("invalid_field", "unknown button");
-    if (input.modifiers !== undefined && !(Array.isArray(input.modifiers) && input.modifiers.every((m) => TASK_INPUT_MODIFIERS.has(m)))) {
-      throw new TaskHostError("invalid_field", "unknown modifier");
-    }
-    if (input.clickCount !== undefined && !(Number.isInteger(input.clickCount) && input.clickCount >= 1 && input.clickCount <= 3)) {
-      throw new TaskHostError("invalid_field", "clickCount must be 1..3");
-    }
+    try { input = validateBrowserInput(input); } catch (error) { throw new TaskHostError("invalid_field", error.message); }
     if (!this.canUseTaskBrowser(taskId)) return false;
     return Boolean(await this._sendTaskInput(taskId, input));
   }

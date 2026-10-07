@@ -21,6 +21,7 @@ const STAGE_OF = Object.freeze({
   approve_call_inclusive: { stage: "approval", inclusive: true },
   approval_to_browser_result: { stage: "approval", inclusive: true },
   browser_observe: { stage: "browser", inclusive: false },
+  computer_use_capture: { stage: "browser", inclusive: true },
   browser_execute: { stage: "browser", inclusive: false },
   journal_prepare: { stage: "journal_append", inclusive: false },
   journal_append_write: { stage: "journal_append", inclusive: false },

@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const packageRoot = path.resolve(__dirname, '..');
 const sharedNames = ['harness-contracts', 'task-profile-contracts', 'harness-profile', 'capability-registry', 'task-profile-router', 'port-contracts', 'layout-constants', 'clamp-bounds'];
-const harnessNames = ['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker', 'message-port', 'message-mailbox', 'background-runtime-ui', 'background-launch-agent', 'recovery-policy', 'model-tiers', 'context-builder', 'nvidia-model-catalog', 'screen-map', 'effect-classifier', 'planner-escalation', 'planner-routing', 'slack-task-entry', 'activity-journal', 'strategy-learning', 'strategy-learning-store', 'cdp-web-contents', 'cdp-browser-host', 'cdp-engine', 'renderer-lifecycle'];
+const harnessNames = ['generic-mcp-broker', 'mcp-schema-validator', 'mcp-schema-worker', 'message-port', 'message-mailbox', 'background-runtime-ui', 'background-launch-agent', 'recovery-policy', 'model-tiers', 'context-builder', 'nvidia-model-catalog', 'screen-map', 'effect-classifier', 'planner-escalation', 'planner-routing', 'slack-task-entry', 'activity-journal', 'strategy-learning', 'strategy-learning-store', 'cdp-web-contents', 'cdp-browser-host', 'cdp-engine', 'renderer-lifecycle', 'chromium-bridge', 'chromium-keychain', 'session-vault', 'chromium-session', 'chromium-desktop', 'browser-input', 'effect-verifier', 'halowright-locator', 'halowright', 'frame-capture', 'computer-use-observation', 'turn-memory-preparation'];
 const cohorts = [
   { config: 'tsconfig.runtime.json', source: 'runtime-src/shared', output: 'shared', names: sharedNames },
   { config: 'tsconfig.runtime-harness.json', source: 'runtime-src/main/harness', output: 'main/harness', names: harnessNames },

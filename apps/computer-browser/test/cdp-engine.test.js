@@ -107,3 +107,27 @@ test("shared policy launches with process-per-site so same-site task pages share
   const shared = await renderersFor("shared");
   assert.ok(shared < isolated, `shared ${shared} renderers should be fewer than isolated ${isolated}`);
 });
+
+test("a real Chromium page survives policy changes and its session stays on the old context", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
+  const server = http.createServer((_request, response) => {
+    response.setHeader("content-type", "text/html");
+    response.end("<title>Survivor</title><h1>still running</h1>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const engine = new CdpEngine();
+  t.after(async () => { await engine.release(); await new Promise((resolve) => server.close(resolve)); });
+  engine.configure({ browserEngine: "chromium", chromiumPath: CHROMIUM, chromiumContextPolicy: "isolated" });
+  const old = engine.createPage("halo-task-survivor");
+  await old.webContents.loadURL(base);
+  await old.webContents.executeJavaScript("document.cookie = 'generation=old; path=/'");
+  engine.configure({ browserEngine: "chromium", chromiumPath: CHROMIUM, chromiumContextPolicy: "shared" });
+  assert.equal(await old.webContents.executeJavaScript("document.title"), "Survivor");
+  const next = engine.createPage("halo-task-survivor");
+  await next.webContents.loadURL(base);
+  assert.equal(await next.webContents.executeJavaScript("document.cookie"), "", "new settings must not inherit the old context");
+  assert.equal((await old.webContents.session.cookies.get({ name: "generation" }))[0].value, "old");
+  old.webContents.close();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await next.webContents.executeJavaScript("document.title"), "Survivor", "reclaiming the retired browser must not affect the new one");
+});

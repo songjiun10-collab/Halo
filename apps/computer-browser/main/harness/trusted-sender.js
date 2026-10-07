@@ -28,7 +28,13 @@ function isTrustedSender(event, win) {
   const mainFrame = win.webContents && win.webContents.mainFrame;
   if (!mainFrame) return false;
   if (event.senderFrame !== mainFrame) return false;
-  if (typeof mainFrame.url === "string" && !mainFrame.url.startsWith("file://")) return false;
+  if (typeof mainFrame.url === "string" && !mainFrame.url.startsWith("file://")) {
+    // Chromium bridge owns this exact origin and constructs the frame identity after authentication.
+    if (typeof win.trustedUiOrigin !== "string" || mainFrame.url !== `${win.trustedUiOrigin}/`) return false;
+    let parsed;
+    try { parsed = new URL(win.trustedUiOrigin); } catch { return false; }
+    if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" || !parsed.port || parsed.username || parsed.password || parsed.pathname !== "/") return false;
+  }
   return true;
 }
 

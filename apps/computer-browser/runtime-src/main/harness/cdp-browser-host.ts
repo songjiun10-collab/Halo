@@ -22,6 +22,9 @@ interface CdpBrowserOptions {
   extraFlags?: readonly string[];
   headless?: boolean;       // default true
   startupTimeoutMs?: number;
+  desktop?: boolean;
+  appUrl?: string;
+  profilePath?: string;
 }
 interface CdpBrowserHandle { wsUrl: string; launched: boolean; close(): Promise<void> }
 
@@ -37,6 +40,9 @@ const LEAN_FLAGS: readonly string[] = Object.freeze([
   "--disable-component-update",
   "--disable-sync",
   "--disable-default-apps",
+  "--disk-cache-size=1",
+  "--media-cache-size=1",
+  "--js-flags=--max-old-space-size=512",
 ]);
 const MAC_CANDIDATES: readonly string[] = Object.freeze([
   // Halo's own lean build (headless_shell: no browser UI, no extensions) is preferred when present.
@@ -92,20 +98,25 @@ async function resolveEndpoint(endpoint: string, fetchImpl: typeof fetch = fetch
 // headless_shell is always headless and has no browser UI, so it takes no --headless flag.
 function isHeadlessShell(executablePath: string): boolean { return path.basename(executablePath) === "headless_shell"; }
 
-function launchFlags(extra: readonly string[] | undefined, headless: boolean, profile: string, executablePath = ""): string[] {
+function launchFlags(extra: readonly string[] | undefined, headless: boolean, profile: string, executablePath = "", desktop: { desktop?: boolean; appUrl?: string } = {}): string[] {
   for (const flag of extra ?? []) {
     if (typeof flag !== "string" || !flag.startsWith("--") || FORBIDDEN_FLAG.test(flag)) {
       throw new CdpBrowserError("forbidden_flag", `flag is not allowed: ${String(flag).slice(0, 40)}`);
     }
+  }
+  if (desktop.appUrl) {
+    let appUrl: URL;
+    try { appUrl = new URL(desktop.appUrl); } catch { throw new CdpBrowserError("invalid_app_url", "desktop URL must be a private loopback origin"); }
+    if (!desktop.desktop || appUrl.protocol !== "http:" || appUrl.hostname !== "127.0.0.1" || !appUrl.port || appUrl.username || appUrl.password) throw new CdpBrowserError("invalid_app_url", "desktop URL must be a private loopback origin");
   }
   return [
     ...(headless && !isHeadlessShell(executablePath) ? ["--headless=new", "--disable-gpu"] : []),
     "--remote-debugging-port=0",
     "--remote-debugging-address=127.0.0.1",
     `--user-data-dir=${profile}`,
-    ...LEAN_FLAGS,
+    ...LEAN_FLAGS.filter((flag) => !(desktop.desktop && ["--disable-extensions", "--disable-component-update", "--disable-default-apps"].includes(flag))),
     ...(extra ?? []),
-    "about:blank",
+    ...(desktop.appUrl ? [`--app=${desktop.appUrl}`] : ["about:blank"]),
   ];
 }
 
@@ -113,10 +124,17 @@ async function launchBrowser(executablePath: string, options: CdpBrowserOptions)
   if (!path.isAbsolute(executablePath) || !fs.existsSync(executablePath)) {
     throw new CdpBrowserError("executable_missing", "executablePath must be an existing absolute path");
   }
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "halo-byo-"));
-  const flags = launchFlags(options.extraFlags, options.headless !== false, profile, executablePath);
+  if (options.profilePath && !options.desktop) throw new CdpBrowserError("invalid_profile", "only the desktop may use a persistent profile");
+  const profile = options.profilePath ?? fs.mkdtempSync(path.join(os.tmpdir(), "halo-byo-"));
+  if (options.profilePath) {
+    if (!path.isAbsolute(profile)) throw new CdpBrowserError("invalid_profile", "desktop profile must be absolute");
+    fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
+    const stat = fs.lstatSync(profile);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(profile) !== profile || (stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid())) throw new CdpBrowserError("unsafe_profile", "desktop profile must be an owned private directory");
+  }
+  const flags = launchFlags(options.extraFlags, options.headless !== false, profile, executablePath, options);
   const child = childProcess.spawn(executablePath, flags, { stdio: ["ignore", "ignore", "pipe"] });
-  const cleanup = () => { try { fs.rmSync(profile, { recursive: true, force: true }); } catch { /* best effort */ } };
+  const cleanup = () => { if (!options.profilePath) { try { fs.rmSync(profile, { recursive: true, force: true }); } catch { /* best effort */ } } };
   const wsUrl = await new Promise<string>((resolve, reject) => {
     let buffer = "";
     const timer = setTimeout(() => { child.kill("SIGTERM"); reject(new CdpBrowserError("startup_timeout", "browser did not report a debugging endpoint")); }, options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS);
@@ -150,4 +168,4 @@ async function acquireCdpBrowser(options: CdpBrowserOptions = {}): Promise<CdpBr
   return launchBrowser(executable, options);
 }
 
-export = { CdpBrowserError, LEAN_FLAGS, acquireCdpBrowser, resolveEndpoint, findChromium, launchFlags, isLoopbackEndpoint };
+export = { CdpBrowserError, LEAN_FLAGS, acquireCdpBrowser, resolveEndpoint, findChromium, launchFlags, isLoopbackEndpoint, isHeadlessShell };

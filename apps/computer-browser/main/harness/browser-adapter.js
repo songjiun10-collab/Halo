@@ -52,6 +52,7 @@ const MAX_INPUT_BYTES = 4096;
 const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
 const { evaluateLock } = require("../../shared/harness-contracts");
 const { validateCoordinateAction } = require("./computer-use-contract");
+const { PAGE_SNAPSHOT_SOURCE, parseSnapshot, verifyEffect } = require("./effect-verifier");
 
 // The http(s) origin of a URL string, or null.
 function bareOrigin(value) {
@@ -875,6 +876,26 @@ class BrowserAdapter {
     }
   }
 
+  // Reads the host-measured page snapshot, or null when this page cannot run scripts
+  // (a test double) or the read fails.
+  async _readSnapshot(wc) {
+    if (typeof wc.executeJavaScriptInIsolatedWorld !== "function") return null;
+    try {
+      const raw = await wc.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD_ID, [{ code: PAGE_SNAPSHOT_SOURCE }], false);
+      return parseSnapshot(Array.isArray(raw) ? raw[0] : raw);
+    } catch { return null; }
+  }
+
+  // Wraps a write action: `perform` sends the input. ok only when the page measurably changed.
+  async _withEffectCheck(wc, perform) {
+    const before = await this._readSnapshot(wc);
+    if (!before && typeof wc.executeJavaScriptInIsolatedWorld === "function") return { status: "failed", errorCode: "effect_unverifiable" };
+    perform();
+    if (!before) return { status: "ok" };
+    const effect = await verifyEffect({ before, read: () => this._readSnapshot(wc), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) });
+    return effect.observed ? { status: "ok", effect } : { status: "uncertain", errorCode: "effect_not_observed" };
+  }
+
   async _coordinateAction(action, { signal, documentEpoch, expectedOrigin }) {
     let normalized;
     try { normalized = validateCoordinateAction(action); }
@@ -902,21 +923,25 @@ class BrowserAdapter {
     this._visualBinding = null;
     try {
       if (normalized.type === "press_key") {
-        wc.sendInputEvent({ type: "keyDown", keyCode: normalized.key });
-        if (normalized.key === "Enter") wc.sendInputEvent({ type: "char", keyCode: "Enter" });
-        wc.sendInputEvent({ type: "keyUp", keyCode: normalized.key });
-        return { status: "ok" };
+        const send = () => {
+          wc.sendInputEvent({ type: "keyDown", keyCode: normalized.key });
+          if (normalized.key === "Enter") wc.sendInputEvent({ type: "char", keyCode: "Enter" });
+          wc.sendInputEvent({ type: "keyUp", keyCode: normalized.key });
+        };
+        if (normalized.key !== "Enter") { send(); return { status: "ok" }; }
+        return await this._withEffectCheck(wc, send);
       }
-      // Hover first so pointer-driven widgets (menus, custom buttons) arm before the click.
-      wc.sendInputEvent({ type: "mouseMove", x, y });
-      wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
-      wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
-      if (normalized.type === "type_at") {
-        // Like ordinary type, typing replaces the field: select what the click focused, then insert.
-        if (typeof wc.selectAll === "function") wc.selectAll();
-        wc.insertText(normalized.text);
-      }
-      return { status: "ok" };
+      return await this._withEffectCheck(wc, () => {
+        // Hover first so pointer-driven widgets (menus, custom buttons) arm before the click.
+        wc.sendInputEvent({ type: "mouseMove", x, y });
+        wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+        wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+        if (normalized.type === "type_at") {
+          // Like ordinary type, typing replaces the field: select what the click focused, then insert.
+          if (typeof wc.selectAll === "function") wc.selectAll();
+          wc.insertText(normalized.text);
+        }
+      });
     } catch {
       return { status: "uncertain", errorCode: "coordinate_input_uncertain" };
     }

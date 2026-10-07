@@ -26,6 +26,9 @@ const LEAN_FLAGS = Object.freeze([
     "--disable-component-update",
     "--disable-sync",
     "--disable-default-apps",
+    "--disk-cache-size=1",
+    "--media-cache-size=1",
+    "--js-flags=--max-old-space-size=512",
 ]);
 const MAC_CANDIDATES = Object.freeze([
     // Halo's own lean build (headless_shell: no browser UI, no extensions) is preferred when present.
@@ -88,33 +91,56 @@ async function resolveEndpoint(endpoint, fetchImpl = fetch) {
 }
 // headless_shell is always headless and has no browser UI, so it takes no --headless flag.
 function isHeadlessShell(executablePath) { return path.basename(executablePath) === "headless_shell"; }
-function launchFlags(extra, headless, profile, executablePath = "") {
+function launchFlags(extra, headless, profile, executablePath = "", desktop = {}) {
     for (const flag of extra ?? []) {
         if (typeof flag !== "string" || !flag.startsWith("--") || FORBIDDEN_FLAG.test(flag)) {
             throw new CdpBrowserError("forbidden_flag", `flag is not allowed: ${String(flag).slice(0, 40)}`);
         }
+    }
+    if (desktop.appUrl) {
+        let appUrl;
+        try {
+            appUrl = new URL(desktop.appUrl);
+        }
+        catch {
+            throw new CdpBrowserError("invalid_app_url", "desktop URL must be a private loopback origin");
+        }
+        if (!desktop.desktop || appUrl.protocol !== "http:" || appUrl.hostname !== "127.0.0.1" || !appUrl.port || appUrl.username || appUrl.password)
+            throw new CdpBrowserError("invalid_app_url", "desktop URL must be a private loopback origin");
     }
     return [
         ...(headless && !isHeadlessShell(executablePath) ? ["--headless=new", "--disable-gpu"] : []),
         "--remote-debugging-port=0",
         "--remote-debugging-address=127.0.0.1",
         `--user-data-dir=${profile}`,
-        ...LEAN_FLAGS,
+        ...LEAN_FLAGS.filter((flag) => !(desktop.desktop && ["--disable-extensions", "--disable-component-update", "--disable-default-apps"].includes(flag))),
         ...(extra ?? []),
-        "about:blank",
+        ...(desktop.appUrl ? [`--app=${desktop.appUrl}`] : ["about:blank"]),
     ];
 }
 async function launchBrowser(executablePath, options) {
     if (!path.isAbsolute(executablePath) || !fs.existsSync(executablePath)) {
         throw new CdpBrowserError("executable_missing", "executablePath must be an existing absolute path");
     }
-    const profile = fs.mkdtempSync(path.join(os.tmpdir(), "halo-byo-"));
-    const flags = launchFlags(options.extraFlags, options.headless !== false, profile, executablePath);
-    const child = childProcess.spawn(executablePath, flags, { stdio: ["ignore", "ignore", "pipe"] });
-    const cleanup = () => { try {
-        fs.rmSync(profile, { recursive: true, force: true });
+    if (options.profilePath && !options.desktop)
+        throw new CdpBrowserError("invalid_profile", "only the desktop may use a persistent profile");
+    const profile = options.profilePath ?? fs.mkdtempSync(path.join(os.tmpdir(), "halo-byo-"));
+    if (options.profilePath) {
+        if (!path.isAbsolute(profile))
+            throw new CdpBrowserError("invalid_profile", "desktop profile must be absolute");
+        fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
+        const stat = fs.lstatSync(profile);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(profile) !== profile || (stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid()))
+            throw new CdpBrowserError("unsafe_profile", "desktop profile must be an owned private directory");
     }
-    catch { /* best effort */ } };
+    const flags = launchFlags(options.extraFlags, options.headless !== false, profile, executablePath, options);
+    const child = childProcess.spawn(executablePath, flags, { stdio: ["ignore", "ignore", "pipe"] });
+    const cleanup = () => { if (!options.profilePath) {
+        try {
+            fs.rmSync(profile, { recursive: true, force: true });
+        }
+        catch { /* best effort */ }
+    } };
     const wsUrl = await new Promise((resolve, reject) => {
         let buffer = "";
         const timer = setTimeout(() => { child.kill("SIGTERM"); reject(new CdpBrowserError("startup_timeout", "browser did not report a debugging endpoint")); }, options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS);
@@ -154,4 +180,4 @@ async function acquireCdpBrowser(options = {}) {
         throw new CdpBrowserError("no_browser", "set an endpoint, an executablePath or HALO_CHROMIUM");
     return launchBrowser(executable, options);
 }
-module.exports = { CdpBrowserError, LEAN_FLAGS, acquireCdpBrowser, resolveEndpoint, findChromium, launchFlags, isLoopbackEndpoint };
+module.exports = { CdpBrowserError, LEAN_FLAGS, acquireCdpBrowser, resolveEndpoint, findChromium, launchFlags, isLoopbackEndpoint, isHeadlessShell };

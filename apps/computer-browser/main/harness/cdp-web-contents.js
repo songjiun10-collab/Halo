@@ -144,7 +144,12 @@ class CdpImage {
     toJPEG(_quality) { throw new Error("cdp_image: use encodeJpegAsync"); }
     encodeJpegAsync(quality) { return this.encodeJpeg(quality, this.targetWidth); }
 }
+let nextWebContentsId = 1;
 class CdpWebContents {
+    viewportWidth = DEFAULT_WIDTH;
+    viewportHeight = DEFAULT_HEIGHT;
+    viewportChange = Promise.resolve();
+    webContentsId = nextWebContentsId++;
     listeners = new Map();
     unsubscribe;
     url = "about:blank";
@@ -156,6 +161,7 @@ class CdpWebContents {
     worlds = new Map();
     destroyed = false;
     sessionId = "";
+    screencast = null;
     targetId = "";
     contextId = null;
     transport;
@@ -165,6 +171,7 @@ class CdpWebContents {
     // the browser waits on it, so a caller can use the page right after construction.
     ready;
     isCdp = true;
+    get session() { return this.options.session; }
     navigationHistory;
     // Synchronous on purpose: the harness builds a task's browser without awaiting.
     constructor(provider, options = {}) {
@@ -213,6 +220,8 @@ class CdpWebContents {
         await this.rawCmd("Network.enable");
         await this.rawCmd("Runtime.enable");
         await this.rawCmd("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+        this.viewportWidth = width;
+        this.viewportHeight = height;
         const tree = await this.rawCmd("Page.getFrameTree");
         this.mainFrameId = tree.frameTree.frame.id;
         await this.refreshHistory();
@@ -322,12 +331,32 @@ class CdpWebContents {
                 }
                 break;
             case "Page.frameStoppedLoading":
-                if (params.frameId === this.mainFrameId)
+                if (params.frameId === this.mainFrameId) {
                     this.emit("did-stop-loading");
+                    this.emit("did-finish-load");
+                }
+                break;
+            case "Page.frameStartedLoading":
+                if (params.frameId === this.mainFrameId)
+                    this.emit("did-start-navigation", {}, this.url, false, true);
+                break;
+            case "Page.domContentEventFired":
+                this.emit("dom-ready");
                 break;
             case "Runtime.executionContextsCleared":
                 this.worlds.clear();
                 break;
+            case "Page.screencastFrame": {
+                // Ack first so Chromium keeps producing frames; the listener only ever sees the newest bytes.
+                this.rawCmd("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => undefined);
+                if (this.screencast && typeof params.data === "string") {
+                    try {
+                        this.screencast(params.data);
+                    }
+                    catch { /* a listener must not stop frames */ }
+                }
+                break;
+            }
             default:
                 break;
         }
@@ -349,9 +378,25 @@ class CdpWebContents {
         this.listeners.get(name)?.delete(listener);
         return this;
     }
+    once(name, listener) {
+        const wrapped = (...args) => { this.removeListener(name, wrapped); listener(...args); };
+        return this.on(name, wrapped);
+    }
+    setWindowOpenHandler(_handler) { }
+    async setViewportSize(width, height) {
+        if (![width, height].every((value) => Number.isInteger(value) && value > 0 && value <= 16384))
+            return Promise.reject(new Error("invalid_viewport"));
+        const update = this.viewportChange.catch(() => undefined).then(async () => {
+            await this.cmd("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+            this.viewportWidth = width;
+            this.viewportHeight = height;
+        });
+        this.viewportChange = update;
+        return update;
+    }
     getURL() { return this.url; }
     getTitle() { return this.title; }
-    get id() { return 0; }
+    get id() { return this.webContentsId; }
     async loadURL(url) {
         await this.ready;
         return this.navigate(url);
@@ -436,6 +481,31 @@ class CdpWebContents {
             .then(() => this.cmd("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: MODIFIER_BITS.meta }))
             .catch(() => undefined);
     }
+    async captureJpeg({ maxWidth, quality }) {
+        if (!Number.isInteger(maxWidth) || maxWidth < 1 || maxWidth > 8192 || !Number.isInteger(quality) || quality < 1 || quality > 100)
+            throw new Error("invalid_capture_options");
+        await this.ready;
+        await this.viewportChange;
+        const width = this.viewportWidth, height = this.viewportHeight;
+        const shot = await this.cmd("Page.captureScreenshot", { format: "jpeg", quality, captureBeyondViewport: false,
+            clip: { x: 0, y: 0, width, height, scale: Math.min(1, maxWidth / width) } });
+        return Buffer.from(String(shot.data), "base64");
+    }
+    // Push-based live view: Chromium sends a JPEG only when the page paints something new.
+    async startScreencast({ maxWidth, quality }, onFrame) {
+        if (!Number.isInteger(maxWidth) || maxWidth < 1 || maxWidth > 8192 || !Number.isInteger(quality) || quality < 1 || quality > 100)
+            throw new Error("invalid_capture_options");
+        await this.ready;
+        await this.viewportChange;
+        this.screencast = onFrame;
+        await this.cmd("Page.startScreencast", { format: "jpeg", quality, maxWidth, maxHeight: Math.min(8192, Math.round(maxWidth * 2)), everyNthFrame: 1 });
+    }
+    async stopScreencast() {
+        this.screencast = null;
+        if (this.destroyed)
+            return;
+        await this.cmd("Page.stopScreencast").catch(() => undefined);
+    }
     async capturePage(rect) {
         const clip = rect ? { clip: { ...rect, scale: 1 } } : {};
         const shot = await this.cmd("Page.captureScreenshot", { format: "png", ...clip });
@@ -447,6 +517,12 @@ class CdpWebContents {
             return Buffer.from(String(out.data), "base64");
         };
         return new CdpImage(png, size, jpeg);
+    }
+    async purgeMemory() {
+        if (this.destroyed)
+            return;
+        await this.ready.catch(() => undefined);
+        await this.rawCmd("Memory.forciblyPurgeJavaScriptMemory").catch(() => undefined);
     }
     close() {
         if (this.destroyed)
@@ -481,6 +557,18 @@ function createCdpView(provider, options = {}) {
     const width = options.width ?? DEFAULT_WIDTH;
     const height = options.height ?? DEFAULT_HEIGHT;
     const webContents = new CdpWebContents(provider, options);
-    return { webContents, getBounds: () => ({ x: 0, y: 0, width, height }) };
+    let bounds = { x: 0, y: 0, width, height };
+    let visible = false;
+    return {
+        webContents, getBounds: () => ({ ...bounds }),
+        setBounds(next) {
+            if (![next.x, next.y, next.width, next.height].every(Number.isFinite) || next.width < 0 || next.height < 0)
+                throw new Error("invalid_view_bounds");
+            bounds = { ...next };
+            if (next.width > 0 && next.height > 0)
+                void webContents.setViewportSize(Math.round(next.width), Math.round(next.height)).catch(() => undefined);
+        },
+        setVisible(value) { visible = value === true; }, getVisible: () => visible,
+    };
 }
 module.exports = { createCdpView, CdpWebContents, connectCdpTransport, openCdpView, modifierMask, keyInfo, pngSize };

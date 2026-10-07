@@ -67,6 +67,32 @@ test("a failed capture yields null rather than an error", async () => {
   assert.equal(await captureVisibleSurface(winWith(view)), null);
 });
 
+test("Chromium mirror uses one direct JPEG capture instead of PNG then JPEG", async () => {
+  const view = fakeView();
+  let jpegCalls = 0;
+  view.webContents.captureJpeg = async ({ maxWidth, quality }) => {
+    assert.equal(maxWidth, 1600); assert.equal(quality, 70);
+    jpegCalls++; return Buffer.from("direct-jpeg");
+  };
+  const result = await captureVisibleSurface(winWith(view));
+  assert.equal(view.captured, 0, "must not capture the intermediate PNG");
+  assert.equal(jpegCalls, 1);
+  assert.equal(result, `data:image/jpeg;base64,${Buffer.from("direct-jpeg").toString("base64")}`);
+});
+
+test("concurrent requests for the same Chromium surface share one pending capture", async () => {
+  const view = fakeView();
+  let finish; let calls = 0;
+  view.webContents.captureJpeg = async () => { calls++; return new Promise(resolve => { finish = resolve; }); };
+  const win = winWith(view);
+  const first = captureVisibleSurface(win);
+  const second = captureVisibleSurface(win);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1);
+  finish(Buffer.from("shared-jpeg"));
+  assert.equal(await first, await second);
+});
+
 test("captureSurface is answered only for the trusted Halo window", async () => {
   const handlers = new Map();
   const ipcMain = { handle: (c, fn) => handlers.set(c, fn), removeHandler: (c) => handlers.delete(c) };

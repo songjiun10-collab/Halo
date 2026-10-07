@@ -204,3 +204,37 @@ test("a CDP page gets the same fail-closed policy as the Electron agent view", {
   assert.equal(await view.webContents.executeJavaScript("document.title"), "main", "page stays put");
   await adapter.dispose();
 });
+
+test("a CDP page pushes live JPEG frames while it paints, and stops on request", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "text/html");
+    response.end('<title>live</title><body style="margin:0"><div id="b" style="width:300px;height:300px;background:#e33"></div>');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const launched = await acquireCdpBrowser({ executablePath: CHROMIUM });
+  t.after(async () => { await launched.close(); await new Promise((resolve) => server.close(resolve)); });
+  const transport = await connectCdpTransport(launched.wsUrl);
+  t.after(() => transport.close());
+  const view = createCdpView(async () => transport, { isolated: true });
+  const adapter = new BrowserAdapter({ view });
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/` })).status, "ok");
+
+  const frames = [];
+  await view.webContents.startScreencast({ maxWidth: 800, quality: 60 }, (data) => frames.push(data));
+  // A repaint after the stream starts must produce a new frame.
+  await view.webContents.executeJavaScript(`document.getElementById("b").style.background = "#33e"`);
+  const deadline = Date.now() + 8000;
+  while (!frames.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(frames.length > 0, "at least one frame arrived");
+  assert.equal(Buffer.from(frames[0], "base64").subarray(0, 2).toString("hex"), "ffd8", "frames are JPEG");
+
+  await view.webContents.stopScreencast();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const settled = frames.length;
+  await view.webContents.executeJavaScript(`document.getElementById("b").style.background = "#3e3"`);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(frames.length, settled, "no frames after stop");
+  await assert.rejects(view.webContents.startScreencast({ maxWidth: 0, quality: 60 }, () => {}), /invalid_capture_options/);
+  await adapter.dispose();
+});

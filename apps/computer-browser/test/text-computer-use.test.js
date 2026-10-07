@@ -141,10 +141,17 @@ test("a planner without image input gets the screen map and no attachment, and i
   assert.equal(controller.getSnapshot().state, "awaiting_approval");
 });
 
-test("an image-capable planner still gets an attachment path, not the text map", async (t) => {
-  const { seen } = await controllerFixture(t, { textMode: false }).catch((e) => ({ seen: [], e }));
-  // The fixture browser has no captureComputerUseObservation, so the image route pauses before any planner turn.
+test("an image-capable planner uses a rich text map without requiring an image", async (t) => {
+  const { seen } = await controllerFixture(t, { textMode: false });
+  assert.equal(seen[0].observation.computerUse.mode, "text");
+  assert.ok(seen[0].observation.screenMap);
+  assert.equal(seen[0].options.attachments, undefined);
+});
+
+test("an image-capable planner pauses on sparse DOM when image capture is unavailable", async (t) => {
+  const { seen, controller } = await controllerFixture(t, { textMode: false, sparse: true });
   assert.equal(seen.length, 0);
+  assert.equal(controller.getSnapshot().pauseReason, "computer_use_capture_failed");
 });
 
 test("a capture failure pauses the task instead of sending the planner a blind turn", async (t) => {
@@ -204,7 +211,15 @@ test("the adapter sends key events for press_key and consumes the binding", asyn
   const observation = await adapter.observe();
   adapter.authorizeVisualBinding({ observationId: observation.id, taskId: "11111111-1111-4111-8111-111111111111", agentId: null, documentEpoch: observation.documentEpoch, origin: "https://page.test", capturedAt: 1, viewport: { width: 1440, height: 900 }, digest: "0".repeat(64) });
   const action = { type: "press_key", observationId: observation.id, key: "Enter" };
-  assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), { status: "ok" });
+  // Independently report a measurable effect after the input, not merely that
+  // sendInputEvent returned. Missing evidence must never count as success.
+  wc.executeJavaScriptInIsolatedWorld = async () => JSON.stringify({
+    url: "https://page.test/", title: "t", nodes: 10, textLength: 50,
+    focus: "INPUT#q", valueLength: sent.length ? 0 : 4,
+  });
+  assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), {
+    status: "ok", effect: { observed: true, changed: ["valueLength"] },
+  });
   assert.deepEqual(sent, [{ type: "keyDown", keyCode: "Enter" }, { type: "char", keyCode: "Enter" }, { type: "keyUp", keyCode: "Enter" }]);
   assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), { status: "failed", errorCode: "stale_visual_observation" });
   assert.equal(sent.length, 3);

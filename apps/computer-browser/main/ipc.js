@@ -3,7 +3,8 @@
 const { isTrustedSender } = require("./harness/trusted-sender");
 const { BackgroundRuntimeUi } = require("./harness/background-runtime-ui");
 const { captureVisibleSurface } = require("./surface-snapshot");
-const { clipboard } = require("electron");
+const { createSurfaceStreams } = require("./surface-stream");
+const { clipboard } = require("./desktop-runtime");
 const registries = new WeakMap();
 
 // Exactly the method surface preload exposes as window.haloBrowser. No
@@ -158,7 +159,7 @@ const SHARED_RUNTIME_METHODS = new Set(["setMemoryPolicy", "setLaunchAtLogin"]);
 //   launchAgent: optional {isInstalled, enable, disable} for "start at
 //     login" (main/harness/background-launch-agent.js).
 module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNewWindow, launchAgentInstalled, launchAgent, captureAgentFrame, captureTaskFrame, sendTaskInput } = {}) {
-  const ipc = ipcMain || require("electron").ipcMain;
+  const ipc = ipcMain || require("./desktop-runtime").ipcMain;
   let registry = registries.get(ipc);
   if (!registry) {
     registry = { contexts: new Map(), channels: new Set(), harnessEnabled: false };
@@ -214,6 +215,19 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
     return captureVisibleSurface(owner.win);
   });
 
+  // Live view: frames are pushed on "halo:surfaceFrame" while a stream is started for the showing page.
+  const surfaceStreams = createSurfaceStreams();
+  addHandler("halo:startSurfaceStream", (event) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:startSurfaceStream: rejected untrusted sender"));
+    return surfaceStreams.start(owner.win);
+  });
+  addHandler("halo:stopSurfaceStream", (event) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:stopSurfaceStream: rejected untrusted sender"));
+    return surfaceStreams.stop(owner.win);
+  });
+
   // The agent works in a hidden page; this is the trusted window's read-only look at it.
   addHandler("halo:captureAgentFrame", (event, taskId) => {
     if (!findContext(event)) return Promise.reject(new Error("halo:captureAgentFrame: rejected untrusted sender"));
@@ -230,6 +244,11 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
     if (!findContext(event)) return Promise.reject(new Error("halo:sendTaskInput: rejected untrusted sender"));
     if (typeof taskId !== "string" || !taskId || typeof sendTaskInput !== "function") return Promise.resolve(false);
     return Promise.resolve(sendTaskInput(taskId, input));
+  });
+  addHandler("halo:sendSurfaceInput", (event, input) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:sendSurfaceInput: rejected untrusted sender"));
+    return Promise.resolve(owner.controlApi.sendSurfaceInput(input));
   });
 
   if (taskHost) registry.harnessEnabled = true;

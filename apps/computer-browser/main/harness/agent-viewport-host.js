@@ -31,10 +31,11 @@
 // implement any "show agent page" action.
 
 const { installAgentRequestFilter } = require("./agent-request-filter");
-const { BrowserWindow, WebContentsView } = require("electron");
+const { BrowserWindow, WebContentsView } = require("../desktop-runtime");
 const { createHash } = require("node:crypto");
 const { BrowserAdapter } = require("./browser-adapter");
 const { createScreenshotAttachment } = require("./computer-use-contract");
+const { captureFrameJpeg } = require("./frame-capture");
 const { buildScreenMap } = require("./screen-map");
 const { ParkableView, SurfacePool, wakeOnUse } = require("./renderer-lifecycle");
 
@@ -170,7 +171,7 @@ class AgentViewportHost {
     if (!this._pool) return this._rawViewPair(partition);
     const view = new ParkableView({
       lazy: true,
-      getSession: () => require("electron").session.fromPartition(partition),
+      getSession: () => require("../desktop-runtime").session.fromPartition(partition),
       width: AGENT_WIDTH,
       height: AGENT_HEIGHT,
       create: () => {
@@ -250,6 +251,13 @@ class AgentViewportHost {
     // A parked or frozen surface is not woken for the mirror: the last frame stands.
     if (typeof view.isLive === "function" && !view.isLive()) return this._lastFrames.get(taskId)?.dataUrl ?? null;
     try {
+      if (typeof view.webContents.captureJpeg === "function") {
+        const jpeg = await captureFrameJpeg(view.webContents, { maxWidth: 1200, quality: 65 });
+        if (!jpeg || this._hosts.get(taskId)?.view !== view) return null;
+        const dataUrl = `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+        this._lastFrames.set(taskId, { fingerprint: null, dataUrl });
+        return dataUrl;
+      }
       const image = await view.webContents.capturePage();
       if (!image || image.isEmpty()) return null;
       // An unchanged page returns the previous string untouched, so the caller's

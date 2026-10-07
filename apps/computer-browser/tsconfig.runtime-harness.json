@@ -45,6 +45,18 @@
     "runtime-src/main/harness/cdp-web-contents.ts",
     "runtime-src/main/harness/cdp-browser-host.ts",
     "runtime-src/main/harness/cdp-engine.ts",
-    "runtime-src/main/harness/renderer-lifecycle.ts"
+    "runtime-src/main/harness/renderer-lifecycle.ts",
+    "runtime-src/main/harness/chromium-bridge.ts",
+    "runtime-src/main/harness/chromium-keychain.ts",
+    "runtime-src/main/harness/session-vault.ts",
+    "runtime-src/main/harness/chromium-session.ts",
+    "runtime-src/main/harness/chromium-desktop.ts",
+    "runtime-src/main/harness/browser-input.ts",
+    "runtime-src/main/harness/effect-verifier.ts",
+    "runtime-src/main/harness/halowright-locator.ts",
+    "runtime-src/main/harness/halowright.ts",
+    "runtime-src/main/harness/frame-capture.ts",
+    "runtime-src/main/harness/computer-use-observation.ts",
+    "runtime-src/main/harness/turn-memory-preparation.ts"
   ]
 }

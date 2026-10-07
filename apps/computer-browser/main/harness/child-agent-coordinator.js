@@ -133,6 +133,8 @@ class ChildAgentCoordinator {
     this._cancellingPlans = new Set();
     // childId -> { outcome: "completed"|"stopped"|"failed", reason? }
     this._terminalChildren = new Map();
+    // Children that sent their parent at least one progress or handoff report.
+    this._reportedChildren = new Set();
     // A failed start whose teardown itself failed keeps its lease reserved.
     // This is intentionally fail-closed: releasing it could admit another
     // child while the first one's browser/planner/store may still be alive.
@@ -419,6 +421,8 @@ class ChildAgentCoordinator {
         // The parent-authored label, so the UI names a child by its job, not its UUID.
         ...(typeof subgoal === "string" && subgoal ? { subgoal: subgoal.slice(0, 200) } : {}),
         ...(terminal?.reason ? { reason: terminal.reason } : {}),
+        ...(terminal && terminal.outcome === "completed" ? { reported: terminal.reported === true } : {}),
+        ...(terminal && terminal.outcome === "completed" && terminal.reported !== true ? { unreported: true } : {}),
       };
     });
     const count = (status) => agents.filter((agent) => agent.status === status).length;
@@ -937,7 +941,10 @@ class ChildAgentCoordinator {
     const live = this._liveChildren.get(childId);
     if (!live) return Promise.resolve();
     this._liveChildren.delete(childId);
-    this._terminalChildren.set(childId, { outcome: controllerState === "completed" ? "completed" : "stopped" });
+    this._terminalChildren.set(childId, {
+      outcome: controllerState === "completed" ? "completed" : "stopped",
+      reported: this._reportedChildren.has(childId),
+    });
     this._notifyPlanChange(parentTaskId);
     const retirement = {
       parentTaskId,
@@ -1000,7 +1007,7 @@ class ChildAgentCoordinator {
         this._retiringChildren.delete(live.store.taskId);
       }
       if (retirement.terminalOutcome) {
-        this._terminalChildren.set(live.store.taskId, { outcome: retirement.terminalOutcome });
+        this._terminalChildren.set(live.store.taskId, { outcome: retirement.terminalOutcome, reported: this._reportedChildren.has(live.store.taskId) });
       } else {
         this._terminalChildren.delete(live.store.taskId);
       }
@@ -1198,6 +1205,7 @@ class ChildAgentCoordinator {
         });
       }
       const sent = await this._mailbox.send(envelope);
+      if (senderTaskId === childTaskId && (proposal.messageKind === "progress" || proposal.messageKind === "handoff")) this._reportedChildren.add(childTaskId);
       if (senderTaskId === childTaskId) await this._postToBoard(parentTaskId, plan, envelope, sent);
       return sent;
     } catch (err) {

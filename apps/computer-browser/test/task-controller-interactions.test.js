@@ -8,10 +8,10 @@ const { TaskStore } = require("../main/harness/task-store");
 const { TaskController } = require("../main/harness/task-controller");
 const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
 
-async function fixture(t, action, permissionMode = "interact", { computerUse = false, capabilityId = "computer_use" } = {}) {
+async function fixture(t, action, permissionMode = "interact", { computerUse = false, capabilityId = "computer_use", textMap = null } = {}) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-interaction-controller-"));
   const store = await TaskStore.create({ originalRequest: "update profile" }, { storageRoot });
-  let turns = 0; const executed = []; let plannerOptions = null; let attachmentDisposed = false;
+  let turns = 0; const executed = []; let plannerOptions = null; let attachmentDisposed = false; let screenshotCalls = 0;
   const browser = { supportsAction: () => true,
     observe: async () => ({ id: "obs", documentEpoch: 7, url: "https://page.test/", elements: [
       { elementId: "0", role: "textbox", name: "Title" },
@@ -20,9 +20,13 @@ async function fixture(t, action, permissionMode = "interact", { computerUse = f
       { elementId: "3", role: "link", name: "Pricing", href: "https://example.test/pricing" },
       { elementId: "4", role: "button", name: "Delete" },
     ] }),
-    ...(computerUse ? { captureComputerUseObservation: async (observation) => ({
+    ...(computerUse ? { captureComputerUseObservation: async (observation) => { screenshotCalls++; return ({
       binding: { observationId: observation.id, taskId: store.taskId, agentId: "22222222-2222-4222-8222-222222222222", documentEpoch: observation.documentEpoch, origin: "https://page.test", capturedAt: 1, viewport: { width: 1440, height: 900 }, digest: "a".repeat(64) },
       attachment: { id: "attachment-1", path: "/private/fake.png", dispose: async () => { attachmentDisposed = true; } },
+    }); } } : {}),
+    ...(textMap ? { captureTextObservation: async observation => ({
+      binding: { observationId: observation.id, taskId: store.taskId, agentId: null, documentEpoch: observation.documentEpoch, origin: "https://page.test", capturedAt: 1, viewport: { width: 1440, height: 900 }, digest: "a".repeat(64) },
+      screenMap: textMap,
     }) } : {}),
     execute: async (a, options) => { executed.push({ action: a, options }); return { status: "ok" }; },
   };
@@ -47,8 +51,25 @@ async function fixture(t, action, permissionMode = "interact", { computerUse = f
       { capabilityId: "computer_use", adapterId: "codex-subscription-image", adapterVersion: 1 },
     ] } };
   t.after(async () => { await controller.stop(); await store.close(); await fs.rm(storageRoot, { recursive: true, force: true }); });
-  await controller.start(); return { controller, executed, store, get plannerOptions() { return plannerOptions; }, get attachmentDisposed() { return attachmentDisposed; } };
+  await controller.start(); return { controller, executed, store, get screenshotCalls() { return screenshotCalls; }, get plannerOptions() { return plannerOptions; }, get attachmentDisposed() { return attachmentDisposed; } };
 }
+
+test("image-capable computer use uses a rich backend DOM map without taking screenshots", async t => {
+  const run = await fixture(t, { type: "type", elementId: "0", text: "Updated" }, "interact", {
+    computerUse: true, textMap: { text: 'textbox "Title" at 0.5,0.5', sparse: false, targets: [] },
+  });
+  assert.equal(run.executed.length, 1);
+  assert.equal(run.screenshotCalls, 0);
+  assert.equal(run.plannerOptions?.attachments?.length ?? 0, 0);
+});
+
+test("sparse backend DOM maps retain the image fallback", async t => {
+  const run = await fixture(t, { type: "type", elementId: "0", text: "Updated" }, "interact", {
+    computerUse: true, textMap: { text: "canvas", sparse: true, targets: [] },
+  });
+  assert.equal(run.executed.length, 1);
+  assert.ok(run.screenshotCalls > 0);
+});
 
 test("typing into an ordinary text field runs on the approver's verdict without a human gate", async t => {
   const action = { type: "type", elementId: "0", text: "New title" };

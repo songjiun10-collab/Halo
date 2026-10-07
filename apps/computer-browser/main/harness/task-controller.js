@@ -1,4 +1,6 @@
 "use strict";
+const { capturePreferredObservation } = require("./computer-use-observation");
+const { startTurnMemoryReads } = require("./turn-memory-preparation");
 
 // The long-running task state machine (design doc sections 5-7): drives
 // observe -> plan -> approve -> execute -> verify -> checkpoint, one action
@@ -23,7 +25,7 @@ const { AsyncLocalStorage } = require("node:async_hooks");
 const contracts = require("../../shared/harness-contracts");
 const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal, isQuickProfile } = require("../../shared/harness-profile");
 const { adaptiveEffort } = require("./planner-effort-policy");
-const { createRecoveryPolicy } = require("./recovery-policy");
+const { createRecoveryPolicy, buildRecoveryFeedback, buildProposalFeedback } = require("./recovery-policy");
 const { resolveTarget } = require("./screen-map");
 const { TaskBranchManager } = require("./task-branch-manager");
 const { classifyTarget } = require("./effect-classifier");
@@ -491,7 +493,19 @@ class TaskController {
     this._navIntervalMs = Number.isFinite(navIntervalMs) ? navIntervalMs : SAME_SITE_NAV_INTERVAL_MS;
     this._needUserReason = null;
     this._maxRecoveries = maxRecoveries;
-    this._recovery = createRecoveryPolicy(maxRecoveries);
+    this._proposalFeedbackCode = null;
+    this._rejectedProposals = 0;
+    this._recovery = createRecoveryPolicy(maxRecoveries, undefined, { state: store.lastCheckpoint?.payload?.recoveryBudget });
+    for (const event of store.eventsSinceCheckpoint || []) {
+      if (event.type !== "note" || event.payload?.kind !== "recovery") continue;
+      const state = event.payload.recoveryBudget;
+      if (state === undefined) continue; // Legacy notes had no durable budget.
+      const restored = createRecoveryPolicy(maxRecoveries, undefined, { state });
+      if (restored.snapshot().spent !== this._recovery.snapshot().spent + 1) {
+        throw new TaskControllerError("invalid_recovery_state", "recovery journal tail is inconsistent");
+      }
+      this._recovery = restored;
+    }
     // A planner without image input gets a text screen map instead of a
     // screenshot (text computer use). visionAssist, when given, may describe
     // the screen for sparse pages; its output is untrusted text.
@@ -500,7 +514,13 @@ class TaskController {
     // Opt-in: when same-model recovery is spent on a planner problem, the host
     // may hand back a stronger planner. At most once per task.
     this._escalatePlanner = typeof escalatePlanner === "function" ? escalatePlanner : null;
-    this._escalations = 0;
+    this._escalations = store.lastCheckpoint?.payload?.plannerEscalations ?? 0;
+    if (!Number.isInteger(this._escalations) || this._escalations < 0 || this._escalations > 1) {
+      throw new TaskControllerError("invalid_recovery_state", "planner escalation count is malformed");
+    }
+    for (const event of store.eventsSinceCheckpoint || []) {
+      if (event.type === "note" && event.payload?.kind === "planner_escalation") this._escalations = 1;
+    }
     this._visionAssist = typeof visionAssist === "function" ? visionAssist : null;
     this._loopHint = false;
     this._errorUrls = [];
@@ -978,6 +998,8 @@ class TaskController {
         segment: { ...this._segment },
         criteriaStatus: [...this._criteriaStatus.entries()],
         harnessProfile: this._harnessProfile,
+        recoveryBudget: this._recovery.snapshot(),
+        plannerEscalations: this._escalations,
         ...(this._harnessProfile === "long" ? { goalPersistence: { rejectedFinishes: this._rejectedFinishes } } : {}),
         ...(this._routineRun ? { routineRun: { ...this._routineRun } } : {}),
         ...(this._openMcpCalls.size > 0 ? { mcp: { openCalls: [...this._openMcpCalls] } } : {}),
@@ -997,7 +1019,14 @@ class TaskController {
   async _tryRecover(reason, step) {
     const granted = this._recovery.tryConsume(reason);
     if (!granted) return reason === "planner_error" || reason === "no_progress" ? this._tryEscalate(reason) : false;
-    await this._store.append({ type: "note", payload: { kind: "recovery", reason, step, attempt: granted.attempt, total: granted.total } }).catch(() => {});
+    // Retry only after its budget charge is durable. A crash before checkpoint
+    // replays this complete bounded state from the validated journal tail.
+    try {
+      await this._store.append({ type: "note", payload: { kind: "recovery", reason, step, attempt: granted.attempt, total: granted.total,
+        recoveryBudget: this._recovery.snapshot() } });
+    } catch {
+      return false; // No durable charge: take the caller's normal pause path.
+    }
     return true;
   }
 
@@ -1006,13 +1035,18 @@ class TaskController {
     let next;
     try { next = await this._escalatePlanner({ reason }); } catch { return false; }
     if (!next || !next.planner || typeof next.planner.next !== "function") return false;
+    try {
+      await this._store.append({ type: "note", payload: { kind: "planner_escalation", reason, from: String(next.from ?? ""), to: String(next.to ?? "") } });
+    } catch {
+      await Promise.resolve(next.planner.close?.()).catch(() => {});
+      return false;
+    }
     const previous = this._planner;
     this._escalations += 1;
     this._planner = next.planner;
     this._plannerImageInput = next.imageInput !== false;
-    this._recovery = createRecoveryPolicy(this._maxRecoveries);
+    this._recovery.noteProgress(); // New model gets a recent window, not a new lifetime.
     this._loopHint = false;
-    await this._store.append({ type: "note", payload: { kind: "planner_escalation", reason, from: String(next.from ?? ""), to: String(next.to ?? "") } }).catch(() => {});
     await Promise.resolve(previous?.close?.()).catch(() => {});
     return true;
   }
@@ -1153,6 +1187,7 @@ class TaskController {
     // resume either, for the same reason.
     this._lastObservation = null;
     this._reusableObservation = null;
+    this._rejectedProposals = 0; // Explicit user resume, never an automatic retry.
     this._emit();
     return this._runLoop();
   }
@@ -1924,11 +1959,12 @@ class TaskController {
         this._recordNavigation(observation);
 
         let customMemory = [];
+        const memoryReads = startTurnMemoryReads({
+          loadMemory: this._memoryStore ? () => this._memoryStore.forContext(observation.url) : undefined,
+          recallActivity: this._activityRecall ? () => this._activityRecall(this._goal.originalRequest ?? "") : undefined,
+        });
         try {
-          if (this._memoryStore) {
-            const memory = await this._memoryStore.forContext(observation.url);
-            customMemory = memory.entries;
-          }
+          customMemory = await memoryReads.memory;
         } catch {
           if (this._stopHappenedSince(epoch)) break;
           if (await this._tryRecover("context_error", "rebuild-context")) continue;
@@ -1943,10 +1979,8 @@ class TaskController {
           if (merged.length) customMemory = [...customMemory, ...merged];
         }
         if (this._activityRecall) {
-          try {
-            const recalled = await this._activityRecall(this._goal.originalRequest ?? "");
-            if (Array.isArray(recalled) && recalled.length) customMemory = [...customMemory, ...recalled];
-          } catch { /* the journal is optional */ }
+          const recalled = await memoryReads.activity;
+          if (recalled.length) customMemory = [...customMemory, ...recalled];
           if (this._stopHappenedSince(epoch)) break;
         }
 
@@ -2046,39 +2080,24 @@ class TaskController {
           // A blank start page has no boxes to read; the planner navigates first, then the next
           // observation is captured normally.
           const computerUseReady = hasComputerUseAdapter(this._store.taskProfile) && /^https?:/i.test(observation?.url ?? "");
-          if (computerUseReady && !this._plannerImageInput) {
-            if (typeof this._browser.captureTextObservation !== "function") {
+          if (computerUseReady) {
+            if ((!this._plannerImageInput && typeof this._browser.captureTextObservation !== "function") ||
+                (typeof this._browser.captureTextObservation !== "function" && typeof this._browser.captureComputerUseObservation !== "function")) {
               await this._pauseWith("computer_use_unavailable");
               break;
             }
             try {
-              textCapture = await this._browser.captureTextObservation(observation);
-              if (!textCapture?.binding || textCapture.binding.observationId !== observation.id ||
-                  textCapture.binding.taskId !== this._goal.taskId || textCapture.binding.documentEpoch !== observation.documentEpoch ||
-                  typeof textCapture.screenMap?.text !== "string") {
-                throw new Error("invalid screen map binding");
-              }
-              if (textCapture.screenMap.sparse && this._visionAssist) {
+              const captureStartedAt = this._onTiming ? performance.now() : null;
+              const capture = await capturePreferredObservation(this._browser, observation, {
+                taskId: this._goal.taskId, imageInput: this._plannerImageInput,
+                lastActionType: this._lastActionType, lastActionStatus: this._lastActionStatus,
+              });
+              textCapture = capture.textCapture; visualCapture = capture.visualCapture;
+              if (this._onTiming) { try { this._onTiming({ operation: "computer_use_capture", elapsedMs: performance.now() - captureStartedAt, route: capture.route, reason: capture.reason }); } catch {} }
+              if (textCapture?.screenMap.sparse && this._visionAssist) {
                 // Best effort: a failed description leaves the plain map.
                 const described = await Promise.resolve(this._visionAssist(observation)).catch(() => null);
                 if (typeof described === "string" && described.trim()) textCapture = { ...textCapture, visionNote: described.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 2048) };
-              }
-            } catch (error) {
-              await this._store.append({ type: "note", payload: { kind: "computer_use_capture_error", code: String(error?.code ?? error?.message ?? "unknown").slice(0, 120) } }).catch(() => {});
-              await this._pauseWith("computer_use_capture_failed");
-              break;
-            }
-          } else if (computerUseReady) {
-            if (typeof this._browser.captureComputerUseObservation !== "function") {
-              await this._pauseWith("computer_use_unavailable");
-              break;
-            }
-            try {
-              visualCapture = await this._browser.captureComputerUseObservation(observation);
-              if (!visualCapture?.binding || visualCapture.binding.observationId !== observation.id ||
-                  visualCapture.binding.taskId !== this._goal.taskId || visualCapture.binding.documentEpoch !== observation.documentEpoch ||
-                  !visualCapture.attachment || typeof visualCapture.attachment.path !== "string" || typeof visualCapture.attachment.dispose !== "function") {
-                throw new Error("invalid screenshot attachment binding");
               }
             } catch (error) {
               await this._store.append({ type: "note", payload: { kind: "computer_use_capture_error", code: String(error?.code ?? error?.message ?? "unknown").slice(0, 120) } }).catch(() => {});
@@ -2093,12 +2112,19 @@ class TaskController {
             : textCapture
               ? { ...observation, computerUse: { ...textCapture.binding, mode: "text" }, screenMap: textCapture.screenMap.text, ...(textCapture.visionNote ? { visionNote: textCapture.visionNote } : {}) }
               : observation;
+          const recoveryFeedback = buildRecoveryFeedback(this._recovery.snapshot());
+          const proposalFeedback = this._proposalFeedbackCode ? buildProposalFeedback(this._proposalFeedbackCode, {
+            taskId: this._goal.taskId, goalVersion: this._goal.goalVersion,
+            basedOnObservationId: observation.id, maxActions: this._maxActionsPerProposal,
+          }) : null;
           context = buildContext({
             goal: this._goal,
             state: {
               criteriaStatus: this.getSnapshot().criteriaStatus,
               segment: { ...this._segment },
               budgets: { ...this._budgets },
+              ...(recoveryFeedback ? { recoveryFeedback } : {}),
+              ...(proposalFeedback ? { proposalFeedback } : {}),
               plannerEffort: this._effectivePlannerEffort(pendingMessages, observation?.url),
               harnessProfile: this._harnessProfile,
               maxActionsPerProposal: this._maxActionsPerProposal,
@@ -2175,11 +2201,23 @@ class TaskController {
           try {
             proposal = await this._nextPlanner(context, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
           } catch (firstError) {
-            // A malformed proposal is a transient model slip, not a broken
-            // planner: retry the same context once (charged as a call).
+            // Repair format against the same observation, but with bounded
+            // host feedback, not the provider's raw error or rejected output.
             if (!PLANNER_RETRYABLE_CODES.includes(firstError?.plannerCode) || this._stopHappenedSince(epoch)) throw firstError;
+            const activeMs = this._budgets.activeMs + (this._activeSince !== null ? this._now() - this._activeSince : 0);
+            if (this._budgets.plannerCallsUsed >= this._goal.limits.maxPlannerCalls || activeMs >= this._goal.limits.maxActiveMs) {
+              await this._pauseWith("budget_exhausted");
+              break;
+            }
+            this._proposalFeedbackCode = firstError.plannerCode;
+            const repairContext = { ...context, progress: { ...context.progress,
+              budgets: { ...this._budgets, plannerCallsUsed: this._budgets.plannerCallsUsed + 1 }, proposalFeedback: buildProposalFeedback(firstError.plannerCode, {
+                taskId: this._goal.taskId, goalVersion: this._goal.goalVersion,
+                basedOnObservationId: context.observation.id, maxActions: this._maxActionsPerProposal,
+              }) } };
+            if (Buffer.byteLength(JSON.stringify(repairContext), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) throw firstError;
             this._budgets.plannerCallsUsed += 1;
-            proposal = await this._nextPlanner(context, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
+            proposal = await this._nextPlanner(repairContext, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
           }
           if (this._pendingMcpObservation) this._pendingMcpObservation = null;
           this._pendingContextRead = null;
@@ -2239,12 +2277,25 @@ class TaskController {
         let validated;
         try {
           validated = validateProposal(proposal, { goal: this._goal, maxActions: this._maxActionsPerProposal });
-        } catch {
+          if (validated.basedOnObservationId !== observation.id) {
+            throw new TaskControllerError("stale_observation", "proposal must reference the current observation");
+          }
+        } catch (error) {
           // An off-goal/stale/malformed proposal is never executed; give the
-          // planner another turn with a fresh observation rather than
-          // silently doing nothing forever.
+          // planner one correction turn with a fresh observation and binding.
+          this._proposalFeedbackCode = buildProposalFeedback(error?.code, {
+            taskId: this._goal.taskId, goalVersion: this._goal.goalVersion,
+            basedOnObservationId: observation.id, maxActions: this._maxActionsPerProposal,
+          }).code;
+          this._rejectedProposals += 1;
+          if (this._rejectedProposals >= 2) {
+            await this._pauseWith("invalid_proposal");
+            break;
+          }
           continue;
         }
+        this._proposalFeedbackCode = null;
+        this._rejectedProposals = 0;
 
         if (this._onCaptchaPage && validated.kind === "actions") {
           const staysOut = validated.actions.every((action) => {

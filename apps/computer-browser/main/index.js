@@ -1,6 +1,11 @@
 "use strict";
 
-const { app, BrowserWindow, WebContentsView, dialog, nativeTheme } = require("electron");
+const desktopRuntime = require("./desktop-runtime");
+const { app, BrowserWindow, WebContentsView, dialog, nativeTheme } = desktopRuntime;
+
+// Opt-in: folds the GPU process into the browser process, about 60 MB less with a few
+// surfaces open. Off by default because a GPU crash then takes the whole app down.
+if (process.env.HALO_IN_PROCESS_GPU === "1") app.commandLine.appendSwitch("in-process-gpu");
 const { applyPageTheme } = require("./page-theme");
 const path = require("path");
 const os = require("os");
@@ -157,10 +162,11 @@ function withConnectorObservation(browser) {
 // makeHarnessBrowser below), not tied to the visible window's lifecycle.
 // Bring-your-own Chromium: stays inert (createPage returns null) until Settings selects the
 // "chromium" engine, so the default path is exactly the Electron one.
-const cdpEngine = new (require("./harness/cdp-engine").CdpEngine)();
+const cdpEngine = desktopRuntime.cdpEngine ?? new (require("./harness/cdp-engine").CdpEngine)();
 // Agent surfaces idle past a few seconds freeze and, past two minutes or over six live renderers, are
 // discarded and restored by one GET on next use; the pool also gives memory back under pressure.
-const agentViewportHost = new AgentViewportHost({ createPage: (partition) => cdpEngine.createPage(partition), lifecycle: true, onIdle: () => cdpEngine.release() });
+require("./session-vault-setup").attachSessionVault({ app, safeStorage: desktopRuntime.safeStorage, cdpEngine, isChromium: desktopRuntime.isChromium, createSessionVault: require("./harness/session-vault").createSessionVault, path });
+const agentViewportHost = new AgentViewportHost({ createPage: (partition) => cdpEngine.createPage(partition), lifecycle: true, onIdle: () => desktopRuntime.isChromium ? undefined : cdpEngine.release() });
 const TAB_IDLE_DISCARD_MS = 10 * 60_000;
 // Windows register a callback that discards their inactive tabs. When task admission
 // is refused for memory, every inactive tab is given back before the task is refused.
@@ -472,7 +478,7 @@ function makeChildHarnessBrowser(parentTaskId, childId, origin, execution = "hos
 // always wins; otherwise the task's pinned settings plannerProvider selects a
 // host-allowlisted worker; "none" keeps the planner honestly unavailable.
 // Keys registered in Settings; process.env still wins when both are set.
-const apiKeyStore = new ApiKeyStore({ storageRoot: path.join(app.getPath("userData"), "harness-data"), safeStorage: require("electron").safeStorage });
+const apiKeyStore = new ApiKeyStore({ storageRoot: path.join(app.getPath("userData"), "harness-data"), safeStorage: desktopRuntime.safeStorage });
 
 function makeHarnessPlanner(usageLedger) {
   const { command: plannerCommand, env: plannerEnv } = resolvePlannerCommand();
@@ -513,16 +519,16 @@ async function createHarnessHost(socketPath, hostWindow) {
   const nvidiaModelsFile = path.join(dataRoot, "nvidia-models.json");
   require("./harness/providers/nvidia-models").loadDiscoveredNvidiaModels(nvidiaModelsFile);
   const settings = await settingsStore.load();
-  cdpEngine.configure(settings);
+  cdpEngine.configure(desktopRuntime.isChromium ? { ...settings, browserEngine: "chromium" } : settings);
   // Later Settings changes re-point the engine; tasks already running keep the browser they started on.
   const updateSettings = settingsStore.update.bind(settingsStore);
-  settingsStore.update = async (...args) => { const next = await updateSettings(...args); cdpEngine.configure(next); return next; };
+  settingsStore.update = async (...args) => { const next = await updateSettings(...args); cdpEngine.configure(desktopRuntime.isChromium ? { ...next, browserEngine: "chromium" } : next); return next; };
   await apiKeyStore.load().catch((error) => console.error("[harness] registered API keys unavailable:", error?.code ?? error));
-  const memoryStore = new LocalMemoryStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
+  const memoryStore = new LocalMemoryStore({ storageRoot: dataRoot, safeStorage: desktopRuntime.safeStorage });
   // Context Awareness: off unless the user turned it on. The setting is read
   // live (cached briefly) so toggling it takes effect without a restart.
-  const journalStore = new ActivityJournalStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
-  const strategyLearningStore = new StrategyLearningStore({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
+  const journalStore = new ActivityJournalStore({ storageRoot: dataRoot, safeStorage: desktopRuntime.safeStorage });
+  const strategyLearningStore = new StrategyLearningStore({ storageRoot: dataRoot, safeStorage: desktopRuntime.safeStorage });
   if (settings.strategyLearning === true) await strategyLearningStore.setEnabled(true).catch((error) => {
     console.error("[harness] strategy learning remains unavailable:", error?.code ?? error);
   });
@@ -533,9 +539,9 @@ async function createHarnessHost(socketPath, hostWindow) {
   };
   pageVisitSink = createPageVisitSink({ isEnabled: awarenessOn, record: (visit) => journalStore.record(visit) });
   const activityJournal = { store: journalStore, isEnabled: awarenessOn };
-  const credentialVault = new LocalCredentialVault({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage });
+  const credentialVault = new LocalCredentialVault({ storageRoot: dataRoot, safeStorage: desktopRuntime.safeStorage });
   const profileImporter = new ProfileImporter({
-    vault: new SessionVault({ storageRoot: dataRoot, safeStorage: require("electron").safeStorage }),
+    vault: new SessionVault({ storageRoot: dataRoot, safeStorage: desktopRuntime.safeStorage }),
     config: new SessionConfigStore({ storageRoot: dataRoot }),
     readers: { chrome: ({ domains, profile }) => readChromeCookies({ domains, profile }) },
     settingsReaders: { chrome: ({ profile }) => readChromeSettings({ profile }) },
@@ -583,7 +589,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     profileImporter,
     // Same non-persistent partition the task's views use, so cookies injected
     // here are what the first navigation sends.
-    getTaskSession: (taskId) => require("electron").session.fromPartition(`halo-task-${taskId}`),
+    getTaskSession: (taskId) => desktopRuntime.session.fromPartition(`halo-task-${taskId}`),
   });
   taskHosts.add(taskHost);
   return taskHost;
@@ -636,8 +642,8 @@ async function createWindow(socketPath, attachedClient = undefined) {
     // An attached UI has no agent views of its own; the service process owns them.
     captureAgentFrame: (taskId) => (attachedClient ? attachedClient.captureAgentFrame(taskId) : agentViewportHost.captureFrame(taskId)),
     // Only an attached UI needs these: its task views live in the service process.
-    captureTaskFrame: (taskId) => (attachedClient ? attachedClient.captureTaskFrame(taskId) : null),
-    sendTaskInput: (taskId, input) => (attachedClient ? attachedClient.sendTaskInput(taskId, input) : false),
+    captureTaskFrame: (taskId) => (attachedClient ? attachedClient.captureTaskFrame(taskId) : desktopRuntime.isChromium ? taskHost.captureTaskFrame(taskId) : null),
+    sendTaskInput: (taskId, input) => (attachedClient ? attachedClient.sendTaskInput(taskId, input) : desktopRuntime.isChromium ? taskHost.sendTaskInput(taskId, input) : false),
     launchAgent: getBackgroundLaunchAgent() ?? undefined,
     onNewWindow: async () => {
       const client = await connectRuntimeClient();
@@ -660,7 +666,7 @@ async function createWindow(socketPath, attachedClient = undefined) {
     if (details.reason === "clean-exit") return;
     setTimeout(() => { if (!win.isDestroyed()) win.webContents.reload(); }, 300);
   });
-  win.loadFile(path.join(__dirname, "..", "renderer", "dist", "index.html"));
+  await win.loadFile(path.join(__dirname, "..", "renderer", "dist", "index.html"));
   return win;
 }
 

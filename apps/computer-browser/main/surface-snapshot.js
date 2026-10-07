@@ -11,6 +11,7 @@
 
 const MAX_WIDTH = 1600;
 const JPEG_QUALITY = 70;
+const { captureFrameJpeg } = require("./harness/frame-capture");
 
 function isShowing(view) {
   if (!view?.webContents || view.webContents.isDestroyed?.()) return false;
@@ -20,18 +21,22 @@ function isShowing(view) {
   return Boolean(bounds && bounds.width > 0 && bounds.height > 0);
 }
 
+function findShowingView(win) {
+  if (!win || win.isDestroyed()) return null;
+  return (win.contentView?.children ?? []).find(isShowing) ?? null;
+}
+
 async function captureVisibleSurface(win) {
   if (!win || win.isDestroyed()) return null;
   const view = (win.contentView?.children ?? []).find(isShowing);
   if (!view) return null;
   try {
-    let image = await view.webContents.capturePage();
-    if (!image || image.isEmpty()) return null;
-    if (image.getSize().width > MAX_WIDTH) image = image.resize({ width: MAX_WIDTH, quality: "good" });
-    return `data:image/jpeg;base64,${image.toJPEG(JPEG_QUALITY).toString("base64")}`;
+    const jpeg = await captureFrameJpeg(view.webContents, { maxWidth: MAX_WIDTH, quality: JPEG_QUALITY });
+    if (!jpeg || win.isDestroyed() || !(win.contentView?.children ?? []).includes(view) || !isShowing(view)) return null;
+    return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
   } catch {
     return null;
   }
 }
 
-module.exports = { captureVisibleSurface };
+module.exports = { captureVisibleSurface, findShowingView };

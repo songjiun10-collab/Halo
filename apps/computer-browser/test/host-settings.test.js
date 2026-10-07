@@ -11,9 +11,9 @@ test("host settings default to browse/medium/budgeted and persist validated valu
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
   try {
     const settings = new HostSettingsStore({ storageRoot: root });
-    assert.deepEqual(await settings.load(), { version: 5, plannerEffortMode: "auto", executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [] });
+    assert.deepEqual(await settings.load(), { version: 5, plannerEffortMode: "auto", executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [], strategyLearning: false });
     await settings.update({ executionMode: "parallel", permissionMode: "interact", plannerEffort: "high" });
-    assert.deepEqual(await settings.load(), { version: 5, plannerEffortMode: "auto", executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [] });
+    assert.deepEqual(await settings.load(), { version: 5, plannerEffortMode: "auto", executionMode: "parallel", permissionMode: "interact", plannerEffort: "high", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [], strategyLearning: false });
     const stat = await fs.stat(path.join(root, "host-settings.json"));
     assert.equal(stat.mode & 0o777, 0o600);
   } finally {
@@ -28,7 +28,7 @@ test("host settings reject invalid mode or effort without changing persisted val
     await settings.load();
     await assert.rejects(settings.update({ permissionMode: "unrestricted" }), { code: "invalid_permission_mode" });
     await assert.rejects(settings.update({ plannerEffort: "--dangerous" }), { code: "invalid_planner_effort" });
-    assert.deepEqual(await settings.load(), { version: 5, plannerEffortMode: "auto", executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [] });
+    assert.deepEqual(await settings.load(), { version: 5, plannerEffortMode: "auto", executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", memoryPolicy: "budgeted", plannerProvider: "none", mcpProviders: [], strategyLearning: false });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

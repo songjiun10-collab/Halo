@@ -17,6 +17,8 @@ import { openAgentView, type AgentNavView } from './agent/agent-nav'
 import { usePresence } from './hooks/usePresence'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useTrackpad } from './hooks/useTrackpad'
+import type { BrowserSnapshot, TaskInput } from './session/api'
+import { RemotePageFrame } from './components/RemotePageFrame'
 import { captureSnapshot, syncDirectSurface, syncNativeSurface } from './session/browser-surface'
 import { AGENT, canNavigate, currentUrl, NEW_TAB_URL, pendingCriteria, SessionStore } from './session/session'
 import { tabTitle } from './session/pages'
@@ -238,8 +240,81 @@ export default function App() {
   const helpShown = usePresence(helpOpen ? true : null)
   const settingsShown = usePresence(settingsOpen ? true : null)
 
+  // The agent works in a hidden page. While it does, its page is mirrored here as a live still.
+  const [agentFrame, setAgentFrame] = useState<string | null>(null)
+  const agentWorking = s.control === 'claude' && !!s.activeTaskId
+  useEffect(() => {
+    const api = window.haloBrowser
+    const taskId = s.activeTaskId
+    if (!agentWorking || !taskId || typeof api?.captureAgentFrame !== 'function') { setAgentFrame(null); return }
+    let stopped = false
+    const tick = async () => {
+      const frame = await api.captureAgentFrame!(taskId).catch(() => null)
+      if (!stopped) setAgentFrame(frame)
+      if (!stopped) id = window.setTimeout(() => void tick(), 250)
+    }
+    let id: number | undefined
+    void tick()
+    return () => { stopped = true; window.clearTimeout(id); setAgentFrame(null) }
+  }, [agentWorking, s.activeTaskId])
+
+  // When you take over from a UI attached to the background service, the task's page lives in
+  // that other process: it arrives as stills here and your input goes back to it.
+  const [userFrame, setUserFrame] = useState<string | null>(null)
+  const userDriving = s.control === 'you' && !!s.activeTaskId
+  useEffect(() => {
+    const api = window.haloBrowser
+    const taskId = s.activeTaskId
+    if (!userDriving || !taskId || typeof api?.captureTaskFrame !== 'function') { setUserFrame(null); return }
+    let stopped = false
+    const tick = async () => {
+      const frame = await api.captureTaskFrame!(taskId).catch(() => null)
+      if (!stopped) setUserFrame(frame)
+      if (!stopped) id = window.setTimeout(() => void tick(), 120)
+    }
+    let id: number | undefined
+    void tick()
+    return () => { stopped = true; window.clearTimeout(id); setUserFrame(null) }
+  }, [userDriving, s.activeTaskId])
+  const sendInput = (input: TaskInput) => {
+    const api = window.haloBrowser
+    if (s.activeTaskId && typeof api?.sendTaskInput === 'function') void api.sendTaskInput(s.activeTaskId, input).catch(() => {})
+  }
+  const chromium = window.haloBrowser?.runtime === 'chromium'
+  const directDriving = chromium && s.directBrowser && !s.activeTaskId
+  const [directFrame, setDirectFrame] = useState<string | null>(null)
+  useEffect(() => {
+    const api = window.haloBrowser
+    if (!directDriving || !api?.captureSurface) { setDirectFrame(null); return }
+    let stopped = false
+    let id: number | undefined
+    // Polling is the fallback for engines that cannot stream.
+    const tick = async () => {
+      const frame = await api.captureSurface!().catch(() => null)
+      if (!stopped) { setDirectFrame(frame); id = window.setTimeout(() => void tick(), 120) }
+    }
+    let unsubscribe: (() => void) | undefined
+    if (typeof api.startSurfaceStream === 'function' && typeof api.onSurfaceFrame === 'function') {
+      unsubscribe = api.onSurfaceFrame((payload) => {
+        if (!stopped && typeof payload?.frame === 'string' && payload.frame.startsWith('data:image/jpeg;base64,')) setDirectFrame(payload.frame)
+      })
+      // One still first so the page never flashes empty, then the pushed frames take over.
+      void api.captureSurface().then((frame) => { if (!stopped && frame) setDirectFrame((current) => current ?? frame) }).catch(() => {})
+      void api.startSurfaceStream().then((started) => { if (!stopped && !started) void tick() }).catch(() => { if (!stopped) void tick() })
+    } else void tick()
+    return () => {
+      stopped = true; window.clearTimeout(id); unsubscribe?.()
+      setDirectFrame(null)
+    }
+  }, [directDriving, s.activeTabId])
+  // A tab switch restarts the stream in place (the host replaces the old one); stop only when the live view ends.
+  useEffect(() => {
+    if (!directDriving) return
+    return () => { void window.haloBrowser?.stopSurfaceStream?.().catch(() => {}) }
+  }, [directDriving])
+
   const nativeSurfaceVisible = ((!!s.activeTaskId && !!s.browser) || (!s.activeTaskId && s.directBrowser)) && !approval && !activityOpen && !chatOpen &&
-    !overviewOpen && !helpOpen && !settingsOpen && !noticeShown.item && !toastShown.item && !swipeDir
+    !overviewOpen && !helpOpen && !settingsOpen && !noticeShown.item && !toastShown.item && !swipeDir && (chromium || (!agentFrame && !userFrame))
   // A native view draws above the DOM, so overlays hide it. A still of the page stays in the
   // slot meanwhile: taken while the page is still on screen, then the view is hidden.
   const [snapshot, setSnapshot] = useState<string | null>(null)
@@ -316,6 +391,7 @@ export default function App() {
             onOverview={toggleOverview}
             onActivity={toggleActivity}
             onNavigate={(url) => void store.navigate({ type: 'navigate', url })}
+            onAsk={onSendMessage}
             onSettings={toggleSettings}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((open) => !open)}
@@ -327,6 +403,8 @@ export default function App() {
                   recoveryReason={s.recoveryReason}
                   onTakeOver={() => void store.control('takeOver')}
                   onResume={() => void store.control('resume', s.recoveryReason === 'execution_uncertain')}
+                  awaitingReview={s.snapshot?.state === 'awaiting_verification' && pendingCriteria(s).length > 0}
+                  onReview={openChat}
                 />
                 <LeaseChip leases={leases} now={leaseNow} agent={AGENT} onRevoke={(id) => void store.revokeLease(id)} />
               </>
@@ -355,6 +433,7 @@ export default function App() {
             activeTabId={tab.id}
             onSelectTab={(id) => void store.selectBrowserTab(id)}
             onOpenUrl={(url) => void store.navigate({ type: 'navigate', url })}
+            onNewTab={!s.activeTaskId ? () => { void store.newBrowserTab() } : undefined}
             agents={<SidebarAgents onOpen={(owner) => openAgents({ n: 'detail', owner })} onSeeAll={() => openAgents({ n: 'hub' })} onNew={() => openAgents({ n: 'hub' })} />}
           />
           <div className="hx-content-col">
@@ -370,7 +449,10 @@ export default function App() {
                   aria-label="Page rendered in the isolated browser surface"
                   tabIndex={-1}
                 >
-                  {snapshot && !nativeSurfaceVisible && <img className="hx-snapshot" data-swipe={swipeDir || undefined} src={snapshot} alt="" aria-hidden="true" draggable={false} />}
+                  {agentFrame && <img className="hx-snapshot" data-live="agent" src={agentFrame} alt="" aria-hidden="true" draggable={false} />}
+                  {userFrame && <RemotePageFrame frame={userFrame} onInput={sendInput} />}
+                  {directFrame && !s.activeTaskId && <RemotePageFrame frame={directFrame} onInput={(input) => { void window.haloBrowser?.sendSurfaceInput?.(input).catch(() => {}) }} />}
+                  {snapshot && !agentFrame && !userFrame && !nativeSurfaceVisible && <img className="hx-snapshot" data-swipe={swipeDir || undefined} src={snapshot} alt="" aria-hidden="true" draggable={false} />}
                 </main>
               ) : (
                 <Viewport
@@ -379,10 +461,28 @@ export default function App() {
                   activeTask={activeTask}
                   onSelectTab={(id) => void store.selectTask(id)}
                   onStartTask={onSendMessage}
+                  onNavigate={(url) => void store.navigate({ type: 'navigate', url })}
                 />
               )}
               <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
             </div>
+            {chatShown.item && !approval && !activityOpen && !overviewOpen && !helpOpen && (
+                <HaloChat
+                  taskLabel={s.task || 'New task'}
+                  tabContext={chatTabContext(s.browser)}
+                  messages={s.messages}
+                  timeline={s.timeline}
+                  recentTasks={recentTasks}
+                  pendingCriteria={pendingCriteria(s)}
+                  isTaskActive={!!s.activeTaskId}
+                  leaving={chatShown.leaving}
+                  onClose={closeChat}
+                  onSend={onSendMessage}
+                  onSelectTask={(taskId) => void store.selectTask(taskId)}
+                  onNewTask={() => { store.newTask(); closeChat() }}
+                  onConfirmCriterion={(criterion, outcome) => void store.confirmCriterion(criterion, outcome)}
+                />
+              )}
             {/* One Halo surface at a time: a surface a newer one supersedes cuts instantly rather
               than cross-fading underneath it, so the glass never stacks two deep. */}
             <div className="hx-overlays">
@@ -398,21 +498,6 @@ export default function App() {
               )}
               {noticeShown.item && !activityOpen && !chatOpen && !approval && <Notice event={noticeShown.item} leaving={noticeShown.leaving} blocked={!!approval} onOpen={openActivity} />}
               {activityShown.item && !approval && !chatOpen && !overviewOpen && !helpOpen && <Activity session={s} leaving={activityShown.leaving} onClose={closeActivity} />}
-              {chatShown.item && !approval && !activityOpen && !overviewOpen && !helpOpen && (
-                <HaloChat
-                  taskLabel={s.task || 'New task'}
-                  messages={s.messages}
-                  recentTasks={recentTasks}
-                  pendingCriteria={pendingCriteria(s)}
-                  isTaskActive={!!s.activeTaskId}
-                  leaving={chatShown.leaving}
-                  onClose={closeChat}
-                  onSend={onSendMessage}
-                  onSelectTask={(taskId) => void store.selectTask(taskId)}
-                  onNewTask={() => { store.newTask(); closeChat() }}
-                  onConfirmCriterion={(criterion, outcome) => void store.confirmCriterion(criterion, outcome)}
-                />
-              )}
               {helpShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && <ShortcutsHelp leaving={helpShown.leaving} onClose={() => setHelpOpen(false)} />}
               {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}
             </div>
@@ -432,4 +517,13 @@ export default function App() {
       </div>
     </div>
   )
+}
+
+/** The agent's active page as a chat context chip: its title and host, never the full URL. */
+function chatTabContext(browser: BrowserSnapshot | null): { title: string; host: string } | null {
+  const page = browser?.tabs.find((t) => t.id === browser.activeTabId)
+  if (!page) return null
+  let host = ''
+  try { host = new URL(page.url).host } catch { /* about:blank and the like have no host */ }
+  return host || page.title ? { title: page.title, host } : null
 }

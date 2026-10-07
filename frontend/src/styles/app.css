@@ -427,7 +427,14 @@ code { font-family: var(--font-mono); }
 .hx-msg__who { font-size: 11px; font-weight: 600; color: var(--muted-foreground); }
 .hx-msg__actions { display: flex; justify-content: flex-end; gap: var(--space-xs); }
 
-.hx-chat__composer { display: flex; gap: var(--space-sm); }
+.hx-chat__composer { display: flex; flex-direction: column; gap: var(--space-xs); }
+.hx-chat__row { display: flex; gap: var(--space-sm); }
+.hx-work { font-size: 12px; color: var(--muted-foreground); }
+.hx-work summary { cursor: pointer; padding: 2px 0; }
+.hx-work ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; }
+.hx-chat__ctx { display: flex; align-items: baseline; gap: var(--space-xs); margin: 0; padding: 4px 8px; width: fit-content; max-width: 100%; border-radius: var(--radius-md); background: var(--toolbar); font-size: 11px; color: var(--muted-foreground); }
+.hx-chat__ctx-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--foreground); }
+.hx-chat__ctx-h { flex: none; }
 .hx-chat__input {
   flex: 1; min-width: 0; height: 36px; padding-inline: var(--space-sm); border-radius: var(--radius-md);
   border: 1px solid var(--border-strong); background: var(--toolbar); color: var(--foreground); font: 400 13px/1 var(--font-body);
@@ -780,7 +787,7 @@ section.hx-chat .hx-chat__thread { flex: 1 1 auto; min-height: 120px; overflow-y
 
 /* Light theme: the window is real glass too; panels are frosted white, not opaque grey. */
 @media (min-width: 681px) {
-  :root[data-theme="light"] .hx-window .hx-content-col { background: rgba(255, 255, 255, 0.42); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); }
+  :root[data-theme="light"] .hx-window .hx-content-col { background: rgba(255, 255, 255, 0.72); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); }
   :root[data-theme="light"] .hx-window .hx-sidebar { background: rgba(255, 255, 255, 0.28) !important; border-color: rgba(255, 255, 255, 0.5) !important; }
 }
 
@@ -809,3 +816,77 @@ section.hx-chat .hx-chat__thread { flex: 1 1 auto; min-height: 120px; overflow-y
 .hx-msg__more { margin-top: 6px; font-size: 12px; opacity: .75; }
 .hx-msg__more summary { cursor: pointer; }
 .hx-msg__more code { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+
+/* macOS frameless window. The sidebar is a full-height glass column holding the traffic lights; the toolbar, tab strip and page sit to its right on one solid tone. */
+:root { --halo-solid: #0c0e0d; }
+:root[data-theme="light"] { --halo-solid: #f4f4f2; }
+@media (min-width: 681px) {
+  :root[data-platform="darwin"] .hx-window { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); background: transparent !important; }
+  :root[data-platform="darwin"] .hx-workspace { display: contents; }
+  :root[data-platform="darwin"] .hx-chrome { grid-column: 2; grid-row: 1; background: var(--halo-solid) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  :root[data-platform="darwin"] .hx-toolbar, :root[data-platform="darwin"] .hx-strip { background: transparent !important; border: 0 !important; box-shadow: none; }
+  :root[data-platform="darwin"] .hx-content-col { grid-column: 2; grid-row: 2; margin: 0; border-radius: 0; background: var(--halo-solid) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  :root[data-platform="darwin"] .hx-sidebar {
+    grid-column: 1; grid-row: 1 / span 2; width: 244px; margin: 0; border: 0 !important; border-radius: 0; padding-top: 52px;
+    background: rgba(12, 14, 13, 0.76) !important; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none;
+  }
+  :root[data-platform="darwin"][data-theme="light"] .hx-sidebar { background: rgba(255, 255, 255, 0.72) !important; }
+  :root[data-platform="darwin"] .hx-sidebar[data-open="false"] { width: 52px; }
+  :root[data-platform="darwin"] .hx-sidebar::before { content: ""; position: fixed; top: 0; left: 0; width: 244px; height: 44px; -webkit-app-region: drag; }
+  :root[data-platform="darwin"] .hx-toolbar { -webkit-app-region: drag; }
+  :root[data-platform="darwin"] .hx-toolbar button, :root[data-platform="darwin"] .hx-toolbar input, :root[data-platform="darwin"] .hx-toolbar a, :root[data-platform="darwin"] .hx-toolbar [role="button"] { -webkit-app-region: no-drag; }
+}
+
+/* No scrollbar chrome anywhere in the app UI; scrolling itself is unchanged. */
+.hx-window, .hx-window * { scrollbar-width: none; }
+.hx-window *::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+/* macOS frameless: the native window already has rounded corners, so the page fills it edge to edge (no inset showing the raw glass as a second tone). */
+:root[data-platform="darwin"] .hx-app { padding: 0; }
+:root[data-platform="darwin"] .hx-window { border-radius: 12px; box-shadow: none; }
+
+/* Home (Design System-7): Search/Ask toggle, Chats/Routines tabs, card list. */
+.hx-seg { display: flex; flex: none; gap: 2px; padding: 3px; border-radius: 12px; background: color-mix(in oklab, #000 25%, transparent); font-size: 13px; }
+.hx-seg button { border: 0; background: none; cursor: pointer; padding: 5px 14px; border-radius: 9px; color: var(--muted-foreground); font: 500 13px var(--font-body); }
+.hx-seg button[aria-pressed=true] { background: color-mix(in oklab, var(--foreground) 15%, transparent); color: var(--foreground); box-shadow: 0 1px 3px rgba(0, 0, 0, .25); }
+.hx-seg--lg { border-radius: 16px; }
+.hx-seg--lg button { padding: 6px 16px; border-radius: 13px; font-size: 14px; }
+.hx-home__row { display: flex; align-items: center; justify-content: space-between; margin-top: 28px; }
+.hx-home__all { display: flex; align-items: center; gap: 4px; border: 0; background: none; cursor: pointer; color: var(--muted-foreground); font: 400 13px var(--font-body); }
+.hx-home__all .hx-ic { width: 14px; height: 14px; }
+.hx-home__all:hover { color: var(--foreground); }
+.hx-home__list { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.hx-hc { display: flex; flex-direction: column; gap: 3px; border: 0; cursor: pointer; text-align: left; padding: 14px 16px; border-radius: 18px; color: var(--foreground); font-family: var(--font-body); background: color-mix(in oklab, var(--foreground) 7%, transparent); box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 14%, transparent); }
+.hx-hc[data-static] { cursor: default; }
+.hx-hc:not([data-static]):hover { background: color-mix(in oklab, var(--foreground) 11%, transparent); }
+.hx-hc small { font-size: 12px; color: var(--muted-foreground); }
+.hx-hc b { font-weight: 500; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hx-hc span { font-size: 13px; color: var(--muted-foreground); line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hx-home__empty { align-items: center; justify-content: center; gap: 6px; min-height: 200px; border: 1px dashed color-mix(in oklab, var(--foreground) 15%, transparent); border-radius: 18px; font-size: 13px; color: var(--muted-foreground); text-align: center; }
+.hx-home__empty b { font-weight: 500; font-size: 15px; color: var(--foreground); }
+
+/* Design System-7 sidebar sections */
+.hx-sidebar__foldbtn { flex: 1; width: auto; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; }
+.hx-sidebar__showall { color: var(--muted-foreground); font-size: 12px; }
+.hx-sidebar__agents { min-width: 0; }
+
+/* Design System-7: the agent panel docks to the right of the page instead of floating over it. */
+.hx-body > section.hx-chat { position: relative; flex: 0 0 372px; width: 372px; max-height: none; align-self: stretch; margin: 8px 8px 8px 0; z-index: 5; }
+.hx-chat__ttl { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; text-align: start; cursor: pointer; padding: 0; }
+.hx-chat__ttl .hx-sidebar__chev { transform: rotate(90deg); }
+.hx-chat__ttl[aria-expanded="false"] .hx-sidebar__chev { transform: none; }
+.hx-chat__new { flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted-foreground); font-size: 14px; cursor: pointer; }
+.hx-chat__new:hover { background: var(--hover); color: var(--foreground); }
+.hx-chat__row { align-items: center; gap: 8px; padding: 4px 4px 4px 14px; border: 1px solid var(--halo-glass-border); border-radius: 999px; background: var(--well, transparent); }
+.hx-chat__row .hx-chat__input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; }
+.hx-chat__send { flex: none; width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--primary-fill); color: var(--on-primary); font-size: 15px; line-height: 1; cursor: pointer; }
+.hx-chat__send:disabled { opacity: .4; cursor: default; }
+
+.hx-omni__mode { flex: none; display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--well, transparent); }
+.hx-omni__mode button { border: 0; padding: 2px 10px; border-radius: 999px; background: transparent; color: var(--muted-foreground); font: 500 12px/1.4 var(--font-body); cursor: pointer; }
+.hx-omni__mode button[aria-pressed="true"] { background: var(--hover); color: var(--foreground); }
+
+/* The planner picker inside the docked agent panel: a compact pill, never a wrapped circle. */
+.hx-chat__composer .hx-mpick { align-self: flex-start; max-width: 100%; }
+.hx-chat__composer .hx-mpick__toggle { height: 30px; width: auto; min-width: 0; padding-inline: 12px; border-radius: 999px; font-size: 12.5px; white-space: nowrap; }
+.hx-chat__composer .hx-mpick__toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

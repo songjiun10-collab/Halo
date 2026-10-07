@@ -16,6 +16,8 @@ interface Props {
   onOverview: () => void
   onActivity: () => void
   onNavigate: (url: string) => void
+  /** Ask mode: the address field text becomes a task for the agent. */
+  onAsk?: (text: string) => void
   onSettings: () => void
   sidebarOpen: boolean
   onToggleSidebar: () => void
@@ -25,13 +27,19 @@ interface Props {
   halo: ReactNode
 }
 
-export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onShare, onOverview, onActivity, onNavigate, onSettings, sidebarOpen, onToggleSidebar, controller, halo }: Props) {
+export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onShare, onOverview, onActivity, onNavigate, onAsk, onSettings, sidebarOpen, onToggleSidebar, controller, halo }: Props) {
   const url = currentUrl(tab)
   const addressUrl = url.startsWith('halo://') || url === 'about:blank' ? '' : url
   const [address, setAddress] = useState(addressUrl)
   useEffect(() => setAddress(addressUrl), [addressUrl])
+  const [ask, setAsk] = useState(false)
   const submitAddress = (event: FormEvent) => {
     event.preventDefault()
+    if (ask && onAsk) {
+      const text = address.trim()
+      if (text) { onAsk(text); setAddress(addressUrl); setAsk(false) }
+      return
+    }
     const target = addressTarget(address)
     if (target) onNavigate(target)
   }
@@ -45,9 +53,15 @@ export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onSha
       <div className="hx-omni">
         {url.startsWith('https://') && <span className="hx-omni__lock" role="img" aria-label="Secure connection"><Lock /></span>}
         <form className="hx-omni__form" onSubmit={submitAddress}>
-          <input ref={omniRef} className="hx-omni__input" aria-label="Address" placeholder="Search or enter address" value={address} onChange={(event) => setAddress(event.target.value)} disabled={locked} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
+          <input ref={omniRef} className="hx-omni__input" aria-label="Address" placeholder={ask ? 'Ask Halo to do something' : 'Search or enter address'} value={address} onChange={(event) => setAddress(event.target.value)} disabled={locked} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
           <button className="hx-sr" type="submit" tabIndex={-1}>Go</button>
         </form>
+        {onAsk ? (
+          <span className="hx-omni__mode" role="group" aria-label="Address mode">
+            <button type="button" aria-pressed={!ask} onClick={() => setAsk(false)}>Tab</button>
+            <button type="button" aria-pressed={ask} onClick={() => setAsk(true)}>Ask</button>
+          </span>
+        ) : null}
         {controller}
       </div>
       <div className="hx-nav">

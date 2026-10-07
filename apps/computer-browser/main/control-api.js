@@ -2,8 +2,9 @@
 
 const { randomUUID } = require("crypto");
 const { performance } = require("node:perf_hooks");
-const { WebContentsView } = require("electron");
+const { WebContentsView } = require("./desktop-runtime");
 const { MIN_CHROME_HEIGHT } = require("./harness/browser-surfaces");
+const { dispatchBrowserInput } = require("./harness/browser-input");
 
 // The React shell has no fixed side panel, so the user's view fills the page
 // slot the renderer measures, exactly like task surfaces (BrowserSurfaces):
@@ -149,6 +150,11 @@ class ControlApi {
   onChange(listener) {
     this._listeners.add(listener);
     return () => this._listeners.delete(listener);
+  }
+
+  sendSurfaceInput(input) {
+    if (!this._view || this._view.webContents.isDestroyed() || this._inFlightAgentActions.size || ["running", "awaiting_approval"].includes(this._task.state) || this._task.pauseReason === "user_takeover_pending") return false;
+    return dispatchBrowserInput(this._view.webContents, this._view.getBounds(), input);
   }
 
   _emit() {

@@ -7,6 +7,7 @@ import App from './App'
 import { watchSystemTheme } from './session/theme'
 
 watchSystemTheme()
+if (/Mac/.test(navigator.userAgent)) document.documentElement.dataset.platform = 'darwin'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

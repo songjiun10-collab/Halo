@@ -20,7 +20,7 @@ interface CdpTransport {
   onEvent(handler: (method: string, params: Json, sessionId?: string) => void): () => void;
   close(): void;
 }
-interface CdpPageOptions { url?: string; width?: number; height?: number; commandTimeoutMs?: number; isolated?: boolean; hardened?: boolean; sharedContext?: (transport: CdpTransport) => Promise<string> }
+interface CdpPageOptions { url?: string; width?: number; height?: number; commandTimeoutMs?: number; isolated?: boolean; hardened?: boolean; session?: any; sharedContext?: (transport: CdpTransport) => Promise<string> }
 // Same ad/tracker list the Electron agent session uses, so both engines refuse the same hosts.
 const { isBlockedUrl } = require("./agent-request-filter") as { isBlockedUrl: (url: string) => boolean };
 const DENIED_PERMISSIONS = ["geolocation", "notifications", "camera", "microphone", "midi", "clipboard-read", "clipboard-write", "screen-wake-lock", "persistent-storage", "background-sync", "idle-detection", "window-management", "local-fonts", "display-capture"];
@@ -138,7 +138,13 @@ class CdpImage {
   encodeJpegAsync(quality: number): Promise<Buffer> { return this.encodeJpeg(quality, this.targetWidth); }
 }
 
+let nextWebContentsId = 1;
+
 class CdpWebContents {
+  private viewportWidth = DEFAULT_WIDTH;
+  private viewportHeight = DEFAULT_HEIGHT;
+  private viewportChange: Promise<void> = Promise.resolve();
+  private readonly webContentsId = nextWebContentsId++;
   private readonly listeners = new Map<string, Set<EventListener>>();
   private unsubscribe: () => void;
   private url = "about:blank";
@@ -150,6 +156,7 @@ class CdpWebContents {
   private readonly worlds = new Map<number, number>();
   private destroyed = false;
   private sessionId = "";
+  private screencast: ((jpegBase64: string) => void) | null = null;
   private targetId = "";
   private contextId: string | null = null;
   private transport!: CdpTransport;
@@ -159,6 +166,7 @@ class CdpWebContents {
   // the browser waits on it, so a caller can use the page right after construction.
   readonly ready: Promise<void>;
   readonly isCdp = true;
+  get session(): any { return this.options.session; }
   readonly navigationHistory: {
     canGoBack: () => boolean; canGoForward: () => boolean; getActiveIndex: () => number; goToIndex: (index: number) => void;
   };
@@ -208,6 +216,7 @@ class CdpWebContents {
     await this.rawCmd("Network.enable");
     await this.rawCmd("Runtime.enable");
     await this.rawCmd("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+    this.viewportWidth = width; this.viewportHeight = height;
     const tree = await this.rawCmd("Page.getFrameTree");
     this.mainFrameId = tree.frameTree.frame.id;
     await this.refreshHistory();
@@ -295,11 +304,23 @@ class CdpWebContents {
         }
         break;
       case "Page.frameStoppedLoading":
-        if (params.frameId === this.mainFrameId) this.emit("did-stop-loading");
+        if (params.frameId === this.mainFrameId) { this.emit("did-stop-loading"); this.emit("did-finish-load"); }
+        break;
+      case "Page.frameStartedLoading":
+        if (params.frameId === this.mainFrameId) this.emit("did-start-navigation", {}, this.url, false, true);
+        break;
+      case "Page.domContentEventFired":
+        this.emit("dom-ready");
         break;
       case "Runtime.executionContextsCleared":
         this.worlds.clear();
         break;
+      case "Page.screencastFrame": {
+        // Ack first so Chromium keeps producing frames; the listener only ever sees the newest bytes.
+        this.rawCmd("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => undefined);
+        if (this.screencast && typeof params.data === "string") { try { this.screencast(params.data); } catch { /* a listener must not stop frames */ } }
+        break;
+      }
       default:
         break;
     }
@@ -321,9 +342,23 @@ class CdpWebContents {
     this.listeners.get(name)?.delete(listener);
     return this;
   }
+  once(name: string, listener: EventListener): this {
+    const wrapped = (...args: any[]) => { this.removeListener(name, wrapped); listener(...args); };
+    return this.on(name, wrapped);
+  }
+  setWindowOpenHandler(_handler: unknown): void { /* hardened pages close popup targets in onEvent. */ }
+  async setViewportSize(width: number, height: number): Promise<void> {
+    if (![width, height].every((value) => Number.isInteger(value) && value > 0 && value <= 16384)) return Promise.reject(new Error("invalid_viewport"));
+    const update = this.viewportChange.catch(() => undefined).then(async () => {
+      await this.cmd("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+      this.viewportWidth = width; this.viewportHeight = height;
+    });
+    this.viewportChange = update;
+    return update;
+  }
   getURL(): string { return this.url; }
   getTitle(): string { return this.title; }
-  get id(): number { return 0; }
+  get id(): number { return this.webContentsId; }
 
   async loadURL(url: string): Promise<void> {
     await this.ready;
@@ -408,6 +443,30 @@ class CdpWebContents {
       .catch(() => undefined);
   }
 
+  async captureJpeg({ maxWidth, quality }: { maxWidth: number; quality: number }): Promise<Buffer> {
+    if (!Number.isInteger(maxWidth) || maxWidth < 1 || maxWidth > 8192 || !Number.isInteger(quality) || quality < 1 || quality > 100) throw new Error("invalid_capture_options");
+    await this.ready;
+    await this.viewportChange;
+    const width = this.viewportWidth, height = this.viewportHeight;
+    const shot = await this.cmd("Page.captureScreenshot", { format: "jpeg", quality, captureBeyondViewport: false,
+      clip: { x: 0, y: 0, width, height, scale: Math.min(1, maxWidth / width) } });
+    return Buffer.from(String(shot.data), "base64");
+  }
+
+  // Push-based live view: Chromium sends a JPEG only when the page paints something new.
+  async startScreencast({ maxWidth, quality }: { maxWidth: number; quality: number }, onFrame: (jpegBase64: string) => void): Promise<void> {
+    if (!Number.isInteger(maxWidth) || maxWidth < 1 || maxWidth > 8192 || !Number.isInteger(quality) || quality < 1 || quality > 100) throw new Error("invalid_capture_options");
+    await this.ready;
+    await this.viewportChange;
+    this.screencast = onFrame;
+    await this.cmd("Page.startScreencast", { format: "jpeg", quality, maxWidth, maxHeight: Math.min(8192, Math.round(maxWidth * 2)), everyNthFrame: 1 });
+  }
+  async stopScreencast(): Promise<void> {
+    this.screencast = null;
+    if (this.destroyed) return;
+    await this.cmd("Page.stopScreencast").catch(() => undefined);
+  }
+
   async capturePage(rect?: { x: number; y: number; width: number; height: number }): Promise<CdpImage> {
     const clip = rect ? { clip: { ...rect, scale: 1 } } : {};
     const shot = await this.cmd("Page.captureScreenshot", { format: "png", ...clip });
@@ -419,6 +478,12 @@ class CdpWebContents {
       return Buffer.from(String(out.data), "base64");
     };
     return new CdpImage(png, size, jpeg);
+  }
+
+  async purgeMemory(): Promise<void> {
+    if (this.destroyed) return;
+    await this.ready.catch(() => undefined);
+    await this.rawCmd("Memory.forciblyPurgeJavaScriptMemory").catch(() => undefined);
   }
 
   close(): void {
@@ -451,7 +516,17 @@ function createCdpView(provider: () => Promise<CdpTransport>, options: CdpPageOp
   const width = options.width ?? DEFAULT_WIDTH;
   const height = options.height ?? DEFAULT_HEIGHT;
   const webContents = new CdpWebContents(provider, options);
-  return { webContents, getBounds: () => ({ x: 0, y: 0, width, height }) };
+  let bounds = { x: 0, y: 0, width, height };
+  let visible = false;
+  return {
+    webContents, getBounds: () => ({ ...bounds }),
+    setBounds(next: { x: number; y: number; width: number; height: number }) {
+      if (![next.x, next.y, next.width, next.height].every(Number.isFinite) || next.width < 0 || next.height < 0) throw new Error("invalid_view_bounds");
+      bounds = { ...next };
+      if (next.width > 0 && next.height > 0) void webContents.setViewportSize(Math.round(next.width), Math.round(next.height)).catch(() => undefined);
+    },
+    setVisible(value: boolean) { visible = value === true; }, getVisible: () => visible,
+  };
 }
 
 export = { createCdpView, CdpWebContents, connectCdpTransport, openCdpView, modifierMask, keyInfo, pngSize };

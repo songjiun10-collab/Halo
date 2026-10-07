@@ -7,3 +7,4 @@ __pycache__/
 .docker-secrets/
 .claude/
 node_modules/
+release/

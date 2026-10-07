@@ -3,6 +3,12 @@ import type { ChildPlanSummary } from './child-agents'
 
 /** Renderer view of the existing harness contracts and trusted preload methods. */
 export type TaskState = 'idle' | 'queued' | 'running' | 'awaiting_approval' | 'awaiting_verification' | 'paused' | 'stopped' | 'completed'
+export type TaskInput =
+  | { type: 'insertText'; text: string }
+  | { type: 'mouseMove' | 'mouseDown' | 'mouseUp'; nx: number; ny: number; button?: 'left' | 'middle' | 'right'; clickCount?: number; modifiers?: string[] }
+  | { type: 'mouseWheel'; nx: number; ny: number; deltaX: number; deltaY: number; modifiers?: string[] }
+  | { type: 'keyDown' | 'keyUp'; key: string; modifiers?: string[] }
+
 export interface GoalCriterion { id: string; text: string; required: boolean; verification: 'host' | 'user'; sourceMessageId?: string }
 export interface GoalConstraint { id: string; text: string; sourceMessageId?: string }
 export type LockRule = { kind: 'deny_action'; action: 'navigate' | 'follow_link' | 'click' | 'type' | 'submit_form' } | { kind: 'allow_origins' | 'deny_origins'; origins: string[] }
@@ -84,8 +90,11 @@ export interface HostSettings {
   plannerRouting?: boolean
   /** Opt-in local journal of pages the user read, recalled by later tasks. */
   contextAwareness?: boolean
+  /** Opt-in local, Luna-only strategy-learning journal. */
+  strategyLearning?: boolean
 }
 export interface HaloBrowserApi {
+  readonly runtime?: 'chromium'
   getSnapshot: () => Promise<DirectBrowserSnapshot>
   navigate: (url: string) => Promise<DirectBrowserSnapshot>
   goBack: () => Promise<DirectBrowserSnapshot>
@@ -97,6 +106,15 @@ export interface HaloBrowserApi {
   newWindow: () => Promise<{ opened: boolean }>
   /** Optional: older hosts lack it. */
   captureSurface?: () => Promise<string | null>
+  /** Chromium runtime: push live JPEG frames of the showing page (false when the engine cannot stream). */
+  startSurfaceStream?: () => Promise<boolean>
+  stopSurfaceStream?: () => Promise<boolean>
+  onSurfaceFrame?: (callback: (payload: { frame: string }) => void) => () => void
+  captureAgentFrame?: (taskId: string) => Promise<string | null>
+  /** Attached UIs only: their task page lives in the service process, so it arrives as stills and goes back as input. */
+  captureTaskFrame?: (taskId: string) => Promise<string | null>
+  sendTaskInput?: (taskId: string, input: TaskInput) => Promise<boolean>
+  sendSurfaceInput?: (input: TaskInput) => Promise<boolean>
   /** Optional: older hosts lack it. */
   copyText?: (text: string) => Promise<boolean>
   setBrowserBounds: (bounds: BrowserViewport) => Promise<unknown>
@@ -119,6 +137,11 @@ export interface HaloBrowserApi {
   getChildPlan(taskId: string): Promise<ChildPlanSummary | null>
   getHostSettings(): Promise<HostSettings>
   clearActivity?(): Promise<boolean>
+  getStrategyLearningState?(): Promise<{ enabled: boolean; activeRevisionId: string | null; candidates: any[]; revisions: any[] }>
+  evaluateStrategyCandidate?(candidateId: string): Promise<unknown>
+  promoteStrategyCandidate?(candidateId: string, expectedActiveRevisionId: string | null): Promise<unknown>
+  rollbackStrategyGuidance?(targetRevisionId: string, expectedActiveRevisionId: string | null): Promise<unknown>
+  clearStrategyLearning?(): Promise<boolean>
   /** Planner API keys registered in Settings; the key itself never comes back. */
   getApiKeyStatus?(): Promise<Record<string, boolean>>
   setApiKey?(provider: string, key: string): Promise<Record<string, boolean>>

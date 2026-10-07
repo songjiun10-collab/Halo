@@ -119,6 +119,8 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
       },
     },
     "./harness/generic-mcp-broker": { GenericMcpBroker: class { constructor(options) { this.options = options; } } },
+    "./session-vault-setup": require("../main/session-vault-setup"),
+    "./harness/session-vault": require("../main/harness/session-vault"),
     "./harness/shared-mcp-provider": require("../main/harness/shared-mcp-provider"),
     "./harness/mcp-catalog-cache": require("../main/harness/mcp-catalog-cache"),
     "./harness/mcp-schema-validator": require("../main/harness/mcp-schema-validator"),
@@ -127,10 +129,12 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
         if (key === "dispose") return async () => { calls.connectorDisposed = (calls.connectorDisposed || 0) + 1; };
         return Reflect.get(target, key);
       } }) },
-    "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } } },
+    "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } update(patch) { return Promise.resolve(patch); } } },
     "./harness/api-key-store": { ApiKeyStore: class { load() { return Promise.resolve(); } env() { return {}; } } },
     "./harness/local-memory-store": { LocalMemoryStore: class {} },
     "./harness/activity-journal-store": { ActivityJournalStore: class {} },
+    "./harness/strategy-learning-store": { StrategyLearningStore: class { async setEnabled() {} } },
+    "./harness/cdp-engine": { CdpEngine: class { configure() {} createPage() { return null; } async release() {} } },
     "./harness/providers/nvidia-models": { loadDiscoveredNvidiaModels() {} },
     "./activity-capture": { createPageVisitSink: () => async () => {} },
     "./harness/usage-ledger": { UsageLedger: class { async load() { return this; } record(...args) { calls.usage.push(args); } } },
@@ -148,6 +152,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
       createBackgroundLaunchAgent: (options) => { calls.launchAgents = [...(calls.launchAgents ?? []), options]; return { label: "test", isInstalled: async () => false, enable: async () => {}, disable: async () => {} }; },
     },
   };
+  map["./desktop-runtime"] = map.electron;
   const realRequire = require;
   const context = {
     require: (name) => Object.hasOwn(map, name) ? map[name] : realRequire(name),
