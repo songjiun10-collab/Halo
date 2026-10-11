@@ -24,6 +24,7 @@ const PAGE = `<!doctype html><title>Signup</title>
 <label for="email">Email address</label><input id="email" type="email">
 <label for="plan">Plan</label><select id="plan"><option value="free">Free</option><option value="pro">Pro</option></select>
 <div id="slot"></div><p id="result"></p>
+<div role="tablist"><button role="tab" aria-selected="true" onclick="document.getElementById('tabclicks').textContent+='x'">5D</button><button role="tab" aria-selected="false">1M</button></div><p id="tabclicks"></p>
 <script>
 // The submit button is rendered late and starts disabled: a locator must wait for it to become actionable.
 setTimeout(() => {
@@ -79,6 +80,11 @@ test("real Chromium: hw_step fills, selects and clicks by locator with auto-wait
   assert.equal(clicked.effect.observed, true);
   assert.equal(await read("document.getElementById('result').textContent"), "Subscribed: a@b.co / pro");
   assert.ok(authorized.length >= 3, "every step went through the authorization callback");
+
+  // A tab that is already selected is a no-op: reported ok without sending input; an unselected one is still clicked.
+  const selectedTab = await runHwStep(wc, { locator: { role: "tab", name: "5D" }, op: "click" }, options);
+  assert.equal(selectedTab.status, "ok", JSON.stringify(selectedTab));
+  assert.equal(await read("document.getElementById('tabclicks').textContent"), "", "no click was sent to the already-selected tab");
 
   const missing = await runHwStep(wc, { locator: { role: "button", name: "Cancel subscription" }, op: "click" }, { ...options, timeoutMs: 800 });
   assert.equal(missing.status, "failed");

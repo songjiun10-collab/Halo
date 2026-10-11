@@ -89,7 +89,7 @@ function locatorResolveSource(spec, settle = false) {
       // Halo: hw_step authorizes the resolved element, not the locator string,
       // so carry the element's role/name/input type for the host's runtime gate.
       const inputType = el.tagName === "INPUT" ? String(el.getAttribute("type") || "text").toLowerCase() : undefined;
-      return { status: "resolved", x, y, tag: el.tagName, role: el.getAttribute("role") || el.tagName.toLowerCase(), name: String(nameOf(el)).slice(0, 120), ...(inputType === undefined ? {} : { inputType }), ...(checked === undefined ? {} : { checked }) };
+      return { status: "resolved", x, y, tag: el.tagName, role: el.getAttribute("role") || el.tagName.toLowerCase(), name: String(nameOf(el)).slice(0, 120), ...(inputType === undefined ? {} : { inputType }), ...(checked === undefined ? {} : { checked }), ...(el.getAttribute("aria-selected") === "true" ? { selected: true } : {}) };
     };
     const first = probe();
     if (!settle || first.status !== "resolved") return JSON.stringify(first);

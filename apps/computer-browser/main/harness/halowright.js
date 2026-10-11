@@ -211,6 +211,10 @@ async function runHwStep(wc, step, options = {}) {
         wc.sendInputEvent({ type: "mouseMove", x, y });
         return { status: "ok", effect: none };
     }
+    // Clicking a tab/option that is already selected changes nothing by design; like an already-satisfied
+    // check, it needs no input, so it is not reported as an unobserved effect. Toggles (aria-pressed) are not covered.
+    if (op === "click" && target.selected === true)
+        return { status: "ok", effect: none };
     if (want !== null) {
         if (target.checked === want)
             return { status: "ok", effect: none };
