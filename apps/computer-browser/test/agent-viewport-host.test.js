@@ -75,7 +75,7 @@ test("ensure() creates a hidden, fixed 1440x900, never-shown host + view with th
   assert.equal(win.opts.show, false);
   assert.equal(win.opts.width, AGENT_WIDTH);
   assert.equal(win.opts.height, AGENT_HEIGHT);
-  assert.equal(win.opts.webPreferences.partition, undefined, "the shared window carries no partition; each view does");
+  assert.equal(win.opts.webPreferences.partition, undefined, "a hidden window carries no partition; each view does");
   assert.equal(win.opts.webPreferences.sandbox, true);
   assert.equal(win.opts.webPreferences.contextIsolation, true);
   assert.equal(win.opts.webPreferences.nodeIntegration, false);
@@ -166,11 +166,11 @@ test("computer-use screenshot identity comes from the host-owned task and Agent 
   await assert.rejects(host.captureComputerUseObservation("missing-task", observation), { code: "visual_view_unavailable" });
 });
 
-test("different tasks get isolated hidden views with distinct session partitions", () => {
+test("different tasks get isolated hidden views and windows with distinct session partitions", () => {
   const { host, views, windows } = setup();
   host.ensure("task-a");
   host.ensure("task-b");
-  assert.equal(windows.length, 1, "agent views share one hidden window");
+  assert.equal(windows.length, 2, "each agent owns its hidden window");
   assert.equal(views.length, 2);
   assert.notEqual(views[0].opts.webPreferences.partition, views[1].opts.webPreferences.partition);
 });
@@ -282,11 +282,11 @@ test("ensureChild() reuses the same adapter for the same childId and never creat
   assert.equal(views.length, 1);
 });
 
-test("host-executed sibling children get distinct views while retaining the parent's shared session", () => {
+test("host-executed sibling children get distinct views and windows while retaining the parent's shared session", () => {
   const { host, views, windows } = setup();
   host.ensureChild("parent-1", "child-1", { assignedOrigin: "https://a.example" });
   host.ensureChild("parent-1", "child-2", { assignedOrigin: "https://b.example" });
-  assert.equal(windows.length, 1);
+  assert.equal(windows.length, 2);
   assert.equal(views.length, 2);
   assert.equal(views[0].opts.webPreferences.partition, views[1].opts.webPreferences.partition);
   assert.notEqual(views[0], views[1], "each child still gets its own distinct hidden view");
@@ -454,31 +454,35 @@ test("image-mode capture also returns host-side screen targets for click classif
   await visual.attachment.dispose();
 });
 
-test("every agent view lives in one shared hidden window", () => {
+test("every agent owns its hidden window; a task window and a child window never mix", () => {
   const { host, windows, views } = setup();
   host.ensure("task-a");
   host.ensure("task-b");
   host.ensureChild("task-a", "child-1", { assignedOrigin: "https://example.com", execution: "host" });
-  assert.equal(windows.length, 1);
-  assert.equal(windows[0].children.length, 3);
+  assert.equal(windows.length, 3);
+  for (const win of windows) {
+    assert.equal(win.children.length, 1);
+    assert.equal(win.opts.show, false);
+    assert.equal(win.opts.width, AGENT_WIDTH);
+    assert.equal(win.opts.height, AGENT_HEIGHT);
+  }
   assert.equal(views.length, 3);
-  assert.equal(windows[0].opts.show, false);
-  assert.equal(windows[0].opts.width, AGENT_WIDTH);
-  assert.equal(windows[0].opts.height, AGENT_HEIGHT);
 });
 
-test("disposing one view keeps the shared window; disposing the last one destroys it", async () => {
+test("disposing one owner destroys only its own window; the other owner's window lives on", async () => {
   const { host, windows } = setup();
   host.ensure("task-a");
   host.ensure("task-b");
   await host.dispose("task-a");
-  assert.equal(windows[0].destroyed, false);
-  assert.equal(windows[0].children.length, 1);
-  await host.dispose("task-b");
   assert.equal(windows[0].destroyed, true);
+  assert.equal(windows[0].children.length, 0);
+  assert.equal(windows[1].destroyed, false);
+  assert.equal(windows[1].children.length, 1);
+  await host.dispose("task-b");
+  assert.equal(windows[1].destroyed, true);
 });
 
-test("a view created after the shared window was destroyed gets a fresh window", async () => {
+test("a view created after its owner's window was destroyed gets a fresh window", async () => {
   const { host, windows } = setup();
   host.ensure("task-a");
   await host.dispose("task-a");
@@ -529,4 +533,25 @@ test("captureFrame cache is dropped with the view", async () => {
   await host.dispose("task-a");
   assert.equal(await host.captureFrame("task-a"), null);
   assert.equal(host._lastFrames.has("task-a"), false);
+});
+
+test("openFrameStream relays the agent page's frames, keeps them as the last frame, and stops cleanly", async () => {
+  const { host, views } = setup();
+  host.ensure("task-s");
+  const wc = views[0].webContents;
+  assert.equal(await host.openFrameStream("task-s", () => {}), null, "a page that cannot stream answers null");
+  assert.equal(await host.openFrameStream("missing", () => {}), null);
+  let emit; let stopped = 0;
+  wc.startScreencast = async (options, onFrame) => { emit = onFrame; wc.options = options; };
+  wc.stopScreencast = async () => { stopped += 1; };
+  const got = [];
+  const stop = await host.openFrameStream("task-s", (d) => got.push(d));
+  assert.equal(typeof stop, "function");
+  emit("AAA");
+  assert.deepEqual(got, ["AAA"]);
+  assert.equal(host._lastFrames.get("task-s").dataUrl, "data:image/jpeg;base64,AAA");
+  await stop(); await stop();
+  assert.equal(stopped, 1);
+  emit("BBB");
+  assert.deepEqual(got, ["AAA"]);
 });

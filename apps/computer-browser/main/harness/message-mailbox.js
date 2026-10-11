@@ -102,7 +102,21 @@ class MessageMailbox {
     }
     async _relationship(envelope) {
         const relation = await this._getConversationTaskIds(envelope.conversationId);
-        if (!relation || relation.parentTaskId !== envelope.parentTaskId || relation.childTaskId !== envelope.childTaskId ||
+        if (!relation || relation.parentTaskId !== envelope.parentTaskId) {
+            throw new MessageMailboxError("unauthorized_route", "message does not match the host conversation relationship");
+        }
+        if (relation.siblingPair) {
+            // A sibling leg: both ends are accepted children of the same parent,
+            // and the child leg always names the recipient child.
+            const [first, second] = relation.siblingPair;
+            if (envelope.childTaskId !== envelope.recipientTaskId ||
+                !((envelope.senderTaskId === first && envelope.recipientTaskId === second) ||
+                    (envelope.senderTaskId === second && envelope.recipientTaskId === first))) {
+                throw new MessageMailboxError("unauthorized_route", "message does not match the host sibling relationship");
+            }
+            return relation;
+        }
+        if (relation.childTaskId !== envelope.childTaskId ||
             !((envelope.senderTaskId === relation.parentTaskId && envelope.recipientTaskId === relation.childTaskId) ||
                 (envelope.senderTaskId === relation.childTaskId && envelope.recipientTaskId === relation.parentTaskId))) {
             throw new MessageMailboxError("unauthorized_route", "message does not match the host conversation relationship");

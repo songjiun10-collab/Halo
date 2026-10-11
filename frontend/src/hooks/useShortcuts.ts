@@ -12,6 +12,10 @@ export const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Alt+←', label: 'Back' },
   { keys: 'Alt+→', label: 'Forward' },
   { keys: 'Mod+L', label: 'Focus the address field' },
+  { keys: 'Mod+F', label: 'Find on page' },
+  { keys: 'Mod+=', label: 'Zoom in' },
+  { keys: 'Mod+-', label: 'Zoom out' },
+  { keys: 'Mod+0', label: 'Reset zoom' },
   { keys: 'Mod+K', label: 'New task' },
   { keys: 'Mod+Shift+L', label: 'Toggle sidebar' },
   { keys: 'Mod+.', label: 'Keep Halo unfolded' },
@@ -32,6 +36,10 @@ interface Handlers {
   onBack: () => void
   onForward: () => void
   onFocusOmni: () => void
+  onFind: () => void
+  onZoomIn: () => void
+  onZoomOut: () => void
+  onZoomReset: () => void
   onTogglePin: () => void
   onToggleChat: () => void
   onToggleOverview: () => void
@@ -75,6 +83,10 @@ export function useShortcuts(s: SessionState, approval: unknown, handlers: Handl
       if (e.code === 'KeyT' && !e.shiftKey) { e.preventDefault(); handlers.onNewTab(); return }
       if (e.code === 'KeyW' && !e.shiftKey) { e.preventDefault(); handlers.onCloseTab(tab.id); return }
       if (e.code === 'KeyL' && !e.shiftKey) { e.preventDefault(); handlers.onFocusOmni(); return }
+      if (e.code === 'KeyF' && !e.shiftKey) { e.preventDefault(); handlers.onFind(); return }
+      if (e.code === 'Equal') { e.preventDefault(); handlers.onZoomIn(); return }
+      if (e.code === 'Minus') { e.preventDefault(); handlers.onZoomOut(); return }
+      if (e.code === 'Digit0') { e.preventDefault(); handlers.onZoomReset(); return }
       if (e.code === 'KeyL' && e.shiftKey) { e.preventDefault(); handlers.onToggleSidebar(); return }
       if (e.code === 'KeyN' && !e.shiftKey) { e.preventDefault(); handlers.onNewWindow(); return }
       const digit = /^Digit([1-9])$/.exec(e.code)

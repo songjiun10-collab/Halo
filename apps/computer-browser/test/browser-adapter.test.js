@@ -453,6 +453,133 @@ test("execute(scroll) proceeds when documentEpoch matches the current document",
   assert.equal(scrolled, true);
 });
 
+// --- find: read-only page search. window.find scrolls to and selects the
+// match; repeated calls continue from the selection. The adapter reports
+// found true/false and validates the query before touching the page.
+
+test("execute(find) searches forward by default and reports found", async () => {
+  const scripts = [];
+  const view = makeFakeView({
+    executeJavaScript: async (script) => {
+      scripts.push(script);
+      return true;
+    },
+  });
+  const adapter = new BrowserAdapter({ view });
+
+  const result = await adapter.execute({ type: "find", text: "Refund policy" });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.found, true);
+  const findScript = scripts.find((s) => s.includes("window.find"));
+  assert.ok(findScript, "find must run window.find in the page");
+  assert.ok(findScript.includes(JSON.stringify("Refund policy")));
+  assert.ok(findScript.includes("false, true"), "forward search passes backwards=false with wrap=true");
+});
+
+test("execute(find) searches backward for direction prev and reports a miss as ok/found:false", async () => {
+  let backwards = null;
+  const view = makeFakeView({
+    executeJavaScript: async (script) => {
+      if (script.includes("window.find")) backwards = script.includes("true, true");
+      return false;
+    },
+  });
+  const adapter = new BrowserAdapter({ view });
+
+  const result = await adapter.execute({ type: "find", text: "없는 문구", direction: "prev" });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.found, false);
+  assert.equal(backwards, true, "prev passes backwards=true");
+});
+
+test("execute(find) rejects a missing or control-only query without running a script", async () => {
+  let ran = false;
+  const view = makeFakeView({ executeJavaScript: async () => { ran = true; return true; } });
+  const adapter = new BrowserAdapter({ view });
+
+  const missing = await adapter.execute({ type: "find" });
+  assert.equal(missing.status, "failed");
+  assert.equal(missing.errorCode, "invalid_action");
+  for (const text of ["\u0000\u001f", "   "]) {
+    const result = await adapter.execute({ type: "find", text });
+    assert.equal(result.status, "failed");
+    assert.equal(result.errorCode, "invalid_find_query");
+  }
+  assert.equal(ran, false);
+});
+
+// --- zoom: read-only page zoom via CSS zoom on the root element. The ladder
+// is walked from the level the adapter remembers for this page.
+
+test("execute(zoom) walks the ladder with direction and remembers the level", async () => {
+  const scripts = [];
+  const view = makeFakeView({
+    executeJavaScript: async (code) => {
+      scripts.push(code);
+      const m = /style\.zoom = "([^"]+)"/.exec(code);
+      return m ? m[1] : null;
+    },
+  });
+  const adapter = new BrowserAdapter({ view });
+
+  const first = await adapter.execute({ type: "zoom", direction: "in" });
+  assert.deepEqual([first.status, first.level], ["ok", 1.1]);
+  const back = await adapter.execute({ type: "zoom", direction: "out" });
+  assert.deepEqual([back.status, back.level], ["ok", 1]);
+  const absolute = await adapter.execute({ type: "zoom", level: 2 });
+  assert.deepEqual([absolute.status, absolute.level], ["ok", 2]);
+  const walk = await adapter.execute({ type: "zoom", direction: "in" });
+  assert.deepEqual([walk.status, walk.level], ["ok", 2.5], "walks from the remembered level");
+  assert.ok(scripts.at(-1).includes('style.zoom = "2.5"'));
+  const reset = await adapter.execute({ type: "zoom", direction: "reset" });
+  assert.deepEqual([reset.status, reset.level], ["ok", 1]);
+});
+
+test("execute(zoom) rejects malformed actions without touching the page", async () => {
+  let ran = false;
+  const view = makeFakeView({ executeJavaScript: async () => { ran = true; return "1"; } });
+  const adapter = new BrowserAdapter({ view });
+
+  for (const action of [{ type: "zoom" }, { type: "zoom", direction: "sideways" }, { type: "zoom", direction: "in", level: 2 }, { type: "zoom", level: 99 }]) {
+    const result = await adapter.execute(action);
+    assert.equal(result.status, "failed");
+    assert.equal(result.errorCode, "invalid_action");
+  }
+  assert.equal(ran, false);
+});
+
+// --- select_all / copy: selection editing plus a clipboard write through the
+// injected writer (tests never touch the user's real clipboard).
+
+test("execute(select_all) runs the engine selectAll; execute(copy) writes the selection and returns its text", async () => {
+  const written = [];
+  let selected = 0;
+  const view = makeFakeView({ executeJavaScript: async (code) => (code.includes("getSelection") ? "hello" : null) });
+  view.webContents.selectAll = () => { selected += 1; };
+  const adapter = new BrowserAdapter({ view, permissionMode: "interact", writeClipboard: (text) => { written.push(text); return true; } });
+
+  assert.deepEqual(await adapter.execute({ type: "select_all" }), { status: "ok" });
+  assert.equal(selected, 1, "the engine helper performed the select-all");
+
+  const copied = await adapter.execute({ type: "copy" });
+  assert.deepEqual([copied.status, copied.chars, copied.text], ["ok", 5, "hello"]);
+  assert.deepEqual(written, ["hello"], "the injected writer received the selection");
+
+  const empty = makeFakeView({ executeJavaScript: async () => "" });
+  const adapter2 = new BrowserAdapter({ view: empty, permissionMode: "interact", writeClipboard: () => { throw new Error("must not be called"); } });
+  assert.deepEqual(await adapter2.execute({ type: "copy" }), { status: "ok", chars: 0, text: "" });
+});
+
+test("execute(copy) fails closed when the clipboard writer refuses", async () => {
+  const view = makeFakeView({ executeJavaScript: async () => "abc" });
+  const adapter = new BrowserAdapter({ view, permissionMode: "interact", writeClipboard: () => false });
+  const result = await adapter.execute({ type: "copy" });
+  assert.equal(result.status, "failed");
+  assert.equal(result.errorCode, "clipboard_write_failed");
+});
+
 // --- follow_link: host-owned elementId only, real href re-resolved at
 // execute time -- never trusts a href the action itself might carry, and
 // rejects if the anchor at that index has changed since the observation.
@@ -592,8 +719,11 @@ test("observe() assigns host-owned sequential elementIds and includes the curren
   assert.equal(observation.documentEpoch, 0);
   assert.equal(observation.elements[0].elementId, "0");
   assert.equal(observation.elements[1].elementId, "1");
-  assert.equal(observation.elements[0].parentElementId, null);
-  assert.equal(observation.elements[1].parentElementId, "0");
+  // Absence means null/0 for these two: they are omitted when they carry no
+  // information, because every element used to pay for them on every turn.
+  assert.equal("parentElementId" in observation.elements[0], false, "a top-level element omits the parent field");
+  assert.equal(observation.elements[1].parentElementId, "0", "a nested element still names its included parent");
+  assert.equal("depth" in observation.elements[0], false, "depth 0 is omitted");
   assert.equal("parentIndex" in observation.elements[1], false, "raw DOM traversal indices stay internal");
   assert.equal("index" in observation.elements[1], false, "the public contract uses host-owned elementIds");
   assert.equal("tag" in observation.elements[1], false);
@@ -601,6 +731,29 @@ test("observe() assigns host-owned sequential elementIds and includes the curren
   assert.equal(observation.url, "https://example.com/");
   assert.ok(observation.id);
   assert.ok(typeof observation.at === "number");
+});
+
+test("observe() keeps a non-zero depth and byte-caps CJK element names", async () => {
+  const longKorean = "가".repeat(200); // 600 UTF-8 bytes, under the 180-char in-page cap
+  const view = makeFakeView({
+    executeJavaScript: async () => ({
+      url: "https://example.com/",
+      title: "Example",
+      text: "",
+      elements: [
+        { role: "button", name: "Nested enough", index: 0, parentIndex: null, depth: 2 },
+        { role: "link", name: longKorean, href: "https://example.com/x", index: 1, parentIndex: 0, depth: 3 },
+      ],
+    }),
+  });
+  const adapter = new BrowserAdapter({ view });
+
+  const observation = await adapter.observe();
+
+  assert.equal(observation.elements[0].depth, 2, "a real nesting depth survives");
+  assert.equal(observation.elements[1].depth, 3);
+  assert.equal(Buffer.byteLength(observation.elements[1].name, "utf8"), 180, "CJK names are capped by UTF-8 bytes, not characters");
+  assert.ok(observation.elements[1].name.startsWith("가"), "the cap keeps a clean prefix, not a broken code point");
 });
 
 // --- Bounded DOM traversal: the script itself must encode the visited-node
@@ -800,7 +953,7 @@ function makeFakeTreeWalker(root) {
   };
 }
 
-function runObserveScriptAgainst(root, { maxNodesVisited = 500, maxElements = 100, maxTextBytes = 12 * 1024, baseURI = "http://example.test/" } = {}) {
+function runObserveScriptAgainst(root, { maxNodesVisited = 500, maxElements = 100, maxTextBytes = 12 * 1024, baseURI = "http://example.test/", onStyleRead, afterObservation } = {}) {
   const all = [];
   (function visit(node) { all.push(node); for (const child of node.children) visit(child); })(root);
   const byId = new Map(all.filter((node) => node.getAttribute("id")).map((node) => [node.getAttribute("id"), node]));
@@ -820,9 +973,27 @@ function runObserveScriptAgainst(root, { maxNodesVisited = 500, maxElements = 10
     NodeFilter: { SHOW_ELEMENT: 1 },
     URL,
   };
+  if (onStyleRead) sandbox.getComputedStyle = (node) => {
+    onStyleRead(node);
+    return { display: "block", visibility: "visible" };
+  };
   vm.createContext(sandbox);
-  return vm.runInContext(buildObserveScript(maxNodesVisited, maxElements, maxTextBytes), sandbox);
+  const observation = vm.runInContext(buildObserveScript(maxNodesVisited, maxElements, maxTextBytes,
+    afterObservation ? { key: "testBinding", token: "test" } : null), sandbox);
+  afterObservation?.(sandbox.testBinding);
+  return observation;
 }
+
+test("observation visibility cache does not outlive the scan in action bindings", () => {
+  const node = new FakeElement("p", { text: "Visible copy" });
+  const body = new FakeElement("body", { children: [node] });
+  runObserveScriptAgainst(body, {
+    afterObservation(binding) {
+      node.getAttribute = (name) => name === "aria-hidden" ? "true" : null;
+      assert.equal(binding.hidden(node), true);
+    },
+  });
+});
 
 test("buildObserveScript captures visible text from an ordinary element with a single text-node child, not just childless leaves", () => {
   // <body><h1>Final page</h1><p>Task complete marker: DONE-XYZ</p></body> --
@@ -854,6 +1025,16 @@ test("buildObserveScript still finds anchor elements and their href/text correct
   assert.equal(anchor.href, "http://example.test/page3");
   assert.equal("tag" in anchor, false, "raw tag names are replaced by the semantic role");
   assert.equal("text" in anchor, false, "accessible name is the single compact source for the link label");
+});
+
+test("buildObserveScript computes visibility style once per node during an observation", () => {
+  const body = new FakeElement("body", { children: [new FakeElement("p", { text: "Visible copy" })] });
+  const styleReads = new Map();
+  const observation = runObserveScriptAgainst(body, {
+    onStyleRead(node) { styleReads.set(node, (styleReads.get(node) || 0) + 1); },
+  });
+  assert.equal(observation.elements[0]?.name, "Visible copy");
+  assert.ok([...styleReads.values()].every((count) => count === 1), `expected one style read per node, got ${[...styleReads.values()]}`);
 });
 
 test("compact observation adds accessible role, name, state, and compressed semantic ancestry", () => {

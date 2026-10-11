@@ -1,0 +1,37 @@
+/* macOS window form factor from Halo Design System-9: full-height vibrancy sidebar + inset content card. */
+.hx-window[data-frame=mac]{position:relative;display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr);border-radius:14px!important;overflow:hidden;box-shadow:0 0 0 1px rgba(0,0,0,.35),0 30px 80px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.12);-webkit-backdrop-filter:blur(40px) saturate(1.8);backdrop-filter:blur(40px) saturate(1.8)}
+[data-theme=dark] .hx-window[data-frame=mac],:root:not([data-theme=light]) .hx-window[data-frame=mac]{background:rgba(14,16,15,.62)}
+[data-theme=light] .hx-window[data-frame=mac]{background:rgba(255,255,255,.58)}
+.hx-window[data-frame=mac] .hx-window-row{display:contents}
+.hx-window[data-frame=mac] .hx-lights{position:absolute;left:16px;top:15px;z-index:20;display:flex}
+.hx-window[data-frame=mac] .hx-sidebar{grid-column:1;grid-row:1/-1;margin:0;border-radius:0;border:0;box-shadow:none;background:transparent!important;-webkit-backdrop-filter:none;backdrop-filter:none;padding:50px 8px 10px;height:auto}
+.hx-window[data-frame=mac] .hx-sidebar[data-open=false]{margin:0}
+.hx-window[data-frame=mac] .hx-toolbar{grid-column:2;grid-row:1;background:transparent!important;-webkit-backdrop-filter:none;backdrop-filter:none;box-shadow:none;height:48px;padding:0 12px 0 8px}
+.hx-window[data-frame=mac] .hx-strip{grid-column:2;grid-row:2;display:none}
+.hx-window[data-frame=mac] .hx-content-col{grid-column:2;grid-row:3;margin:0 10px 10px 0;border-radius:14px;box-shadow:0 0 0 1px color-mix(in oklab,var(--foreground) 10%,transparent),0 6px 24px rgba(0,0,0,.18);min-height:0}
+[data-theme=light] .hx-window[data-frame=mac] .hx-content-col{background:#fbfcfd}
+.hx-window[data-frame=mac]>.hx-ctxmenu,.hx-window[data-frame=mac] .hx-overview{z-index:30}
+@media (width<=40rem){.hx-window[data-frame=mac]{border-radius:0!important}}
+.hx-window[data-frame=mac] .hx-nav--lead{flex:none}
+.hx-window[data-frame=mac] .hx-omni{flex:1 1 0;min-width:0;max-width:560px}
+.hx-window[data-frame=mac] .hx-toolbar{min-width:0;overflow:hidden}
+.hx-window[data-frame=mac]>.hx-chrome{display:contents}
+.hx-app .hx-window[data-frame=mac]{grid-template-rows:48px 0 minmax(0,1fr)}
+
+/* Vibrancy: the native window is transparent; the OS supplies the wallpaper behind it. */
+.hx-window[data-frame=mac] .hx-sidebar{background:rgba(13,15,14,.24)!important;-webkit-backdrop-filter:blur(36px) saturate(1.6);backdrop-filter:blur(36px) saturate(1.6)}
+[data-theme=light] .hx-window[data-frame=mac] .hx-sidebar{background:rgba(255,255,255,.7)!important}
+.hx-window[data-frame=mac] .hx-content-col{border-radius:12px;margin:0 8px 8px 0;overflow:hidden}
+.hx-window[data-frame=mac] .hx-sidebar__item{border-radius:9px;min-height:32px}
+.hx-window[data-frame=mac] .hx-sidebar__item[data-selected]{background:rgba(255,255,255,.15);box-shadow:0 1px 4px rgba(0,0,0,.2)}
+.hx-window[data-frame=mac] .hx-sidebar__label{font-size:12.5px;font-weight:400;text-transform:none;letter-spacing:0}
+
+/* Home: single 54px pill search bar, 3-column cards. */
+.hx-window[data-frame=mac] .hx-home{width:min(1060px,100% - 48px);text-align:left;display:flex;flex-direction:column}
+.hx-window[data-frame=mac] .hx-home__mark{align-self:center;width:58px;height:58px}
+.hx-window[data-frame=mac] .hx-home__form{margin-top:7vh;height:54px;padding:0 8px 0 22px;border-radius:27px;background:var(--surface-2,#1d201e);box-shadow:0 14px 40px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.08),0 0 0 1px rgba(255,255,255,.05)}
+.hx-window[data-frame=mac] .hx-home__input{flex:1;height:auto;border:0!important;background:none!important;box-shadow:none!important;font:400 16px var(--font-body);padding:0}
+.hx-window[data-frame=mac] .hx-home__row{margin-top:7vh;display:flex;align-items:center;justify-content:space-between}
+.hx-window[data-frame=mac] .hx-home__list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:16px}
+.hx-window[data-frame=mac] .hx-hc{height:190px;border-radius:20px;padding:14px 16px;text-align:left;overflow:hidden}
+@container (max-width:800px){.hx-window[data-frame=mac] .hx-home__list{grid-template-columns:1fr}}

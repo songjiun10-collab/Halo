@@ -21,9 +21,11 @@ mirror of the agent's hidden browser view; the sidebar is cropped out of the rec
 
 ## HALO Browser
 
-The Electron app brings browser controls, agents and long-running tasks into one
-workspace. Its React UI shows task status, approval requests and activity while
-the host manages planner connections, browser surfaces and saved task state.
+The Chromium desktop app brings browser controls, agents and long-running tasks
+into one workspace. Its React UI runs in full Chromium while a local Node.js host
+manages planner connections, browser surfaces and saved task state. Electron
+remains a development dependency for legacy comparison tests and benchmarks;
+the production application runtime does not load it.
 
 - **Browser workspace:** real web pages with navigation and tab controls, alongside
   task and agent panels.
@@ -46,8 +48,8 @@ Current version: `0.1.0-beta`. The opt-in features are off by default.
 
 ### Run locally
 
-From the repository root, with Node.js compatible with the pinned app packages
-and Python 3.11+ for the local approver:
+From the repository root, with Node.js compatible with the pinned app packages,
+a full Chromium build and Python 3.11+ for the local approver:
 
 ```sh
 npm --prefix frontend ci
@@ -56,8 +58,8 @@ npm --prefix apps/computer-browser start
 ```
 
 Configure a planner using the [provider guide](apps/computer-browser/main/harness/providers/README.ko.md).
-The [Browser README](apps/computer-browser/README.md) covers runtime builds,
-source ownership and unit/Electron integration tests.
+The [Browser README](apps/computer-browser/README.md) covers the Chromium-first
+runtime, its loopback bridge, source ownership and compatibility tests.
 
 Browser permission modes are `observe`, `browse`, `interact` and `full`.
 Routed MCP execution proposals require human approval regardless of that mode.

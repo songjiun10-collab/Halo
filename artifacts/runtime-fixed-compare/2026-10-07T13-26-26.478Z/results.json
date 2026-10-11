@@ -1,0 +1,374 @@
+{
+  "schemaVersion": 1,
+  "method": "fixed local fixture planner; same three read-only tasks, BrowserAdapter, TaskController, viewport, approval, serial runs; one warmup then repeated measured runs; no model calls",
+  "repetitions": 5,
+  "taskIds": [
+    "specs-retrieval",
+    "walkthrough-navigation",
+    "returns-multihop-navigation"
+  ],
+  "electronVersion": "44.4.5",
+  "chromiumExecutable": "/Users/songjiun/chromium/src/out/Trial/headless_shell",
+  "arms": [
+    {
+      "arm": "electron",
+      "startupMs": 415.5045,
+      "warmup": {
+        "verdicts": [
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          }
+        ],
+        "metrics": {
+          "observe": {
+            "calls": 8,
+            "ms": 15.672040999999354
+          },
+          "execute": {
+            "calls": 8,
+            "ms": 393.6070829999994,
+            "byAction": {
+              "navigate": {
+                "calls": 4,
+                "ms": 354.12054100000023
+              },
+              "follow_link": {
+                "calls": 4,
+                "ms": 39.48654199999919
+              }
+            }
+          }
+        },
+        "wallMs": 5143.109541999999
+      },
+      "measured": {
+        "repetitions": 5,
+        "verdicts": [
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          }
+        ],
+        "taskWallMs": {
+          "specs-retrieval": {
+            "n": 5,
+            "mean": 153.8,
+            "p50": 151,
+            "p95": 168,
+            "min": 145,
+            "max": 168
+          },
+          "walkthrough-navigation": {
+            "n": 5,
+            "mean": 147,
+            "p50": 147,
+            "p95": 149,
+            "min": 145,
+            "max": 149
+          },
+          "returns-multihop-navigation": {
+            "n": 5,
+            "mean": 3164.8,
+            "p50": 3164,
+            "p95": 3168,
+            "min": 3163,
+            "max": 3168
+          }
+        },
+        "suiteWallMs": {
+          "n": 5,
+          "mean": 4962.361433399999,
+          "p50": 4965.0613330000015,
+          "p95": 4986.7575,
+          "min": 4929.095292,
+          "max": 4986.7575
+        },
+        "observeTotalMs": {
+          "n": 5,
+          "mean": 11.46506559999816,
+          "p50": 11.405871999992087,
+          "p95": 12.084667000006448,
+          "min": 11.106206999999813,
+          "max": 12.084667000006448
+        },
+        "executeTotalMs": {
+          "n": 5,
+          "mean": 345.45498300000054,
+          "p50": 344.0127500000017,
+          "p95": 362.6026669999992,
+          "min": 333.79941699999836,
+          "max": 362.6026669999992
+        },
+        "meanBrowserOperationMs": {
+          "observe": 1.43313319999977,
+          "execute": 43.18187287500007
+        },
+        "aggregateMetrics": {
+          "observe": {
+            "calls": 40,
+            "ms": 57.325327999990805
+          },
+          "execute": {
+            "calls": 40,
+            "ms": 1727.2749150000027,
+            "byAction": {
+              "navigate": {
+                "calls": 20,
+                "ms": 1513.8153750000038
+              },
+              "follow_link": {
+                "calls": 20,
+                "ms": 213.45953999999892
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "arm": "chromium",
+      "startupMs": 1593.0624580000003,
+      "warmup": {
+        "verdicts": [
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          }
+        ],
+        "metrics": {
+          "observe": {
+            "calls": 8,
+            "ms": 38.845581999994465
+          },
+          "execute": {
+            "calls": 8,
+            "ms": 166.08079199997883,
+            "byAction": {
+              "navigate": {
+                "calls": 4,
+                "ms": 82.1958329999834
+              },
+              "follow_link": {
+                "calls": 4,
+                "ms": 83.88495899999543
+              }
+            }
+          }
+        },
+        "wallMs": 10083.464166000002
+      },
+      "measured": {
+        "repetitions": 5,
+        "verdicts": [
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "specs-retrieval",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "walkthrough-navigation",
+            "verdict": "pass"
+          },
+          {
+            "taskId": "returns-multihop-navigation",
+            "verdict": "pass"
+          }
+        ],
+        "taskWallMs": {
+          "specs-retrieval": {
+            "n": 5,
+            "mean": 1958.8,
+            "p50": 1874,
+            "p95": 2201,
+            "min": 1858,
+            "max": 2201
+          },
+          "walkthrough-navigation": {
+            "n": 5,
+            "mean": 1560.8,
+            "p50": 1540,
+            "p95": 1639,
+            "min": 1528,
+            "max": 1639
+          },
+          "returns-multihop-navigation": {
+            "n": 5,
+            "mean": 4548.8,
+            "p50": 4540,
+            "p95": 4600,
+            "min": 4521,
+            "max": 4600
+          }
+        },
+        "suiteWallMs": {
+          "n": 5,
+          "mean": 9565.771175000003,
+          "p50": 9445.601124999994,
+          "p95": 9871.767250000004,
+          "min": 9405.736042000004,
+          "max": 9871.767250000004
+        },
+        "observeTotalMs": {
+          "n": 5,
+          "mean": 37.07781759998761,
+          "p50": 36.904917999992904,
+          "p95": 39.5504589999764,
+          "min": 35.22870999999577,
+          "max": 39.5504589999764
+        },
+        "executeTotalMs": {
+          "n": 5,
+          "mean": 150.1735334000041,
+          "p50": 150.18504100000428,
+          "p95": 160.08641799999896,
+          "min": 140.15441700001247,
+          "max": 160.08641799999896
+        },
+        "meanBrowserOperationMs": {
+          "observe": 4.634727199998451,
+          "execute": 18.77169167500051
+        },
+        "aggregateMetrics": {
+          "observe": {
+            "calls": 40,
+            "ms": 185.38908799993806
+          },
+          "execute": {
+            "calls": 40,
+            "ms": 750.8676670000204,
+            "byAction": {
+              "navigate": {
+                "calls": 20,
+                "ms": 367.5908319999726
+              },
+              "follow_link": {
+                "calls": 20,
+                "ms": 383.27683500004787
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

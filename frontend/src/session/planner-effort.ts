@@ -9,7 +9,7 @@ export const EFFORT_LEVELS: Record<PlannerEffort, { label: string; tick: string;
   high: { label: 'High', tick: 'High', hint: 'Complex reasoning and agentic work.' },
   xhigh: { label: 'Extra high', tick: 'Extra', hint: 'Long-horizon work. Much more thorough.' },
   max: { label: 'Max', tick: 'Max', hint: 'Deepest reasoning, no limit on spend.' },
-  ultra: { label: 'Ultra', tick: 'Ultra', hint: 'Maximum reasoning with automatic task decomposition. Claude runs it as Max.' },
+  ultra: { label: 'Ultra', tick: 'Ultra', hint: 'Maximum reasoning with automatic task decomposition. Claude runs it as Ultracode (xhigh plus dynamic workflows; uses usage quickly).' },
 }
 
 /** The host's default effort: Codex's reset target and Claude's Recommended step. */

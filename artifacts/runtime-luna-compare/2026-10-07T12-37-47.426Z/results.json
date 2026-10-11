@@ -1,0 +1,634 @@
+{
+  "schemaVersion": 1,
+  "model": "gpt-6-luna",
+  "comparison": "same HALO/CDP adapter; local ground-truth tasks; sequential cold sessions",
+  "viewport": [
+    1280,
+    800
+  ],
+  "chromiumExecutable": "/Users/songjiun/chromium/src/out/Trial/headless_shell",
+  "electronVersion": "44.4.5",
+  "runs": [
+    {
+      "arm": "electron",
+      "startupMs": 3103.622542,
+      "rows": [
+        {
+          "schemaVersion": 1,
+          "harness": "halo-accuracy",
+          "taskId": "specs-retrieval",
+          "kind": "retrieval",
+          "verdict": "inconclusive",
+          "reason": "harness error: cdp_error: Not supported",
+          "ending": "harness_error",
+          "pauseReason": null,
+          "answer": "",
+          "finalUrl": null,
+          "plannerCalls": 0,
+          "actionsUsed": 0,
+          "pageRequests": 0,
+          "wallMs": 0,
+          "summary": {
+            "total": 3,
+            "graded": 0,
+            "passed": 0,
+            "failed": 0,
+            "blocked": 0,
+            "inconclusive": 3,
+            "unclassified": 0,
+            "passRate": null,
+            "reportable": false,
+            "caveat": "3 inconclusive run(s) mean the measurement, not only the model, is in question"
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "harness": "halo-accuracy",
+          "taskId": "returns-multihop-navigation",
+          "kind": "navigation",
+          "verdict": "inconclusive",
+          "reason": "harness error: cdp_error: Not supported",
+          "ending": "harness_error",
+          "pauseReason": null,
+          "answer": "",
+          "finalUrl": null,
+          "plannerCalls": 0,
+          "actionsUsed": 0,
+          "pageRequests": 0,
+          "wallMs": 0,
+          "summary": {
+            "total": 3,
+            "graded": 0,
+            "passed": 0,
+            "failed": 0,
+            "blocked": 0,
+            "inconclusive": 3,
+            "unclassified": 0,
+            "passRate": null,
+            "reportable": false,
+            "caveat": "3 inconclusive run(s) mean the measurement, not only the model, is in question"
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "harness": "halo-accuracy",
+          "taskId": "store-mutation",
+          "kind": "mutation",
+          "verdict": "inconclusive",
+          "reason": "harness error: cdp_error: Not supported",
+          "ending": "harness_error",
+          "pauseReason": null,
+          "answer": "",
+          "finalUrl": null,
+          "plannerCalls": 0,
+          "actionsUsed": 0,
+          "pageRequests": 0,
+          "wallMs": 0,
+          "summary": {
+            "total": 3,
+            "graded": 0,
+            "passed": 0,
+            "failed": 0,
+            "blocked": 0,
+            "inconclusive": 3,
+            "unclassified": 0,
+            "passRate": null,
+            "reportable": false,
+            "caveat": "3 inconclusive run(s) mean the measurement, not only the model, is in question"
+          }
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "graded": 0,
+        "passed": 0,
+        "failed": 0,
+        "blocked": 0,
+        "inconclusive": 3,
+        "unclassified": 0,
+        "passRate": null,
+        "reportable": false,
+        "caveat": "3 inconclusive run(s) mean the measurement, not only the model, is in question"
+      },
+      "usage": [],
+      "peakProcessTreeRssBytes": 145670144,
+      "totalWallMs": 3457.524917
+    },
+    {
+      "arm": "chromium",
+      "startupMs": 3430.97425,
+      "rows": [
+        {
+          "schemaVersion": 1,
+          "harness": "halo-accuracy",
+          "taskId": "specs-retrieval",
+          "kind": "retrieval",
+          "verdict": "pass",
+          "reason": "reported the chip, display and memory the current specs state",
+          "ending": "paused",
+          "pauseReason": "need_user",
+          "answer": "The current laptop specifications page is open. It lists chip M4, an 11-inch display, and 16GB of memory.",
+          "finalUrl": "http://127.0.0.1:50062/specs",
+          "plannerCalls": 2,
+          "actionsUsed": 1,
+          "pageRequests": 2,
+          "wallMs": 15315,
+          "summary": {
+            "total": 3,
+            "graded": 3,
+            "passed": 3,
+            "failed": 0,
+            "blocked": 0,
+            "inconclusive": 0,
+            "unclassified": 0,
+            "passRate": 1,
+            "reportable": true,
+            "caveat": "every run was graded"
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "harness": "halo-accuracy",
+          "taskId": "returns-multihop-navigation",
+          "kind": "navigation",
+          "verdict": "pass",
+          "reason": "walked Support -> Shipping -> Returns",
+          "ending": "paused",
+          "pauseReason": "need_user",
+          "answer": "已打开 Returns policy 页面。",
+          "finalUrl": "http://127.0.0.1:50062/support/shipping/returns",
+          "plannerCalls": 18,
+          "actionsUsed": 13,
+          "pageRequests": 4,
+          "wallMs": 101769,
+          "summary": {
+            "total": 3,
+            "graded": 3,
+            "passed": 3,
+            "failed": 0,
+            "blocked": 0,
+            "inconclusive": 0,
+            "unclassified": 0,
+            "passRate": 1,
+            "reportable": true,
+            "caveat": "every run was graded"
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "harness": "halo-accuracy",
+          "taskId": "store-mutation",
+          "kind": "mutation",
+          "verdict": "pass",
+          "reason": "the server received the correct home-store request",
+          "ending": "paused",
+          "pauseReason": "no_progress",
+          "answer": "",
+          "finalUrl": "http://127.0.0.1:50062/store/confirm",
+          "plannerCalls": 23,
+          "actionsUsed": 23,
+          "pageRequests": 2,
+          "wallMs": 139922,
+          "summary": {
+            "total": 3,
+            "graded": 3,
+            "passed": 3,
+            "failed": 0,
+            "blocked": 0,
+            "inconclusive": 0,
+            "unclassified": 0,
+            "passRate": 1,
+            "reportable": true,
+            "caveat": "every run was graded"
+          }
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "graded": 3,
+        "passed": 3,
+        "failed": 0,
+        "blocked": 0,
+        "inconclusive": 0,
+        "unclassified": 0,
+        "passRate": 1,
+        "reportable": true,
+        "caveat": "every run was graded"
+      },
+      "usage": [
+        {
+          "taskId": "specs-retrieval",
+          "provider": "codex",
+          "inputTokens": 12349,
+          "outputTokens": 102,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "specs-retrieval",
+          "provider": "codex",
+          "inputTokens": 12165,
+          "outputTokens": 109,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12166,
+          "outputTokens": 86,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12028,
+          "outputTokens": 145,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12043,
+          "outputTokens": 115,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12034,
+          "outputTokens": 117,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12096,
+          "outputTokens": 183,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 11984,
+          "outputTokens": 87,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 11981,
+          "outputTokens": 85,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12089,
+          "outputTokens": 116,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 11982,
+          "outputTokens": 108,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 11978,
+          "outputTokens": 83,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12076,
+          "outputTokens": 87,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12029,
+          "outputTokens": 106,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12030,
+          "outputTokens": 168,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12027,
+          "outputTokens": 83,
+          "cacheReadTokens": 11008,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12028,
+          "outputTokens": 111,
+          "cacheReadTokens": 11008,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "provider": "codex",
+          "inputTokens": 12025,
+          "outputTokens": 84,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11858,
+          "outputTokens": 89,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11914,
+          "outputTokens": 85,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11760,
+          "outputTokens": 148,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11804,
+          "outputTokens": 167,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11798,
+          "outputTokens": 116,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11796,
+          "outputTokens": 79,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11798,
+          "outputTokens": 147,
+          "cacheReadTokens": 11008,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11801,
+          "outputTokens": 127,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11798,
+          "outputTokens": 123,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11896,
+          "outputTokens": 120,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 23758,
+          "outputTokens": 140,
+          "cacheReadTokens": 22016,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 23756,
+          "outputTokens": 122,
+          "cacheReadTokens": 22016,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11846,
+          "outputTokens": 135,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11844,
+          "outputTokens": 109,
+          "cacheReadTokens": 11008,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11847,
+          "outputTokens": 126,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11844,
+          "outputTokens": 134,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11894,
+          "outputTokens": 132,
+          "cacheReadTokens": 1792,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11847,
+          "outputTokens": 156,
+          "cacheReadTokens": 11008,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11849,
+          "outputTokens": 157,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11845,
+          "outputTokens": 114,
+          "cacheReadTokens": 11008,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11843,
+          "outputTokens": 171,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11843,
+          "outputTokens": 164,
+          "cacheReadTokens": 8960,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        },
+        {
+          "taskId": "store-mutation",
+          "provider": "codex",
+          "inputTokens": 11852,
+          "outputTokens": 143,
+          "cacheReadTokens": 11008,
+          "cacheCreationTokens": 0,
+          "costUsd": 0,
+          "durationMs": 0
+        }
+      ],
+      "peakProcessTreeRssBytes": 905396224,
+      "totalWallMs": 260454.07362500002
+    }
+  ]
+}

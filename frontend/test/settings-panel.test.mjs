@@ -18,8 +18,9 @@ const base = { version: 5, executionMode: 'sequential', permissionMode: 'browse'
 test('fast mode says where it applies for the selected model', () => {
   const { fastModeSupport } = settingsLib
   assert.equal(fastModeSupport({ ...base, plannerProvider: 'none' }), 'no_planner')
-  assert.equal(fastModeSupport(base), 'claude_opus', 'unpinned Claude runs Opus')
-  assert.equal(fastModeSupport({ ...base, plannerModel: 'claude-opus-4-5-20251101' }), 'claude_opus')
+  assert.equal(fastModeSupport(base), 'claude_other', 'unpinned Claude shows the Sonnet default')
+  assert.equal(fastModeSupport({ ...base, plannerModel: 'claude-opus-5-5' }), 'claude_opus')
+  assert.equal(fastModeSupport({ ...base, plannerModel: 'claude-opus-4-6' }), 'claude_opus')
   assert.equal(fastModeSupport({ ...base, plannerModel: 'claude-sonnet-5-5' }), 'claude_other')
   assert.equal(fastModeSupport({ ...base, plannerProvider: 'codex_cli', plannerModel: 'gpt-5.5' }), 'codex')
 })
@@ -35,7 +36,7 @@ test('saving a setting returns the host result or null, never throws', async () 
 })
 
 test('the settings view shows every runtime setting with its current value', () => {
-  const html = renderToStaticMarkup(React.createElement(SettingsView, { settings: { ...base, plannerFast: true }, saving: false, error: null, onChange: () => {} }))
+  const html = renderToStaticMarkup(React.createElement(SettingsView, { settings: { ...base, plannerModel: 'claude-opus-5-5', plannerFast: true }, saving: false, error: null, onChange: () => {} }))
   assert.match(html, /role="dialog"[^>]*aria-label="Settings"/)
   for (const label of ['Observe', 'Browse', 'Interact', 'Full']) assert.match(html, new RegExp(`>${label}<`))
   assert.match(html, /aria-checked="true"[^>]*>(?:(?!<\/button>)[\s\S])*>Browse</, 'the current permission is the checked card')
@@ -44,7 +45,7 @@ test('the settings view shows every runtime setting with its current value', () 
   assert.match(html, />In parallel</)
   assert.match(html, /aria-label="Planner model"/)
   assert.match(html, /<option[^>]*value="claude-opus-5-5"/)
-  assert.match(html, /<option[^>]*value="gpt-6.1-sol"/)
+  assert.match(html, /<option[^>]*value="gpt-6-luna"/)
   assert.match(html, /role="switch"[^>]*aria-checked="true"[^>]*aria-label="Fast mode"|aria-label="Fast mode"[^>]*role="switch"[^>]*aria-checked="true"|role="switch"[^>]*aria-label="Fast mode"[^>]*aria-checked="true"/)
   assert.match(html, /credits/, 'Claude fast mode cost is stated')
 })
@@ -83,7 +84,7 @@ test('provider switches are independent; the active one falls back to another en
   assert.equal(find(view(base, ['codex_cli']), 'Use Claude').props['aria-checked'], true)
   // turning the active Claude off hands the planner to the other enabled provider
   find(view(base, ['codex_cli']), 'Use Claude').props.onClick()
-  assert.deepEqual(patches, [{ plannerProvider: 'codex_cli', plannerModel: 'gpt-6.1-sol' }, { plannerProvider: 'none' }, { plannerProvider: 'codex_cli', plannerModel: 'gpt-6.1-sol' }])
+  assert.deepEqual(patches, [{ plannerProvider: 'codex_cli', plannerModel: 'gpt-6-luna' }, { plannerProvider: 'none' }, { plannerProvider: 'codex_cli', plannerModel: 'gpt-6-luna' }])
   assert.deepEqual(lists.at(-1), ['codex_cli'])
 })
 

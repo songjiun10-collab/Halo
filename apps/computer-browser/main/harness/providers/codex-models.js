@@ -18,15 +18,15 @@ const UP_TO_ULTRA = [...UP_TO_MAX, "ultra"];
 const CODEX_MODELS = Object.freeze([
   entry("gpt-6.1-sol", "GPT-6.1 Sol", false, "Latest workhorse model for coding and everyday work.", UP_TO_ULTRA),
   entry("gpt-6-astra", "GPT-6 Astra", false, "Frontier intelligence for the most demanding work.", UP_TO_ULTRA),
-  entry("gpt-6-sol", "GPT-6 Sol", false, "Previous generation workhorse model.", UP_TO_ULTRA),
-  entry("gpt-6-luna", "GPT-6 Luna", false, "Fast and affordable model for easier tasks.", UP_TO_MAX),
+  entry("gpt-6-sol", "GPT-6 Sol", true, "Previous generation workhorse model.", UP_TO_ULTRA),
+  entry("gpt-6-luna", "GPT-6 Luna", false, "Fast and affordable model for easier tasks. same level with claude-haiku-5-5", UP_TO_MAX),
   entry("gpt-5.6-sol", "GPT-5.6 Sol", true, "Older generation workhorse model.", UP_TO_ULTRA),
   entry("gpt-5.6-terra", "GPT-5.6 Terra", true, "Older balanced model for straightforward work.", UP_TO_ULTRA),
   entry("gpt-5.6-luna", "GPT-5.6 Luna", true, "Older fast and efficient model.", UP_TO_MAX),
-  entry("gpt-5.5", "GPT-5.5", true, "Legacy coding model.", ["low", "medium", "high", "xhigh"]),
+  entry("gpt-5.5", "GPT-5.5", true, "Legacy coding model.", ["low", "medium", "high", "xhigh"]),//will be deleted
 ]);
 const CODEX_MODEL_IDS = Object.freeze(CODEX_MODELS.map((model) => model.id));
-const DEFAULT_CODEX_MODEL = "gpt-6.1-sol";
+const DEFAULT_CODEX_MODEL = "gpt-6-luna";
 
 const isCodexModel = (value) => typeof value === "string" && CODEX_MODEL_IDS.includes(value);
 

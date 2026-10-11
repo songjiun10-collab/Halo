@@ -266,3 +266,49 @@ test("listPending rejects a forged journal route even when sender and recipient 
   await assert.rejects(() => mailbox.listPending({ senderTaskId: f.parentTaskId, recipientTaskId: f.childTaskId }),
     (e) => e.code === "unauthorized_route");
 });
+
+test("a sibling leg authorizes both directions of an accepted pair and nothing else", async (t) => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-mailbox-sib-"));
+  let parent = await TaskStore.create({ originalRequest: "parent" }, { storageRoot });
+  let first = await TaskStore.createChild({ originalRequest: "one" }, { storageRoot, parentTaskId: parent.taskId });
+  let second = await TaskStore.createChild({ originalRequest: "two" }, { storageRoot, parentTaskId: parent.taskId });
+  const stores = new Map([[parent.taskId, parent], [first.taskId, first], [second.taskId, second]]);
+  t.after(async () => {
+    await Promise.allSettled([...stores.values()].map((store) => store.close()));
+    await fs.rm(storageRoot, { recursive: true, force: true });
+  });
+  const pair = [first.taskId, second.taskId].sort();
+  const mailbox = new MessageMailbox({
+    getTaskStore: (id) => stores.get(id),
+    getConversationTaskIds: (id) => id === "sib-pair"
+      ? { parentTaskId: parent.taskId, childTaskId: second.taskId, siblingPair: pair }
+      : null,
+  });
+  const leg = (sender, recipient, key, overrides = {}) => ({
+    conversationId: "sib-pair",
+    parentTaskId: parent.taskId,
+    childTaskId: recipient,
+    senderTaskId: sender,
+    recipientTaskId: recipient,
+    parentGoalVersion: 1,
+    kind: "question",
+    idempotencyKey: key,
+    text: `sibling ${key}`,
+    ...overrides,
+  });
+  const a2b = await mailbox.send(leg(first.taskId, second.taskId, "a2b"));
+  assert.equal(a2b.duplicate, false);
+  const b2a = await mailbox.send(leg(second.taskId, first.taskId, "b2a"));
+  assert.equal(b2a.duplicate, false);
+  assert.deepEqual(
+    (await mailbox.listPending({ senderTaskId: first.taskId, recipientTaskId: second.taskId })).map((m) => m.messageId),
+    [a2b.messageId]);
+  // The child leg must name the recipient; a forged leg, an outsider, and an
+  // unknown conversation all fail closed.
+  await assert.rejects(() => mailbox.send(leg(first.taskId, second.taskId, "wrong-leg", { childTaskId: first.taskId })),
+    (e) => e.code === "unauthorized_route");
+  await assert.rejects(() => mailbox.send(leg(parent.taskId, second.taskId, "parent-leg")),
+    (e) => e.code === "unauthorized_route");
+  await assert.rejects(() => mailbox.send(leg(first.taskId, second.taskId, "unknown", { conversationId: "sib-nope" })),
+    (e) => e.code === "unauthorized_route");
+});

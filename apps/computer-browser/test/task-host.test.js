@@ -3006,7 +3006,7 @@ test("a Multi-agent task's planner is told it may split work, a plain task's is 
     for (let i = 0; i < 100 && seen.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     return seen;
   };
-  assert.deepEqual(await seenFor({ requestedCapabilityProfile: "multi_agent" }), [{ enabled: true, maxAgents: 8, executionModes: ["host"], active: null }]);
+  assert.deepEqual(await seenFor({ requestedCapabilityProfile: "multi_agent" }), [{ enabled: true, maxAgents: Number.MAX_SAFE_INTEGER, executionModes: ["host"], active: null }]);
   assert.deepEqual(await seenFor({}), [undefined]);
 });
 
@@ -3103,4 +3103,103 @@ test("takeover frame/input only flow while the user owns the task, and input is 
   }
   assert.equal(sent.length, 2, "rejected inputs never reach the page");
   assert.equal(await new TaskHost(base).captureTaskFrame("t1"), null, "no frame source -> null");
+});
+
+test("findInPage on a task page flows only while the user owns the task, and fails closed without a finder", async () => {
+  const calls = [];
+  const base = { hostVerifier: () => true, approve: async () => ({ decision: "allow", reasons: [] }), storageRoot: await fs.mkdtemp(path.join(os.tmpdir(), "halo-find-")), makeBrowser: () => ({}), makePlanner: () => ({}) };
+  const host = new TaskHost({ ...base, findTaskPage: async (id, query, options) => { calls.push([id, query, options]); return { ok: true, found: query === "refund" }; } });
+  hostsToClose.add(host);
+  let owned = false;
+  host.canUseTaskBrowser = () => owned;
+
+  assert.equal((await host.findInPage("t1", "refund")).errorCode, "surface_unavailable", "no search while the agent drives");
+  owned = true;
+  assert.deepEqual(await host.findInPage("t1", "refund", { forward: false }), { ok: true, found: true });
+  assert.deepEqual(calls, [["t1", "refund", { forward: false }]]);
+
+  const without = new TaskHost(base);
+  hostsToClose.add(without);
+  assert.equal((await without.findInPage("t1", "refund")).errorCode, "surface_unavailable", "no finder injected -> fail closed");
+});
+
+test("setZoom on a task page flows only while the user owns the task, and fails closed without a zoomer", async () => {
+  const calls = [];
+  const base = { hostVerifier: () => true, approve: async () => ({ decision: "allow", reasons: [] }), storageRoot: await fs.mkdtemp(path.join(os.tmpdir(), "halo-zoom-")), makeBrowser: () => ({}), makePlanner: () => ({}) };
+  const host = new TaskHost({ ...base, zoomTaskPage: async (id, request) => { calls.push([id, request]); return { ok: true, level: 1.1 }; } });
+  hostsToClose.add(host);
+  let owned = false;
+  host.canUseTaskBrowser = () => owned;
+
+  assert.equal((await host.setZoom("t1", { direction: "in" })).errorCode, "surface_unavailable", "no zoom while the agent drives");
+  owned = true;
+  assert.deepEqual(await host.setZoom("t1", { direction: "in" }), { ok: true, level: 1.1 });
+  assert.deepEqual(calls, [["t1", { direction: "in" }]]);
+
+  const without = new TaskHost(base);
+  hostsToClose.add(without);
+  assert.equal((await without.setZoom("t1", { direction: "in" })).errorCode, "surface_unavailable", "no zoomer injected -> fail closed");
+});
+
+test("copySelection on a task page flows only while the user owns the task, and fails closed without a copier", async () => {
+  const base = { hostVerifier: () => true, approve: async () => ({ decision: "allow", reasons: [] }), storageRoot: await fs.mkdtemp(path.join(os.tmpdir(), "halo-copy-")), makeBrowser: () => ({}), makePlanner: () => ({}) };
+  const host = new TaskHost({ ...base, copyTaskSelection: async (id) => ({ ok: true, chars: 7, text: id === "t1" ? "abc def" : "" }) });
+  hostsToClose.add(host);
+  let owned = false;
+  host.canUseTaskBrowser = () => owned;
+
+  assert.equal((await host.copySelection("t1")).errorCode, "surface_unavailable", "no copy while the agent drives");
+  owned = true;
+  assert.deepEqual(await host.copySelection("t1"), { ok: true, chars: 7, text: "abc def" });
+
+  const without = new TaskHost(base);
+  hostsToClose.add(without);
+  assert.equal((await without.copySelection("t1")).errorCode, "surface_unavailable", "no copier injected -> fail closed");
+});
+
+test("a human-needed pause opens a handoff, journals it, and resolves on resume", async () => {
+  const storageRoot = await mkTempRoot();
+  const notifications = [];
+  let turns = 0;
+  const host = makeHost(storageRoot, {
+    onHumanHandoff: (handoff) => notifications.push(handoff),
+    makePlanner: () => ({
+      next: async (context) => {
+        turns += 1;
+        if (turns === 1) {
+          return {
+            taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs",
+            criterionIds: [], kind: "need_user", reason: "Which account should I use?",
+          };
+        }
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "finish", evidenceIds: [] };
+      },
+    }),
+  });
+
+  const { taskId, snapshot } = await host.createTask({ originalRequest: "handoff test" });
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.deepEqual(host.listHandoffs().map((handoff) => [handoff.taskId, handoff.reason]), [[taskId, "need_user"]]);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].taskId, taskId);
+  assert.equal(typeof notifications[0].label, "string");
+
+  const resumed = await host.resumeSavedTask(taskId);
+  assert.equal(resumed.state, "awaiting_verification");
+  assert.deepEqual(host.listHandoffs(), []);
+  assert.equal(notifications.length, 1, "resuming does not re-notify");
+
+  // The durable notes are best-effort asynchronous appends; poll briefly.
+  const deadline = Date.now() + 2000;
+  let handoffNotes = [];
+  do {
+    handoffNotes = (await TaskStore.readEvents(taskId, { storageRoot }))
+      .filter((event) => event.type === "note" && event.payload?.kind === "human_handoff");
+    if (handoffNotes.length >= 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  } while (Date.now() < deadline);
+  assert.deepEqual(handoffNotes.map((event) => event.payload.status), ["waiting", "resolved"]);
+  assert.equal(handoffNotes[0].payload.reason, "need_user");
+  assert.equal(handoffNotes[1].payload.outcome, "resumed");
 });

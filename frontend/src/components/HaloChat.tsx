@@ -132,6 +132,7 @@ export function HaloChat({ taskLabel, tabContext, messages, timeline = [], recen
           </p>
         )}
         <div className="hx-chat__row">
+          <ModelPicker settings={model.settings} onSelectModel={(id) => void model.selectModel(id)} onEffort={(effort) => void model.selectEffort(effort)} savingProvider={model.savingProvider} savingEffort={model.savingEffort} />
           <input
             className="hx-chat__input"
             value={value}
@@ -142,7 +143,6 @@ export function HaloChat({ taskLabel, tabContext, messages, timeline = [], recen
           />
           <button className="hx-chat__send" type="submit" aria-label="Send" title="Send" disabled={!value.trim()}>↑</button>
         </div>
-        <ModelPicker settings={model.settings} onSelectModel={(id) => void model.selectModel(id)} onEffort={(effort) => void model.selectEffort(effort)} savingProvider={model.savingProvider} savingEffort={model.savingEffort} />
       </form>
     </section>
   )

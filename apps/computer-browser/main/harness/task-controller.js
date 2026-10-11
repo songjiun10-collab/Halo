@@ -20,7 +20,7 @@ const { startTurnMemoryReads } = require("./turn-memory-preparation");
 // history (that lives in the durable journal, read back only in small
 // bounded slices via context-builder.js).
 
-const { randomUUID } = require("node:crypto");
+const { randomUUID, randomInt } = require("node:crypto");
 const { AsyncLocalStorage } = require("node:async_hooks");
 const contracts = require("../../shared/harness-contracts");
 const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal, isQuickProfile } = require("../../shared/harness-profile");
@@ -34,8 +34,11 @@ const { ContextRefCatalog } = require("./context-refs");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
 const { isReadOnlyAction } = require("./permission-policy");
 const { looksLikeCaptcha } = require("../../shared/captcha-heuristics");
+const { groundingReport } = require("./grounding");
 const { evaluateGate, actionTargetOrigin } = require("./action-gate");
 const { LEASE_ACTIONS, lendTerms, createLease, isLeaseLive, LeaseError } = require("./capability-lease");
+const { validateStep, gateActionFor } = require("./halowright");
+const { MCP_ROUTE_PREFERENCES, decideRoute } = require("./mcp-route-policy");
 
 class TaskControllerError extends Error {
   constructor(code, message) {
@@ -56,6 +59,15 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
   if (action.type === "navigate") {
     return typeof action.url === "string" ? action.url : null;
   }
+  if (action.type === "hw_step") {
+    const step = action.step && typeof action.step === "object" ? action.step : {};
+    if (step.op === "press") return `press ${String(step.key ?? "?")}`;
+    if (step.op === "scroll") return `scroll ${String(step.dy ?? "?")}${step.locator ? ` at ${describeLocator(step.locator)}` : ""}`;
+    if (step.op === "get_text") return `read text of ${describeLocator(step.locator)}`;
+    const where = describeLocator(step.locator);
+    if (step.op === "fill") return `${where}; replace text with ${JSON.stringify(String(step.text ?? "").slice(0, 80))}`;
+    return `${String(step.op ?? "?")} ${where}`;
+  }
   if (action.type === "follow_link") {
     const element = lastObservation?.elements?.find((el) => el.elementId === action.elementId);
     if (element && typeof element.href === "string") return element.href;
@@ -66,6 +78,16 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
     const amount = action.amount !== undefined ? String(action.amount) : "?";
     return `${direction} ${amount}`;
   }
+  if (action.type === "find") {
+    const direction = action.direction === "prev" ? "prev" : "next";
+    return typeof action.text === "string" ? `${direction} ${JSON.stringify(action.text)}` : null;
+  }
+  if (action.type === "zoom") {
+    if (typeof action.direction === "string") return `zoom ${action.direction}`;
+    return action.level !== undefined ? `zoom ${String(action.level)}x` : null;
+  }
+  if (action.type === "select_all") return "select all page text";
+  if (action.type === "copy") return "copy the current selection";
   if (["click", "type", "submit_form"].includes(action.type)) {
     const element = lastObservation?.elements?.find((el) => el.elementId === action.elementId);
     if (!element) return `unknown element ${String(action.elementId).slice(0, 32)}`;
@@ -84,6 +106,7 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
     return ` -> ${hit.role} ${JSON.stringify(hit.name)}${flags ? ` [${flags}]` : ""}`;
   };
   if (action.type === "press_key") return `${lastObservation?.id || action.observationId}; press ${action.key}`;
+  if (action.type === "evaluate") return `evaluate ${JSON.stringify(String(action.expression ?? "").slice(0, 120))} on ${lastObservation?.url || "the current page"}`;
   if (["click_at", "type_at"].includes(action.type)) {
     const point = `(${Math.round(Number(action.x) * 100)}%, ${Math.round(Number(action.y) * 100)}%)`;
     const where = landed(lastObservation);
@@ -149,6 +172,43 @@ function hasMultiAgentCapability(taskProfile) {
   return ["multi_agent", "multi_agent_computer_use"].includes(taskProfile?.capability?.id);
 }
 
+// The canonical browser action a proposal action is gated as. hw_step ops map
+// to the elementId action they perform, so the Intent Lock rule, permission
+// mode, lease and approval prompt all judge the real effect. Returns null for
+// a malformed hw_step; the loop rejects those before gating.
+function gateActionOf(action) {
+  if (action?.type !== "hw_step") return action?.type;
+  const valid = validateStep(action.step);
+  return valid.ok ? gateActionFor(action.step.op) : null;
+}
+
+// One readable name for a locator, for the approval prompt.
+function describeLocator(locator) {
+  if (!locator || typeof locator !== "object") return "an element";
+  for (const key of ["name", "text", "label", "placeholder", "testid"]) {
+    if (typeof locator[key] === "string" && locator[key]) {
+      const role = typeof locator.role === "string" && locator.role ? `${locator.role} ` : "";
+      return `${role}${JSON.stringify(locator[key].slice(0, 120))}`;
+    }
+  }
+  return typeof locator.role === "string" && locator.role ? `role ${locator.role}` : "an element";
+}
+
+// Same idea as isAutoDomAction, for a Halowright locator: a click or fill the
+// locator itself names as a benign control or an ordinary text field cannot
+// carry an external effect, so the approver alone decides. Anything the
+// locator does not fully state, or the classifier flags, keeps the human gate.
+function isAutoHwStep(action) {
+  if (action?.type !== "hw_step") return false;
+  const op = action.step?.op;
+  if (op !== "click" && op !== "fill") return false;
+  const locator = action.step.locator;
+  if (!locator || typeof locator !== "object") return false;
+  if (typeof locator.role !== "string" || typeof locator.name !== "string" || !locator.name) return false;
+  const target = { role: locator.role, name: locator.name, covered: false, disabled: false };
+  return classifyTarget(target, op === "fill" ? "type_at" : "click_at").gate === "auto";
+}
+
 // Long-profile goal persistence: total finish proposals the host will reject
 // (criteria still unmet, all machine-verifiable) before pausing for a human.
 const GOAL_MAX_REJECTED_FINISHES = 5;
@@ -161,10 +221,29 @@ const PAGE_LOOP_WINDOW = 12;
 const VISITED_PAGES_KEPT = 500;
 // Minimum gap between page loads on the same site; keeps agent browsing polite and less likely to trip bot checks.
 const SAME_SITE_NAV_INTERVAL_MS = 1500;
+// Bounded upward jitter on that gap, drawn fresh for each navigation. A
+// perfectly uniform gap is itself a robot signature, so the effective
+// interval is navIntervalMs + jitter, uniform in [floor, floor + max]. Jitter
+// never shortens the floor and never goes below it. Off (0) when the option
+// is negative or non-finite.
+const NAV_JITTER_MAX_MS = 1000;
 // Sites that may show a human check before the task is handed to the person.
 const CAPTCHA_SITES_TRIED = 2;
+// Sites that recently showed a human check are remembered across tasks for this long; the planner is told
+// to prefer another source, never to click through the check.
+const FRICTION_TTL_MS = 24 * 60 * 60 * 1000;
+const FRICTION_ORIGINS_SHOWN = 5;
 const PAGE_LOOP_LIMIT = 8;
 const ERROR_URLS_KEPT = 5;
+// Grounding: bound the in-memory observation corpus an answer is checked
+// against, and the answer text the hallucination detector inspects.
+const GROUNDING_CORPUS_MAX_OBSERVATIONS = 24;
+const GROUNDING_CORPUS_MAX_BYTES = 512 * 1024;
+const GROUNDING_ANSWER_MAX_CHARS = 4000;
+// The correction feedback names the pages this task observed so the planner can
+// revisit one instead of guessing; bounded so the packet stays small.
+const GROUNDING_FEEDBACK_URLS = 8;
+const GROUNDING_FEEDBACK_URL_CHARS = 256;
 const OBSERVE_STALE_RETRIES = 2;
 const OBSERVE_RETRY_DELAY_MS = 400;
 const NAV_FRONTIER_MAX = 32;
@@ -227,6 +306,16 @@ function isMcpItem(item) {
   return item.actionType === contracts.MCP_CALL_ACTION_TYPE && !!item.mcp;
 }
 
+// An evaluate answer rides the next planner turn like an MCP result: page
+// data, so it carries its own authority label and the same byte budget.
+function boundedEvaluateObservation(result = "") {
+  const base = { authority: "untrusted_page", outcome: "ok", truncated: false };
+  const json = JSON.stringify({ ...base, result: String(result) });
+  if (Buffer.byteLength(json, "utf8") <= MCP_RESULT_MAX_BYTES) return { ...base, result: String(result) };
+  const overhead = Buffer.byteLength(JSON.stringify({ ...base, result: "" }), "utf8");
+  return { ...base, truncated: true, result: truncateUtf8(result, Math.max(0, MCP_RESULT_MAX_BYTES - overhead - 20)).text };
+}
+
 class TaskController {
   constructor({
     store,
@@ -248,6 +337,11 @@ class TaskController {
     permissionMode = "browse",
     observeRetryDelayMs = OBSERVE_RETRY_DELAY_MS,
     navIntervalMs = SAME_SITE_NAV_INTERVAL_MS,
+    navJitterMaxMs = NAV_JITTER_MAX_MS,
+    navJitter,
+    navLedger,
+    frictionLedger,
+    groundingCorrections = 1,
     maxRecoveries,
     plannerImageInput = true,
     visionAssist = null,
@@ -267,6 +361,7 @@ class TaskController {
     harnessProfile,
     makeMcpBroker,
     mcpEnabled,
+    mcpRoutePreference = "mcp_first",
     reviewFallback = "queue",
     onTiming,
     contextRefs = false,
@@ -424,6 +519,12 @@ class TaskController {
     const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
     if (!PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_config", "permissionMode is invalid");
     this._permissionMode = permissionMode;
+    if (!MCP_ROUTE_PREFERENCES.includes(mcpRoutePreference)) throw new TaskControllerError("invalid_config", "mcpRoutePreference is invalid");
+    this._mcpRoutePreference = mcpRoutePreference;
+    // Last journaled route signature (path|domain|reason): the decision is
+    // re-derived every turn but journaled only when it changes, so the log
+    // names each fallback without one note per turn.
+    this._lastMcpRouteKey = null;
     // Steps that ran without asking the user (approver-only or lease). Session-local, for the report.
     this._autoHandled = 0;
     this._observeRetryDelayMs = Number.isFinite(observeRetryDelayMs) && observeRetryDelayMs >= 0 ? observeRetryDelayMs : OBSERVE_RETRY_DELAY_MS;
@@ -487,10 +588,24 @@ class TaskController {
     this._scrollStreak = { url: null, count: 0 };
     this._recentPages = [];
     this._visitedPages = new Set();
-    this._lastNavAt = new Map();
+    // A host passes one ledger to all its controllers so tasks share the per-origin gap.
+    this._lastNavAt = navLedger instanceof Map ? navLedger : new Map();
+    this._navIntervalMs = Number.isFinite(navIntervalMs) ? navIntervalMs : SAME_SITE_NAV_INTERVAL_MS;
+    this._navJitterMaxMs = Number.isFinite(navJitterMaxMs) && navJitterMaxMs > 0 ? navJitterMaxMs : 0;
+    this._navJitter = typeof navJitter === "function" ? navJitter : (max) => randomInt(max);
+    // origin -> { at, count }; a host passes one ledger to all its controllers.
+    this._friction = frictionLedger instanceof Map ? frictionLedger : new Map();
     this._captchaOrigins = new Set();
     this._onCaptchaPage = false;
-    this._navIntervalMs = Number.isFinite(navIntervalMs) ? navIntervalMs : SAME_SITE_NAV_INTERVAL_MS;
+    this._captchaNotice = null;
+    this._groundingBudget = Number.isInteger(groundingCorrections) && groundingCorrections >= 0 ? groundingCorrections : 1;
+    this._groundingCorrections = 0;
+    this._groundingFeedback = null;
+    this._groundingReport = null;
+    this._observedCorpus = [];
+    this._observedCorpusBytes = 0;
+    this._observedUrls = [];
+    this._groundingGoalVersion = null;
     this._needUserReason = null;
     this._maxRecoveries = maxRecoveries;
     this._proposalFeedbackCode = null;
@@ -529,6 +644,7 @@ class TaskController {
     this._viewsReleased = false;
     this._releaseViewsOnReview = releaseViewsOnReview === true;
     this._pendingMcpObservation = null;
+    this._pendingEvaluateObservation = null;
     // Reusable-across-turns iff the last dispatched action was itself an
     // "observe" (see the reuse gate in the main loop and its assignment in
     // _afterActionDispatched, which is this field's one source of truth).
@@ -648,6 +764,77 @@ class TaskController {
     this._browser.setPermissionMode?.(this._permissionMode);
   }
 
+  // Hallucination device, host side: the planner's answer is checked against
+  // everything this task actually observed. A detector failure never blocks the
+  // task -- it reports "not hallucinated" and the answer passes through.
+  _groundNeedUserAnswer(reason) {
+    const answer = typeof reason === "string" ? reason.trim().slice(0, GROUNDING_ANSWER_MAX_CHARS) : "";
+    if (answer.length === 0) return { hallucinated: false, unsupported: [] };
+    try {
+      const report = groundingReport(answer, this._observedCorpus);
+      return { hallucinated: report.hallucinated, unsupported: report.unsupported };
+    } catch {
+      return { hallucinated: false, unsupported: [] };
+    }
+  }
+
+  // Bounded, in-memory-only corpus of what the planner was shown. Never
+  // journaled, and dropped when the controller is released.
+  _noteObservation(observation) {
+    this._seedGroundingFromGoal();
+    if (!observation || typeof observation !== "object") return;
+    if (typeof observation.url === "string" && observation.url.length > 0 && !this._observedUrls.includes(observation.url)) {
+      this._observedUrls.push(observation.url);
+      if (this._observedUrls.length > GROUNDING_FEEDBACK_URLS) this._observedUrls.shift();
+    }
+    const parts = [];
+    if (typeof observation.text === "string" && observation.text.length > 0) parts.push(observation.text);
+    if (typeof observation.title === "string" && observation.title.length > 0) parts.push(observation.title);
+    if (typeof observation.url === "string" && observation.url.length > 0) parts.push(observation.url);
+    if (Array.isArray(observation.elements)) {
+      for (const element of observation.elements) {
+        if (typeof element?.name === "string" && element.name.length > 0) parts.push(element.name);
+        if (typeof element?.href === "string" && element.href.length > 0) parts.push(element.href);
+      }
+    }
+    if (Number.isInteger(observation.httpStatus)) parts.push(String(observation.httpStatus));
+    const chunk = parts.join(" ").trim();
+    if (chunk.length === 0) return;
+    this._pushGroundingText(chunk);
+  }
+
+  // The request the task was given is ground truth the planner may quote: a
+  // value copied from the user's own request is not a hallucination. Re-seeded
+  // whenever the goal version moves, so user amendments count too. Grounding
+  // correction text never flows through the goal (it uses groundingFeedback),
+  // so this cannot launder a fabrication.
+  _seedGroundingFromGoal() {
+    const version = this._goal?.goalVersion;
+    if (version === this._groundingGoalVersion) return;
+    this._groundingGoalVersion = version;
+    const parts = [];
+    if (typeof this._goal?.originalRequest === "string" && this._goal.originalRequest.length > 0) parts.push(this._goal.originalRequest);
+    for (const constraint of this._goal?.constraints ?? []) {
+      const text = typeof constraint === "string" ? constraint : constraint?.text;
+      if (typeof text === "string" && text.length > 0) parts.push(text);
+    }
+    for (const amendment of this._goal?.amendments ?? []) {
+      const text = typeof amendment === "string" ? amendment : amendment?.text;
+      if (typeof text === "string" && text.length > 0) parts.push(text);
+    }
+    const seed = parts.join(" \n ").trim();
+    if (seed.length > 0) this._pushGroundingText(`task: ${seed}`);
+  }
+
+  _pushGroundingText(chunk) {
+    this._observedCorpus.push(chunk);
+    this._observedCorpusBytes += chunk.length;
+    while (this._observedCorpus.length > GROUNDING_CORPUS_MAX_OBSERVATIONS || this._observedCorpusBytes > GROUNDING_CORPUS_MAX_BYTES) {
+      const removed = this._observedCorpus.shift();
+      this._observedCorpusBytes -= removed.length;
+    }
+  }
+
   getSnapshot() {
     this._pruneLeases();
     return {
@@ -661,6 +848,7 @@ class TaskController {
       branches: this._branches ? this._branches.list() : [],
       approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor, widen, leaseOffer }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null, widen: !!widen, leaseOffer: leaseOffer ?? null })),
       ...(this._task.pauseReason === "need_user" && this._needUserReason ? { needUserReason: this._needUserReason } : {}),
+      ...(this._task.pauseReason === "need_user" && this._groundingReport ? { grounding: { unsupported: [...this._groundingReport.unsupported] } } : {}),
       leases: this._terminal()
         ? []
         : this._leases.filter((l) => isLeaseLive(l, this._monotonicNow())).map(({ id, action, origin, expiresAt, usesLeft }) => ({ id, action, origin, expiresAt, usesLeft })),
@@ -1019,11 +1207,12 @@ class TaskController {
   async _tryRecover(reason, step) {
     const granted = this._recovery.tryConsume(reason);
     if (!granted) return reason === "planner_error" || reason === "no_progress" ? this._tryEscalate(reason) : false;
+    const recoveryFeedback = buildRecoveryFeedback(this._recovery.snapshot());
     // Retry only after its budget charge is durable. A crash before checkpoint
     // replays this complete bounded state from the validated journal tail.
     try {
       await this._store.append({ type: "note", payload: { kind: "recovery", reason, step, attempt: granted.attempt, total: granted.total,
-        recoveryBudget: this._recovery.snapshot() } });
+        nextAction: recoveryFeedback?.nextAction ?? step, recoveryBudget: this._recovery.snapshot() } });
     } catch {
       return false; // No durable charge: take the caller's normal pause path.
     }
@@ -1053,6 +1242,8 @@ class TaskController {
 
   async _pauseWith(reason) {
     this._leaveActive();
+    // A pause ends any pending grounding correction; a resume starts clean.
+    this._groundingFeedback = null;
     this._task = { state: "paused", pauseReason: reason };
     // Pause reasons otherwise live only in the latest checkpoint; keep each one
     // in the journal so "why does it keep pausing" can be answered afterwards.
@@ -1328,9 +1519,17 @@ class TaskController {
       if (outcome === "verified") {
         const completion = canComplete(this._goal, this._evidenceForCompletionCheck());
         if (completion.complete) {
-          this._task = { state: "completed", pauseReason: null };
-          await this._revokeAllLeases("task_ended");
-          await this._checkpoint();
+          const unreported = await this._completedUnreportedChildren();
+          if (unreported.length > 0) {
+            await this._store.append({ type: "note", payload: {
+              kind: "child_unreported",
+              unreportedSubgoals: unreported,
+            } });
+          } else {
+            this._task = { state: "completed", pauseReason: null };
+            await this._revokeAllLeases("task_ended");
+            await this._checkpoint();
+          }
         }
       } else {
         // A rejected criterion cannot complete the task as-is, but leaving
@@ -1682,6 +1881,14 @@ class TaskController {
     return this._plannerMcpEnabled && !this._mcpClosed;
   }
 
+  // Advisory: records why an MCP route fell back (disabled/failed) so the
+  // route can be learned from later. Never blocks or throws into the loop.
+  _noteMcpFallback(observation) {
+    if (!observation || (observation.outcome !== "unavailable" && observation.outcome !== "error")) return;
+    const reason = typeof observation.code === "string" && observation.code ? observation.code : `mcp_${observation.outcome}`;
+    void this._store.append({ type: "note", payload: { kind: "mcp_route_fallback", action: observation.action, reason } }).catch(() => {});
+  }
+
   async _handlePlannerMcpAction(action, epoch) {
     const kind = mcpActionKind(action);
     const active = () => this._task.state === "running" && !this._stopHappenedSince(epoch);
@@ -2011,7 +2218,12 @@ class TaskController {
             enabled: true,
             maxAgents: contracts.MAX_CHILD_ASSIGNMENTS,
             executionModes: Array.isArray(summary?.executionModes) ? summary.executionModes : ["host"],
-            active: summary ? { agents: summary.agents.map((agent) => ({ subgoal: agent.subgoal ?? "", status: agent.status })) } : null,
+            active: summary ? { agents: summary.agents.map((agent) => ({
+              subgoal: agent.subgoal ?? "",
+              status: agent.status,
+              ...(agent.reported !== undefined ? { reported: agent.reported } : {}),
+              ...(agent.unreported === true ? { unreported: true } : {}),
+            })) } : null,
           }), () => undefined);
           if (this._stopHappenedSince(epoch)) break;
         }
@@ -2025,22 +2237,37 @@ class TaskController {
             this._errorUrls.push(observation.url);
             if (this._errorUrls.length > ERROR_URLS_KEPT) this._errorUrls.shift();
           }
+          this._noteObservation(observation);
           // An anti-bot challenge is the person's to pass: hand the browser over
           // before any planner call, never try to click through it.
-          // The first block on a site is routed around by asking the planner for another
-          // source (the challenged URL goes into errorUrls); a repeat, a third site, or any
-          // action other than leaving the page hands the task to the person.
+          // The first block on a site is routed around by asking the planner for
+          // another source: the challenged URL goes into errorUrls and one
+          // structured notice names the blocked origin and the guidance for this
+          // turn. A repeat, a third site, or any action other than leaving the
+          // page hands the task to the person.
           this._onCaptchaPage = false;
+          this._captchaNotice = null;
           if (looksLikeCaptcha(observation?.url, observation?.title)) {
             let origin = null;
             try { origin = new URL(observation.url).origin; } catch {}
+            if (origin !== null) this._noteFriction(origin);
             if (origin === null || this._captchaOrigins.has(origin) || this._captchaOrigins.size >= CAPTCHA_SITES_TRIED) {
               await this._pauseWith("captcha");
               break;
             }
+            const reroutedUrl = String(observation.url).slice(0, NAV_URL_MAX_CHARS);
             this._captchaOrigins.add(origin);
             this._onCaptchaPage = true;
             if (!this._errorUrls.includes(observation.url)) this._errorUrls.push(observation.url);
+            this._captchaNotice = {
+              reason: "human_check",
+              origin,
+              url: reroutedUrl,
+              guidance: "This site showed a human check and is blocked for this task. Get the information from a different source (the official site or documentation, or another search result); do not revisit this origin.",
+            };
+            // Durable, best-effort audit: a later reader can tell which task was
+            // rerouted and how much of the reroute budget was already spent.
+            await this._store.append({ type: "note", payload: { kind: "captcha_reroute", origin, url: reroutedUrl, sitesTried: this._captchaOrigins.size } });
           }
           // A page this task has never been on is real progress: it refills the recovery
           // budget. Looping among pages already seen never does, so a stuck task stays bounded.
@@ -2108,15 +2335,27 @@ class TaskController {
           const targetList = textCapture ? textCapture.screenMap.targets : visualCapture?.screenTargets;
           this._screenTargets = Array.isArray(targetList) ? { observationId: observation.id, targets: targetList } : null;
           const plannerObservation = visualCapture
-            ? { ...observation, computerUse: { ...visualCapture.binding } }
+            ? { ...observation, computerUse: { observationId: visualCapture.binding.observationId } }
             : textCapture
-              ? { ...observation, computerUse: { ...textCapture.binding, mode: "text" }, screenMap: textCapture.screenMap.text, ...(textCapture.visionNote ? { visionNote: textCapture.visionNote } : {}) }
+              ? { ...observation, computerUse: { observationId: textCapture.binding.observationId, mode: "text" }, screenMap: textCapture.screenMap.text, ...(textCapture.visionNote ? { visionNote: textCapture.visionNote } : {}) }
               : observation;
           const recoveryFeedback = buildRecoveryFeedback(this._recovery.snapshot());
           const proposalFeedback = this._proposalFeedbackCode ? buildProposalFeedback(this._proposalFeedbackCode, {
             taskId: this._goal.taskId, goalVersion: this._goal.goalVersion,
             basedOnObservationId: observation.id, maxActions: this._maxActionsPerProposal,
           }) : null;
+          // MCP-first routing, re-derived every turn from the live page and
+          // the pinned providers; journaled only when the decision changes.
+          // The note is advisory and re-derived after any crash, so it never
+          // blocks the dispatch hot path (a floating append would shift the
+          // takeOver/stop race interleavings the loop guarantees).
+          const mcpRoute = decideRoute({ url: observation?.url, preference: this._mcpRoutePreference, mcpAvailable: this._mcpAvailableToPlanner() });
+          const mcpRouteKey = `${mcpRoute.path}|${mcpRoute.domain ?? ""}|${mcpRoute.reason}`;
+          if (mcpRouteKey !== this._lastMcpRouteKey) {
+            this._lastMcpRouteKey = mcpRouteKey;
+            void this._store.append({ type: "note", payload: { kind: "mcp_route_decision",
+              path: mcpRoute.path, ...(mcpRoute.domain ? { domain: mcpRoute.domain } : {}), reason: mcpRoute.reason } }).catch(() => {});
+          }
           context = buildContext({
             goal: this._goal,
             state: {
@@ -2133,8 +2372,12 @@ class TaskController {
               ...(this._lastActionNote ? { lastAction: this._lastActionNote } : {}),
               ...(this._scrollStreak.count >= 3 ? { scrollStreak: this._scrollStreak.count } : {}),
               ...(this._errorUrls.length > 0 ? { errorUrls: [...this._errorUrls] } : {}),
+              ...(this._captchaNotice ? { captchaReroute: { ...this._captchaNotice } } : {}),
+              ...(this._recentHumanChecks().length > 0 ? { recentHumanChecks: this._recentHumanChecks() } : {}),
+              ...(this._groundingFeedback ? { groundingFeedback: { ...this._groundingFeedback } } : {}),
               mcp: { enabled: this._mcpAvailableToPlanner(),
-                actions: ["mcp_search", "mcp_describe", "mcp_propose"] },
+                actions: ["mcp_search", "mcp_describe", "mcp_propose"],
+                route: { path: mcpRoute.path, ...(mcpRoute.domain ? { domain: mcpRoute.domain } : {}), reason: mcpRoute.reason } },
               ...(this._harnessProfile === "long" ? { goalPersistence: this._goalPersistenceState() } : {}),
               ...(childPlan ? { childPlan } : {}),
             },
@@ -2169,6 +2412,19 @@ class TaskController {
               const compactCandidate = { ...context, observation: { ...(context.observation || {}), mcpResult: compact } };
               if (Buffer.byteLength(JSON.stringify(compactCandidate), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) throw new Error("MCP observation exceeds context budget");
               this._pendingMcpObservation = compact;
+              context = compactCandidate;
+            } else {
+              context = candidate;
+            }
+          }
+          if (this._pendingEvaluateObservation) {
+            const observationWithEvaluate = { ...(context.observation || {}), evaluateResult: this._pendingEvaluateObservation };
+            const candidate = { ...context, observation: observationWithEvaluate };
+            if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) {
+              const compactCandidate = { ...context, observation: { ...(context.observation || {}),
+                evaluateResult: { authority: "untrusted_page", outcome: "omitted", truncated: true, result: "" } } };
+              if (Buffer.byteLength(JSON.stringify(compactCandidate), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) throw new Error("evaluate observation exceeds context budget");
+              this._pendingEvaluateObservation = compactCandidate.observation.evaluateResult;
               context = compactCandidate;
             } else {
               context = candidate;
@@ -2220,8 +2476,10 @@ class TaskController {
             proposal = await this._nextPlanner(repairContext, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
           }
           if (this._pendingMcpObservation) this._pendingMcpObservation = null;
+          if (this._pendingEvaluateObservation) this._pendingEvaluateObservation = null;
           this._pendingContextRead = null;
           this._loopHint = false;
+          this._groundingFeedback = null;
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -2337,8 +2595,17 @@ class TaskController {
           }
           this._leaveActive();
           if (completion.complete) {
-            this._task = { state: "completed", pauseReason: null };
-            await this._revokeAllLeases("task_ended");
+            const unreported = await this._completedUnreportedChildren();
+            if (unreported.length > 0) {
+              await this._store.append({ type: "note", payload: {
+                kind: "child_unreported",
+                unreportedSubgoals: unreported,
+              } });
+              this._task = { state: "awaiting_verification", pauseReason: null };
+            } else {
+              this._task = { state: "completed", pauseReason: null };
+              await this._revokeAllLeases("task_ended");
+            }
           } else {
             this._task = { state: "awaiting_verification", pauseReason: null };
           }
@@ -2349,10 +2616,30 @@ class TaskController {
         }
 
         if (validated.kind === "need_user") {
+          this._groundingReport = null;
+          const grounding = this._groundNeedUserAnswer(validated.reason);
+          if (grounding.hallucinated && this._groundingCorrections < this._groundingBudget) {
+            // Host-owned correction channel: the planner revises its own answer
+            // before any person sees it, without borrowing the user's voice or
+            // touching the goal. The feedback text never enters the corpus.
+            this._groundingCorrections += 1;
+            this._groundingFeedback = {
+              authority: "host_grounding_not_permission",
+              unsupported: [...grounding.unsupported],
+              observedUrls: this._observedUrls.map((url) => url.slice(0, GROUNDING_FEEDBACK_URL_CHARS)),
+              guidance: "These specifics were not found in anything this task observed: remove each one, or revisit one of the observed pages listed here and copy the value exactly as shown. Never guess a model code, quantity, price or number.",
+            };
+            await this._store.append({ type: "note", payload: { kind: "grounding", outcome: "correction_requested", unsupported: grounding.unsupported, corrections: this._groundingCorrections } });
+            continue;
+          }
+          if (grounding.hallucinated) {
+            this._groundingReport = { unsupported: [...grounding.unsupported] };
+            await this._store.append({ type: "note", payload: { kind: "grounding", outcome: "unsupported_kept", unsupported: grounding.unsupported, corrections: this._groundingCorrections } });
+          }
           // The planner's question is what the person needs to answer; keep it
           // (bounded) so the chat can show it instead of a bare "paused".
-          this._needUserReason = typeof validated.reason === "string" && validated.reason.trim() ? validated.reason.trim().slice(0, 600) : null;
-          try { console.warn(`[task-controller] planner asked for the user task=${this._goal?.taskId ?? "?"} reason=${JSON.stringify(this._needUserReason)}`); } catch {}
+          this._needUserReason = typeof validated.reason === "string" && validated.reason.trim() ? validated.reason.trim().slice(0, 2000) : null;
+          try { console.warn(`[task-controller] planner asked for the user task=${this._goal?.taskId ?? "?"} reasonChars=${this._needUserReason?.length ?? 0}`); } catch {}
           await this._pauseWith("need_user");
           break;
         }
@@ -2423,6 +2710,7 @@ class TaskController {
           }
           this._budgets.actionsUsed += 1;
           this._pendingMcpObservation = await this._handlePlannerMcpAction(mcpActions[0], epoch);
+          this._noteMcpFallback(this._pendingMcpObservation);
           if (this._task.state !== "running" || this._stopHappenedSince(epoch)) break;
           continue;
         }
@@ -2435,6 +2723,21 @@ class TaskController {
       this._loopRunning = false;
     }
     return this.getSnapshot();
+  }
+
+  // Children that finished "completed" without ever sending the parent a
+  // progress or handoff report (ChildAgentCoordinator.getPlanSummary marks
+  // them { reported: false, unreported: true }). The parent must not treat
+  // their silence as success: completion waits for a human look instead.
+  // An unreadable plan state yields no names (advisory read, like the
+  // planner-context offer above); a readable unreported child always blocks.
+  async _completedUnreportedChildren() {
+    if (typeof this._readChildPlan !== "function") return [];
+    const summary = await Promise.resolve().then(() => this._readChildPlan()).catch(() => null);
+    const agents = Array.isArray(summary?.agents) ? summary.agents : [];
+    return agents
+      .filter((agent) => agent && agent.status === "completed" && agent.unreported === true)
+      .map((agent) => String(agent.subgoal ?? "").slice(0, 200));
   }
 
   _evidenceForCompletionCheck() {
@@ -2469,6 +2772,16 @@ class TaskController {
         return "stop_loop";
       }
 
+      // A malformed hw_step never reaches the gate (an unknown op would break
+      // the mode/lease evaluation); the planner sees a note and moves on.
+      if (action.type === "hw_step") {
+        const valid = validateStep(action.step);
+        if (!valid.ok) {
+          await this._store.append({ type: "note", payload: { kind: "invalid_action", actionType: "hw_step", errorCode: valid.errorCode } });
+          continue;
+        }
+      }
+
       const requestId = randomUUID();
       const descriptor = this._describeAction(action, requestId);
 
@@ -2476,7 +2789,7 @@ class TaskController {
       // Lock first (nothing overrides it, and a denied action never reaches
       // the approver or the browser), then the mode, then any live lease.
       const targetOrigin = actionTargetOrigin(action, this._lastObservation);
-      const gate = evaluateGate({ lock: this._goal.lock ?? null, mode: this._permissionMode, leases: this._leases, action: action.type, targetOrigin, now: this._monotonicNow() });
+      const gate = evaluateGate({ lock: this._goal.lock ?? null, mode: this._permissionMode, leases: this._leases, action: gateActionOf(action), targetOrigin, now: this._monotonicNow() });
       if (gate.outcome === "lock_denied") {
         await this._store.append({ type: "note", payload: { kind: "lock_denied", actionType: action.type, reason: gate.reason, ruleIndex: gate.ruleIndex } });
         if (this._routineRunner) {
@@ -2501,11 +2814,26 @@ class TaskController {
           continue;
         }
       }
+      // Halowright: same refusal when the locator itself names the control as
+      // moving money or destroying an account, before any locator resolution.
+      if (action.type === "hw_step" && ["click", "check", "uncheck", "select"].includes(action.step.op)) {
+        const locator = action.step.locator && typeof action.step.locator === "object" ? action.step.locator : null;
+        const name = locator ? [locator.name, locator.text, locator.label].find((value) => typeof value === "string" && value) : null;
+        const verdict = classifyTarget({ role: typeof locator?.role === "string" ? locator.role : undefined, name: typeof name === "string" ? name : undefined, covered: false, disabled: false }, "click_at");
+        if (verdict.gate === "deny") {
+          await this._store.append({ type: "note", payload: { kind: "effect_denied", actionType: "hw_step", effect: verdict.effect, reason: verdict.reason } });
+          if (this._routineRunner) {
+            await this._denyRoutineStep({ decision: "deny", reasons: [verdict.reason] });
+            return "stop_loop";
+          }
+          continue;
+        }
+      }
       // Computer use: coordinate clicks, typing and non-Enter keys run on the
       // approver's verdict alone. The mode, lock and one-use screen binding still
       // apply; Enter (which can submit a form) keeps the human gate.
       const autoRun = gate.policy.allowed && gate.policy.approval === "human" &&
-        (isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets) || isAutoDomAction(action, this._lastObservation));
+        (isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets) || isAutoDomAction(action, this._lastObservation) || isAutoHwStep(action));
       const policy = autoRun ? { ...gate.policy, approval: "approver" } : gate.policy;
       // Mode-denied actions may be widened by the user, but never for
       // unattended runs or for actions this browser cannot perform.
@@ -2722,25 +3050,49 @@ class TaskController {
   // _dispatchApprovedAndApplyTracked's entry in _inFlightOps.
   // Waits out the same-site gap before a page load. Runs before action_started so a
   // stop during the wait leaves no open action; returns false if a stop happened.
+  // Otherwise returns the origin to stamp (via _stampNavigation, just before execute()
+  // so the floor is measured from the real load start) or null when nothing is paced.
+  _noteFriction(origin) {
+    const now = Date.now();
+    for (const [key, entry] of this._friction) if (now - entry.at > FRICTION_TTL_MS) this._friction.delete(key);
+    this._friction.set(origin, { at: now, count: (this._friction.get(origin)?.count ?? 0) + 1 });
+  }
+
+  // Origins that showed a human check within the TTL, most recent first.
+  _recentHumanChecks() {
+    const now = Date.now();
+    return [...this._friction].filter(([, entry]) => now - entry.at <= FRICTION_TTL_MS)
+      .sort((a, b) => b[1].at - a[1].at).slice(0, FRICTION_ORIGINS_SHOWN).map(([origin]) => origin);
+  }
+
   async _paceNavigation(action, epoch) {
-    if (!["navigate", "follow_link"].includes(action.type) || this._navIntervalMs <= 0) return true;
+    if (!["navigate", "follow_link"].includes(action.type) || this._navIntervalMs <= 0) return null;
     let origin = null;
-    try { origin = new URL(describeActionTarget(action, this._lastObservation)).origin; } catch { return true; }
+    try { origin = new URL(describeActionTarget(action, this._lastObservation)).origin; } catch { return null; }
+    // Drawn once per navigation, before the loop: drawing inside would move
+    // the deadline every 250ms slice. The effective interval is
+    // navIntervalMs + jitter, so the floor is never shortened; a fresh draw
+    // per navigation keeps the gap from reading as one uniform cadence. The
+    // clamp keeps even a misbehaving injected source from shortening the floor.
+    const jitter = this._navJitterMaxMs > 0 ? Math.max(0, this._navJitter(this._navJitterMaxMs)) : 0;
     for (;;) {
-      const wait = (this._lastNavAt.get(origin) ?? 0) + this._navIntervalMs - Date.now();
+      const wait = (this._lastNavAt.get(origin) ?? 0) + this._navIntervalMs + jitter - Date.now();
       if (wait <= 0) break;
       await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 250)));
       if (this._stopHappenedSince(epoch)) return false;
     }
+    // Reserve the slot in the same tick as the check: a ledger shared across tasks would
+    // otherwise let two of them both see an empty gap. The stamp is refreshed just before execute().
     this._lastNavAt.set(origin, Date.now());
-    return true;
+    return origin;
   }
 
   async _dispatchApproved(descriptor, action, epoch, { durable = true, widenedBy = null } = {}) {
     if (this._stopHappenedSince(epoch)) {
       return { status: "not_dispatched", actionId: null, action, descriptor };
     }
-    if (!(await this._paceNavigation(action, epoch))) {
+    const paced = await this._paceNavigation(action, epoch);
+    if (paced === false) {
       return { status: "not_dispatched", actionId: null, action, descriptor };
     }
     const actionId = randomUUID();
@@ -2756,6 +3108,7 @@ class TaskController {
       // against a page that has since redirected or navigated act on the
       // wrong document instead of failing closed with stale_document.
       const documentEpoch = this._lastObservation ? this._lastObservation.documentEpoch : null;
+      if (paced) this._lastNavAt.set(paced, Date.now());
       result = await this._browser.execute(action, { signal: undefined, documentEpoch, widenedBy });
     } catch {
       // A rejected/timeout response cannot prove that the remote or local
@@ -2814,6 +3167,12 @@ class TaskController {
     this._reusableObservation = result.action?.type === "observe" && result.status === "ok" && result.observation
       ? result.observation
       : null;
+
+    // An evaluate answer is page data for the next planner turn, not
+    // verification evidence: it rides the observation, never the criteria.
+    if (result.status === "ok" && result.evaluateResult && typeof result.evaluateResult.value === "string") {
+      this._pendingEvaluateObservation = boundedEvaluateObservation(result.evaluateResult.value);
+    }
 
     // Scrolling the same page again and again is a loop even when each scroll
     // reveals slightly different text (so the identical-observation key below
@@ -2886,7 +3245,8 @@ class TaskController {
       }
     }
 
-    if (madeProgress) {
+    const observedStateChange = result.status === "ok" && result.effect?.observed === true;
+    if (madeProgress || observedStateChange) {
       this._recovery.noteProgress();
       this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
       return;
@@ -2912,4 +3272,4 @@ class TaskController {
   }
 }
 
-module.exports = { TaskController, TaskControllerError };
+module.exports = { TaskController, TaskControllerError, FRICTION_TTL_MS };

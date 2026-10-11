@@ -1,3 +1,5 @@
+import type { ReactElement } from 'react'
+import { createPortal } from 'react-dom'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { HostSettings } from '../session/api'
 import { activeModel, PLANNER_MODELS, type PlannerModel } from '../session/claude-models'
@@ -31,6 +33,10 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
   const isClaudeLegacy = (m: PlannerModel) => m.provider === 'claude_code' && m.legacy
   const [legacyOpen, setLegacyOpen] = useState(Boolean(active && isClaudeLegacy(active)))
   const [maxHeight, setMaxHeight] = useState<number | undefined>()
+  const popRef = useRef<HTMLDivElement>(null)
+  // How far the popover is nudged right so it stays inside a narrow, overflow-hidden parent (the chat panel).
+  const [shift, setShift] = useState(0)
+  const [side, setSide] = useState<{ right: number; bottom: number } | null>(null)
   // The level under the pointer while the effort knob is being dragged.
   const [preview, setPreview] = useState<PlannerEffort | null>(null)
 
@@ -44,9 +50,22 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
     setMaxHeight(Math.max(160, ref.current.getBoundingClientRect().top - area - 72))
   }, [open])
 
+  useLayoutEffect(() => {
+    const pop = popRef.current
+    if (!open || !pop) { setShift(0); return }
+    const bound = ref.current?.closest('.hx-chat')?.getBoundingClientRect()
+    // In the chat panel the pill hugs the panel's bottom-left: open beside the panel (over the page), bottom-aligned with the pill.
+    const pill = ref.current?.getBoundingClientRect()
+    setSide(bound && pill ? { right: Math.round(innerWidth - bound.left + 8), bottom: Math.round(innerHeight - pill.bottom) } : null)
+    if (bound) { setShift(0); return }
+    const rect = pop.getBoundingClientRect()
+    const natural = rect.left - shift
+    setShift(Math.round(Math.max(0, Math.min(8 - natural, innerWidth - 8 - rect.width - natural))))
+  }, [open, view]) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!open) return
-    const outside = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false) }
+    const outside = (e: PointerEvent) => { const t = e.target as Node; if (!ref.current?.contains(t) && !popRef.current?.contains(t)) setOpen(false) }
     const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
     document.addEventListener('pointerdown', outside)
     document.addEventListener('keydown', escape)
@@ -67,15 +86,17 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
   const naming = active?.provider === 'codex_cli' ? 'codex' : 'claude'
   const saved = settings?.plannerEffort ?? DEFAULT_EFFORT
   const effort = preview ?? saved
-  const hint = naming === 'claude' && effort === 'ultra' ? 'Deepest planning. The Claude CLI planner runs it at max effort.' : EFFORT_LEVELS[effort]?.hint
+  const hint = naming === 'claude' && effort === 'ultra' ? 'Ultracode: xhigh effort plus dynamic workflows. Uses your Claude usage quickly.' : EFFORT_LEVELS[effort]?.hint
   const modelButton = <button type="button" className="hx-mpick__model" aria-label="Change model" onClick={() => setView('models')}>{active?.label ?? 'Choose model'}<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 6l6 6-6 6" /></svg></button>
 
+  // The chat panel clips its children, so beside-the-panel popovers render at the body and are positioned in viewport coordinates.
+  const place = (el: ReactElement) => side ? createPortal(<div className="hx-mpick" style={{ display: 'contents' }}>{el}</div>, document.body) : el
   return <div ref={ref} className="hx-mpick" data-open={open || undefined}>
     <button type="button" className="hx-mpick__toggle" aria-haspopup="true" aria-expanded={open} disabled={!settings} onClick={() => setOpen((o) => !o)}>
       <span title={active ? `${PROVIDER_NAME[active.provider]} ${active.label}` : undefined}>{active ? active.label : 'Choose planner'}</span>
       <svg className="hx-mpick__chev" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 9l6 6 6-6" /></svg>
     </button>
-    {open && settings ? <div className="hx-mpick__pop" data-view={view} style={view === 'models' && maxHeight ? { maxHeight } : undefined}>
+    {open && settings ? place(<div ref={popRef} className="hx-mpick__pop" data-view={view} style={{ ...(view === 'models' && maxHeight ? { maxHeight } : {}), ...(side ? { position: 'fixed', top: 'auto', left: 'auto', right: side.right, bottom: side.bottom, maxHeight: 'none', zIndex: 60 } : shift ? { right: -shift } : {}) }}>
       {view === 'effort' ? <>
         <div className="hx-mpick__card" data-level={effort}>
           <svg className="hx-mpick__bolt" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></svg>
@@ -105,6 +126,6 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
         </button>
         {legacyOpen ? PLANNER_MODELS.filter((m) => offered(m) && isClaudeLegacy(m)).map(option) : null}
       </>}
-    </div> : null}
+    </div>) : null}
   </div>
 }

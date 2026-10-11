@@ -38,6 +38,8 @@ export interface TaskSnapshot {
   pauseReason: string | null
   /** The agent's question when it paused with need_user. */
   needUserReason?: string
+  /** Specific values in a need_user answer that no observed page supported (hallucination device). */
+  grounding?: { unsupported: string[] } | null
   goalVersion: number
   budgets: Record<string, number>
   segment: Record<string, unknown>
@@ -55,7 +57,9 @@ export interface BrowserSnapshot {
   activeTabId: string | null
   documentEpoch: number
 }
-export interface TaskEvent { taskId: string; snapshot: TaskSnapshot; goal?: GoalSpec; browser?: BrowserSnapshot; childPlan?: ChildPlanSummary | null }
+export interface TaskEvent { taskId: string; snapshot: TaskSnapshot; goal?: GoalSpec; browser?: BrowserSnapshot; childPlan?: ChildPlanSummary | null
+  /** Present on the open/resolve transitions of a human handoff (see listHandoffs). */
+  handoff?: { status: 'waiting' | 'resolved'; reason?: string | null; label?: string; since?: number; outcome?: string } | null }
 export interface JournalEvent {
   seq: number
   eventId: string
@@ -88,13 +92,23 @@ export interface HostSettings {
   plannerFast?: boolean
   plannerEscalation?: boolean
   plannerRouting?: boolean
+  /** Which route an agent prefers when a connected app (MCP) and the browser can both do the job; unset is mcp_first. */
+  /** Show technical chips (intent lock, leases, sub-agent plans, background service) on the main screens; unset is off. */
+  showAdvanced?: boolean
+  mcpRoutePreference?: 'mcp_first' | 'browser_first' | 'always_ask'
   /** Opt-in local journal of pages the user read, recalled by later tasks. */
   contextAwareness?: boolean
   /** Opt-in local, Luna-only strategy-learning journal. */
   strategyLearning?: boolean
+  /** Opt-in Web Bot Auth request signing; needs webBotAuthDirectory to take effect. */
+  webBotAuth?: boolean
+  /** Public https URL of this install's Web Bot Auth key directory (Signature-Agent). Empty clears it. */
+  webBotAuthDirectory?: string
 }
 export interface HaloBrowserApi {
   readonly runtime?: 'chromium'
+  /** Pixel source for browser pages; remote surfaces require frame mirroring. */
+  readonly surfaceMode?: 'native' | 'remote'
   getSnapshot: () => Promise<DirectBrowserSnapshot>
   navigate: (url: string) => Promise<DirectBrowserSnapshot>
   goBack: () => Promise<DirectBrowserSnapshot>
@@ -107,14 +121,31 @@ export interface HaloBrowserApi {
   /** Optional: older hosts lack it. */
   captureSurface?: () => Promise<string | null>
   /** Chromium runtime: push live JPEG frames of the showing page (false when the engine cannot stream). */
+  /** Chromium runtime: unpacked extensions the user installed, and a way to open their page (the app window has no toolbar). */
+  listBrowserExtensions?: () => Promise<Array<{ id: string; name: string; openable: boolean }>>
+  openBrowserExtension?: (id: string) => Promise<boolean>
   startSurfaceStream?: () => Promise<boolean>
   stopSurfaceStream?: () => Promise<boolean>
   onSurfaceFrame?: (callback: (payload: { frame: string }) => void) => () => void
+  /** Live read-only push of the agent's page (false when unsupported: keep polling captureAgentFrame). */
+  startAgentStream?: (taskId: string) => Promise<boolean>
+  stopAgentStream?: () => Promise<boolean>
+  onAgentFrame?: (callback: (payload: { taskId: string; frame: string }) => void) => () => void
   captureAgentFrame?: (taskId: string) => Promise<string | null>
   /** Attached UIs only: their task page lives in the service process, so it arrives as stills and goes back as input. */
   captureTaskFrame?: (taskId: string) => Promise<string | null>
   sendTaskInput?: (taskId: string, input: TaskInput) => Promise<boolean>
   sendSurfaceInput?: (input: TaskInput) => Promise<boolean>
+  /**
+   * Mod+F find. taskId null searches the user's own active tab; a taskId
+   * searches a taken-over task page. Read-only; `found` is the only required
+   * signal, `matches`/`active` arrive from Electron hosts.
+   */
+  findInPage?: (taskId: string | null, query: string, options?: { forward?: boolean }) => Promise<{ ok: boolean; found: boolean; matches?: number; active?: number; errorCode?: string }>
+  /** Mod+/Mod-/Mod+0 page zoom. taskId null targets the user's own active tab. */
+  zoom?: (taskId: string | null, request: { direction?: 'in' | 'out' | 'reset'; level?: number }) => Promise<{ ok: boolean; level: number | null; errorCode?: string }>
+  /** Mod+C: copy the page's current selection to the OS clipboard (never read back). */
+  copySelection?: (taskId: string | null) => Promise<{ ok: boolean; chars: number; text?: string; errorCode?: string }>
   /** Optional: older hosts lack it. */
   copyText?: (text: string) => Promise<boolean>
   setBrowserBounds: (bounds: BrowserViewport) => Promise<unknown>
@@ -123,6 +154,8 @@ export interface HaloBrowserApi {
   listTasks(): Promise<TaskSummary[]>
   getTaskDetail(taskId: string): Promise<TaskDetail>
   resumeSavedTask(taskId: string, opts?: { confirmed?: boolean }): Promise<TaskSnapshot>
+  /** Retires a saved paused/recovered task without running it. */
+  discardSavedTask(taskId: string): Promise<{ taskId: string; state: 'stopped' }>
   amendTask(taskId: string, input: AmendmentInput): Promise<TaskSnapshot>
   confirmCriterion(taskId: string, input: CriterionConfirmation): Promise<TaskSnapshot>
   taskApprove(taskId: string, approvalId: string): Promise<TaskSnapshot>

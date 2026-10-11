@@ -39,6 +39,10 @@ export function syncDirectSurface(
   return api.setBrowserBounds({ x: rect.left, y: rect.top, width: rect.width, height: rect.height, visible: true })
 }
 
+export function shouldCaptureRemoteTaskFrame(api: Partial<Pick<HaloBrowserApi, 'surfaceMode' | 'captureTaskFrame'>> | undefined, userDriving: boolean, taskId: string | null): boolean {
+  return userDriving && Boolean(taskId) && api?.surfaceMode === 'remote' && typeof api.captureTaskFrame === 'function'
+}
+
 /** A still of the page main is showing, painted in the page slot while an overlay hides the native view. */
 export async function captureSnapshot(api: Partial<Pick<HaloBrowserApi, 'captureSurface'>>): Promise<string | null> {
   if (typeof api.captureSurface !== 'function') return null

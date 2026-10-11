@@ -4,14 +4,14 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const { BrowserSurfaces } = require("../main/harness/browser-surfaces");
 
-function setup() {
+function setup(options = {}) {
   const win = new EventEmitter();
   let size = [800, 600];
   const children = new Set();
   Object.assign(win, { isDestroyed: () => false, getContentSize: () => size,
     contentView: { addChildView: v => children.add(v), removeChildView: v => children.delete(v) } });
   let controlled = false;
-  const surfaces = new BrowserSurfaces(win, { isUserControlled: () => controlled });
+  const surfaces = new BrowserSurfaces(win, { isUserControlled: () => controlled, ...options });
   function view() {
     const webContents = new EventEmitter();
     webContents.isDestroyed = () => false;
@@ -71,4 +71,36 @@ test("reattaching replaces old view and stale disposal cannot remove replacement
   assert.equal(fresh.visible, true); assert.equal(children.has(old), false);
   fresh.webContents.emit("destroyed");
   assert.equal(children.size, 0);
+});
+
+test("find, zoom and copy flow only while the user owns the task, and copy uses the injected writer", async () => {
+  const written = [];
+  const { surfaces, view, control } = setup({ writeClipboard: (text) => { written.push(text); return true; } });
+  const a = view();
+  a.webContents.executeJavaScript = async (code) => {
+    if (code.includes("window.find")) return true;
+    if (code.includes("style.zoom")) return "1.1";
+    if (code.includes("getSelection")) return "selected words";
+    return null;
+  };
+  surfaces.register("a", a);
+
+  assert.equal((await surfaces.findInPage("a", "x")).errorCode, "surface_unavailable");
+  assert.equal((await surfaces.setZoom("a", { direction: "in" })).errorCode, "surface_unavailable");
+  assert.equal((await surfaces.copySelection("a")).errorCode, "surface_unavailable");
+
+  control(true);
+  assert.deepEqual(await surfaces.findInPage("a", "x"), { ok: true, found: true });
+  assert.deepEqual(await surfaces.setZoom("a", { direction: "in" }), { ok: true, level: 1.1 });
+  const copied = await surfaces.copySelection("a");
+  assert.equal(copied.ok, true);
+  assert.equal(copied.chars, "selected words".length);
+  assert.deepEqual(written, ["selected words"], "the injected writer received the selection, not the system clipboard");
+
+  // A zoom stored for the task re-applies after a navigation on the surface.
+  let reapplied = null;
+  a.webContents.executeJavaScript = async (code) => { reapplied = code; return "1.1"; };
+  a.webContents.emit("did-navigate");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(reapplied && reapplied.includes('style.zoom = "1.1"'));
 });

@@ -54,19 +54,19 @@ const CLAUDE = Object.freeze({
 const CODEX = Object.freeze({
   "gpt-6-astra": "GPT-6 Astra is selected for demanding work: resolve ambiguity from supplied observations before acting, and reduce uncertainty when that is necessary to meet a criterion. Do not add actions merely to be exhaustive.",
   "gpt-6.1-sol": "GPT-6.1 Sol is the workhorse profile: batch independent, already-justified browser actions up to the host limit; defer dependent actions until a fresh observation.",
-  "gpt-6-sol": "GPT-6 Sol is the workhorse profile: batch independent, already-justified browser actions up to the host limit; defer dependent actions until a fresh observation.",
+  "gpt-6-sol": "GPT-6 Sol is the workhorse profile: batch independent, already-justified browser actions up to the host limit; defer dependent actions until a fresh observation.(legacy)",
   "gpt-6-luna": "GPT-6 Luna is optimized for easier, faster work: choose the shortest sufficient route and avoid optional exploration, while collecting every required criterion's evidence.",
-  "gpt-5.6-sol": "Use the workhorse route: batch independent, already-justified browser actions up to the host limit; defer dependent actions until a fresh observation.",
-  "gpt-5.6-terra": "Use the balanced route for straightforward tasks: prefer the shortest supported action sequence and verify each stated criterion.",
-  "gpt-5.6-luna": "Use the fast route for easier tasks: choose the shortest sufficient path without skipping required evidence.",
-  "gpt-5.5": "Use this coding-agent model as a constrained browser planner: propose only supported browser actions grounded in the latest observation; do not infer tools or permissions HALO has not exposed.",
+  "gpt-5.6-sol": "Use the workhorse route: batch independent, already-justified browser actions up to the host limit; defer dependent actions until a fresh observation.(legacy)",
+  "gpt-5.6-terra": "Use the balanced route for straightforward tasks: prefer the shortest supported action sequence and verify each stated criterion.The Terra Tier is disappeared and involved to Sol Tier.(legacy)",
+  "gpt-5.6-luna": "Use the fast route for easier tasks: choose the shortest sufficient path without skipping required evidence.GPT-6 Luna is better.(legacy)",
+  "gpt-5.5": "Use this coding-agent model as a constrained browser planner: propose only supported browser actions grounded in the latest observation; do not infer tools or permissions HALO has not exposed.will be disappear soon. (the oldest legacy)",
 });
 
 const NVIDIA = Object.freeze({
-  "deepseek-ai/deepseek-v4-flash": "DeepSeek V4 Flash is the fast option in HALO's NIM catalog: prefer a direct proposal and batch only actions with already-known targets and effects; skip optional exploration.",
-  "deepseek-ai/deepseek-v4-pro": "DeepSeek V4 Pro is the higher-capability reasoning option in HALO's NIM catalog: resolve multi-criterion dependencies from current evidence, then emit only the next bounded HALO proposal.",
+  "deepseek-ai/deepseek-v4-flash": "DeepSeek V4 Flash is the fast option in HALO's NIM catalog: prefer a direct proposal and batch only actions with already-known targets and effects; skip optional exploration.(unapplied model)",
+  "deepseek-ai/deepseek-v4-pro": "DeepSeek V4 Pro is the higher-capability reasoning option in HALO's NIM catalog: resolve multi-criterion dependencies from current evidence, then emit only the next bounded HALO proposal.(unapplied model)",
   "deepseek-ai/deepseek-v4.1-flash": "DeepSeek V4.1 Flash is the newer fast option in HALO's NIM catalog with stronger agentic coding than V4: prefer a direct proposal and batch only actions with already-known targets and effects.",
-  "moonshotai/kimi-k3": "Kimi K3 supports long-context agentic work: use durable criteria and the current observation as working state; do not restate or re-derive recorded history unless a criterion needs it.",
+  "moonshotai/kimi-k3": "Kimi K3 supports long-context agentic work: use durable criteria and the current observation as working state; do not restate or re-derive recorded history unless a criterion needs it.Fucking very slow.",
   "nvidia/nemotron-3-super-120b-a12b": "Nemotron 3 Super is the agentic-work option: ground each bounded proposal in the goal and current observation, and distinguish action dispatch from host-verified completion. For a lookup or question, put the answer itself (the facts you found on the page) in the need_user reason; never end it by asking the person to confirm they can see the page or that you are right, and use need_user for a question only when a required choice or access is missing.",
 });
 

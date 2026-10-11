@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { syncDirectSurface, syncNativeSurface } from '../src/session/browser-surface.ts'
+import { shouldCaptureRemoteTaskFrame, syncDirectSurface, syncNativeSurface } from '../src/session/browser-surface.ts'
 
 test('native browser viewport follows the rendered page bounds and hides when a panel covers it', async () => {
   const calls = []
@@ -49,4 +49,12 @@ test('a page snapshot is taken only as a JPEG data URL and never throws', async 
   assert.equal(await captureSnapshot({ captureSurface: async () => 'https://evil.example/x.png' }), null, 'only an inline image from main')
   assert.equal(await captureSnapshot({ captureSurface: async () => { throw new Error('gone') } }), null)
   assert.equal(await captureSnapshot({}), null, 'an older preload without the method')
+})
+
+test('local native browser pages are not screenshot-polled while remote pages are mirrored', () => {
+  const api = { captureTaskFrame: async () => null, surfaceMode: 'native' }
+  assert.equal(shouldCaptureRemoteTaskFrame(api, true, 'task-1'), false)
+  assert.equal(shouldCaptureRemoteTaskFrame({ ...api, surfaceMode: 'remote' }, true, 'task-1'), true)
+  assert.equal(shouldCaptureRemoteTaskFrame({ ...api, surfaceMode: 'remote' }, false, 'task-1'), false)
+  assert.equal(shouldCaptureRemoteTaskFrame({ ...api, surfaceMode: 'remote' }, true, null), false)
 })

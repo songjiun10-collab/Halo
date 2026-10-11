@@ -1,8 +1,9 @@
 # HALO Browser
 
-Electron browser and task runtime for HALO. The renderer presents tasks, agents,
-team rooms, approval queues and browser controls. The host owns task state,
-planner connections, browser execution and durable recovery.
+Chromium-only desktop browser and task runtime for HALO. A Node.js host owns task
+state, planner connections, browser execution and durable recovery. Full Chromium
+renders the desktop UI and browser pages. Electron remains a development
+dependency for legacy comparison tests and benchmarks, not an application runtime.
 
 See [HALO Core](../../halo/README.md) for containment research and the gateway,
 and the [architecture guide](../../docs/ARCHITECTURE.ko.md) for component boundaries.
@@ -11,9 +12,9 @@ and the [architecture guide](../../docs/ARCHITECTURE.ko.md) for component bounda
 
 ## Run
 
-Run these commands from the repository root. Install a Node.js version compatible
-with the pinned Electron, TypeScript and Vite packages, and Python 3.11+ for the
-local approver. Planner setup is covered by the [provider guide](main/harness/providers/README.ko.md).
+Run these commands from the repository root. Install Node.js, TypeScript and Vite,
+the full Chromium desktop build (or set `HALO_CHROMIUM_UI`), and Python 3.11+ for
+the local approver. Planner setup is covered by the [provider guide](main/harness/providers/README.ko.md).
 
 ```sh
 npm --prefix frontend ci
@@ -22,8 +23,9 @@ npm --prefix apps/computer-browser start
 ```
 
 `start` checks generated runtime files, builds the React renderer and launches
-Electron. If runtime TypeScript sources changed, regenerate their JavaScript
-outputs before starting:
+the Chromium desktop host. The host talks to Chromium over CDP and serves the UI
+through an authenticated loopback bridge. It does not load the Electron package.
+If runtime TypeScript sources changed, regenerate their JavaScript outputs before starting:
 
 ```sh
 npm --prefix apps/computer-browser run build:runtime
@@ -34,8 +36,9 @@ npm --prefix apps/computer-browser run build:runtime
 | Directory | Responsibility |
 | --- | --- |
 | `../../frontend/` | React UI source; the app build consumes its renderer bundle |
-| `main/index.js` | Electron bootstrap and production dependency wiring |
-| `main/ipc.js`, `preload/` | Validated host interface exposed to the renderer |
+| `main/index.js` | Shared host bootstrap for the Chromium desktop runtime |
+| `main/ipc.js` | Host route registration shared with the authenticated Chromium bridge |
+| `runtime-src/main/harness/chromium-desktop.ts` | Chromium window lifecycle, CDP connection and authenticated renderer bridge |
 | `main/harness/` | Task coordination, journals, planners, approval, resources and local stores |
 | `runtime-src/` | TypeScript sources for migrated runtime modules |
 | `shared/`, `contracts/` | Shared contracts and validation |
@@ -55,13 +58,14 @@ npm --prefix frontend test
 npm --prefix apps/computer-browser run test:renderer:e2e
 ```
 
-Electron integration tests require a desktop session. Unit tests with fake
-transports do not establish live provider or operating-system isolation behavior.
+Chromium desktop integration tests require a desktop session and installed Chromium.
+Electron remains in development for legacy comparison tests/benchmarks. Unit tests
+with fake transports do not establish live provider or operating-system isolation behavior.
 
 ## Reliability and safety features (0.1.0-beta)
 
-All three switches below are off by default and live in Settings (host settings
-`plannerEscalation`, `plannerRouting`, `contextAwareness`).
+All the switches below are off by default and live in Settings (host settings
+`plannerEscalation`, `plannerRouting`, `contextAwareness`, `webBotAuth`).
 
 - **Planner escalation:** after a planner failure the host retries one tier up
   (`model-tiers`), never the same model and never a lower tier.
@@ -74,6 +78,20 @@ All three switches below are off by default and live in Settings (host settings
   (no query strings; sensitive hosts, paths and password/card pages excluded; 14
   days, 300 entries). Tasks recall matching entries as untrusted memory. It runs
   only in the local host, not the background service; clear it from Settings.
+- **Web Bot Auth:** signs agent-page requests with a local Ed25519 key so a site
+  that verifies the standard (for example Cloudflare) can recognize the declared
+  agent; publishing the public key is the operator's step (`webBotAuthDirectory`).
+  Signing never solves a human check and is inert on sites without support. See
+  [the contract](contracts/WEB-BOT-AUTH.md).
+- **Human handoff:** a task that pauses for a person (human check, question,
+  uncertain action) is tracked as a handoff — durable waiting/resolved notes, a
+  `listHandoffs()` queue and one event for the UI. Only an explicit resume, stop
+  or takeover clears it; it never expires or retries on its own.
+- **Grounding (hallucination device):** a `need_user` answer is checked against
+  every page the task observed; unsupported specifics (invented model codes,
+  numbers, prices) go back to the planner once through a host-owned channel,
+  and any that survive are surfaced in `snapshot.grounding`. See
+  [the contract](contracts/GROUNDING.md).
 - **Memory override** applies to the next parent run only, then returns to budgeted.
 - **Slack task entry** (`slack-task-entry`) verifies signatures, replay window,
   allowlists and rate limits, but is not connected to Slack yet.
@@ -81,10 +99,10 @@ All three switches below are off by default and live in Settings (host settings
 ## Execution boundaries
 
 Automatic browser actions include observation, navigation, link following,
-scrolling, click, text replacement and native form submission. Interactions use
+scrolling, text finding, click, text replacement and native form submission. Interactions use
 one-use DOM bindings and require a fresh observation for each step. See the
 [interaction contract](contracts/BROWSER-INTERACTIONS.md) for action shapes,
-uncertainty handling and the loopback Electron verification command.
+uncertainty handling and the loopback renderer verification command.
 Downloads and coordinate computer-use remain unavailable.
 
 Antigravity (`agy`) and Cursor (`agent`) are experimental planner choices in
@@ -117,7 +135,7 @@ epochs and checks policy before dispatch; planner proposals and page content are
 untrusted input. Browser permission modes are `observe`, `browse`, `interact` and
 `full`; MCP proposals require human approval independently of that mode.
 
-The Electron app starts a local Python approver. Running the Docker gateway is a
+The desktop host starts a local Python approver. Running the Docker gateway is a
 separate workflow, and does not by itself place browser tasks inside containers.
 Task and agent session partitions have different lifetimes; agent-bound tasks can
 share an agent session. Recovery and `execution_uncertain` require review rather

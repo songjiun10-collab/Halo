@@ -13,12 +13,12 @@
     <string>com.halo.duckdns-update</string>
 
     <key>UserName</key>
-    <string>REPLACE-WITH-YOUR-MACOS-USERNAME</string>
+    <string>songjiun</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>REPLACE-WITH-OUTPUT-OF-which-python3</string>
-        <string>/Users/REPLACE-WITH-YOUR-MACOS-USERNAME/Halo/tools/duckdns_update.py</string>
+        <string>/usr/bin/python3</string>
+        <string>/Users/songjiun/Halo/tools/duckdns_update.py</string>
     </array>
 
     <key>StartInterval</key>
@@ -28,8 +28,8 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>/Users/REPLACE-WITH-YOUR-MACOS-USERNAME/Library/Logs/halo-duckdns.log</string>
+    <string>/Users/songjiun/Library/Logs/halo-duckdns.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/REPLACE-WITH-YOUR-MACOS-USERNAME/Library/Logs/halo-duckdns.log</string>
+    <string>/Users/songjiun/Library/Logs/halo-duckdns.log</string>
 </dict>
 </plist>

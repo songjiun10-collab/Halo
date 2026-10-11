@@ -50,6 +50,15 @@ function dispatchBrowserInput(wc, bounds, value) {
         wc.sendInputEvent(event);
         return true;
     }
+    // Cmd/Ctrl+A performs the real select-all editing command. A synthesized
+    // raw key event alone does not reliably trigger Blink's editing commands
+    // (the same reason cdp-web-contents.selectAll sends commands:["selectAll"]),
+    // so route it through the engine helper when one exists.
+    const primaryModifier = (input.modifiers ?? []).some((modifier) => modifier === "meta" || modifier === "control");
+    if (input.type === "keyDown" && primaryModifier && input.key.toLowerCase() === "a" && typeof wc.selectAll === "function") {
+        wc.selectAll();
+        return true;
+    }
     wc.sendInputEvent({ type: input.type, keyCode: input.key, modifiers: input.modifiers ?? [] });
     if (input.type === "keyDown" && input.key.length === 1 && !(input.modifiers ?? []).some((modifier) => ["meta", "control", "alt"].includes(modifier)))
         wc.sendInputEvent({ type: "char", keyCode: input.key, modifiers: input.modifiers ?? [] });

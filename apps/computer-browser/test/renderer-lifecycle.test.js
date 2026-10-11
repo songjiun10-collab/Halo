@@ -11,7 +11,7 @@ const { ParkableView, SurfacePool, wakeOnUse } = require("../main/harness/render
 const { CdpEngine } = require("../main/harness/cdp-engine");
 const { BrowserAdapter } = require("../main/harness/browser-adapter");
 
-const CHROMIUM = [process.env.HALO_CHROMIUM, path.join(os.homedir(), "chromium/src/out/Trial/Chromium.app/Contents/MacOS/Chromium")].find((p) => p && fs.existsSync(p));
+const CHROMIUM = [process.env.HALO_CHROMIUM, path.join(os.homedir(), "chromium/src/out/TrialLean/headless_shell"), path.join(os.homedir(), "chromium/src/out/Trial/Chromium.app/Contents/MacOS/Chromium")].find((p) => p && fs.existsSync(p));
 
 function fakeInner(log) {
   const wc = new EventEmitter();
@@ -232,4 +232,61 @@ test("real Chromium: after the whole browser is released on idle, the next use c
   assert.notEqual(newTransport, oldTransport, "restoration uses a new live connection");
   assert.ok((await newTransport.send("Browser.getVersion")).product);
   await adapter.dispose();
+});
+
+test("a screencast follows the surface across discard and restore, and stops on close", async () => {
+  const log = [];
+  const inners = [];
+  const create = () => {
+    const inner = fakeInner(log);
+    const n = inners.length;
+    inner.view.webContents.startScreencast = async (options, onFrame) => { log.push(["screencast", n]); inner.emit = onFrame; };
+    inner.view.webContents.stopScreencast = async () => { log.push(["stopScreencast", n]); };
+    inners.push(inner);
+    return inner;
+  };
+  const view = new ParkableView({ create });
+  const frames = [];
+  await view.webContents.startScreencast({ maxWidth: 1200, quality: 65 }, (d) => frames.push(d));
+  inners[0].emit("A");
+  assert.equal(await view.discard(), true);
+  await view.wake();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(inners.length, 2);
+  inners[1].emit("B");
+  assert.deepEqual(frames, ["A", "B"]);
+  await view.webContents.stopScreencast();
+  assert.deepEqual(log.filter((e) => e[0] === "stopScreencast"), [["stopScreencast", 1]]);
+  assert.equal(await view.discard(), true);
+  await view.wake();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(log.filter((e) => e[0] === "screencast").length, 2, "a stopped screencast is not restarted");
+  view.webContents.close();
+});
+
+test("pool: with no fixed cap the live-renderer budget follows free memory, so more agents never mean more renderers than fit", async () => {
+  const c = clock();
+  let freeMb = 1000;
+  const pool = new SurfacePool(
+    { maxActive: "auto", perSurfaceMb: 125, reserveMb: 500, minActive: 2, freezeAfterMs: 10_000, discardAfterMs: 100_000, minIdleMs: 1000 },
+    { freeMemoryMb: () => freeMb },
+  );
+  const views = [];
+  for (let i = 0; i < 16; i += 1) {
+    const view = new ParkableView({ create: () => fakeInner([]), now: c.now });
+    views.push(view);
+    pool.register(`s${i}`, view);
+    c.t += 2000;
+    view.lastUsedAt = c.t;
+  }
+  c.t += 2000;
+  await pool.sweep();
+  // (1000 free - 500 reserve) / 125 = 4 live surfaces, however many agents exist.
+  assert.equal(pool.counts().active, 4);
+  assert.equal(pool.counts().discarded, 12);
+  freeMb = 100; // under pressure the budget never falls below minActive
+  await pool.sweep();
+  assert.equal(pool.counts().active, 2);
+  freeMb = 4000; // plenty of memory: nothing is discarded merely for being over a fixed number
+  assert.equal(pool.effectiveMaxActive(), 28);
 });

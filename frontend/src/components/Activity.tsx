@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useShowAdvanced } from '../session/show-advanced'
 import { AGENT } from '../session/session'
 import type { Actor, SessionState } from '../session/types'
 import { ChildPlanPanel } from '../agent/ChildPlanPanel'
@@ -45,12 +46,13 @@ export function Activity({ session, leaving, onClose }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [leaving])
 
+  const showAdvanced = useShowAdvanced()
   const notable = session.timeline.filter((e) => e.notable)
   const steps = session.timeline
   return (
     <section id="hx-activity" className="hx-activity" data-leaving={leaving || undefined} inert={leaving} role="dialog" aria-label="Halo events" tabIndex={-1} ref={ref}>
       <p className="hx-activity__task">{session.task}</p>
-      <ChildPlanPanel plan={session.childPlan} />
+      {showAdvanced && <ChildPlanPanel plan={session.childPlan} />}
       {(session.snapshot?.branches ?? []).filter((b) => b.state === 'running' || b.state === 'merged').map((b) => (
         <p key={b.id} className="hx-activity__auto">
           {b.state === 'running' ? 'Reading in the background while you decide' : 'Background reading added to the task'}

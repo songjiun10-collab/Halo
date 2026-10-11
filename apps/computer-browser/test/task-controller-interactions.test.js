@@ -35,7 +35,9 @@ async function fixture(t, action, permissionMode = "interact", { computerUse = f
     planner: { next: async (c, options) => {
       plannerOptions = options;
       if (computerUse) {
-        assert.equal(c.observation.computerUse.taskId, store.taskId);
+        assert.equal(c.observation.computerUse.observationId, c.observation.id);
+        assert.equal("digest" in c.observation.computerUse, false, "host-only binding fields stay out of the prompt");
+        assert.equal("taskId" in c.observation.computerUse, false);
         assert.equal(JSON.stringify(c).includes("/private/fake.png"), false, "attachment paths stay out of context");
       }
       const base = { taskId: c.taskId, goalVersion: c.goalVersion, basedOnObservationId: c.observation.id, criterionIds: [] };
@@ -113,6 +115,8 @@ test("a form review displays destination and method, and denial dispatches nothi
 test("both CLI planners receive interaction shapes and fresh-observation instructions", () => {
   const prompt = buildPrompt({ observation: { elements: [] }, progress: {}, goal: {} });
   for (const type of ["click", "type", "submit_form"]) assert.ok(prompt.includes(`"type": "${type}"`));
+  assert.ok(prompt.includes('"type": "hw_step"'));
+  assert.ok(prompt.includes("get_text"));
   assert.match(prompt, /one interaction/);
   assert.match(prompt, /password/);
 });
@@ -204,4 +208,52 @@ test("a lost coordinate-input result pauses as execution_uncertain and is never 
   await assert.rejects(controller.resume(), { code: "confirmation_required" });
   assert.equal(executeCalls, 1);
   assert.equal(plannerCalls, 1);
+});
+
+// -- hw_step: the locator action (Halowright bundle 1 wiring) -----------------
+
+test("a benign hw_step click runs on the approver's verdict; an effect-named locator waits for the human", async t => {
+  const run = await fixture(t, { type: "hw_step", step: { op: "click", locator: { role: "button", name: "Search" } } });
+  assert.equal(run.controller.getSnapshot().approvalQueue.length, 0);
+  assert.equal(run.executed.length, 1);
+  assert.equal(run.executed[0].action.type, "hw_step");
+  const risky = await fixture(t, { type: "hw_step", step: { op: "click", locator: { role: "button", name: "Send message" } } });
+  const [item] = risky.controller.getSnapshot().approvalQueue;
+  assert.equal(risky.controller.getSnapshot().state, "awaiting_approval");
+  assert.match(item.target, /Send message/);
+  assert.equal(risky.executed.length, 0);
+  await risky.controller.approve(item.id);
+  assert.equal(risky.executed.length, 1);
+  assert.deepEqual(risky.executed[0].action.step, { op: "click", locator: { role: "button", name: "Send message" } });
+});
+
+test("an irreversible hw_step locator is refused with no dispatch and no approval queue", async t => {
+  const run = await fixture(t, { type: "hw_step", step: { op: "click", locator: { role: "button", name: "Delete my account" } } });
+  assert.equal(run.executed.length, 0);
+  assert.equal(run.controller.getSnapshot().approvalQueue.length, 0);
+});
+
+test("a malformed hw_step never dispatches and produces no approval request", async t => {
+  const run = await fixture(t, { type: "hw_step", step: { op: "eval", locator: { text: "x" } } });
+  assert.equal(run.executed.length, 0);
+  assert.equal(run.controller.getSnapshot().approvalQueue.length, 0);
+});
+
+test("evaluate keeps the human approval queue and names the expression", async t => {
+  const action = { type: "evaluate", expression: "document.title" };
+  const { controller, executed } = await fixture(t, action);
+  const [item] = controller.getSnapshot().approvalQueue;
+  assert.equal(controller.getSnapshot().state, "awaiting_approval");
+  assert.match(item.target, /document\.title/);
+  assert.equal(executed.length, 0);
+  await controller.approve(item.id);
+  assert.equal(executed.length, 1);
+  assert.deepEqual(executed[0].action, action);
+});
+
+test("a read-only hw_step get_text runs on the approver's verdict with no human queue", async t => {
+  const run = await fixture(t, { type: "hw_step", step: { op: "get_text", locator: { testid: "price" } } });
+  assert.equal(run.controller.getSnapshot().approvalQueue.length, 0);
+  assert.equal(run.executed.length, 1);
+  assert.deepEqual(run.executed[0].action.step, { op: "get_text", locator: { testid: "price" } });
 });

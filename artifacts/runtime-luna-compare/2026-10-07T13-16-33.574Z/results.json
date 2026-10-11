@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "model": "gpt-6-luna",
+  "taskIds": [
+    "specs-retrieval",
+    "returns-multihop-navigation",
+    "store-mutation"
+  ],
+  "method": "native Electron WebContentsView vs standalone Chromium CDP, same BrowserAdapter, TaskController, viewport, fixture and serial task order",
+  "electronVersion": "44.4.5",
+  "chromiumExecutable": "/Users/songjiun/chromium/src/out/Trial/headless_shell",
+  "runs": [
+    {
+      "arm": "electron",
+      "summary": {
+        "total": 3,
+        "graded": 3,
+        "passed": 2,
+        "failed": 1,
+        "blocked": 0,
+        "inconclusive": 0,
+        "unclassified": 0,
+        "passRate": 0.6666666666666666,
+        "reportable": true,
+        "caveat": "every run was graded"
+      },
+      "tasks": [
+        {
+          "taskId": "specs-retrieval",
+          "verdict": "pass",
+          "reason": "reported the chip, display and memory the current specs state",
+          "wallMs": 12625,
+          "plannerCalls": 2,
+          "actionsUsed": 1
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "verdict": "pass",
+          "reason": "walked Support -> Shipping -> Returns",
+          "wallMs": 31641,
+          "plannerCalls": 6,
+          "actionsUsed": 5
+        },
+        {
+          "taskId": "store-mutation",
+          "verdict": "fail",
+          "reason": "submitted but never reached the confirmation page",
+          "wallMs": 18554,
+          "plannerCalls": 3,
+          "actionsUsed": 1
+        }
+      ],
+      "wallMs": 64483.241916,
+      "peakProcessTreeRssBytes": 1056800768
+    },
+    {
+      "arm": "chromium",
+      "summary": {
+        "total": 3,
+        "graded": 3,
+        "passed": 3,
+        "failed": 0,
+        "blocked": 0,
+        "inconclusive": 0,
+        "unclassified": 0,
+        "passRate": 1,
+        "reportable": true,
+        "caveat": "every run was graded"
+      },
+      "tasks": [
+        {
+          "taskId": "specs-retrieval",
+          "verdict": "pass",
+          "reason": "reported the chip, display and memory the current specs state",
+          "wallMs": 14574,
+          "plannerCalls": 2,
+          "actionsUsed": 1
+        },
+        {
+          "taskId": "returns-multihop-navigation",
+          "verdict": "pass",
+          "reason": "walked Support -> Shipping -> Returns",
+          "wallMs": 62618,
+          "plannerCalls": 11,
+          "actionsUsed": 10
+        },
+        {
+          "taskId": "store-mutation",
+          "verdict": "pass",
+          "reason": "the server received the correct home-store request",
+          "wallMs": 140985,
+          "plannerCalls": 23,
+          "actionsUsed": 21
+        }
+      ],
+      "wallMs": 219980.50591699997,
+      "peakProcessTreeRssBytes": 912687104
+    }
+  ]
+}

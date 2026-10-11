@@ -1,7 +1,10 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { selectPilotTasks, readOnlyDecision, actionStep } = require("../integration/online-mind2web-pilot.ts");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
+const { selectPilotTasks, readOnlyDecision, actionStep, captureTerminalEvidence } = require("../integration/online-mind2web-pilot.ts");
 
 const ids = ["ade4c09ad3fdb1607209750924cd232f", "fb7b4f784cfde003e2548fdf4e8d6b4f", "b320c68bffc1f3c7f2a8dc9d5478fb27", "4091bdd3fa64a5b0d912bc08eaf9c824", "d71be72aa25c3eab8eea47a0e60382e2"];
 test("pilot refuses missing or duplicate task bindings rather than silently substituting tasks", () => {
@@ -29,4 +32,18 @@ test("factual step binds its screenshot, pre-action URL and outcome without trea
   assert.equal(uncertain.action_status, undefined);
   const failed = actionStep(4, {type:"navigate",url:"https://example.test/"}, "about:blank", {status:"failed",errorCode:"navigation_failed"});
   assert.equal(failed.action_status, "FAILED");
+});
+test("terminal evidence preserves the final page screenshot and bounded page identity", async (t) => {
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),"halo-terminal-evidence-"));
+  t.after(()=>fs.rm(dir,{recursive:true,force:true}));
+  await fs.mkdir(path.join(dir,"trajectory"));
+  const png=Buffer.from([137,80,78,71,13,10,26,10]);
+  const view={webContents:{capturePage:async()=>({toPNG:()=>png,getSize:()=>({width:1440,height:900})}),
+    getURL:()=>"https://example.test/specs",getTitle:()=>"Product Specs"}};
+  const result=await captureTerminalEvidence(view,dir,{state:"paused",pauseReason:"need_user"});
+  assert.equal(result.screenshot,"trajectory/final.png");
+  assert.equal(result.url,"https://example.test/specs");
+  assert.equal(result.title,"Product Specs");
+  assert.equal(result.state,"paused");
+  assert.deepEqual(await fs.readFile(path.join(dir,"trajectory","final.png")),png);
 });

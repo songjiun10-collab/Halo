@@ -479,3 +479,24 @@ test("an uncertain MCP dispatch pauses execution_uncertain and a restart with an
   assert.equal(makeController(again).getSnapshot().pauseReason === "execution_uncertain", false);
   await again.close();
 });
+
+test("an MCP action that fails or is unavailable journals an mcp_route_fallback note with the reason", async () => {
+  const { store } = await makeStore();
+  const contexts = [];
+  const planner = { next: async (context) => {
+    contexts.push(context);
+    const base = { taskId: store.taskId, goalVersion: 1, basedOnObservationId: context.observation.id, criterionIds: [] };
+    return contexts.length === 1
+      ? { ...base, kind: "actions", actions: [{ type: "mcp_search", query: "search" }] }
+      : { ...base, kind: "need_user", reason: "continued" };
+  } };
+  const controller = makeController(store, { planner });
+  let observationId = 0;
+  controller._browser.observe = async () => ({ id: `obs-${++observationId}` });
+  await controller.start();
+  const fallback = await notes(store, "mcp_route_fallback");
+  assert.equal(fallback.length, 1);
+  assert.equal(fallback[0].payload.reason, "mcp_disabled");
+  assert.equal(fallback[0].payload.action, "search");
+  await store.close();
+});

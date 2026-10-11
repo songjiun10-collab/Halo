@@ -1,0 +1,355 @@
+{
+  "url": "http://127.0.0.1:60042/",
+  "view": {
+    "width": 1440,
+    "height": 900
+  },
+  "widths": [
+    {
+      "width": 1440,
+      "height": 900,
+      "scale": 1,
+      "pngBytes": 87195,
+      "claudeTokens": 1728,
+      "openaiHighTokens": 1105,
+      "geminiTokens": 1032,
+      "controlHeightPx": {
+        "min": 14,
+        "p25": 14,
+        "median": 18
+      },
+      "controlsBelowPx": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "16": 17
+      },
+      "vlm": {
+        "hits": 2,
+        "total": 12,
+        "hitRate": 0.167,
+        "meanMissDistance": 0.035,
+        "misses": [
+          "View 2 -> 0.58,0.28",
+          "View 5 -> 0.58,0.37",
+          "View 8 -> 0.58,0.47",
+          "View 11 -> 0.58,0.56",
+          "Settings -> 0.14,0.03",
+          "Manage buckets -> 0.34,0.16"
+        ]
+      }
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "scale": 0.8888888888888888,
+      "pngBytes": 75408,
+      "claudeTokens": 1366,
+      "openaiHighTokens": 1105,
+      "geminiTokens": 1032,
+      "controlHeightPx": {
+        "min": 12.4,
+        "p25": 12.4,
+        "median": 16
+      },
+      "controlsBelowPx": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "16": 17
+      },
+      "vlm": {
+        "hits": 12,
+        "total": 12,
+        "hitRate": 1,
+        "meanMissDistance": 0,
+        "misses": []
+      }
+    },
+    {
+      "width": 1024,
+      "height": 640,
+      "scale": 0.7111111111111111,
+      "pngBytes": 58178,
+      "claudeTokens": 874,
+      "openaiHighTokens": 765,
+      "geminiTokens": 516,
+      "controlHeightPx": {
+        "min": 10,
+        "p25": 10,
+        "median": 12.8
+      },
+      "controlsBelowPx": {
+        "8": 0,
+        "10": 13,
+        "12": 17,
+        "16": 32
+      },
+      "vlm": {
+        "hits": 5,
+        "total": 12,
+        "hitRate": 0.417,
+        "meanMissDistance": 0.028,
+        "misses": [
+          "View 2 -> 0.56,0.28",
+          "View 5 -> 0.56,0.37",
+          "View 8 -> 0.56,0.47",
+          "View 11 -> 0.56,0.56",
+          "Export 3 -> 0.69,0.32",
+          "Export 9 -> 0.63,0.49"
+        ]
+      }
+    },
+    {
+      "width": 896,
+      "height": 560,
+      "scale": 0.6222222222222222,
+      "pngBytes": 47030,
+      "claudeTokens": 670,
+      "openaiHighTokens": 765,
+      "geminiTokens": 516,
+      "controlHeightPx": {
+        "min": 8.7,
+        "p25": 8.7,
+        "median": 11.2
+      },
+      "controlsBelowPx": {
+        "8": 0,
+        "10": 17,
+        "12": 32,
+        "16": 33
+      },
+      "vlm": {
+        "hits": 1,
+        "total": 12,
+        "hitRate": 0.083,
+        "meanMissDistance": 0.06,
+        "misses": [
+          "View 2 -> 0.50,0.28",
+          "View 5 -> 0.50,0.37",
+          "View 8 -> 0.50,0.46",
+          "View 11 -> 0.50,0.56",
+          "Settings -> 0.20,0.03",
+          "Manage buckets -> 0.33,0.16"
+        ]
+      }
+    },
+    {
+      "width": 768,
+      "height": 480,
+      "scale": 0.5333333333333333,
+      "pngBytes": 32286,
+      "claudeTokens": 492,
+      "openaiHighTokens": 425,
+      "geminiTokens": 258,
+      "controlHeightPx": {
+        "min": 7.5,
+        "p25": 7.5,
+        "median": 9.6
+      },
+      "controlsBelowPx": {
+        "8": 13,
+        "10": 32,
+        "12": 32,
+        "16": 35
+      },
+      "vlm": {
+        "hits": 1,
+        "total": 12,
+        "hitRate": 0.083,
+        "meanMissDistance": 0.06,
+        "misses": [
+          "View 2 -> 0.50,0.32",
+          "View 5 -> 0.50,0.37",
+          "View 8 -> 0.50,0.46",
+          "View 11 -> 0.50,0.56",
+          "Settings -> 0.20,0.03",
+          "Manage buckets -> 0.34,0.16"
+        ]
+      }
+    },
+    {
+      "width": 640,
+      "height": 400,
+      "scale": 0.4444444444444444,
+      "pngBytes": 19760,
+      "claudeTokens": 342,
+      "openaiHighTokens": 425,
+      "geminiTokens": 258,
+      "controlHeightPx": {
+        "min": 6.2,
+        "p25": 6.2,
+        "median": 8
+      },
+      "controlsBelowPx": {
+        "8": 17,
+        "10": 32,
+        "12": 33,
+        "16": 35
+      },
+      "vlm": {
+        "hits": 3,
+        "total": 12,
+        "hitRate": 0.25,
+        "meanMissDistance": 0.065,
+        "misses": [
+          "View 2 -> 0.56,0.33",
+          "View 5 -> 0.56,0.38",
+          "View 8 -> 0.56,0.48",
+          "View 11 -> 0.56,0.57",
+          "Manage buckets -> 0.38,0.17",
+          "Export 3 -> 0.61,0.64"
+        ]
+      }
+    }
+  ],
+  "vlm": "qwen2.5vl:3b",
+  "vlmScale": {
+    "640": {
+      "px": 1141.3333333333333,
+      "py": 684,
+      "raw": {
+        "red": {
+          "x": 280,
+          "y": 340
+        },
+        "blue": {
+          "x": 856,
+          "y": 342
+        }
+      }
+    },
+    "768": {
+      "px": 1288,
+      "py": 704,
+      "raw": {
+        "red": {
+          "x": 280,
+          "y": 280
+        },
+        "blue": {
+          "x": 966,
+          "y": 352
+        }
+      }
+    },
+    "896": {
+      "px": 1290.6666666666667,
+      "py": 704,
+      "raw": {
+        "red": {
+          "x": 288,
+          "y": 352
+        },
+        "blue": {
+          "x": 968,
+          "y": 352
+        }
+      }
+    },
+    "1024": {
+      "px": 1141.3333333333333,
+      "py": 704,
+      "raw": {
+        "red": {
+          "x": 280,
+          "y": 350
+        },
+        "blue": {
+          "x": 856,
+          "y": 352
+        }
+      }
+    },
+    "1280": {
+      "px": 1280,
+      "py": 800,
+      "raw": {
+        "red": {
+          "x": 320,
+          "y": 392
+        },
+        "blue": {
+          "x": 960,
+          "y": 400
+        }
+      }
+    },
+    "1440": {
+      "px": 1568,
+      "py": 864,
+      "raw": {
+        "red": {
+          "x": 351,
+          "y": 428
+        },
+        "blue": {
+          "x": 1176,
+          "y": 432
+        }
+      }
+    }
+  },
+  "targets": [
+    {
+      "role": "button",
+      "name": "View 2",
+      "hPx": 14
+    },
+    {
+      "role": "button",
+      "name": "View 5",
+      "hPx": 14
+    },
+    {
+      "role": "button",
+      "name": "View 8",
+      "hPx": 14
+    },
+    {
+      "role": "button",
+      "name": "View 11",
+      "hPx": 14
+    },
+    {
+      "role": "link",
+      "name": "Dashboards",
+      "hPx": 15
+    },
+    {
+      "role": "link",
+      "name": "Settings",
+      "hPx": 15
+    },
+    {
+      "role": "button",
+      "name": "Manage buckets",
+      "hPx": 18
+    },
+    {
+      "role": "button",
+      "name": "Export 3",
+      "hPx": 18
+    },
+    {
+      "role": "button",
+      "name": "Export 6",
+      "hPx": 18
+    },
+    {
+      "role": "button",
+      "name": "Export 9",
+      "hPx": 18
+    },
+    {
+      "role": "button",
+      "name": "Export 12",
+      "hPx": 18
+    },
+    {
+      "role": "button",
+      "name": "New resource",
+      "hPx": 29
+    }
+  ]
+}

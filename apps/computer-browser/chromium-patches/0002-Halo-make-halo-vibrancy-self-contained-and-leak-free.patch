@@ -1,0 +1,704 @@
+From b0eb13a8e9bf7cdb4577db35a78f02d47a4d7a95 Mon Sep 17 00:00:00 2001
+From: songjiun1105 <tvpcqs5n2x@privaterelay.appleid.com>
+Date: Sat, 10 Oct 2026 09:05:00 +0900
+Subject: [PATCH] Halo: make --halo-vibrancy-* self-contained and leak-free
+
+Patch 1 created the blur/tint views inside UpdateGlassEligibility(), which
+only runs when GlassFrameService exists (kGlassFrame feature, a local-state
+pref, no battery saver, a single tracked window), and the views were
+anonymous locals that were never stored or removed. This makes the switch
+work on its own and bounds the views' lifetime:
+
+- create the gutter from OnWidgetInitDone() so the switch alone is enough,
+  store the blur/tint as members, and remove them in OnWidgetDestroyed()
+  so eligibility cycles cannot stack copies;
+- scope every consumer through halo::IsVibrancyEnabledForBrowser(): only
+  the --app window is treated, a malformed --halo-vibrancy-width disables
+  the treatment instead of leaving a chromeless transparent window, and
+  popups/devtools in the same process keep upstream behavior;
+- follow the text direction (leading edge in RTL);
+- never show the glass-frame opt-in promo in the halo window;
+- keep the window non-opaque when glass eligibility turns off;
+- in ContentsWebView::UpdateBackgroundColor(), look the tab up only when
+  web_contents() is set: the unguarded lookup crashed at startup before
+  SetWebContents() ran.
+
+Verified on out/TrialLean/Chromium.app at --window-size=1600,1000:
+window.innerHeight is 1000 with the switch (full-size content view) against
+968 without it; the leading strip tracks a red/blue/green backdrop behind
+the window both with and without --enable-features=GlassFrame, while the
+stock build with the same flags paints it opaque; the page area right of
+the strip stays opaque #101010. The blur was also confirmed by eye.
+---
+ chrome/browser/ui/BUILD.gn                    |   1 +
+ chrome/browser/ui/views/frame/BUILD.gn        |  12 ++
+ .../views/frame/browser_native_widget_mac.h   |   7 +
+ .../views/frame/browser_native_widget_mac.mm  | 201 +++++++++++-------
+ chrome/browser/ui/views/frame/browser_view.cc |  14 +-
+ .../ui/views/frame/contents_web_view.cc       |  15 +-
+ .../ui/views/frame/glass_frame_service.cc     |  15 +-
+ .../ui/views/frame/glass_frame_service.h      |   3 +-
+ chrome/browser/ui/views/frame/halo_vibrancy.h |  51 +++++
+ .../layout/browser_view_app_layout_impl.cc    |  10 +-
+ .../layout/browser_view_app_layout_impl.h     |   5 +-
+ .../views/frame/layout/browser_view_layout.cc |   4 +-
+ 12 files changed, 234 insertions(+), 104 deletions(-)
+ create mode 100644 chrome/browser/ui/views/frame/halo_vibrancy.h
+
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index a19bc815ff..f3cf57b594 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -3841,6 +3841,7 @@ static_library("ui") {
+       "//chrome/browser/ui/views/frame:find_bar_owner_views",
+       "//chrome/browser/ui/views/frame:find_bar_owner_views_impl",
+       "//chrome/browser/ui/views/frame:frame_separator",
++      "//chrome/browser/ui/views/frame:halo_vibrancy",
+       "//chrome/browser/ui/views/frame:horizontal_tab_strip_region_view",
+       "//chrome/browser/ui/views/frame:immersive_mode_controller_factory_views",
+       "//chrome/browser/ui/views/frame:immersive_mode_controller_stub",
+diff --git a/chrome/browser/ui/views/frame/BUILD.gn b/chrome/browser/ui/views/frame/BUILD.gn
+index 0b0b7695ea..8c801f51e7 100644
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -627,6 +627,7 @@ source_set("glass_frame_service") {
+   public = [ "glass_frame_service.h" ]
+   sources = [ "glass_frame_service.cc" ]
+   deps = [
++    ":halo_vibrancy",
+     ":safe_invoke",
+     "//base",
+     "//chrome/browser:browser_process",
+@@ -645,6 +646,14 @@ source_set("glass_frame_service") {
+   ]
+ }
+ 
++source_set("halo_vibrancy") {
++  public = [ "halo_vibrancy.h" ]
++  public_deps = [
++    "//base",
++    "//chrome/browser/ui/browser_window",
++  ]
++}
++
+ source_set("caption_button_placeholder_container") {
+   public = [ "caption_button_placeholder_container.h" ]
+   sources = [ "caption_button_placeholder_container.cc" ]
+@@ -1152,6 +1161,7 @@ source_set("contents_web_view") {
+     "//ui/views/controls/webview",
+   ]
+   deps = [
++    ":halo_vibrancy",
+     ":safe_invoke",
+     ":web_contents_close_handler",
+     "//chrome/browser/ui/color:color_headers",
+@@ -1789,6 +1799,7 @@ if (is_mac) {
+       ":browser_frame_view",
+       ":browser_widget",
+       ":glass_frame_service",
++      ":halo_vibrancy",
+       "//base",
+       "//base:i18n",
+       "//chrome/app:command_ids",
+@@ -2686,6 +2697,7 @@ source_set("browser_view_layout_core_impl") {
+     ":browser_view_layout_delegate",
+     ":browser_view_popup_layout_impl",
+     ":browser_view_tabbed_layout_impl",
++    ":halo_vibrancy",
+     ":multi_contents_view",
+     "//base",
+     "//chrome/browser/ui:ui_features",
+diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.h b/chrome/browser/ui/views/frame/browser_native_widget_mac.h
+index 2d84f6ff90..a6744d6934 100644
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.h
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.h
+@@ -106,6 +106,8 @@ class BrowserNativeWidgetMac : public views::NativeWidgetMac,
+ 
+  private:
+   bool IsGlassEligible() const;
++  bool IsHaloVibrancyEnabled() const;
++  void UpdateHaloVibrancy();
+   void UpdateGlassEligibility(bool is_glass_eligible);
+   void UpdateBackgroundGeometry();
+   void UpdateBackgroundColor();
+@@ -124,6 +126,11 @@ class BrowserNativeWidgetMac : public views::NativeWidgetMac,
+   NSView* __strong glass_background_view_;
+   NSView* __strong tint_view_;
+   NSView* __strong opaque_background_view_;
++  // Halo: native blur behind the leading column of the --app window and its
++  // optional tint. Created at most once per window, independently of the glass
++  // frame's eligibility.
++  NSView* __strong halo_blur_view_;
++  NSView* __strong halo_tint_view_;
+ 
+   std::optional<SkColor> last_theme_color_;
+   std::optional<bool> last_is_vertical_tabs_;
+diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+index c10bfefcc2..e143826015 100644
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+@@ -5,19 +5,19 @@
+ #import "chrome/browser/ui/views/frame/browser_native_widget_mac.h"
+ 
+ #include <array>
+-#include <vector>
+ #include <string>
++#include <vector>
+ 
+ #import "base/apple/foundation_util.h"
+ #include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/i18n/rtl.h"
+ #include "base/memory/raw_ptr.h"
+-#include "base/strings/string_number_conversions.h"
+-#include "base/strings/string_split.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/metrics/user_metrics_action.h"
+ #include "base/notimplemented.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/app_controller_mac.h"
+ #include "chrome/browser/apps/app_shim/app_shim_host_mac.h"
+@@ -49,6 +49,7 @@
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/browser_widget.h"
+ #include "chrome/browser/ui/views/frame/glass_frame_service.h"
++#include "chrome/browser/ui/views/frame/halo_vibrancy.h"
+ #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_utils.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+ #include "chrome/common/pref_names.h"
+@@ -415,6 +416,14 @@ - (NSTouchBar*)makeTouchBar {
+     [opaque_background_view_ removeFromSuperview];
+     opaque_background_view_ = nil;
+   }
++  if (halo_tint_view_) {
++    [halo_tint_view_ removeFromSuperview];
++    halo_tint_view_ = nil;
++  }
++  if (halo_blur_view_) {
++    [halo_blur_view_ removeFromSuperview];
++    halo_blur_view_ = nil;
++  }
+   browser_view_ = nullptr;
+   last_theme_color_.reset();
+   last_is_vertical_tabs_.reset();
+@@ -765,8 +774,7 @@ - (NSTouchBar*)makeTouchBar {
+   } else {
+     params->window_class = remote_cocoa::mojom::WindowClass::kDefault;
+   }
+-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+-          "halo-vibrancy-width")) {
++  if (IsHaloVibrancyEnabled()) {
+     // Halo: the page fills the whole window; traffic lights float over it.
+     params->style_mask |= NSWindowStyleMaskFullSizeContentView;
+     params->titlebar_appears_transparent = true;
+@@ -816,6 +824,10 @@ - (NSTouchBar*)makeTouchBar {
+       GetWidget()->RegisterPaintAsActiveChangedCallback(
+           base::BindRepeating(&BrowserNativeWidgetMac::UpdateBackgroundColor,
+                               base::Unretained(this)));
++  // Halo: create the vibrancy gutter from the switch alone. This must not be
++  // gated on GlassFrameService, which only exists when the glass frame feature
++  // is enabled and the window is eligible.
++  UpdateHaloVibrancy();
+   // GlassFrameService is only available if glass frame is enabled.
+   if (auto* const glass_frame_service = GlassFrameService::GetInstance()) {
+     glass_frame_service_subscription_ =
+@@ -982,9 +994,14 @@ - (NSTouchBar*)makeTouchBar {
+     return;
+   }
+ 
+-  GetNSWindowHost()->SetLayerAndCompositorOpaque(true);
+-  [ns_window setBackgroundColor:[NSColor windowBackgroundColor]];
+-  [ns_window setOpaque:YES];
++  // Halo windows keep their transparent background: the vibrancy gutter is
++  // independent of the glass frame's eligibility, and its views are only torn
++  // down in OnWidgetDestroyed().
++  if (!IsHaloVibrancyEnabled()) {
++    GetNSWindowHost()->SetLayerAndCompositorOpaque(true);
++    [ns_window setBackgroundColor:[NSColor windowBackgroundColor]];
++    [ns_window setOpaque:YES];
++  }
+   if (glass_background_view_) {
+     [glass_background_view_ removeFromSuperview];
+     glass_background_view_ = nil;
+@@ -1010,6 +1027,91 @@ - (NSTouchBar*)makeTouchBar {
+   return false;
+ }
+ 
++bool BrowserNativeWidgetMac::IsHaloVibrancyEnabled() const {
++  return browser_view_ &&
++         halo::IsVibrancyEnabledForBrowser(browser_view_->browser());
++}
++
++void BrowserNativeWidgetMac::UpdateHaloVibrancy() {
++  // At most one blur/tint pair per window. Eligibility changes (fullscreen,
++  // activation, battery saver, pref) must not add more.
++  if (halo_blur_view_ || !IsHaloVibrancyEnabled() || !GetNSWindowHost()) {
++    return;
++  }
++
++  NSWindow* const ns_window = GetNSWindowHost()->GetInProcessNSWindow();
++  if (!ns_window) {
++    return;
++  }
++
++  const std::optional<int> halo_width = halo::GetVibrancyWidth();
++  if (!halo_width.has_value()) {
++    return;
++  }
++
++  // A fully transparent background ([NSColor clearColor]) causes AppKit to
++  // continuously invalidate the window surface, resulting in high CPU and
++  // energy usage. Using an almost-transparent color (alpha 0.001) avoids this
++  // performance issue while remaining visually indistinguishable. See also
++  // UpdateGlassEligibility().
++  GetNSWindowHost()->SetLayerAndCompositorOpaque(false);
++  [ns_window setOpaque:NO];
++  [ns_window setBackgroundColor:[[NSColor windowBackgroundColor]
++                                    colorWithAlphaComponent:0.001]];
++  ns_window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
++  ns_window.titlebarAppearsTransparent = YES;
++
++  NSView* const content_view = [ns_window contentView];
++  // Parent the blur to the frame view so it also covers the title bar.
++  NSView* const blur_parent =
++      content_view.superview ? content_view.superview : content_view;
++  const bool is_rtl = base::i18n::IsRTL();
++  const NSRect halo_frame =
++      NSMakeRect(is_rtl ? blur_parent.bounds.size.width - *halo_width : 0, 0,
++                 *halo_width, blur_parent.bounds.size.height);
++
++  NSVisualEffectView* const blur =
++      [[HaloVibrancyView alloc] initWithFrame:halo_frame];
++  blur.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
++  blur.material = NSVisualEffectMaterialSidebar;
++  blur.blendingMode = NSVisualEffectBlendingModeBehindWindow;
++  blur.state = NSVisualEffectStateActive;
++  blur.autoresizingMask =
++      (is_rtl ? NSViewMinXMargin : NSViewMaxXMargin) | NSViewHeightSizable;
++  [blur_parent addSubview:blur
++               positioned:NSWindowBelow
++               relativeTo:blur_parent == content_view ? nil : content_view];
++  halo_blur_view_ = blur;
++
++  // Halo: tint the blur like the page's own scrim so the sliver of blur
++  // outside the page's rounded corners matches the sidebar colour.
++  // --halo-vibrancy-tint=r,g,b,a (0-255 channels, 0-1 alpha).
++  const std::string tint_spec =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "halo-vibrancy-tint");
++  const std::vector<std::string> halo_tint = base::SplitString(
++      tint_spec, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++  double tr = 0, tg = 0, tb = 0, ta = 0;
++  if (halo_tint.size() == 4 && base::StringToDouble(halo_tint[0], &tr) &&
++      base::StringToDouble(halo_tint[1], &tg) &&
++      base::StringToDouble(halo_tint[2], &tb) &&
++      base::StringToDouble(halo_tint[3], &ta)) {
++    NSView* const halo_tint_view =
++        [[HaloVibrancyTintView alloc] initWithFrame:blur.frame];
++    halo_tint_view.wantsLayer = YES;
++    halo_tint_view.layer.backgroundColor = [NSColor colorWithSRGBRed:tr / 255.0
++                                                               green:tg / 255.0
++                                                                blue:tb / 255.0
++                                                               alpha:ta]
++                                               .CGColor;
++    halo_tint_view.autoresizingMask = blur.autoresizingMask;
++    [blur_parent addSubview:halo_tint_view
++                 positioned:NSWindowAbove
++                 relativeTo:blur];
++    halo_tint_view_ = halo_tint_view;
++  }
++}
++
+ void BrowserNativeWidgetMac::UpdateGlassEligibility(bool is_glass_eligible) {
+   if (!GetNSWindowHost()) {
+     return;
+@@ -1077,74 +1179,19 @@ - (NSTouchBar*)makeTouchBar {
+                     positioned:NSWindowBelow
+                     relativeTo:nil];
+ 
+-      const bool halo_glass =
+-          base::CommandLine::ForCurrentProcess()->HasSwitch(
+-              "halo-vibrancy-width");
+-      int halo_width = 0;
+-      if (halo_glass &&
+-          base::StringToInt(base::CommandLine::ForCurrentProcess()
+-                                ->GetSwitchValueASCII("halo-vibrancy-width"),
+-                            &halo_width) &&
+-          halo_width > 0) {
+-        // Parent the blur to the frame view so it also covers the title bar.
+-        NSView* const blur_parent =
+-            content_view.superview ? content_view.superview : content_view;
+-        NSVisualEffectView* const blur = [[HaloVibrancyView alloc]
+-            initWithFrame:NSMakeRect(0, 0, halo_width,
+-                                     blur_parent.bounds.size.height)];
+-        ns_window.appearance =
+-            [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+-        ns_window.titlebarAppearsTransparent = YES;
+-        blur.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+-        blur.material = NSVisualEffectMaterialSidebar;
+-        blur.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+-        blur.state = NSVisualEffectStateActive;
+-        blur.autoresizingMask = NSViewMaxXMargin | NSViewHeightSizable;
+-        [blur_parent addSubview:blur
+-                     positioned:NSWindowBelow
+-                     relativeTo:blur_parent == content_view ? nil
+-                                                            : content_view];
+-        // Halo: tint the blur like the page's own scrim so the sliver of blur
+-        // outside the page's rounded corners matches the sidebar colour.
+-        // --halo-vibrancy-tint=r,g,b,a (0-255 channels, 0-1 alpha).
+-        const std::string tint_spec =
+-            base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+-                "halo-vibrancy-tint");
+-        const std::vector<std::string> halo_tint = base::SplitString(
+-            tint_spec, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+-        double tr = 0, tg = 0, tb = 0, ta = 0;
+-        if (halo_tint.size() == 4 && base::StringToDouble(halo_tint[0], &tr) &&
+-            base::StringToDouble(halo_tint[1], &tg) &&
+-            base::StringToDouble(halo_tint[2], &tb) &&
+-            base::StringToDouble(halo_tint[3], &ta)) {
+-          NSView* const halo_tint_view = [[HaloVibrancyTintView alloc]
+-              initWithFrame:blur.frame];
+-          halo_tint_view.wantsLayer = YES;
+-          halo_tint_view.layer.backgroundColor =
+-              [NSColor colorWithSRGBRed:tr / 255.0
+-                                  green:tg / 255.0
+-                                   blue:tb / 255.0
+-                                  alpha:ta]
+-                  .CGColor;
+-          halo_tint_view.autoresizingMask = NSViewMaxXMargin | NSViewHeightSizable;
+-          [blur_parent addSubview:halo_tint_view
+-                       positioned:NSWindowAbove
+-                       relativeTo:blur];
+-        }
+-      }
+-      NSView* opaque_view =
+-          halo_glass ? nil
+-                     : [[OpaqueFrameBackgroundView alloc]
+-                           initWithFrame:content_view.bounds];
+-      if (opaque_view) {
+-      opaque_view.identifier =
+-          remote_cocoa::kOpaqueFrameBackgroundViewIdentifier;
+-      opaque_view.wantsLayer = YES;
+-      opaque_view.layer.opaque = YES;
+-      opaque_background_view_ = opaque_view;
+-      [content_view addSubview:opaque_background_view_
+-                    positioned:NSWindowBelow
+-                    relativeTo:glass_background_view_];
++      // Halo: when the vibrancy gutter is enabled the blur is the window
++      // background, so the opaque frame background view must not be created.
++      if (!IsHaloVibrancyEnabled()) {
++        NSView* const opaque_view = [[OpaqueFrameBackgroundView alloc]
++            initWithFrame:content_view.bounds];
++        opaque_view.identifier =
++            remote_cocoa::kOpaqueFrameBackgroundViewIdentifier;
++        opaque_view.wantsLayer = YES;
++        opaque_view.layer.opaque = YES;
++        opaque_background_view_ = opaque_view;
++        [content_view addSubview:opaque_background_view_
++                      positioned:NSWindowBelow
++                      relativeTo:glass_background_view_];
+       }
+     }
+ 
+@@ -1255,7 +1302,7 @@ - (NSTouchBar*)makeTouchBar {
+   const CGFloat g = SkColorGetG(theme_color) / 255.0;
+   const CGFloat b = SkColorGetB(theme_color) / 255.0;
+   const CGFloat a =
+-      base::CommandLine::ForCurrentProcess()->HasSwitch("halo-vibrancy-width")
++      IsHaloVibrancyEnabled()
+           ? 0.0
+           : GetGlassFrameTintOpacity(color_utils::IsDark(theme_color),
+                                      is_vertical_tabs);
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+index 4e21577f81..66c94fd386 100644
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -165,6 +165,7 @@
+ #include "chrome/browser/ui/views/frame/contents_separator.h"
+ #include "chrome/browser/ui/views/frame/contents_web_view.h"
+ #include "chrome/browser/ui/views/frame/custom_floating_corner.h"
++#include "chrome/browser/ui/views/frame/halo_vibrancy.h"
+ #include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h"
+@@ -1463,8 +1464,7 @@ bool BrowserView::ShouldDrawVerticalTabStrip() const {
+ 
+ bool BrowserView::ShouldDrawWebAppFrameToolbar() const {
+   // Halo: the page owns the whole window; no frame toolbar strip above it.
+-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+-          "halo-vibrancy-width")) {
++  if (halo::IsVibrancyEnabledForBrowser(browser())) {
+     return false;
+   }
+   return !IsUnframedModeEnabled() &&
+@@ -6054,19 +6054,17 @@ void BrowserView::PaintAsActiveChanged() {
+ }
+ 
+ void BrowserView::FrameColorsChanged() {
++  const bool halo_vibrancy = halo::IsVibrancyEnabledForBrowser(browser());
+   if (web_app_window_title_) {
+     SkColor frame_color =
+         GetFrameView()->GetFrameColor(BrowserFrameActiveState::kUseCurrent);
+     SkColor caption_color =
+         GetFrameView()->GetCaptionColor(BrowserFrameActiveState::kUseCurrent);
+-    const bool halo_glass = base::CommandLine::ForCurrentProcess()->HasSwitch(
+-        "halo-vibrancy-width");
+-    web_app_window_title_->SetBackgroundColor(halo_glass ? SK_ColorTRANSPARENT
+-                                                         : frame_color);
++    web_app_window_title_->SetBackgroundColor(
++        halo_vibrancy ? SK_ColorTRANSPARENT : frame_color);
+     web_app_window_title_->SetEnabledColor(caption_color);
+   }
+-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+-          "halo-vibrancy-width")) {
++  if (halo_vibrancy) {
+     // Halo: the page decides which areas are solid; the window stays clear.
+     GetWidget()->SetBackgroundColor(SK_ColorTRANSPARENT);
+     return;
+diff --git a/chrome/browser/ui/views/frame/contents_web_view.cc b/chrome/browser/ui/views/frame/contents_web_view.cc
+index bf26bc78cc..106f403fbb 100644
+--- a/chrome/browser/ui/views/frame/contents_web_view.cc
++++ b/chrome/browser/ui/views/frame/contents_web_view.cc
+@@ -4,10 +4,10 @@
+ 
+ #include "chrome/browser/ui/views/frame/contents_web_view.h"
+ 
+-#include "base/command_line.h"
+ #include "base/debug/dump_without_crashing.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/views/frame/halo_vibrancy.h"
+ #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
+ #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
+ #include "chrome/browser/ui/views/status_bubble_views.h"
+@@ -188,9 +188,16 @@ void ContentsWebView::DidGetUserInteraction(const blink::WebInputEvent& event) {
+ #endif
+ 
+ void ContentsWebView::UpdateBackgroundColor() {
+-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+-          "halo-vibrancy-width")) {
+-    // Halo: keep the page's own (possibly translucent) background.
++  // Halo: keep the page's own (possibly translucent) background in the
++  // vibrancy-enabled --app window. This can run before the web contents is
++  // set (and after it is cleared), so the lookup must tolerate a null
++  // contents; TabInterface::MaybeGetFromContents() does not.
++  const tabs::TabInterface* const tab =
++      web_contents()
++          ? tabs::TabInterface::MaybeGetFromContents(web_contents())
++          : nullptr;
++  if (tab &&
++      halo::IsVibrancyEnabledForBrowser(tab->GetBrowserWindowInterface())) {
+     layer()->AsSolidColor()->SetColor(SkColors::kTransparent);
+     SafeInvoke(web_contents())
+         .Then(&content::WebContents::GetRenderWidgetHostView)
+diff --git a/chrome/browser/ui/views/frame/glass_frame_service.cc b/chrome/browser/ui/views/frame/glass_frame_service.cc
+index 440632bf07..3915a7363d 100644
+--- a/chrome/browser/ui/views/frame/glass_frame_service.cc
++++ b/chrome/browser/ui/views/frame/glass_frame_service.cc
+@@ -9,7 +9,6 @@
+ #include <utility>
+ 
+ #include "base/check.h"
+-#include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+ #include "base/memory/raw_ptr.h"
+@@ -29,6 +28,7 @@
+ #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+ #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
+ #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
++#include "chrome/browser/ui/views/frame/halo_vibrancy.h"
+ #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/feature_engagement/public/feature_constants.h"
+@@ -171,9 +171,7 @@ bool GlassFrameService::IsGlassFrameAllowed() {
+ 
+ void GlassFrameService::OnBrowserActivated(BrowserWindowInterface* browser) {
+   if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL &&
+-      !(browser->GetType() == BrowserWindowInterface::TYPE_APP &&
+-        base::CommandLine::ForCurrentProcess()->HasSwitch(
+-            "halo-vibrancy-width"))) {
++      !halo::IsVibrancyEnabledForBrowser(browser)) {
+     return;
+   }
+ 
+@@ -298,6 +296,11 @@ void GlassFrameService::OnEligibleStateChanged() {
+ }
+ 
+ void GlassFrameService::MaybeShowOptInPromo(BrowserWindowInterface* browser) {
++  // Halo: the halo window opts in through --halo-vibrancy-width, so the glass
++  // frame opt-in promo must never appear in it.
++  if (halo::IsVibrancyEnabledForBrowser(browser)) {
++    return;
++  }
+   if (is_glass_frame_enabled_ || is_battery_saver_mode_active_ ||
+       !IsBrowserEligibleForGlass(browser)) {
+     return;
+@@ -312,9 +315,7 @@ void GlassFrameService::MaybeShowOptInPromo(BrowserWindowInterface* browser) {
+ 
+ void GlassFrameService::MaybeTrackBrowser(BrowserWindowInterface* browser) {
+   // Halo: --halo-vibrancy-width opts its --app window into the glass frame.
+-  const bool halo_app =
+-      browser->GetType() == BrowserWindowInterface::TYPE_APP &&
+-      base::CommandLine::ForCurrentProcess()->HasSwitch("halo-vibrancy-width");
++  const bool halo_app = halo::IsVibrancyEnabledForBrowser(browser);
+   if ((browser->GetType() != BrowserWindowInterface::TYPE_NORMAL &&
+        !halo_app) ||
+       !tracked_browsers_.insert(browser).second) {
+diff --git a/chrome/browser/ui/views/frame/glass_frame_service.h b/chrome/browser/ui/views/frame/glass_frame_service.h
+index b3e4cf1c52..a638a61492 100644
+--- a/chrome/browser/ui/views/frame/glass_frame_service.h
++++ b/chrome/browser/ui/views/frame/glass_frame_service.h
+@@ -108,7 +108,8 @@ class GlassFrameService : public BrowserCollectionObserver,
+       window_callbacks_;
+   std::map<BrowserWindowInterface*, base::CallbackListSubscription>
+       fullscreen_subscriptions_;
+-  // Set of tracked normal browsers.
++  // Set of tracked browsers: normal browsers, plus Halo's --app window when
++  // --halo-vibrancy-width is active.
+   base::flat_set<raw_ptr<BrowserWindowInterface>> tracked_browsers_;
+   // Set of browsers currently eligible to display the glass frame.
+   base::flat_set<raw_ptr<BrowserWindowInterface>> eligible_browsers_;
+diff --git a/chrome/browser/ui/views/frame/halo_vibrancy.h b/chrome/browser/ui/views/frame/halo_vibrancy.h
+new file mode 100644
+index 0000000000..0d56b14ce6
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/halo_vibrancy.h
+@@ -0,0 +1,51 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_HALO_VIBRANCY_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_HALO_VIBRANCY_H_
++
++#include <optional>
++
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++
++namespace halo {
++
++// Halo draws its desktop UI in an --app window and asks Chromium for native
++// vibrancy behind the leading column of that window with this switch.
++inline constexpr char kHaloVibrancyWidthSwitch[] = "halo-vibrancy-width";
++
++// Returns the requested vibrancy gutter width, or nullopt if the switch is
++// absent or its value is not a positive integer. A malformed value disables
++// the feature instead of producing a chromeless, transparent window with no
++// blur behind it.
++inline std::optional<int> GetVibrancyWidth() {
++  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kHaloVibrancyWidthSwitch)) {
++    return std::nullopt;
++  }
++  int width = 0;
++  if (!base::StringToInt(
++          base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++              kHaloVibrancyWidthSwitch),
++          &width) ||
++      width <= 0) {
++    return std::nullopt;
++  }
++  return width;
++}
++
++// Returns true if the native vibrancy treatment should be applied to
++// `browser`. The switch is process-global, so the treatment is limited to
++// Halo's --app window; other windows in the same process (popups, devtools,
++// extension windows, ...) keep upstream behavior.
++inline bool IsVibrancyEnabledForBrowser(const BrowserWindowInterface* browser) {
++  return browser && browser->GetType() == BrowserWindowInterface::TYPE_APP &&
++         GetVibrancyWidth().has_value();
++}
++
++}  // namespace halo
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_HALO_VIBRANCY_H_
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc b/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc
+index 76201a2a88..613a009aea 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc
+@@ -2,7 +2,6 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-#include "base/command_line.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.h"
+ 
+ #include "base/notreached.h"
+@@ -83,9 +82,11 @@ gfx::Rect GetBoundsBetweenExclusionZones(const BrowserLayoutParams& params) {
+ BrowserViewAppLayoutImpl::BrowserViewAppLayoutImpl(
+     std::unique_ptr<BrowserViewLayoutDelegate> delegate,
+     BrowserViewLayoutViews views,
+-    bool is_web_app)
++    bool is_web_app,
++    bool is_halo_app)
+     : BrowserViewLayoutImpl(std::move(delegate), std::move(views)),
+-      is_web_app_(is_web_app) {}
++      is_web_app_(is_web_app),
++      is_halo_app_(is_halo_app) {}
+ 
+ BrowserViewAppLayoutImpl::~BrowserViewAppLayoutImpl() = default;
+ 
+@@ -362,8 +363,7 @@ void BrowserViewAppLayoutImpl::CalculateTitlebarLayout(
+             ? GetLayoutConstant(LayoutConstant::kTabstripToolbarOverlap)
+             : 0;
+     // Halo: the page fills the whole window; the title strip is not reserved.
+-    if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+-            "halo-vibrancy-width")) {
++    if (!is_halo_app_) {
+       params.SetTop(full_titlebar_bounds.bottom() - tabstrip_adjustment);
+     }
+     overlay_rect_ = std::nullopt;
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.h b/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.h
+index 1322002f3e..4a25292887 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.h
++++ b/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.h
+@@ -19,7 +19,8 @@ class BrowserViewAppLayoutImpl : public BrowserViewLayoutImpl {
+  public:
+   BrowserViewAppLayoutImpl(std::unique_ptr<BrowserViewLayoutDelegate> delegate,
+                            BrowserViewLayoutViews views,
+-                           bool is_web_app);
++                           bool is_web_app,
++                           bool is_halo_app);
+   ~BrowserViewAppLayoutImpl() override;
+ 
+  protected:
+@@ -40,6 +41,8 @@ class BrowserViewAppLayoutImpl : public BrowserViewLayoutImpl {
+ 
+   mutable std::optional<gfx::Rect> overlay_rect_;
+   const bool is_web_app_;
++  // True when this is Halo's vibrancy-enabled --app window.
++  const bool is_halo_app_;
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_LAYOUT_BROWSER_VIEW_APP_LAYOUT_IMPL_H_
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_layout.cc b/chrome/browser/ui/views/frame/layout/browser_view_layout.cc
+index 778997a0f1..6c3bdf2098 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_layout.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_layout.cc
+@@ -13,6 +13,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.h"
++#include "chrome/browser/ui/views/frame/halo_vibrancy.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.h"
+@@ -155,7 +156,8 @@ std::unique_ptr<BrowserViewLayout> BrowserViewLayout::CreateLayout(
+             !web_app::AppBrowserController::From(browser)->system_app();
+ #endif
+         return std::make_unique<BrowserViewAppLayoutImpl>(
+-            std::move(delegate), std::move(views), is_web_app);
++            std::move(delegate), std::move(views), is_web_app,
++            halo::IsVibrancyEnabledForBrowser(browser));
+       }
+       case BrowserWindowInterface::Type::TYPE_POPUP:
+       case BrowserWindowInterface::Type::TYPE_DEVTOOLS:
+-- 
+2.54.0 (Apple Git-157)
+

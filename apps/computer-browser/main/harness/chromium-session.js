@@ -48,6 +48,55 @@ class CdpSession extends events.EventEmitter {
     }
     setPermissionRequestHandler(_handler) { }
     setPermissionCheckHandler(_handler) { }
-    async clearStorageData() { const { transport, contextId } = await this.getContext(); await transport.send("Storage.clearCookies", { browserContextId: contextId }); }
+    async clearStorageData() {
+        const { transport, contextId } = await this.getContext();
+        const { targetInfos = [] } = await transport.send("Target.getTargets");
+        const targets = targetInfos.filter((target) => target.browserContextId === contextId &&
+            ["page", "service_worker", "shared_worker", "worker"].includes(target.type));
+        const attached = [];
+        const origins = new Set();
+        const addOrigin = (value) => {
+            if (typeof value !== "string")
+                return;
+            try {
+                const parsed = new URL(value);
+                if (["http:", "https:"].includes(parsed.protocol))
+                    origins.add(parsed.origin);
+            }
+            catch { /* non-web documents own no website storage */ }
+        };
+        try {
+            for (const target of targets) {
+                addOrigin(target.url);
+                try {
+                    const { sessionId } = await transport.send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+                    if (typeof sessionId !== "string" || !sessionId)
+                        continue;
+                    attached.push({ sessionId, target });
+                    if (target.type === "page") {
+                        const { frameTree } = await transport.send("Page.getFrameTree", {}, sessionId);
+                        const visit = (frame) => {
+                            if (!frame)
+                                return;
+                            addOrigin(frame.url);
+                            for (const child of frame.childFrames ?? [])
+                                visit(child);
+                        };
+                        visit(frameTree?.frame);
+                    }
+                }
+                catch { /* a target closing during enumeration has no live storage to clear */ }
+            }
+            await transport.send("Storage.clearCookies", { browserContextId: contextId });
+            const storageSession = attached[0]?.sessionId;
+            if (storageSession) {
+                for (const origin of origins)
+                    await transport.send("Storage.clearDataForOrigin", { origin, storageTypes: "all" }, storageSession);
+            }
+        }
+        finally {
+            await Promise.allSettled(attached.map(({ sessionId }) => transport.send("Target.detachFromTarget", { sessionId })));
+        }
+    }
 }
 module.exports = { CdpSession };

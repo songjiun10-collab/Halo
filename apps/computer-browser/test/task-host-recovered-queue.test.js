@@ -133,3 +133,44 @@ test("recovery refuses a persisted Agent profile task when its owner record is m
   const host = makeHost(storageRoot, "finish");
   await assert.rejects(host.resumeSavedTask(taskId), { code: "agent_profile_unavailable" });
 });
+
+test("discarding a recovered task stops it for good without ever running it", async () => {
+  const { storageRoot, first, second } = await restartedWithRecovered();
+  const planners = [];
+  const host = makeHost(storageRoot, "finish", planners);
+  await host.listTasks();
+  for (const id of [first.taskId, second.taskId]) {
+    assert.deepEqual(await host.discardSavedTask(id), { taskId: id, state: "stopped" });
+  }
+  assert.deepEqual(planners, [], "discarding never attaches a planner");
+  const listed = await host.listTasks();
+  for (const id of [first.taskId, second.taskId]) assert.equal(listed.find((item) => item.taskId === id).state, "stopped");
+  await assert.rejects(() => host.discardSavedTask(first.taskId), (error) => error.code === "not_discardable");
+  await host.close();
+  hosts.delete(host);
+  const again = makeHost(storageRoot, "finish", planners);
+  const relisted = await again.listTasks();
+  for (const id of [first.taskId, second.taskId]) assert.equal(relisted.find((item) => item.taskId === id).state, "stopped", "stays stopped after a restart");
+});
+
+test("saved tasks waiting more than 12 hours are stopped automatically, newer ones are kept", async () => {
+  const { storageRoot, first, second } = await restartedWithRecovered();
+  const planners = [];
+  let now = Date.now();
+  const host = new TaskHost({
+    storageRoot, now: () => now,
+    makeBrowser: () => ({ observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) }),
+    makePlanner: (taskId) => { planners.push(taskId); return plannerOf("pause"); },
+    hostVerifier: () => true,
+    approve: async () => ({ decision: "allow", reasons: [] }),
+  });
+  hosts.add(host);
+  await host.listTasks();
+  assert.deepEqual(await host.sweepStaleWaiting(), [], "fresh tasks are kept");
+  now += 12 * 60 * 60 * 1000 + 60_000;
+  const gone = await host.sweepStaleWaiting();
+  assert.deepEqual(gone.sort(), [first.taskId, second.taskId].sort());
+  assert.deepEqual(planners, [], "sweeping never runs a task");
+  const listed = await host.listTasks();
+  for (const id of [first.taskId, second.taskId]) assert.equal(listed.find((item) => item.taskId === id).state, "stopped");
+});

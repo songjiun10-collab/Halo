@@ -1,0 +1,129 @@
+From 36c74cc69420906df67194eee97aec94b529bef3 Mon Sep 17 00:00:00 2001
+From: songjiun1105 <tvpcqs5n2x@privaterelay.appleid.com>
+Date: Sat, 10 Oct 2026 14:47:13 +0900
+Subject: [PATCH] Halo: present the stock Chromium identity instead of
+ automation flags
+
+The halo browser advertised automation in three mechanical places:
+headless_shell sent a HeadlessChrome user agent and UA-CH brand, and both
+the agent browser and the desktop --app window ran with
+navigator.webdriver=true, because --headless, --remote-debugging-port=0
+and --enable-automation each turn on Blink's AutomationControlled
+feature. Those are the cheapest triggers for a CAPTCHA or bot
+interstitial, and the desktop window carried the flag although a person
+was driving it.
+
+With --halo-identity:
+
+- headless_shell builds its product string and UA-CH brand lists from the
+  stock Chromium product (Chrome/<version>, [Chromium, grease]) instead
+  of HeadlessChrome;
+- content/child/runtime_features.cc turns AutomationControlled off after
+  the switch- and port-driven enabling, so navigator.webdriver is false;
+  the switch is forwarded to renderers for it
+  (render_process_host_impl.cc).
+
+Without the switch nothing changes. The agent's declared identity stays
+the Web Bot Auth signature, and the challenge policy is untouched:
+detect, pause, hand off -- never solve.
+
+Verified on out/TrialLean (headless_shell and Chromium.app). Agent
+browser: UA HeadlessChrome/157.0.8089.0 -> Chrome/157.0.0.0, UA-CH
+brands [Not-A.Brand;99, HeadlessChrome;157, Chromium;157] -> [Chromium;
+157, Not-A.Brand;99] (identical to this tree's full browser),
+navigator.webdriver true -> false. Desktop --app window: webdriver true
+-> false, UA and brands unchanged (already stock). The only remaining
+difference from the full browser is navigator.languages (agent en-US vs
+the full browser's system locale).
+---
+ .../renderer_host/render_process_host_impl.cc |  3 +++
+ content/child/runtime_features.cc             |  9 +++++++++
+ headless/lib/browser/headless_browser_impl.cc | 19 +++++++++++++++++++
+ 3 files changed, 31 insertions(+)
+
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index d8a53ceb09..5a27ee59e4 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -3941,6 +3941,9 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
+       switches::kDisableVideoCaptureUseGpuMemoryBuffer,
+       switches::kDomAutomationController,
+       switches::kEnableAutomation,
++      // Halo: the identity switch must reach the renderer so
++      // runtime_features.cc can keep navigator.webdriver off.
++      "halo-identity",
+       switches::kEnableExperimentalAccessibilityLabelsDebugging,
+       switches::kEnableExperimentalWebPlatformFeatures,
+       switches::kEnableBlinkTestFeatures,
+diff --git a/content/child/runtime_features.cc b/content/child/runtime_features.cc
+index 399eb78185..ff1a2e6425 100644
+--- a/content/child/runtime_features.cc
++++ b/content/child/runtime_features.cc
+@@ -397,6 +397,15 @@ void SetRuntimeFeaturesFromCommandLine(const base::CommandLine& command_line) {
+       WebRuntimeFeatures::EnableAutomationControlled(true);
+     }
+   }
++
++  // Halo: --halo-identity keeps the browser's declared identity in
++  // the Web Bot Auth signature instead of advertising navigator.webdriver,
++  // which --headless / --remote-debugging-port=0 / --enable-automation would
++  // otherwise enable. Without the switch, upstream behavior is unchanged; the
++  // switch is forwarded to renderers (render_process_host_impl.cc).
++  if (command_line.HasSwitch("halo-identity")) {
++    wrf::EnableAutomationControlled(false);
++  }
+ }
+ 
+ // Sets blink runtime features that depend on a combination
+diff --git a/headless/lib/browser/headless_browser_impl.cc b/headless/lib/browser/headless_browser_impl.cc
+index 999d93f956..7ac21a417c 100644
+--- a/headless/lib/browser/headless_browser_impl.cc
++++ b/headless/lib/browser/headless_browser_impl.cc
+@@ -8,6 +8,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "base/command_line.h"
+ #include "base/compiler_specific.h"
+ #include "base/functional/callback.h"
+ #include "base/logging.h"
+@@ -66,6 +67,13 @@ namespace {
+ // Product name for building the default user agent string.
+ const char kHeadlessProductName[] = "HeadlessChrome";
+ 
++// Halo: --halo-identity presents the stock Chromium product identity
++// (UA and UA client hints) and keeps navigator.webdriver off, so the agent is
++// declared through Web Bot Auth signatures instead of a "HeadlessChrome" brand
++// (apps/computer-browser/contracts/WEB-BOT-AUTH.md). Without the switch
++// nothing changes.
++constexpr char kHaloIdentitySwitch[] = "halo-identity";
++
+ #if defined(HEADLESS_USE_PREFS)
+ const base::FilePath::CharType kLocalStateFilename[] =
+     FILE_PATH_LITERAL("Local State");
+@@ -90,11 +98,22 @@ bool HeadlessBrowser::Options::DevtoolsServerEnabled() {
+ 
+ /// static
+ std::string HeadlessBrowser::GetProductNameAndVersion() {
++  // Halo: the stock product ("Chrome/<version>") instead of "HeadlessChrome".
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kHaloIdentitySwitch)) {
++    return embedder_support::GetProductAndVersion();
++  }
+   return std::string(kHeadlessProductName) + "/" + PRODUCT_VERSION;
+ }
+ 
+ /// static
+ blink::UserAgentMetadata HeadlessBrowser::GetUserAgentMetadata() {
++  // Halo: keep the stock Chromium brand lists (Chromium + grease) instead of
++  // regenerating them with the HeadlessChrome brand.
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kHaloIdentitySwitch)) {
++    return embedder_support::GetUserAgentMetadata();
++  }
+   auto metadata = embedder_support::GetUserAgentMetadata();
+   // Skip override brand version information if components' API returns a blank
+   // UserAgentMetadata.
+-- 
+2.54.0 (Apple Git-157)
+

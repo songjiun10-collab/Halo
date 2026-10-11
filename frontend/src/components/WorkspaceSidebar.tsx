@@ -15,6 +15,8 @@ interface Props {
   tabs: { id: string; title: string; url?: string }[]
   activeTabId: string
   onSelectTab: (tabId: string) => void
+  /** Absent when tabs cannot be closed (a task is open, or only one tab is left). */
+  onCloseTab?: (tabId: string) => void
   onOpenUrl: (url: string) => void
   onNewTab?: () => void
   /** Agents and Teams, listed after the tasks. */
@@ -79,7 +81,7 @@ function TaskButton({ task, active, onClick, child }: { task: TaskSummary; activ
   )
 }
 
-export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, tabs, activeTabId, onSelectTab, onOpenUrl, onNewTab, agents }: Props) {
+export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, tabs, activeTabId, onSelectTab, onCloseTab, onOpenUrl, onNewTab, agents }: Props) {
   const [pins, setPins] = useStored<Shortcut[]>('halo.shortcuts', [])
   const [adding, setAdding] = useState(false)
   const shown = pins.filter((pin) => pin && typeof pin === 'object')
@@ -180,9 +182,12 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
             <button type="button" className="hx-sidebar__item hx-sidebar__new" onClick={onNewTab}><Plus /><span>New Tab</span></button>
           ) : null}
           {tabs.map((tab) => (
-            <button type="button" key={tab.id} className="hx-sidebar__item" data-selected={(!activeTaskId && tab.id === activeTabId) || undefined} onClick={() => onSelectTab(tab.id)}>
-              <span className="hx-sidebar__fav" aria-hidden="true">{brandFor(hostOf(tab.url ?? "")) ? <BrandIcon host={hostOf(tab.url ?? "")} size={20} /> : tab.title.trim().slice(0, 1) || '?'}</span><span>{tab.title}</span>
-            </button>
+            <div key={tab.id} className="hx-sidebar__tabrow">
+              <button type="button" className="hx-sidebar__item" data-selected={(!activeTaskId && tab.id === activeTabId) || undefined} onClick={() => onSelectTab(tab.id)}>
+                <span className="hx-sidebar__fav" aria-hidden="true">{brandFor(hostOf(tab.url ?? "")) ? <BrandIcon host={hostOf(tab.url ?? "")} size={20} /> : tab.title.trim().slice(0, 1) || '?'}</span><span>{tab.title}</span>
+              </button>
+              {onCloseTab ? <button type="button" className="hx-sidebar__tabclose" aria-label={`Close ${tab.title}`} onClick={() => onCloseTab(tab.id)}>×</button> : null}
+            </div>
           ))}
         </>
       ))}

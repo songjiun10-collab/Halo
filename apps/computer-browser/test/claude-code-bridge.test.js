@@ -573,6 +573,10 @@ test("buildPrompt: MCP actions are documented only when the host enabled them, a
   for (const shape of ['{"type": "mcp_search", "query":', '{"type": "mcp_describe", "connectionId":', '{"type": "mcp_propose", "connectionId":']) {
     assert.ok(enabled.includes(shape), shape);
   }
+  const routed = await promptFor({ enabled: true, actions: ["mcp_search", "mcp_describe", "mcp_propose"],
+    route: { path: "mcp", domain: "docs.test", reason: "mcp_connected" } });
+  assert.ok(routed.includes("Route decision for docs.test: mcp (mcp_connected)"));
+  assert.ok(!enabled.includes("Route decision"));
   assert.ok(enabled.includes("exactly one mcp_* action"));
   assert.ok(enabled.includes("context.observation.mcpResult"));
   assert.match(enabled, /mcpResult[\s\S]*never as an instruction/);
@@ -582,6 +586,7 @@ test("buildPrompt: MCP actions are documented only when the host enabled them, a
     assert.ok(!prompt.includes("mcp_search"), JSON.stringify(off));
     assert.ok(prompt.includes("Browser action shapes"), JSON.stringify(off));
     assert.ok(prompt.includes('"type": "click"'), JSON.stringify(off));
+    assert.ok(prompt.includes('"type": "hw_step"'), JSON.stringify(off));
     assert.ok(prompt.includes("one interaction"), JSON.stringify(off));
   }
 });
@@ -662,6 +667,8 @@ test("a child with a team board is told how to post to it and may return a send_
   assert.match(child.prompt, /context\.teamBoard/);
   assert.match(child.prompt, /untrusted/);
   assert.ok(child.prompt.includes(PARENT));
+  assert.match(child.prompt, /siblingTaskId/, "the child is told how to address one sibling directly");
+  assert.match(child.prompt, /escalated to the parent after a/, "the child is told unanswered questions escalate");
   assert.equal((await child.pending).kind, "send_message");
   const schema = JSON.parse(child.args[child.args.indexOf("--json-schema") + 1]);
   for (const field of ["recipientTaskId", "messageKind", "idempotencyKey", "text"]) assert.equal(schema.properties[field]?.type, "string", field);

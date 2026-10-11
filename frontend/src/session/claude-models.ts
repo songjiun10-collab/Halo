@@ -7,28 +7,29 @@ export interface PlannerModel { id: string; label: string; legacy: boolean; prov
 export const CLAUDE_MODELS: readonly ClaudeModel[] = [
   { id: 'claude-opus-5-5', label: 'Opus 5.5', family: 'opus', legacy: false },
   { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', family: 'sonnet', legacy: false },
-  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', family: 'haiku', legacy: false },
   { id: 'claude-fable-5-1', label: 'Fable 5.1', family: 'fable', legacy: false },
-  { id: 'claude-opus-4-5-20251101', label: 'Opus 4.5', family: 'opus', legacy: true },
-  { id: 'claude-opus-4-1-20250805', label: 'Opus 4.1', family: 'opus', legacy: true },
-  { id: 'claude-opus-4-20250514', label: 'Opus 4', family: 'opus', legacy: true },
-  { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5', family: 'sonnet', legacy: true },
-  { id: 'claude-sonnet-4-20250514', label: 'Sonnet 4', family: 'sonnet', legacy: true },
-  { id: 'claude-3-7-sonnet-20250219', label: 'Sonnet 3.7', family: 'sonnet', legacy: true },
-  { id: 'claude-3-5-haiku-20241022', label: 'Haiku 3.5', family: 'haiku', legacy: true },
+  { id: 'claude-haiku-5-5', label: 'Haiku 5.5', family: 'haiku', legacy: false },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', family: 'haiku', legacy: true },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', family: 'sonnet', legacy: true },
+  { id: 'claude-opus-5', label: 'Opus 5', family: 'opus', legacy: true },
+  { id: 'claude-fable-5', label: 'Fable 5', family: 'fable', legacy: true },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', family: 'opus', legacy: true },
+  { id: 'claude-opus-4-7', label: 'Opus 4.7', family: 'opus', legacy: true },
+  { id: 'claude-opus-4-6', label: 'Opus 4.6', family: 'opus', legacy: true },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', family: 'sonnet', legacy: true },
 ]
 /** Mirror of the host Codex allowlist (apps/computer-browser/main/harness/providers/codex-models.js). */
 export const CODEX_MODELS: readonly { id: string; label: string; legacy: boolean; description: string }[] = [
   { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', legacy: false, description: 'Latest workhorse model for coding and everyday work.' },
   { id: 'gpt-6-astra', label: 'GPT-6 Astra', legacy: false, description: 'Frontier intelligence for the most demanding work.' },
-  { id: 'gpt-6-sol', label: 'GPT-6 Sol', legacy: false, description: 'Previous generation workhorse model.' },
-  { id: 'gpt-6-luna', label: 'GPT-6 Luna', legacy: false, description: 'Fast and affordable model for easier tasks.' },
+  { id: 'gpt-6-sol', label: 'GPT-6 Sol', legacy: true, description: 'Previous generation workhorse model.' },
+  { id: 'gpt-6-luna', label: 'GPT-6 Luna', legacy: false, description: 'Fast and affordable model for easier tasks. same level with claude-haiku-5-5' },
   { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', legacy: true, description: 'Older generation workhorse model.' },
   { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', legacy: true, description: 'Older balanced model for straightforward work.' },
   { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', legacy: true, description: 'Older fast and efficient model.' },
   { id: 'gpt-5.5', label: 'GPT-5.5', legacy: true, description: 'Legacy coding model.' },
 ]
-export const DEFAULT_CODEX_MODEL = 'gpt-6.1-sol'
+export const DEFAULT_CODEX_MODEL = 'gpt-6-luna'
 export const NVIDIA_MODELS = [
   { id: 'deepseek-ai/deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
   { id: 'deepseek-ai/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
@@ -65,7 +66,7 @@ export function mergeDiscoveredNvidia(entries: readonly { id: string; label: str
 }
 
 /** What an unset plannerModel runs (the CLI's latest Opus). */
-export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5'
+export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5-5'
 
 /** The model the selected planner runs, or null while no planner is selected. */
 export function activeModel(settings: HostSettings | null): PlannerModel | null {

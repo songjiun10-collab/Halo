@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Activity } from './components/Activity'
 import { ControllerChip } from './components/ControllerChip'
+import { FindBar } from './components/FindBar'
 import { HaloButton } from './components/HaloButton'
 import { HaloChat } from './components/HaloChat'
 import { HaloSheet } from './components/HaloSheet'
@@ -8,7 +9,6 @@ import { Notice } from './components/Notice'
 import { SettingsPanel } from './components/SettingsPanel'
 import { ShortcutsHelp } from './components/ShortcutsHelp'
 import { TabOverview } from './components/TabOverview'
-import { TabStrip } from './components/TabStrip'
 import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
 import { WorkspaceSidebar } from './components/WorkspaceSidebar'
@@ -19,7 +19,8 @@ import { useShortcuts } from './hooks/useShortcuts'
 import { useTrackpad } from './hooks/useTrackpad'
 import type { BrowserSnapshot, TaskInput } from './session/api'
 import { RemotePageFrame } from './components/RemotePageFrame'
-import { captureSnapshot, syncDirectSurface, syncNativeSurface } from './session/browser-surface'
+import { DirectBrowserSurface } from './components/DirectBrowserSurface'
+import { captureSnapshot, shouldCaptureRemoteTaskFrame, syncDirectSurface, syncNativeSurface } from './session/browser-surface'
 import { AGENT, canNavigate, currentUrl, NEW_TAB_URL, pendingCriteria, SessionStore } from './session/session'
 import { tabTitle } from './session/pages'
 import type { IntentLockInput } from './session/api'
@@ -45,7 +46,15 @@ export default function App() {
   useEffect(() => store.connect(), [store])
 
   const [activityOpen, setActivityOpen] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia?.('(max-width: 880px)').matches)
+  // A narrow window folds the sidebar to its icon rail; widening it brings the full sidebar back.
+  useEffect(() => {
+    const query = window.matchMedia?.('(max-width: 880px)')
+    if (!query) return
+    const sync = () => setSidebarOpen(!query.matches)
+    query.addEventListener('change', sync)
+    return () => query.removeEventListener('change', sync)
+  }, [])
   const [chatOpen, setChatOpen] = useState(false)
   /** ⌘/Ctrl + . keeps Halo's controls unfolded even when nothing needs you. */
   const [pinned, setPinned] = useState(false)
@@ -133,6 +142,31 @@ export default function App() {
     }
     setToast(copied ? 'Link copied' : 'Unable to share this page')
   }, [tab, store])
+  // Mod+/Mod-/Mod+0. The task surface is read from the store at call time so
+  // the handler never captures a stale active task.
+  const zoomPage = useCallback((request: { direction?: 'in' | 'out' | 'reset'; level?: number }) => {
+    const api = window.haloBrowser
+    if (typeof api?.zoom !== 'function') return
+    const taskId = store.getState().activeTaskId ?? null
+    void api.zoom(taskId, request).then((result) => {
+      if (result?.ok && typeof result.level === 'number') setToast(`Zoom ${Math.round(result.level * 100)}%`)
+      else if (result && !result.ok && result.errorCode !== 'surface_unavailable') setToast('Zoom is unavailable here')
+    }).catch(() => {})
+  }, [store])
+  // Mod+C. The task surface is read from the store at call time so the handler
+  // never captures a stale active task.
+  const copyPageSelection = useCallback(() => {
+    const api = window.haloBrowser
+    if (typeof api?.copySelection !== 'function') return
+    const taskId = store.getState().activeTaskId ?? null
+    void api.copySelection(taskId).then((result) => {
+      if (!result?.ok) {
+        if (result?.errorCode !== 'surface_unavailable') setToast('Could not copy')
+        return
+      }
+      setToast(result.chars > 0 ? 'Copied' : 'Nothing selected')
+    }).catch(() => {})
+  }, [store])
   const onNewWindow = useCallback(() => { void store.newWindow() }, [store])
   const leases = s.snapshot?.leases ?? []
   const [leaseNow, setLeaseNow] = useState(() => Date.now())
@@ -155,6 +189,9 @@ export default function App() {
 
   // Native tab commands are owned by the direct browser API. Task-owned browser tabs remain
   // isolated and cannot be mutated through that API.
+  const [findOpen, setFindOpen] = useState(false)
+  // A search belongs to the page it was opened on; switching tab or task closes it.
+  useEffect(() => { setFindOpen(false) }, [s.activeTaskId, s.activeTabId])
   const shortcutHandlers = useMemo(() => ({
     onNewTab: () => { void store.newBrowserTab() },
     onNewTask,
@@ -163,6 +200,10 @@ export default function App() {
     onBack: () => void store.navigate({ type: 'back' }),
     onForward: () => void store.navigate({ type: 'forward' }),
     onFocusOmni: () => omniRef.current?.focus(),
+    onFind: () => setFindOpen(true),
+    onZoomIn: () => zoomPage({ direction: 'in' }),
+    onZoomOut: () => zoomPage({ direction: 'out' }),
+    onZoomReset: () => zoomPage({ direction: 'reset' }),
     onTogglePin: () => setPinned((p) => !p),
     onToggleChat: toggleChat,
     onToggleOverview: toggleOverview,
@@ -171,7 +212,7 @@ export default function App() {
     onToggleHelp: toggleHelp,
     onToggleSidebar: () => setSidebarOpen((open) => !open),
     onToggleSettings: toggleSettings,
-  }), [store, onNewTask, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp, toggleSettings, tab.id])
+  }), [store, onNewTask, zoomPage, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp, toggleSettings, tab.id])
   useShortcuts(s, approval, shortcutHandlers)
 
   // Safari-style swipe: the page you leave slides off in the swipe's direction. The native view
@@ -240,22 +281,45 @@ export default function App() {
   const helpShown = usePresence(helpOpen ? true : null)
   const settingsShown = usePresence(settingsOpen ? true : null)
 
-  // The agent works in a hidden page. While it does, its page is mirrored here as a live still.
+  // The agent works in a hidden page. While the task is live (including while it waits on you,
+  // is paused or awaits verification) its page is mirrored here, read-only: pushed frames when the
+  // engine can stream, otherwise polled stills. The last frame stays until the task ends.
   const [agentFrame, setAgentFrame] = useState<string | null>(null)
-  const agentWorking = s.control === 'claude' && !!s.activeTaskId
+  const taskState = s.snapshot?.state
+  const agentWorking = !!s.activeTaskId && (taskState === 'running' || taskState === 'awaiting_approval' || taskState === 'awaiting_verification' || taskState === 'paused' || (!taskState && s.control === 'claude'))
   useEffect(() => {
     const api = window.haloBrowser
     const taskId = s.activeTaskId
     if (!agentWorking || !taskId || typeof api?.captureAgentFrame !== 'function') { setAgentFrame(null); return }
     let stopped = false
+    let id: number | undefined
+    let unsubscribe: (() => void) | undefined
+    let streaming = false
     const tick = async () => {
       const frame = await api.captureAgentFrame!(taskId).catch(() => null)
-      if (!stopped) setAgentFrame(frame)
-      if (!stopped) id = window.setTimeout(() => void tick(), 250)
+      // A still that comes back empty (parked surface) never erases the frame already on screen.
+      if (!stopped && (frame || !streaming)) setAgentFrame((current) => frame ?? current)
+      if (!stopped && !streaming) id = window.setTimeout(() => void tick(), 250)
     }
-    let id: number | undefined
-    void tick()
-    return () => { stopped = true; window.clearTimeout(id); setAgentFrame(null) }
+    if (typeof api.startAgentStream === 'function' && typeof api.onAgentFrame === 'function') {
+      unsubscribe = api.onAgentFrame((payload) => {
+        if (!stopped && payload?.taskId === taskId && typeof payload.frame === 'string' && payload.frame.startsWith('data:image/jpeg;base64,')) setAgentFrame(payload.frame)
+      })
+      streaming = true
+      void tick()
+      void api.startAgentStream(taskId).then((started) => {
+        if (stopped || started) { if (!started) streaming = false; return }
+        streaming = false
+        void tick()
+      }).catch(() => { if (!stopped) { streaming = false; void tick() } })
+    } else void tick()
+    return () => {
+      stopped = true
+      window.clearTimeout(id)
+      unsubscribe?.()
+      if (typeof api.startAgentStream === 'function') void api.stopAgentStream?.().catch(() => {})
+      setAgentFrame(null)
+    }
   }, [agentWorking, s.activeTaskId])
 
   // When you take over from a UI attached to the background service, the task's page lives in
@@ -265,12 +329,18 @@ export default function App() {
   useEffect(() => {
     const api = window.haloBrowser
     const taskId = s.activeTaskId
-    if (!userDriving || !taskId || typeof api?.captureTaskFrame !== 'function') { setUserFrame(null); return }
+    // A local Chromium page is already painted natively above this renderer.
+    // Capturing it every 120ms wastes CDP/GPU work and competes with page load,
+    // input and navigation for the same browser connection. Only an attached
+    // UI needs pixel mirroring from the separate background process.
+    if (!shouldCaptureRemoteTaskFrame(api, userDriving, taskId)) { setUserFrame(null); return }
+    const remoteApi = api!
+    const remoteTaskId = taskId!
     let stopped = false
     const tick = async () => {
-      const frame = await api.captureTaskFrame!(taskId).catch(() => null)
+      const frame = await remoteApi.captureTaskFrame!(remoteTaskId).catch(() => null)
       if (!stopped) setUserFrame(frame)
-      if (!stopped) id = window.setTimeout(() => void tick(), 120)
+      if (!stopped) id = window.setTimeout(() => void tick(), 200)
     }
     let id: number | undefined
     void tick()
@@ -282,36 +352,6 @@ export default function App() {
   }
   const chromium = window.haloBrowser?.runtime === 'chromium'
   const directDriving = chromium && s.directBrowser && !s.activeTaskId
-  const [directFrame, setDirectFrame] = useState<string | null>(null)
-  useEffect(() => {
-    const api = window.haloBrowser
-    if (!directDriving || !api?.captureSurface) { setDirectFrame(null); return }
-    let stopped = false
-    let id: number | undefined
-    // Polling is the fallback for engines that cannot stream.
-    const tick = async () => {
-      const frame = await api.captureSurface!().catch(() => null)
-      if (!stopped) { setDirectFrame(frame); id = window.setTimeout(() => void tick(), 120) }
-    }
-    let unsubscribe: (() => void) | undefined
-    if (typeof api.startSurfaceStream === 'function' && typeof api.onSurfaceFrame === 'function') {
-      unsubscribe = api.onSurfaceFrame((payload) => {
-        if (!stopped && typeof payload?.frame === 'string' && payload.frame.startsWith('data:image/jpeg;base64,')) setDirectFrame(payload.frame)
-      })
-      // One still first so the page never flashes empty, then the pushed frames take over.
-      void api.captureSurface().then((frame) => { if (!stopped && frame) setDirectFrame((current) => current ?? frame) }).catch(() => {})
-      void api.startSurfaceStream().then((started) => { if (!stopped && !started) void tick() }).catch(() => { if (!stopped) void tick() })
-    } else void tick()
-    return () => {
-      stopped = true; window.clearTimeout(id); unsubscribe?.()
-      setDirectFrame(null)
-    }
-  }, [directDriving, s.activeTabId])
-  // A tab switch restarts the stream in place (the host replaces the old one); stop only when the live view ends.
-  useEffect(() => {
-    if (!directDriving) return
-    return () => { void window.haloBrowser?.stopSurfaceStream?.().catch(() => {}) }
-  }, [directDriving])
 
   const nativeSurfaceVisible = ((!!s.activeTaskId && !!s.browser) || (!s.activeTaskId && s.directBrowser)) && !approval && !activityOpen && !chatOpen &&
     !overviewOpen && !helpOpen && !settingsOpen && !noticeShown.item && !toastShown.item && !swipeDir && (chromium || (!agentFrame && !userFrame))
@@ -375,10 +415,11 @@ export default function App() {
 
   return (
     <div className="hx-app" data-active-task-id={s.activeTaskId ?? undefined}>
+      <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true"><filter id="hx-refract" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="0.012 0.018" numOctaves="2" seed="7" result="n" /><feGaussianBlur in="n" stdDeviation="3" result="nb" /><feDisplacementMap in="SourceGraphic" in2="nb" scale="38" xChannelSelector="R" yChannelSelector="G" /></filter></svg>
       <a className="hx-skip" href="#hx-page" inert={!!approval}>Skip to page</a>
       <h1 className="hx-sr">HALO</h1>
       <p className="hx-sr" role="status" aria-live="polite">{announcement(s, notice)}</p>
-      <div className="hx-window">
+      <div className="hx-window" data-frame="mac">
         <header className="hx-chrome" inert={overviewOpen || !!approval}>
           <Toolbar
             folded={folded}
@@ -411,15 +452,6 @@ export default function App() {
             }
               halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
             />
-          <TabStrip
-            tabs={tabsForDisplay}
-            activeTabId={tab.id}
-            canClose={(candidate) => !s.activeTaskId && tabsForDisplay.length > 1 && candidate.id !== 'home'}
-            onSelect={(id) => void store.selectBrowserTab(id)}
-            onClose={(id) => void store.closeBrowserTab(id)}
-            canCreate={!s.activeTaskId}
-            onNew={() => { void store.newBrowserTab() }}
-          />
         </header>
         <div className="hx-window-row hx-workspace">
           <WorkspaceSidebar
@@ -432,6 +464,7 @@ export default function App() {
             tabs={tabsForDisplay.map((t) => ({ id: t.id, title: tabTitle(t), url: currentUrl(t) }))}
             activeTabId={tab.id}
             onSelectTab={(id) => void store.selectBrowserTab(id)}
+            onCloseTab={!s.activeTaskId && tabsForDisplay.length > 1 ? (id) => { if (id !== 'home') void store.closeBrowserTab(id) } : undefined}
             onOpenUrl={(url) => void store.navigate({ type: 'navigate', url })}
             onNewTab={!s.activeTaskId ? () => { void store.newBrowserTab() } : undefined}
             agents={<SidebarAgents onOpen={(owner) => openAgents({ n: 'detail', owner })} onSeeAll={() => openAgents({ n: 'hub' })} onNew={() => openAgents({ n: 'hub' })} />}
@@ -439,7 +472,7 @@ export default function App() {
           <div className="hx-content-col">
           <div className="hx-body" inert={overviewOpen}>
             <div className="hx-page" inert={!!approval}>
-              {(s.activeTaskId && s.browser) || (!s.activeTaskId && s.directBrowser) ? (
+              {(s.activeTaskId && (s.browser || agentFrame)) || (!s.activeTaskId && s.directBrowser) ? (
                 <main
                   id="hx-page"
                   ref={pageRef}
@@ -449,9 +482,10 @@ export default function App() {
                   aria-label="Page rendered in the isolated browser surface"
                   tabIndex={-1}
                 >
-                  {agentFrame && <img className="hx-snapshot" data-live="agent" src={agentFrame} alt="" aria-hidden="true" draggable={false} />}
-                  {userFrame && <RemotePageFrame frame={userFrame} onInput={sendInput} />}
-                  {directFrame && !s.activeTaskId && <RemotePageFrame frame={directFrame} onInput={(input) => { void window.haloBrowser?.sendSurfaceInput?.(input).catch(() => {}) }} />}
+                  {agentFrame && !userFrame && <img className="hx-snapshot" data-live="agent" src={agentFrame} alt="" aria-hidden="true" draggable={false} />}
+                  {userFrame && <RemotePageFrame frame={userFrame} onInput={sendInput} onCopy={copyPageSelection} />}
+                  {directDriving && <DirectBrowserSurface tabId={s.activeTabId} onCopy={copyPageSelection} />}
+                  {findOpen && <FindBar targetTaskId={s.activeTaskId ?? null} onClose={() => setFindOpen(false)} />}
                   {snapshot && !agentFrame && !userFrame && !nativeSurfaceVisible && <img className="hx-snapshot" data-swipe={swipeDir || undefined} src={snapshot} alt="" aria-hidden="true" draggable={false} />}
                 </main>
               ) : (

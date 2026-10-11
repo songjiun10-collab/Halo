@@ -33,6 +33,7 @@ const { AgentViewportHost, makeDualSurfaceBrowser, agentBrowserPartition } = req
 const { resolvePlannerCommand } = require("./harness/planner-command");
 const { parseOperatorOverride, selectPlannerLaunch, plannerProviderEnv } = require("./harness/planner-providers");
 const { HostSettingsStore } = require("./harness/host-settings");
+const webBotAuth = require("./harness/web-bot-auth");
 const { ApiKeyStore } = require("./harness/api-key-store");
 const { LocalMemoryStore } = require("./harness/local-memory-store");
 const { ActivityJournalStore } = require("./harness/activity-journal-store");
@@ -163,10 +164,36 @@ function withConnectorObservation(browser) {
 // Bring-your-own Chromium: stays inert (createPage returns null) until Settings selects the
 // "chromium" engine, so the default path is exactly the Electron one.
 const cdpEngine = desktopRuntime.cdpEngine ?? new (require("./harness/cdp-engine").CdpEngine)();
+// Count the Chromium this engine launches in the app-wide budget. Without this
+// the whole browser tree was invisible to MemoryMonitor: app.getAppMetrics()
+// returns Electron's own processes only, so a launched Chromium's ~145MB idle
+// baseline and ~650MB heavy-page peak both summed as zero, and getPressureLevel()
+// could never raise caution/pause/emergency for it. One registration for the
+// root pid covers the entire tree because the injected lookup already sums
+// descendants (process-tree-memory.js). Attach mode registers nothing -- the
+// user owns that browser.
+//
+// The listener is installed once and survives configure(), which is called later
+// with user settings that carry no such field.
+// A null callback means teardown, which carries no pid, so the last registration
+// is tracked here and released with the exact creationTime it was made under.
+// The monitor's own generation guard would also drop a stale unregister; pairing
+// it exactly means a recycled pid can never be confused for this browser.
+let chromiumRegistration = null;
+cdpEngine.setBrowserProcessListener((info) => {
+  if (info) {
+    memoryMonitor.registerExternalProcess({ pid: info.pid, creationTime: info.creationTime, label: "chromium" });
+    chromiumRegistration = { pid: info.pid, creationTime: info.creationTime };
+  } else if (chromiumRegistration) {
+    memoryMonitor.unregister(chromiumRegistration.pid, chromiumRegistration.creationTime);
+    chromiumRegistration = null;
+  }
+});
 // Agent surfaces idle past a few seconds freeze and, past two minutes or over six live renderers, are
 // discarded and restored by one GET on next use; the pool also gives memory back under pressure.
-require("./session-vault-setup").attachSessionVault({ app, safeStorage: desktopRuntime.safeStorage, cdpEngine, isChromium: desktopRuntime.isChromium, createSessionVault: require("./harness/session-vault").createSessionVault, path });
-const agentViewportHost = new AgentViewportHost({ createPage: (partition) => cdpEngine.createPage(partition), lifecycle: true, onIdle: () => desktopRuntime.isChromium ? undefined : cdpEngine.release() });
+const agentSessionVault = require("./session-vault-setup").attachSessionVault({ app, safeStorage: desktopRuntime.safeStorage, cdpEngine, isChromium: desktopRuntime.isChromium, createSessionVault: require("./harness/session-vault").createSessionVault, path });
+const evaluateLeases = new (require("./harness/evaluate-lease").EvaluateLeases)();
+const agentViewportHost = new AgentViewportHost({ evaluateLeases, createPage: (partition) => cdpEngine.createPage(partition), lifecycle: true, onIdle: () => desktopRuntime.isChromium ? undefined : cdpEngine.release() });
 const TAB_IDLE_DISCARD_MS = 10 * 60_000;
 // Windows register a callback that discards their inactive tabs. When task admission
 // is refused for memory, every inactive tab is given back before the task is refused.
@@ -518,11 +545,32 @@ async function createHarnessHost(socketPath, hostWindow) {
   const settingsStore = new HostSettingsStore({ storageRoot: dataRoot });
   const nvidiaModelsFile = path.join(dataRoot, "nvidia-models.json");
   require("./harness/providers/nvidia-models").loadDiscoveredNvidiaModels(nvidiaModelsFile);
+  // Web Bot Auth (opt-in): signs agent-browser requests with this install's local
+  // key so a site that verifies the standard can recognize the declared agent.
+  // Signing is inert on other sites and is never used to pass a human check.
+  const webBotAuthKeyFile = path.join(dataRoot, "web-bot-auth-key.pem");
+  const webBotAuthPublicFile = path.join(dataRoot, "web-bot-auth-public.jwks.json");
+  const applyWebBotAuth = async (next) => {
+    try {
+      if (next?.webBotAuth !== true || typeof next.webBotAuthDirectory !== "string" || next.webBotAuthDirectory.length === 0) {
+        cdpEngine.setRequestSigner(null);
+        return;
+      }
+      const signer = await webBotAuth.createRequestSigner({ keyFile: webBotAuthKeyFile, directoryUrl: next.webBotAuthDirectory });
+      await fs.promises.writeFile(webBotAuthPublicFile, signer.directoryJson, { mode: 0o644 }).catch(() => undefined);
+      cdpEngine.setRequestSigner((url) => signer.sign(url));
+      console.error(`[web-bot-auth] signing enabled keyid=${signer.keyId} directory=${next.webBotAuthDirectory}`);
+    } catch (error) {
+      cdpEngine.setRequestSigner(null);
+      console.error("[web-bot-auth] signer unavailable:", error?.code ?? error);
+    }
+  };
   const settings = await settingsStore.load();
   cdpEngine.configure(desktopRuntime.isChromium ? { ...settings, browserEngine: "chromium" } : settings);
   // Later Settings changes re-point the engine; tasks already running keep the browser they started on.
   const updateSettings = settingsStore.update.bind(settingsStore);
-  settingsStore.update = async (...args) => { const next = await updateSettings(...args); cdpEngine.configure(desktopRuntime.isChromium ? { ...next, browserEngine: "chromium" } : next); return next; };
+  settingsStore.update = async (...args) => { const next = await updateSettings(...args); cdpEngine.configure(desktopRuntime.isChromium ? { ...next, browserEngine: "chromium" } : next); await applyWebBotAuth(next); return next; };
+  await applyWebBotAuth(settings);
   await apiKeyStore.load().catch((error) => console.error("[harness] registered API keys unavailable:", error?.code ?? error));
   const memoryStore = new LocalMemoryStore({ storageRoot: dataRoot, safeStorage: desktopRuntime.safeStorage });
   // Context Awareness: off unless the user turned it on. The setting is read
@@ -550,6 +598,8 @@ async function createHarnessHost(socketPath, hostWindow) {
   let taskHost;
   const surfaces = new BrowserSurfaces(hostWindow, { isUserControlled: (taskId) => taskHost.canUseTaskBrowser(taskId) });
   taskHost = new TaskHost({
+    evaluateLeases,
+    sessionVault: agentSessionVault,
     releaseViewsOnReview: true,
     storageRoot: path.join(app.getPath("userData"), "harness-tasks"),
     makeBrowser: makeHarnessBrowser(surfaces, agentViewportHost),
@@ -567,10 +617,16 @@ async function createHarnessHost(socketPath, hostWindow) {
     reclaimMemory,
     captureAgentFrame: (taskId) => agentViewportHost.captureFrame(taskId),
     captureTaskFrame: (taskId) => surfaces.captureFrame(taskId),
+    findTaskPage: (taskId, query, options) => surfaces.findInPage(taskId, query, options),
+    zoomTaskPage: (taskId, request) => surfaces.setZoom(taskId, request),
+    copyTaskSelection: (taskId) => surfaces.copySelection(taskId),
     sendTaskInput: (taskId, input) => surfaces.sendInput(taskId, input),
     memoryStore,
     activityJournal,
     strategyLearning: strategyLearningStore,
+    // One log line per human handoff; the task UI already surfaces the paused
+    // state, and the task event detail carries { handoff } for richer UI.
+    onHumanHandoff: (handoff) => console.error(`[handoff] task=${handoff.taskId} waiting reason=${handoff.reason}`),
     nvidiaModelsFile,
     permissionMode: settings.permissionMode,
     plannerEffort: settings.plannerEffort,
@@ -580,6 +636,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     plannerFast: settings.plannerFast,
     plannerEscalation: settings.plannerEscalation,
     plannerRouting: settings.plannerRouting,
+    mcpRoutePreference: settings.mcpRoutePreference,
     mcpProviders: settings.mcpProviders,
     makeMcpBroker: makeHarnessMcpBroker,
     executionMode: settings.executionMode,
@@ -603,11 +660,10 @@ async function createWindow(socketPath, attachedClient = undefined) {
     // macOS: the window is real glass; the desktop behind it shows through the translucent chrome.
     ...(process.platform === "darwin" ? { transparent: true, backgroundColor: "#00000000", titleBarStyle: "hidden", trafficLightPosition: { x: 16, y: 20 } } : {}),
     webPreferences: {
-      preload: path.join(__dirname, "..", "preload", "index.js"),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
-      additionalArguments: [`--halo-layout=${JSON.stringify(RENDERER_LAYOUT)}`],
+      additionalArguments: [`--halo-layout=${JSON.stringify(RENDERER_LAYOUT)}`, ...(attachedClient ? ["--halo-remote-surfaces=1"] : [])],
     },
   });
 
@@ -641,6 +697,8 @@ async function createWindow(socketPath, attachedClient = undefined) {
     taskHost,
     // An attached UI has no agent views of its own; the service process owns them.
     captureAgentFrame: (taskId) => (attachedClient ? attachedClient.captureAgentFrame(taskId) : agentViewportHost.captureFrame(taskId)),
+    // An attached UI polls stills: the agent's page lives in the service process.
+    openAgentFrameStream: (taskId, onFrame) => (attachedClient ? null : agentViewportHost.openFrameStream(taskId, onFrame)),
     // Only an attached UI needs these: its task views live in the service process.
     captureTaskFrame: (taskId) => (attachedClient ? attachedClient.captureTaskFrame(taskId) : desktopRuntime.isChromium ? taskHost.captureTaskFrame(taskId) : null),
     sendTaskInput: (taskId, input) => (attachedClient ? attachedClient.sendTaskInput(taskId, input) : desktopRuntime.isChromium ? taskHost.sendTaskInput(taskId, input) : false),

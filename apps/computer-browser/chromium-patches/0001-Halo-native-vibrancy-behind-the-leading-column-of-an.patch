@@ -1,0 +1,318 @@
+From ee502d2ca5a9e8f5ee7fa172edb25788ca0b8957 Mon Sep 17 00:00:00 2001
+From: songjiun1105 <tvpcqs5n2x@privaterelay.appleid.com>
+Date: Fri, 9 Oct 2026 17:15:43 +0900
+Subject: [PATCH] Halo: native vibrancy behind the leading column of an --app
+ window
+
+Halo launches its UI browser with --halo-vibrancy-width=244 and
+--halo-vibrancy-tint=r,g,b,a. Without this patch both switches are unknown and
+ignored, and the leading column paints opaque.
+
+With --halo-vibrancy-width present:
+- the --app window gets NSWindowStyleMaskFullSizeContentView, a transparent
+  titlebar and a hidden title, so the page fills the whole window;
+- an NSVisualEffectView (sidebar material, behind-window blending) sits behind
+  the leading N px with an optional tint layer above it, both click-through;
+- the app layout reserves no title strip, the frame and contents-web-view
+  backgrounds stay transparent, and Chromium's own glass-frame tint opacity is
+  zeroed so the page's scrim is the only tint;
+- GlassFrameService tracks the TYPE_APP window.
+
+Without the switch nothing changes: every change is guarded by
+HasSwitch("halo-vibrancy-width"). --halo-vibrancy-tint is r,g,b (0-255) plus
+alpha (0-1); a malformed value is ignored.
+
+Verified on out/TrialLean/Chromium.app at --window-size=1600,1000:
+window.innerHeight is 1000 with the switch (full-size content view) against 968
+without it, at the same outer height.
+---
+ .../views/frame/browser_native_widget_mac.mm  | 100 +++++++++++++++++-
+ chrome/browser/ui/views/frame/browser_view.cc |  16 ++-
+ .../ui/views/frame/contents_web_view.cc       |  11 ++
+ .../ui/views/frame/glass_frame_service.cc     |  13 ++-
+ .../layout/browser_view_app_layout_impl.cc    |   7 +-
+ 5 files changed, 140 insertions(+), 7 deletions(-)
+
+diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+index fa6dcfd024..c10bfefcc2 100644
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+@@ -5,11 +5,16 @@
+ #import "chrome/browser/ui/views/frame/browser_native_widget_mac.h"
+ 
+ #include <array>
++#include <vector>
++#include <string>
+ 
+ #import "base/apple/foundation_util.h"
++#include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/i18n/rtl.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/metrics/user_metrics_action.h"
+ #include "base/notimplemented.h"
+@@ -157,6 +162,26 @@ - (NSView*)hitTest:(NSPoint)point {
+ }
+ @end
+ 
++// Halo: native blur behind the leading column of an --app window. Like the
++// glass frame view it must not swallow clicks meant for the web contents.
++@interface HaloVibrancyView : NSVisualEffectView
++@end
++
++@implementation HaloVibrancyView
++- (NSView*)hitTest:(NSPoint)point {
++  return nil;
++}
++@end
++
++@interface HaloVibrancyTintView : NSView
++@end
++
++@implementation HaloVibrancyTintView
++- (NSView*)hitTest:(NSPoint)point {
++  return nil;
++}
++@end
++
+ @interface OpaqueFrameBackgroundView : NSView
+ @end
+ 
+@@ -740,6 +765,13 @@ - (NSTouchBar*)makeTouchBar {
+   } else {
+     params->window_class = remote_cocoa::mojom::WindowClass::kDefault;
+   }
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "halo-vibrancy-width")) {
++    // Halo: the page fills the whole window; traffic lights float over it.
++    params->style_mask |= NSWindowStyleMaskFullSizeContentView;
++    params->titlebar_appears_transparent = true;
++    params->window_title_hidden = true;
++  }
+   params->animation_enabled = true;
+ }
+ 
+@@ -1045,8 +1077,66 @@ - (NSTouchBar*)makeTouchBar {
+                     positioned:NSWindowBelow
+                     relativeTo:nil];
+ 
++      const bool halo_glass =
++          base::CommandLine::ForCurrentProcess()->HasSwitch(
++              "halo-vibrancy-width");
++      int halo_width = 0;
++      if (halo_glass &&
++          base::StringToInt(base::CommandLine::ForCurrentProcess()
++                                ->GetSwitchValueASCII("halo-vibrancy-width"),
++                            &halo_width) &&
++          halo_width > 0) {
++        // Parent the blur to the frame view so it also covers the title bar.
++        NSView* const blur_parent =
++            content_view.superview ? content_view.superview : content_view;
++        NSVisualEffectView* const blur = [[HaloVibrancyView alloc]
++            initWithFrame:NSMakeRect(0, 0, halo_width,
++                                     blur_parent.bounds.size.height)];
++        ns_window.appearance =
++            [NSAppearance appearanceNamed:NSAppearanceNameAqua];
++        ns_window.titlebarAppearsTransparent = YES;
++        blur.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
++        blur.material = NSVisualEffectMaterialSidebar;
++        blur.blendingMode = NSVisualEffectBlendingModeBehindWindow;
++        blur.state = NSVisualEffectStateActive;
++        blur.autoresizingMask = NSViewMaxXMargin | NSViewHeightSizable;
++        [blur_parent addSubview:blur
++                     positioned:NSWindowBelow
++                     relativeTo:blur_parent == content_view ? nil
++                                                            : content_view];
++        // Halo: tint the blur like the page's own scrim so the sliver of blur
++        // outside the page's rounded corners matches the sidebar colour.
++        // --halo-vibrancy-tint=r,g,b,a (0-255 channels, 0-1 alpha).
++        const std::string tint_spec =
++            base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++                "halo-vibrancy-tint");
++        const std::vector<std::string> halo_tint = base::SplitString(
++            tint_spec, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++        double tr = 0, tg = 0, tb = 0, ta = 0;
++        if (halo_tint.size() == 4 && base::StringToDouble(halo_tint[0], &tr) &&
++            base::StringToDouble(halo_tint[1], &tg) &&
++            base::StringToDouble(halo_tint[2], &tb) &&
++            base::StringToDouble(halo_tint[3], &ta)) {
++          NSView* const halo_tint_view = [[HaloVibrancyTintView alloc]
++              initWithFrame:blur.frame];
++          halo_tint_view.wantsLayer = YES;
++          halo_tint_view.layer.backgroundColor =
++              [NSColor colorWithSRGBRed:tr / 255.0
++                                  green:tg / 255.0
++                                   blue:tb / 255.0
++                                  alpha:ta]
++                  .CGColor;
++          halo_tint_view.autoresizingMask = NSViewMaxXMargin | NSViewHeightSizable;
++          [blur_parent addSubview:halo_tint_view
++                       positioned:NSWindowAbove
++                       relativeTo:blur];
++        }
++      }
+       NSView* opaque_view =
+-          [[OpaqueFrameBackgroundView alloc] initWithFrame:content_view.bounds];
++          halo_glass ? nil
++                     : [[OpaqueFrameBackgroundView alloc]
++                           initWithFrame:content_view.bounds];
++      if (opaque_view) {
+       opaque_view.identifier =
+           remote_cocoa::kOpaqueFrameBackgroundViewIdentifier;
+       opaque_view.wantsLayer = YES;
+@@ -1055,6 +1145,7 @@ - (NSTouchBar*)makeTouchBar {
+       [content_view addSubview:opaque_background_view_
+                     positioned:NSWindowBelow
+                     relativeTo:glass_background_view_];
++      }
+     }
+ 
+     UpdateBackgroundGeometry();
+@@ -1163,8 +1254,11 @@ - (NSTouchBar*)makeTouchBar {
+   const CGFloat r = SkColorGetR(theme_color) / 255.0;
+   const CGFloat g = SkColorGetG(theme_color) / 255.0;
+   const CGFloat b = SkColorGetB(theme_color) / 255.0;
+-  const CGFloat a = GetGlassFrameTintOpacity(color_utils::IsDark(theme_color),
+-                                             is_vertical_tabs);
++  const CGFloat a =
++      base::CommandLine::ForCurrentProcess()->HasSwitch("halo-vibrancy-width")
++          ? 0.0
++          : GetGlassFrameTintOpacity(color_utils::IsDark(theme_color),
++                                     is_vertical_tabs);
+ 
+   tint_view_.layer.backgroundColor =
+       [NSColor colorWithSRGBRed:r green:g blue:b alpha:a].CGColor;
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+index a30cb908ae..4e21577f81 100644
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -1462,6 +1462,11 @@ bool BrowserView::ShouldDrawVerticalTabStrip() const {
+ }
+ 
+ bool BrowserView::ShouldDrawWebAppFrameToolbar() const {
++  // Halo: the page owns the whole window; no frame toolbar strip above it.
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "halo-vibrancy-width")) {
++    return false;
++  }
+   return !IsUnframedModeEnabled() &&
+          GetFrameView()->ShouldShowWebAppFrameToolbar();
+ }
+@@ -6054,9 +6059,18 @@ void BrowserView::FrameColorsChanged() {
+         GetFrameView()->GetFrameColor(BrowserFrameActiveState::kUseCurrent);
+     SkColor caption_color =
+         GetFrameView()->GetCaptionColor(BrowserFrameActiveState::kUseCurrent);
+-    web_app_window_title_->SetBackgroundColor(frame_color);
++    const bool halo_glass = base::CommandLine::ForCurrentProcess()->HasSwitch(
++        "halo-vibrancy-width");
++    web_app_window_title_->SetBackgroundColor(halo_glass ? SK_ColorTRANSPARENT
++                                                         : frame_color);
+     web_app_window_title_->SetEnabledColor(caption_color);
+   }
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "halo-vibrancy-width")) {
++    // Halo: the page decides which areas are solid; the window stays clear.
++    GetWidget()->SetBackgroundColor(SK_ColorTRANSPARENT);
++    return;
++  }
+   GetWidget()->SetBackgroundColor(kColorToolbar);
+ }
+ 
+diff --git a/chrome/browser/ui/views/frame/contents_web_view.cc b/chrome/browser/ui/views/frame/contents_web_view.cc
+index e1d30f930b..bf26bc78cc 100644
+--- a/chrome/browser/ui/views/frame/contents_web_view.cc
++++ b/chrome/browser/ui/views/frame/contents_web_view.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/ui/views/frame/contents_web_view.h"
+ 
++#include "base/command_line.h"
+ #include "base/debug/dump_without_crashing.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+@@ -187,6 +188,16 @@ void ContentsWebView::DidGetUserInteraction(const blink::WebInputEvent& event) {
+ #endif
+ 
+ void ContentsWebView::UpdateBackgroundColor() {
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "halo-vibrancy-width")) {
++    // Halo: keep the page's own (possibly translucent) background.
++    layer()->AsSolidColor()->SetColor(SkColors::kTransparent);
++    SafeInvoke(web_contents())
++        .Then(&content::WebContents::GetRenderWidgetHostView)
++        .Then(&content::RenderWidgetHostView::SetBackgroundColor,
++              SK_ColorTRANSPARENT);
++    return;
++  }
+   const SkColor color = GetColorProvider()->GetColor(
+       is_letterboxing() ? kColorWebContentsBackgroundLetterboxing
+                         : kColorWebContentsBackground);
+diff --git a/chrome/browser/ui/views/frame/glass_frame_service.cc b/chrome/browser/ui/views/frame/glass_frame_service.cc
+index 7ec12ec3c4..440632bf07 100644
+--- a/chrome/browser/ui/views/frame/glass_frame_service.cc
++++ b/chrome/browser/ui/views/frame/glass_frame_service.cc
+@@ -9,6 +9,7 @@
+ #include <utility>
+ 
+ #include "base/check.h"
++#include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+ #include "base/memory/raw_ptr.h"
+@@ -169,7 +170,10 @@ bool GlassFrameService::IsGlassFrameAllowed() {
+ }
+ 
+ void GlassFrameService::OnBrowserActivated(BrowserWindowInterface* browser) {
+-  if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
++  if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL &&
++      !(browser->GetType() == BrowserWindowInterface::TYPE_APP &&
++        base::CommandLine::ForCurrentProcess()->HasSwitch(
++            "halo-vibrancy-width"))) {
+     return;
+   }
+ 
+@@ -307,7 +311,12 @@ void GlassFrameService::MaybeShowOptInPromo(BrowserWindowInterface* browser) {
+ }
+ 
+ void GlassFrameService::MaybeTrackBrowser(BrowserWindowInterface* browser) {
+-  if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL ||
++  // Halo: --halo-vibrancy-width opts its --app window into the glass frame.
++  const bool halo_app =
++      browser->GetType() == BrowserWindowInterface::TYPE_APP &&
++      base::CommandLine::ForCurrentProcess()->HasSwitch("halo-vibrancy-width");
++  if ((browser->GetType() != BrowserWindowInterface::TYPE_NORMAL &&
++       !halo_app) ||
+       !tracked_browsers_.insert(browser).second) {
+     return;
+   }
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc b/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc
+index a6efac48fe..76201a2a88 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.cc
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "base/command_line.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.h"
+ 
+ #include "base/notreached.h"
+@@ -360,7 +361,11 @@ void BrowserViewAppLayoutImpl::CalculateTitlebarLayout(
+         tabstrip_enabled
+             ? GetLayoutConstant(LayoutConstant::kTabstripToolbarOverlap)
+             : 0;
+-    params.SetTop(full_titlebar_bounds.bottom() - tabstrip_adjustment);
++    // Halo: the page fills the whole window; the title strip is not reserved.
++    if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
++            "halo-vibrancy-width")) {
++      params.SetTop(full_titlebar_bounds.bottom() - tabstrip_adjustment);
++    }
+     overlay_rect_ = std::nullopt;
+   }
+ }
+-- 
+2.54.0 (Apple Git-157)
+

@@ -52,7 +52,28 @@ function createSessionVault(options: VaultOptions) {
       return false;
     }
   }
+  // A "site" is the cookie domain without a leading dot or "www."; an allowed site also covers its subdomains.
+  const siteOf = (domain: string): string => domain.replace(/^\./, "").replace(/^www\./, "").toLowerCase();
+  const covers = (allowed: string, domain: string): boolean => { const site = siteOf(domain); return site === allowed || site.endsWith(`.${allowed}`); };
+  // null (or never set) = persist every site, which is the previous behavior.
+  const allowedSites = new Map<string, string[] | null>();
+
   return Object.freeze({
+    setAllowedSites(partition: string, sites: string[] | null): void {
+      const uuid = uuidOf(partition);
+      if (!uuid) return;
+      allowedSites.set(uuid, Array.isArray(sites) ? sites.map((site) => siteOf(String(site))) : null);
+    },
+    async listSites(partition: string): Promise<Array<{ site: string; cookieCount: number }>> {
+      const counts = new Map<string, number>();
+      for (const cookie of await this.load(partition)) counts.set(siteOf(cookie.domain), (counts.get(siteOf(cookie.domain)) ?? 0) + 1);
+      return [...counts].map(([site, cookieCount]) => ({ site, cookieCount })).sort((a, b) => a.site.localeCompare(b.site));
+    },
+    async forgetSite(partition: string, site: string): Promise<boolean> {
+      const target = siteOf(String(site));
+      const kept = (await this.load(partition)).filter((cookie) => !covers(target, cookie.domain));
+      return this.save(partition, kept, { replace: true });
+    },
     isPersistentPartition(partition: string): boolean { return uuidOf(partition) !== null; },
     async load(partition: string): Promise<Cookie[]> {
       const uuid = uuidOf(partition);
@@ -76,8 +97,10 @@ function createSessionVault(options: VaultOptions) {
         return parsed.slice(0, MAX_COOKIES).filter((c: unknown): c is Cookie => validCookie(c, now));
       } catch { return []; }
     },
-    save(partition: string, cookies: Cookie[]): Promise<boolean> {
+    save(partition: string, cookies: Cookie[], options: { replace?: boolean } = {}): Promise<boolean> {
       const uuid = uuidOf(partition);
+      const allowed = uuid && !options.replace ? allowedSites.get(uuid) ?? null : null;
+      if (allowed && Array.isArray(cookies)) cookies = cookies.filter((cookie) => allowed.some((site) => covers(site, cookie.domain)));
       if (!uuid || !Array.isArray(cookies) || cookies.length > MAX_COOKIES || !encryptionAvailable() || unreadable.has(uuid)) return Promise.resolve(false);
       // One write at a time per partition so an older save can never land after a newer one.
       const run = (queues.get(uuid) ?? Promise.resolve()).then(() => write(uuid, cookies));

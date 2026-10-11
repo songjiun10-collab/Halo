@@ -1209,15 +1209,48 @@ test("handleSendMessage() lets a child message its own parent", async () => {
   await Promise.all(childStores.map((s) => s.close()));
 });
 
-test("handleSendMessage() rejects a child claiming a recipient other than its own parent (sibling/unrelated routing)", async () => {
+test("handleSendMessage() lets a child message an accepted sibling; both directions share one conversation", async () => {
+  const storageRoot = await mkTempRoot();
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const { parent, childIds, childStores } = await setUpAcceptedPlan(coordinator, storageRoot);
+
+  const asked = await coordinator.handleSendMessage(
+    childIds[0],
+    makeSendMessageProposal({ recipientTaskId: childIds[1], messageKind: "question", text: "what did you find?" }),
+  );
+  assert.equal(asked.duplicate, false);
+  const answered = await coordinator.handleSendMessage(
+    childIds[1],
+    makeSendMessageProposal({ recipientTaskId: childIds[0], messageKind: "answer", text: "three pages", inReplyToMessageId: asked.messageId }),
+  );
+  assert.equal(answered.duplicate, false);
+
+  const askerEvents = await childStores[0].getEvents();
+  const askerSent = askerEvents.filter((e) => e.type === "message_sent");
+  assert.equal(askerSent.length, 1);
+  assert.equal(askerSent[0].payload.senderTaskId, childIds[0]);
+  assert.equal(askerSent[0].payload.recipientTaskId, childIds[1]);
+  assert.equal(askerSent[0].payload.childTaskId, childIds[1], "the child leg always names the recipient child");
+  assert.match(askerSent[0].payload.conversationId, /^sib-/);
+  const answerEvents = await childStores[1].getEvents();
+  const answerSent = answerEvents.filter((e) => e.type === "message_sent");
+  assert.equal(answerSent.length, 1);
+  assert.equal(answerSent[0].payload.conversationId, askerSent[0].payload.conversationId, "one pair shares one conversation and quota");
+
+  const forRecipient = await coordinator.listPendingMessages(childIds[1]);
+  assert.ok(forRecipient.some((m) => m.messageId === asked.messageId));
+  const forAsker = await coordinator.listPendingMessages(childIds[0]);
+  assert.ok(forAsker.some((m) => m.messageId === answered.messageId));
+
+  await parent.close();
+  await Promise.all(childStores.map((s) => s.close()));
+});
+
+test("handleSendMessage() still rejects a child messaging an unrelated UUID", async () => {
   const storageRoot = await mkTempRoot();
   const coordinator = new ChildAgentCoordinator({ storageRoot });
   const { childIds, parent, childStores } = await setUpAcceptedPlan(coordinator, storageRoot);
 
-  await assert.rejects(
-    coordinator.handleSendMessage(childIds[0], makeSendMessageProposal({ recipientTaskId: childIds[1] })),
-    (err) => err instanceof ChildAgentCoordinatorError && err.code === "unauthorized_route",
-  );
   await assert.rejects(
     coordinator.handleSendMessage(
       childIds[0],
@@ -1225,6 +1258,80 @@ test("handleSendMessage() rejects a child claiming a recipient other than its ow
     ),
     (err) => err instanceof ChildAgentCoordinatorError && err.code === "unauthorized_route",
   );
+
+  await parent.close();
+  await Promise.all(childStores.map((s) => s.close()));
+});
+
+test("handleSendMessage() rejects a sibling steer (parent-to-child only, both directions)", async () => {
+  const storageRoot = await mkTempRoot();
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const { childIds, parent, childStores } = await setUpAcceptedPlan(coordinator, storageRoot);
+
+  await assert.rejects(
+    coordinator.handleSendMessage(
+      childIds[0],
+      makeSendMessageProposal({ recipientTaskId: childIds[1], messageKind: "steer" }),
+    ),
+    (err) => err instanceof ChildAgentCoordinatorError && err.code === "unauthorized_route",
+  );
+
+  await parent.close();
+  await Promise.all(childStores.map((s) => s.close()));
+});
+
+test("an unanswered sibling question is escalated to the parent once, and an answered one never is", async () => {
+  const storageRoot = await mkTempRoot();
+  const coordinator = new ChildAgentCoordinator({ storageRoot, siblingAskTimeoutMs: 50 });
+  const { parent, childIds, childStores } = await setUpAcceptedPlan(coordinator, storageRoot);
+
+  const asked = await coordinator.handleSendMessage(
+    childIds[0],
+    makeSendMessageProposal({ recipientTaskId: childIds[1], messageKind: "question", text: "are you there?" }),
+  );
+  await coordinator.listPendingMessages(parent.taskId);
+  const earlyNotes = (await parent.getEvents()).filter((e) => e.type === "note" && e.payload?.kind === "sibling_ask_timeout");
+  assert.equal(earlyNotes.length, 0, "a fresh question is not expired");
+
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  await coordinator.listPendingMessages(parent.taskId);
+  await coordinator.listPendingMessages(parent.taskId);
+  const notes = (await parent.getEvents()).filter((e) => e.type === "note" && e.payload?.kind === "sibling_ask_timeout");
+  assert.equal(notes.length, 1, "exactly one escalation per question");
+  assert.equal(notes[0].payload.askerTaskId, childIds[0]);
+  assert.equal(notes[0].payload.recipientTaskId, childIds[1]);
+  assert.equal(notes[0].payload.messageId, asked.messageId);
+  assert.equal(notes[0].payload.reason, "ask_timeout");
+
+  // An answered question never escalates, even past the timeout.
+  await coordinator.handleSendMessage(
+    childIds[1],
+    makeSendMessageProposal({ recipientTaskId: childIds[0], messageKind: "answer", text: "yes", inReplyToMessageId: asked.messageId }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  await coordinator.listPendingMessages(parent.taskId);
+  const after = (await parent.getEvents()).filter((e) => e.type === "note" && e.payload?.kind === "sibling_ask_timeout");
+  assert.equal(after.length, 1, "the answered question adds no second note");
+
+  await parent.close();
+  await Promise.all(childStores.map((s) => s.close()));
+});
+
+test("a sibling question whose recipient already retired escalates immediately", async () => {
+  const storageRoot = await mkTempRoot();
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const { parent, childIds, childStores } = await setUpAcceptedPlan(coordinator, storageRoot);
+
+  const asked = await coordinator.handleSendMessage(
+    childIds[0],
+    makeSendMessageProposal({ recipientTaskId: childIds[1], messageKind: "question", text: "ping" }),
+  );
+  coordinator._terminalChildren.set(childIds[1], { outcome: "completed", reported: false });
+  await coordinator.listPendingMessages(parent.taskId);
+  const notes = (await parent.getEvents()).filter((e) => e.type === "note" && e.payload?.kind === "sibling_ask_timeout");
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0].payload.messageId, asked.messageId);
+  assert.equal(notes[0].payload.reason, "recipient_retired");
 
   await parent.close();
   await Promise.all(childStores.map((s) => s.close()));
@@ -1509,4 +1616,125 @@ test("end-to-end: a live child's own planner proposes send_message and it durabl
   assert.equal(snapshot.budgets.plannerCallsUsed, 2);
 
   await parent.close();
+});
+
+test("handleSendMessage() refuses a sibling question that would close a wait cycle, and an answer frees the wait", async () => {
+  const storageRoot = await mkTempRoot();
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const { parent, childIds, childStores } = await setUpAcceptedPlan(coordinator, storageRoot);
+
+  const asked = await coordinator.handleSendMessage(
+    childIds[0],
+    makeSendMessageProposal({ recipientTaskId: childIds[1], messageKind: "question", text: "need your result", idempotencyKey: "q-ab" }),
+  );
+  await assert.rejects(
+    coordinator.handleSendMessage(
+      childIds[1],
+      makeSendMessageProposal({ recipientTaskId: childIds[0], messageKind: "question", text: "need yours first", idempotencyKey: "q-ba" }),
+    ),
+    (err) => err instanceof ChildAgentCoordinatorError && err.code === "deadlock",
+  );
+  await coordinator.handleSendMessage(
+    childIds[1],
+    makeSendMessageProposal({ recipientTaskId: childIds[0], messageKind: "answer", text: "here", inReplyToMessageId: asked.messageId, idempotencyKey: "a-ba" }),
+  );
+  const later = await coordinator.handleSendMessage(
+    childIds[1],
+    makeSendMessageProposal({ recipientTaskId: childIds[0], messageKind: "question", text: "now me", idempotencyKey: "q-ba2" }),
+  );
+  assert.equal(later.duplicate, false);
+
+  await parent.close();
+  await Promise.all(childStores.map((s) => s.close()));
+});
+
+test("broadcastToTeam() shares with every sibling and the parent but not the sender", async () => {
+  const storageRoot = await mkTempRoot();
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const { parent, childIds, childStores } = await setUpAcceptedPlan(coordinator, storageRoot);
+
+  const sent = await coordinator.broadcastToTeam(childIds[0], { text: "found the login form", idempotencyKey: "bc-1" });
+  const recipients = sent.map((s) => s.recipientTaskId).sort();
+  assert.deepEqual(recipients, [parent.taskId, ...childIds.slice(1)].sort());
+  assert.ok(sent.every((s) => s.duplicate === false));
+
+  await parent.close();
+  await Promise.all(childStores.map((s) => s.close()));
+});
+
+test("an unanswered sibling question expires from the wait graph so the reverse ask is allowed again", async () => {
+  const storageRoot = await mkTempRoot();
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const { parent, childIds, childStores } = await setUpAcceptedPlan(coordinator, storageRoot);
+  let clock = 0;
+  coordinator._commsGuard = new (require("../main/harness/comms-guard").CommsGuard)({ now: () => clock, questionTimeoutMs: 1000 });
+
+  await coordinator.handleSendMessage(childIds[0], makeSendMessageProposal({ recipientTaskId: childIds[1], messageKind: "question", text: "q", idempotencyKey: "q1" }));
+  clock = 2000;
+  assert.equal(coordinator._commsGuard.expireQuestions().length, 1);
+  const reverse = await coordinator.handleSendMessage(childIds[1], makeSendMessageProposal({ recipientTaskId: childIds[0], messageKind: "question", text: "r", idempotencyKey: "q2" }));
+  assert.equal(reverse.duplicate, false);
+
+  await parent.close();
+  await Promise.all(childStores.map((s) => s.close()));
+});
+
+test("cross-team help needs a lease, goes lead to lead, is budgeted, and a revoke or release stops it", async () => {
+  const storageRoot = await mkTempRoot();
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const a = await setUpAcceptedPlan(coordinator, storageRoot);
+  const b = await setUpAcceptedPlan(coordinator, storageRoot);
+  const teamA = a.parent.taskId;
+  const teamB = b.parent.taskId;
+
+  await assert.rejects(coordinator.requestTeamHelp(teamA, { toTeamId: teamB, text: "need data", idempotencyKey: "h1" }), { code: "no_lease" });
+  await assert.rejects(coordinator.requestTeamHelp(a.childIds[0], { toTeamId: teamB, text: "x", idempotencyKey: "h0" }), { code: "not_lead" });
+
+  coordinator.grantTeamLease(teamA, teamB, "share scraped data");
+  const sent = await coordinator.requestTeamHelp(teamA, { toTeamId: teamB, text: "need data", idempotencyKey: "h1" });
+  assert.equal(sent.recipientTaskId, teamB);
+  assert.equal(coordinator.listTeamConversation(teamA, teamB).length, 1);
+
+  // a reverse ask while the first is still open would close a team-level wait cycle
+  coordinator.grantTeamLease(teamB, teamA, "reverse");
+  await assert.rejects(coordinator.requestTeamHelp(teamB, { toTeamId: teamA, text: "need yours", idempotencyKey: "h2" }), { code: "deadlock" });
+
+  coordinator.revokeTeamLease(teamA, teamB);
+  assert.equal(coordinator.listTeamConversation(teamA, teamB).length, 0);
+  await assert.rejects(coordinator.requestTeamHelp(teamA, { toTeamId: teamB, text: "again", idempotencyKey: "h3" }), { code: "no_lease" });
+
+  await a.parent.close(); await b.parent.close();
+  await Promise.all([...a.childStores, ...b.childStores].map((s) => s.close()));
+});
+
+test("a team message budget is spent per send and returned to the pool when the plan is cancelled", async () => {
+  const storageRoot = await mkTempRoot();
+  const { TeamBudgets } = require("../main/harness/team-budgets");
+  const budgets = new TeamBudgets({ perTeam: { messages: 2 }, crossTeam: { messages: 1 }, pool: { messages: 0 } });
+  const coordinator = new ChildAgentCoordinator({ storageRoot, teamBudgets: budgets });
+  const { parent, childIds, childStores } = await setUpAcceptedPlan(coordinator, storageRoot);
+
+  await coordinator.handleSendMessage(childIds[0], makeSendMessageProposal({ recipientTaskId: childIds[1], messageKind: "share", text: "1", idempotencyKey: "m1" }));
+  await coordinator.handleSendMessage(childIds[0], makeSendMessageProposal({ recipientTaskId: childIds[1], messageKind: "share", text: "2", idempotencyKey: "m2" }));
+  await assert.rejects(
+    coordinator.handleSendMessage(childIds[0], makeSendMessageProposal({ recipientTaskId: childIds[1], messageKind: "share", text: "3", idempotencyKey: "m3" })),
+    { code: "budget_exhausted" },
+  );
+  await coordinator.cancelPlan(parent.taskId, "done", { parentStore: parent });
+  assert.throws(() => budgets.remaining(parent.taskId), { code: "unknown_team" });
+
+  await parent.close();
+  await Promise.all(childStores.map((s) => s.close()));
+});
+
+test("getPlanSummary() reports each child's lastNote from the team board", async () => {
+  const storageRoot = await mkTempRoot();
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const { parent, childIds, childStores } = await setUpAcceptedPlan(coordinator, storageRoot);
+  await coordinator.handleSendMessage(childIds[0], makeSendMessageProposal({ recipientTaskId: parent.taskId, messageKind: "progress", text: "halfway there", idempotencyKey: "p1" }));
+  const summary = await coordinator.getPlanSummary(parent.taskId);
+  assert.equal(summary.agents.find((a) => a.agentId === childIds[0]).lastNote, "halfway there");
+  assert.equal(summary.agents.find((a) => a.agentId === childIds[1]).lastNote, undefined);
+  await parent.close();
+  await Promise.all(childStores.map((s) => s.close()));
 });

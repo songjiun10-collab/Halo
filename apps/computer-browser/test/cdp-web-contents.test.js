@@ -10,8 +10,10 @@ const path = require("node:path");
 const http = require("node:http");
 const { spawn } = require("node:child_process");
 const { BrowserAdapter } = require("../main/harness/browser-adapter");
-const { openCdpView, createCdpView, connectCdpTransport, modifierMask, keyInfo, pngSize } = require("../main/harness/cdp-web-contents");
+const { openCdpView, createCdpView, connectCdpTransport, mergeRequestHeaders, modifierMask, keyInfo, pngSize } = require("../main/harness/cdp-web-contents");
+const { createRequestSigner, verifyWebBotAuthHeaders } = require("../main/harness/web-bot-auth");
 const { acquireCdpBrowser } = require("../main/harness/cdp-browser-host");
+const { makeIntentLock } = require("../shared/harness-contracts");
 
 const CANDIDATES = [
   process.env.HALO_CHROMIUM,
@@ -30,6 +32,26 @@ test("pure helpers map modifiers, keys and PNG headers", () => {
   header.writeUInt32BE(200, 20);
   assert.deepEqual(pngSize(header), { width: 300, height: 200 });
   assert.deepEqual(pngSize(Buffer.alloc(4)), { width: 0, height: 0 });
+});
+
+test("signature headers merge over the request's own headers, replacing stale ones", () => {
+  const merged = mergeRequestHeaders(
+    { accept: "text/html", "user-agent": "Halo", "Signature-Input": "sig1=old", Cookie: "a=b" },
+    { "Signature-Input": "sig1=new", Signature: "sig1=:x:", "Signature-Agent": '"https://agent.example.org"' },
+  );
+  assert.deepEqual(merged, [
+    { name: "accept", value: "text/html" },
+    { name: "user-agent", value: "Halo" },
+    { name: "Cookie", value: "a=b" },
+    { name: "Signature-Input", value: "sig1=new" },
+    { name: "Signature", value: "sig1=:x:" },
+    { name: "Signature-Agent", value: '"https://agent.example.org"' },
+  ]);
+  assert.deepEqual(mergeRequestHeaders(undefined, { Signature: "sig1=:x:" }), [{ name: "Signature", value: "sig1=:x:" }]);
+  assert.deepEqual(
+    mergeRequestHeaders([{ name: "Accept", value: "a" }, { name: "signature", value: "old" }], { Signature: "sig1=:new:" }),
+    [{ name: "Accept", value: "a" }, { name: "Signature", value: "sig1=:new:" }],
+  );
 });
 
 test("BrowserAdapter observes, clicks and navigates a real Chromium page over CDP", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
@@ -64,6 +86,14 @@ test("BrowserAdapter observes, clicks and navigates a real Chromium page over CD
 
   const navigated = await adapter.execute({ type: "navigate", url: `${base}/` });
   assert.equal(navigated.status, "ok");
+  adapter.setIntentLock(makeIntentLock({ rules: [{ kind: "deny_origins", origins: [base] }] }));
+  await view.webContents.executeJavaScript(`location.href = ${JSON.stringify(`${base}/blocked-by-lock`)}`);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(view.webContents.getURL(), `${base}/`, "page-driven top-level navigation obeys the same host lock as agent actions");
+  adapter.setIntentLock(null);
+  // Re-establish a settled document after Chromium reports the rejected
+  // provisional navigation. It must not contaminate the next observation's epoch.
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/` })).status, "ok");
   const first = await adapter.observe();
   assert.ok(first.elements.some((element) => element.name === "Hello"), "heading observed");
   const link = first.elements.find((element) => /Go next/.test(element.name ?? element.text ?? ""));
@@ -236,5 +266,35 @@ test("a CDP page pushes live JPEG frames while it paints, and stops on request",
   await new Promise((resolve) => setTimeout(resolve, 600));
   assert.equal(frames.length, settled, "no frames after stop");
   await assert.rejects(view.webContents.startScreencast({ maxWidth: 0, quality: 60 }, () => {}), /invalid_capture_options/);
+  await adapter.dispose();
+});
+
+test("Web Bot Auth headers reach the server and verify without dropping request headers", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
+  const seen = [];
+  const server = http.createServer((request, response) => {
+    seen.push({ url: request.url, headers: request.headers });
+    response.setHeader("content-type", "text/html");
+    response.end("<title>signed</title>signed");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "halo-wba-"));
+  const signer = await createRequestSigner({ keyFile: path.join(dir, "key.pem"), directoryUrl: "https://agent.example.org" });
+  const launched = await acquireCdpBrowser({ executablePath: CHROMIUM });
+  t.after(async () => {
+    await launched.close();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  });
+  const transport = await connectCdpTransport(launched.wsUrl);
+  t.after(() => transport.close());
+  const view = createCdpView(async () => transport, { isolated: true, signRequestHeaders: (url) => signer.sign(url) });
+  const adapter = new BrowserAdapter({ view });
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/page` })).status, "ok");
+  const document = seen.find((entry) => entry.url === "/page");
+  assert.ok(document, "the document request reached the server");
+  assert.ok(document.headers["user-agent"], "existing request headers survive the override");
+  assert.equal(document.headers["signature-agent"], '"https://agent.example.org"');
+  assert.ok(verifyWebBotAuthHeaders({ url: `${base}/page`, headers: document.headers, publicJwk: signer.publicJwk }), "the server-visible signature verifies");
   await adapter.dispose();
 });

@@ -62,7 +62,7 @@ interface TaskStore {
   append(input: { type: "message_sent"; payload: MessageEnvelope }): MaybePromise<MessageSentEvent>;
   append(input: { type: "message_turn_consumed"; payload: ConsumedInput }): MaybePromise<MessageConsumedEvent>;
 }
-interface ConversationTaskIds { parentTaskId: string; childTaskId: string }
+interface ConversationTaskIds { parentTaskId: string; childTaskId: string; siblingPair?: [string, string] }
 type GetTaskStore = (taskId: string) => MaybePromise<TaskStore | null | undefined>;
 type GetConversationTaskIds = (conversationId: string) => MaybePromise<ConversationTaskIds | null | undefined>;
 interface MailboxOptions {
@@ -184,7 +184,21 @@ class MessageMailbox {
 
   async _relationship(envelope: MessageInput): Promise<ConversationTaskIds> {
     const relation = await this._getConversationTaskIds(envelope.conversationId);
-    if (!relation || relation.parentTaskId !== envelope.parentTaskId || relation.childTaskId !== envelope.childTaskId ||
+    if (!relation || relation.parentTaskId !== envelope.parentTaskId) {
+      throw new MessageMailboxError("unauthorized_route", "message does not match the host conversation relationship");
+    }
+    if (relation.siblingPair) {
+      // A sibling leg: both ends are accepted children of the same parent,
+      // and the child leg always names the recipient child.
+      const [first, second] = relation.siblingPair;
+      if (envelope.childTaskId !== envelope.recipientTaskId ||
+          !((envelope.senderTaskId === first && envelope.recipientTaskId === second) ||
+            (envelope.senderTaskId === second && envelope.recipientTaskId === first))) {
+        throw new MessageMailboxError("unauthorized_route", "message does not match the host sibling relationship");
+      }
+      return relation;
+    }
+    if (relation.childTaskId !== envelope.childTaskId ||
         !((envelope.senderTaskId === relation.parentTaskId && envelope.recipientTaskId === relation.childTaskId) ||
           (envelope.senderTaskId === relation.childTaskId && envelope.recipientTaskId === relation.parentTaskId))) {
       throw new MessageMailboxError("unauthorized_route", "message does not match the host conversation relationship");

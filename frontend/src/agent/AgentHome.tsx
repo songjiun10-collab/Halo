@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
+import { useShowAdvanced } from '../session/show-advanced'
 import { LIM, errText, getAgentApi, listConversations, markRead, type AgentApi, type AgentRecord, type OwnerRef, type RosterStatus, type TeamRecord } from './agent-api'
 import { rosterDot, toUi, type UiConversation } from './normalize'
 import { AgentCharacter, AgentDeskCredit, Avatar, ConvoList, Ic, modelBrand, Stack } from './AgentUi'
@@ -44,6 +45,7 @@ export function AgentHome({ onOpenTask }: { onOpenTask: (taskId: string) => void
 }
 
 function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: string) => void }) {
+  const showAdvanced = useShowAdvanced()
   const [v, setV] = useState<View>(() => takeAgentView() ?? { n: 'hub' })
   useEffect(() => onAgentView(() => { const next = takeAgentView(); if (next) setV(next) }), [])
   // Each view starts at its top (the page scroller is shared with the previous view).
@@ -138,8 +140,8 @@ function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: str
         <button type="button" className="hx-acard hx-acard--new" disabled={nT >= LIM.teams || !agents.some((a) => !a.archived)} onClick={() => setV({ n: 'teamForm' })}><span className="hx-plus">+</span><b>New team</b>{nT >= LIM.teams ? <span>Limit reached</span> : null}</button></div>
       <h3 className="hx-ag__h">Recent conversations</h3>
       {loaded ? <ConvoList rows={convos.slice(0, 8)} owners={owners} showOwner onOpen={(c) => openTask(c.taskId, { kind: c.kind, id: c.ownerId })} /> : <p className="hx-ag__empty">Loading…</p>}
-      <h3 className="hx-ag__h">Background service</h3>
-      <BackgroundRuntimePanel />
+      {showAdvanced && <><h3 className="hx-ag__h">Background service</h3>
+      <BackgroundRuntimePanel /></>}
       <WorkspaceSections onOpenTask={onOpenTask} /></div>
   }
   return <div ref={rootRef} className="hx-ag">{body}</div>

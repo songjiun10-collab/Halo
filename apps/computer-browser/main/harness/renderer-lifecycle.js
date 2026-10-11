@@ -14,6 +14,7 @@
 // already treats that as a new document (epoch bump, observation and approval
 // bindings dropped), so nothing observed before a park can be acted on after it.
 const events = require("node:events");
+const os = require("node:os");
 const FORWARDED_EVENTS = ["did-navigate", "did-navigate-in-page", "did-stop-loading", "did-fail-load", "page-title-updated", "will-navigate", "will-redirect"];
 let nextProxyId = 1;
 class SurfaceError extends Error {
@@ -44,6 +45,8 @@ class ParkableView {
     closed = false;
     freezeBroken = false;
     unhook = [];
+    // A live mirror of the page: it survives a discard/restore by re-attaching to the new renderer.
+    screencast = null;
     constructor(opts) {
         this.opts = opts;
         this.now = opts.now ?? Date.now;
@@ -166,6 +169,10 @@ class ParkableView {
             this.unhook.push(() => wc.removeListener?.(name, forward));
         }
         this.session ??= safeCall(() => wc.session, undefined);
+        if (this.screencast && typeof wc.startScreencast === "function") {
+            const { options, onFrame } = this.screencast;
+            void Promise.resolve(safeCall(() => wc.startScreencast(options, onFrame), undefined)).catch(() => undefined);
+        }
     }
     release(inner) {
         for (const off of this.unhook.splice(0))
@@ -214,6 +221,25 @@ class ParkableView {
                 ? (...args) => self.use(true, (wc) => wc.captureJpeg(...args))
                 : undefined,
         });
+        Object.defineProperty(proxy, "startScreencast", {
+            get: () => typeof self.inner?.view.webContents.startScreencast === "function"
+                ? async (options, onFrame) => {
+                    self.screencast = { options, onFrame };
+                    try {
+                        await self.use(true, (wc) => wc.startScreencast(options, onFrame));
+                    }
+                    catch (error) {
+                        self.screencast = null;
+                        throw error;
+                    }
+                }
+                : undefined,
+        });
+        Object.defineProperty(proxy, "stopScreencast", {
+            get: () => typeof self.inner?.view.webContents.stopScreencast === "function"
+                ? async () => { self.screencast = null; await self.inner?.view.webContents.stopScreencast?.(); }
+                : undefined,
+        });
         Object.defineProperty(proxy, "navigationHistory", {
             get: () => self.inner?.view.webContents.navigationHistory ?? { canGoBack: () => false, canGoForward: () => false, getActiveIndex: () => 0, length: () => 1 },
         });
@@ -234,6 +260,7 @@ class ParkableView {
         if (this.closed)
             return;
         this.closed = true;
+        this.screencast = null;
         const inner = this.inner;
         this.inner = null;
         this.state = "discarded";
@@ -260,7 +287,11 @@ function safeCall(fn, fallback) { try {
 catch {
     return fallback;
 } }
-const DEFAULT_POLICY = Object.freeze({ maxActive: 6, freezeAfterMs: 8_000, discardAfterMs: 120_000, minIdleMs: 3_000, idleShutdownMs: 30_000 });
+const DEFAULT_POLICY = Object.freeze({ maxActive: "auto", perSurfaceMb: 125, reserveMb: 1_024, minActive: 2, freezeAfterMs: 8_000, discardAfterMs: 120_000, minIdleMs: 3_000, idleShutdownMs: 30_000 });
+// macOS reports little "free" memory because it caches aggressively; treat a quarter of RAM as always reclaimable.
+function defaultFreeMemoryMb() {
+    return Math.max(os.freemem(), os.totalmem() * 0.25) / (1024 * 1024);
+}
 class SurfacePool {
     surfaces = new Map();
     pins = new Map();
@@ -269,10 +300,20 @@ class SurfacePool {
     onIdle;
     now;
     idleSince = null;
+    freeMemoryMb;
     constructor(policy = {}, hooks = {}) {
         this.policy = { ...DEFAULT_POLICY, ...policy };
         this.onIdle = hooks.onIdle ?? null;
         this.now = hooks.now ?? Date.now;
+        this.freeMemoryMb = hooks.freeMemoryMb ?? defaultFreeMemoryMb;
+    }
+    // The live-renderer budget. A fixed number, or (auto) what free memory affords,
+    // floored at minActive so a memory spike can never discard every surface.
+    effectiveMaxActive() {
+        const { maxActive, perSurfaceMb, reserveMb, minActive } = this.policy;
+        if (maxActive !== "auto")
+            return maxActive;
+        return Math.max(minActive, Math.floor((this.freeMemoryMb() - reserveMb) / perSurfaceMb));
     }
     register(id, view) { this.surfaces.set(id, view); }
     unregister(id) { this.surfaces.delete(id); this.pins.delete(id); }
@@ -293,7 +334,8 @@ class SurfacePool {
     }
     // One pass of the policy. Safe to call at any time and from any number of places.
     async sweep() {
-        const { freezeAfterMs, discardAfterMs, minIdleMs, maxActive } = this.policy;
+        const { freezeAfterMs, discardAfterMs, minIdleMs } = this.policy;
+        const maxActive = this.effectiveMaxActive();
         const idle = this.candidates().sort((a, b) => b[1].idleMs() - a[1].idleMs());
         for (const [, view] of idle) {
             if (view.idleMs() >= discardAfterMs)

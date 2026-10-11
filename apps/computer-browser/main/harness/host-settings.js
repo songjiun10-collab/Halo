@@ -5,6 +5,7 @@ const fsConstants = require("node:fs").constants;
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { PERMISSION_MODES } = require("./permission-policy");
+const { MCP_ROUTE_PREFERENCES } = require("./mcp-route-policy");
 const { PLANNER_PROVIDER_IDS, PLANNER_PROVIDERS } = require("./planner-providers");
 const { EFFORT_MODES } = require("./planner-effort-policy");
 
@@ -38,8 +39,11 @@ const SETTINGS_FIELDS = ["executionMode", "mcpProviders", "memoryPolicy", "permi
 // contextAwareness (opt-in, off when unset) keeps a local journal of pages the user read.
 // plannerRouting (opt-in, off when unset) picks a planner tier from the task duration profile.
 // plannerEscalation (opt-in, off when unset) lets a stuck task move up one model tier.
-const OPTIONAL_FIELDS = ["plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy"];
-const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy"];
+// webBotAuth (opt-in, off when unset) signs agent-browser requests so a site that
+// verifies Web Bot Auth can recognize the declared agent; webBotAuthDirectory is
+// the https URL of the published key directory used as Signature-Agent.
+const OPTIONAL_FIELDS = ["plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "mcpRoutePreference", "showAdvanced", "contextAwareness", "strategyLearning", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy", "webBotAuth", "webBotAuthDirectory"];
+const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "mcpRoutePreference", "showAdvanced", "contextAwareness", "strategyLearning", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy", "webBotAuth", "webBotAuthDirectory"];
 const LEGACY_V1_FIELDS = "executionMode,permissionMode,plannerEffort,version";
 const LEGACY_V2_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,version";
 const LEGACY_V3_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,plannerProvider,version";
@@ -127,9 +131,33 @@ function validateSettings(value) {
   if (hasChromiumEndpoint && (typeof value.chromiumEndpoint !== "string" || value.chromiumEndpoint.length > 256 || !/^(https?|wss?):\/\//.test(value.chromiumEndpoint))) {
     throw new HostSettingsError("invalid_chromium_endpoint", "chromiumEndpoint must be an http(s) or ws(s) URL");
   }
+  // Web Bot Auth (web-bot-auth.ts). Signing only changes requests to sites that
+  // verify the standard; the directory URL is the operator-published https key
+  // directory. An empty string clears the directory (treated as unset).
+  const hasWebBotAuth = Object.prototype.hasOwnProperty.call(value, "webBotAuth");
+  if (hasWebBotAuth && typeof value.webBotAuth !== "boolean") {
+    throw new HostSettingsError("invalid_web_bot_auth", "webBotAuth must be a boolean");
+  }
+  const hasWebBotAuthDirectory = Object.prototype.hasOwnProperty.call(value, "webBotAuthDirectory") && value.webBotAuthDirectory !== "";
+  if (hasWebBotAuthDirectory) {
+    const raw = value.webBotAuthDirectory;
+    let parsed = null;
+    try { parsed = new URL(raw); } catch { parsed = null; }
+    if (typeof raw !== "string" || raw.length > 512 || raw.includes("\0") || !parsed || parsed.protocol !== "https:" || !parsed.hostname || parsed.username !== "" || parsed.password !== "") {
+      throw new HostSettingsError("invalid_web_bot_auth_directory", "webBotAuthDirectory must be an https URL");
+    }
+  }
   const hasRouting = Object.prototype.hasOwnProperty.call(value, "plannerRouting");
   if (hasRouting && typeof value.plannerRouting !== "boolean") {
     throw new HostSettingsError("invalid_planner_routing", "plannerRouting must be a boolean");
+  }
+  const hasMcpRoute = Object.prototype.hasOwnProperty.call(value, "mcpRoutePreference");
+  if (hasMcpRoute && !MCP_ROUTE_PREFERENCES.includes(value.mcpRoutePreference)) {
+    throw new HostSettingsError("invalid_mcp_route_preference", "mcpRoutePreference must be mcp_first, browser_first or always_ask");
+  }
+  const hasShowAdvanced = Object.prototype.hasOwnProperty.call(value, "showAdvanced");
+  if (hasShowAdvanced && typeof value.showAdvanced !== "boolean") {
+    throw new HostSettingsError("invalid_show_advanced", "showAdvanced must be a boolean");
   }
   const hasEscalation = Object.prototype.hasOwnProperty.call(value, "plannerEscalation");
   if (hasEscalation && typeof value.plannerEscalation !== "boolean") {
@@ -148,12 +176,16 @@ function validateSettings(value) {
     ...(hasFast ? { plannerFast: value.plannerFast } : {}),
     ...(hasEscalation ? { plannerEscalation: value.plannerEscalation } : {}),
     ...(hasRouting ? { plannerRouting: value.plannerRouting } : {}),
+    ...(hasMcpRoute ? { mcpRoutePreference: value.mcpRoutePreference } : {}),
+    ...(hasShowAdvanced ? { showAdvanced: value.showAdvanced } : {}),
     ...(hasAwareness ? { contextAwareness: value.contextAwareness } : {}),
     ...(hasStrategyLearning ? { strategyLearning: value.strategyLearning } : {}),
     ...(hasEngine ? { browserEngine: value.browserEngine } : {}),
     ...(hasChromiumPath ? { chromiumPath: value.chromiumPath } : {}),
     ...(hasChromiumEndpoint ? { chromiumEndpoint: value.chromiumEndpoint } : {}),
     ...(hasChromiumContextPolicy ? { chromiumContextPolicy: value.chromiumContextPolicy } : {}),
+    ...(hasWebBotAuth ? { webBotAuth: value.webBotAuth } : {}),
+    ...(hasWebBotAuthDirectory ? { webBotAuthDirectory: value.webBotAuthDirectory } : {}),
   };
 }
 

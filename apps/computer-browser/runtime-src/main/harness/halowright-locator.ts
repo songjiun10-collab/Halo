@@ -1,17 +1,20 @@
 "use strict";
 
-// A locator names an element the way a person would (role+name, label, text, placeholder).
+// A locator names an element the way a person would (role+name, label, text, placeholder, testid).
 // Nothing here is a selector or code: the host builds the page script itself and only
 // splices in JSON-encoded strings, so a model-supplied name can never become script.
 
-type LocatorSpec =
+type LocatorBase =
   | { role: string; name?: string; nth?: number }
   | { label: string; nth?: number }
   | { text: string; nth?: number }
-  | { placeholder: string; nth?: number };
+  | { placeholder: string; nth?: number }
+  | { testid: string; nth?: number };
+// within narrows the search to one unique container found by a plain (non-nested) locator.
+type LocatorSpec = LocatorBase & { within?: LocatorBase };
 
 type ResolveResult =
-  | { status: "resolved"; x: number; y: number; tag: string }
+  | { status: "resolved"; x: number; y: number; tag: string; stable?: boolean; checked?: boolean; role?: string; name?: string; inputType?: string }
   | { status: "not_found" }
   | { status: "ambiguous"; count: number; candidates: string[] }
   | { status: "not_actionable"; reason: "hidden" | "disabled" | "covered" | "moving" };
@@ -24,14 +27,14 @@ class HalowrightError extends Error {
 const MAX_TEXT = 200;
 const ROLES = ["button", "link", "textbox", "checkbox", "radio", "combobox", "heading", "tab", "menuitem", "option", "switch"];
 
-function validateLocator(value: unknown): LocatorSpec {
+function validateLocator(value: unknown, nested = false): LocatorSpec {
   const fail = (why: string): never => { throw new HalowrightError("invalid_locator", why); };
   if (!value || typeof value !== "object" || Array.isArray(value)) return fail("locator must be an object");
   const spec = value as Record<string, unknown>;
   const keys = Object.keys(spec);
-  const forms = ["role", "label", "text", "placeholder"].filter((key) => key in spec);
-  if (forms.length !== 1) return fail("exactly one of role, label, text, placeholder");
-  const allowed = new Set([forms[0], "nth", ...(forms[0] === "role" ? ["name"] : [])]);
+  const forms = ["role", "label", "text", "placeholder", "testid"].filter((key) => key in spec);
+  if (forms.length !== 1) return fail("exactly one of role, label, text, placeholder, testid");
+  const allowed = new Set([forms[0], "nth", ...(forms[0] === "role" ? ["name"] : []), ...(nested ? [] : ["within"])]);
   if (keys.some((key) => !allowed.has(key))) return fail("unknown field");
   const str = (key: string): string => {
     const v = spec[key];
@@ -40,27 +43,48 @@ function validateLocator(value: unknown): LocatorSpec {
   };
   if ("nth" in spec && !(Number.isInteger(spec.nth) && (spec.nth as number) >= 0 && (spec.nth as number) < 50)) return fail("nth must be 0..49");
   const nth = "nth" in spec ? { nth: spec.nth as number } : {};
+  const within = "within" in spec ? { within: validateLocator(spec.within, true) as LocatorBase } : {};
   if (forms[0] === "role") {
     const role = str("role");
     if (!ROLES.includes(role)) return fail("unsupported role");
-    return { role, ...("name" in spec ? { name: str("name") } : {}), ...nth };
+    return { role, ...("name" in spec ? { name: str("name") } : {}), ...nth, ...within };
   }
-  return { [forms[0]]: str(forms[0]), ...nth } as LocatorSpec;
+  return { [forms[0]]: str(forms[0]), ...nth, ...within } as LocatorSpec;
 }
 
 // Runs in the isolated world and returns a ResolveResult as JSON.
-function locatorResolveSource(spec: LocatorSpec): string {
-  return `((spec) => {
+function locatorResolveSource(spec: LocatorSpec, settle = false): string {
+  return `((spec, settle) => {
     const norm = (s) => String(s || "").replace(/\\s+/g, " ").trim().toLowerCase();
     const IMPLICIT = { button: "button,[role=button],input[type=button],input[type=submit]", link: "a[href],[role=link]", textbox: "input:not([type]),input[type=text],input[type=email],input[type=search],input[type=url],input[type=tel],input[type=password],textarea,[role=textbox]", checkbox: "input[type=checkbox],[role=checkbox]", radio: "input[type=radio],[role=radio]", combobox: "select,[role=combobox]", heading: "h1,h2,h3,h4,h5,h6,[role=heading]", tab: "[role=tab]", menuitem: "[role=menuitem]", option: "option,[role=option]", switch: "[role=switch]" };
-    const nameOf = (el) => norm(el.getAttribute("aria-label") || (el.labels && el.labels[0] && el.labels[0].innerText) || el.innerText || el.value || el.getAttribute("title") || el.getAttribute("placeholder"));
-    let list = [];
-    if (spec.role) list = [...document.querySelectorAll(IMPLICIT[spec.role])].filter((el) => spec.name === undefined || nameOf(el) === norm(spec.name));
-    else if (spec.label) list = [...document.querySelectorAll("input,textarea,select")].filter((el) => (el.labels && [...el.labels].some((l) => norm(l.innerText) === norm(spec.label))) || norm(el.getAttribute("aria-label")) === norm(spec.label));
-    else if (spec.placeholder) list = [...document.querySelectorAll("[placeholder]")].filter((el) => norm(el.getAttribute("placeholder")) === norm(spec.placeholder));
-    else if (spec.text) list = [...document.querySelectorAll("body *")].filter((el) => el.children.length === 0 && norm(el.innerText || el.textContent) === norm(spec.text));
-    const rendered = list.filter((el) => { const r = el.getBoundingClientRect(); const st = getComputedStyle(el); return r.width > 0 && r.height > 0 && st.visibility !== "hidden" && st.display !== "none"; });
-    if (rendered.length > 0) list = rendered;
+    // A wrapping <label> also contains its control and options; only its own words name the control.
+    const labelText = (l) => { const c = l.cloneNode(true); c.querySelectorAll("select,textarea,input,option,button").forEach((n) => n.remove()); return c.textContent; };
+    const nameOf = (el) => norm(el.getAttribute("aria-label") || (el.labels && el.labels[0] && labelText(el.labels[0])) || el.innerText || el.value || el.getAttribute("title") || el.getAttribute("placeholder"));
+    // Open shadow roots are searched too; a closed root is invisible to any script, so it is never matched.
+    const qsa = (root, sel) => { const out = [...root.querySelectorAll(sel)]; for (const h of root.querySelectorAll("*")) if (h.shadowRoot) out.push(...qsa(h.shadowRoot, sel)); return out; };
+    const find = (s, root) => {
+      let found = [];
+      if (s.role) found = qsa(root, IMPLICIT[s.role]).filter((el) => s.name === undefined || nameOf(el) === norm(s.name));
+      else if (s.label) found = qsa(root, "input,textarea,select").filter((el) => (el.labels && [...el.labels].some((l) => norm(labelText(l)) === norm(s.label))) || norm(el.getAttribute("aria-label")) === norm(s.label));
+      else if (s.placeholder) found = qsa(root, "[placeholder]").filter((el) => norm(el.getAttribute("placeholder")) === norm(s.placeholder));
+      else if (s.testid) found = qsa(root, "[data-testid]").filter((el) => el.getAttribute("data-testid") === s.testid);
+      else if (s.text) found = qsa(root, "*").filter((el) => el.children.length === 0 && norm(el.innerText || el.textContent) === norm(s.text));
+      const shown = found.filter((el) => { const r = el.getBoundingClientRect(); const st = getComputedStyle(el); return r.width > 0 && r.height > 0 && st.visibility !== "hidden" && st.display !== "none"; });
+      return shown.length > 0 ? shown : found;
+    };
+    let scope = document;
+    if (spec.within) {
+      const containers = find(spec.within, document);
+      if (containers.length === 0) return JSON.stringify({ status: "not_found" });
+      if (containers.length > 1 && spec.within.nth === undefined) return JSON.stringify({ status: "ambiguous", count: containers.length, candidates: containers.slice(0, 5).map((c) => c.tagName.toLowerCase() + (c.id ? "#" + c.id : "")) });
+      const container = containers[spec.within.nth === undefined ? 0 : spec.within.nth];
+      if (!container) return JSON.stringify({ status: "not_found" });
+      // A text or label match is a leaf; the scope is the smallest ancestor-or-self that actually holds a match of the inner locator.
+      scope = container;
+      for (let up = 0; up < 8 && scope && find(spec, scope).length === 0; up++) scope = scope.parentElement || (scope.getRootNode && scope.getRootNode().host) || null;
+      if (!scope) return JSON.stringify({ status: "not_found" });
+    }
+    let list = find(spec, scope);
     const label = (el) => el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") + ":" + nameOf(el).slice(0, 40);
     if (list.length === 0) return JSON.stringify({ status: "not_found" });
     const index = spec.nth === undefined ? (list.length === 1 ? 0 : -1) : spec.nth;
@@ -68,15 +92,31 @@ function locatorResolveSource(spec: LocatorSpec): string {
     const el = list[index];
     if (!el) return JSON.stringify({ status: "not_found" });
     if (el.scrollIntoView) el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-    const rect = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
-    if (rect.width === 0 || rect.height === 0 || style.visibility === "hidden" || style.display === "none") return JSON.stringify({ status: "not_actionable", reason: "hidden" });
-    if (el.disabled || el.getAttribute("aria-disabled") === "true") return JSON.stringify({ status: "not_actionable", reason: "disabled" });
-    const x = Math.round(rect.left + rect.width / 2), y = Math.round(rect.top + rect.height / 2);
-    const top = document.elementFromPoint(x, y);
-    if (!top || !(top === el || el.contains(top) || top.contains(el))) return JSON.stringify({ status: "not_actionable", reason: "covered" });
-    return JSON.stringify({ status: "resolved", x, y, tag: el.tagName });
-  })(${JSON.stringify(spec)})`;
+    const probe = () => {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (rect.width === 0 || rect.height === 0 || style.visibility === "hidden" || style.display === "none") return { status: "not_actionable", reason: "hidden" };
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") return { status: "not_actionable", reason: "disabled" };
+      const x = Math.round(rect.left + rect.width / 2), y = Math.round(rect.top + rect.height / 2);
+      let top = document.elementFromPoint(x, y);
+      for (let inner; top && top.shadowRoot && (inner = top.shadowRoot.elementFromPoint(x, y)) && inner !== top;) top = inner;
+      if (!top || !(top === el || el.contains(top) || top.contains(el))) return { status: "not_actionable", reason: "covered" };
+      const checked = typeof el.checked === "boolean" ? el.checked : el.getAttribute("aria-checked") === "true" ? true : el.getAttribute("aria-checked") === "false" ? false : undefined;
+      // Halo: hw_step authorizes the resolved element, not the locator string,
+      // so carry the element's role/name/input type for the host's runtime gate.
+      const inputType = el.tagName === "INPUT" ? String(el.getAttribute("type") || "text").toLowerCase() : undefined;
+      return { status: "resolved", x, y, tag: el.tagName, role: el.getAttribute("role") || el.tagName.toLowerCase(), name: String(nameOf(el)).slice(0, 120), ...(inputType === undefined ? {} : { inputType }), ...(checked === undefined ? {} : { checked }) };
+    };
+    const first = probe();
+    if (!settle || first.status !== "resolved") return JSON.stringify(first);
+    // One frame later the same element must sit at the same point; a hidden page never paints, so a timer backs the frame up.
+    return new Promise((done) => {
+      let finished = false;
+      const finish = () => { if (finished) return; finished = true; const second = probe(); done(JSON.stringify(second.status === "resolved" && second.x === first.x && second.y === first.y ? { ...second, stable: true } : second)); };
+      requestAnimationFrame(() => requestAnimationFrame(finish));
+      setTimeout(finish, 60);
+    });
+  })(${JSON.stringify(spec)}, ${settle ? "true" : "false"})`;
 }
 
 interface WaitOptions {
@@ -85,9 +125,12 @@ interface WaitOptions {
   sleep: (ms: number) => Promise<void>;
   timeoutMs?: number;
   intervalMs?: number;
+  // Gap before the confirming sample once an element has been seen: about two frames,
+  // enough to catch an element that is still moving without costing a full poll interval.
+  settleMs?: number;
 }
 
-async function waitForActionable({ resolve, spec, sleep, timeoutMs = 5000, intervalMs = 100 }: WaitOptions): Promise<ResolveResult & { waitedMs: number }> {
+async function waitForActionable({ resolve, spec, sleep, timeoutMs = 5000, intervalMs = 100, settleMs = 32 }: WaitOptions): Promise<ResolveResult & { waitedMs: number }> {
   let last: ResolveResult = { status: "not_found" };
   let previous: { x: number; y: number } | null = null;
   let waited = 0;
@@ -98,12 +141,15 @@ async function waitForActionable({ resolve, spec, sleep, timeoutMs = 5000, inter
     last = current;
     if (current.status === "ambiguous") return { ...current, waitedMs: waited };
     if (current.status === "resolved") {
+      // The page already re-read the position one frame later and found it unchanged.
+      if (current.stable) return { ...current, waitedMs: waited };
       if (previous && previous.x === current.x && previous.y === current.y) return { ...current, waitedMs: waited };
       previous = { x: current.x, y: current.y };
     } else previous = null;
     if (waited >= timeoutMs) break;
-    await sleep(intervalMs);
-    waited += intervalMs;
+    const gap = previous ? Math.min(settleMs, intervalMs) : intervalMs;
+    await sleep(gap);
+    waited += gap;
   }
   return last.status === "resolved" ? { status: "not_actionable", reason: "moving", waitedMs: waited } : { ...last, waitedMs: waited };
 }

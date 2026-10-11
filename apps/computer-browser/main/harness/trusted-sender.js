@@ -22,6 +22,14 @@
 // Electron main process itself (see approver_service.py's own docstring on
 // this same boundary) -- only against content loaded into a frame that was
 // never meant to hold this capability.
+//
+// Chromium runtime caveat: chromium-desktop.js synthesizes senderFrame from the
+// window's own mainFrame for every bridge call, so the frame-identity clause is
+// a no-op there and only the URL clause (mainFrame.url vs trustedUiOrigin) is
+// effective. The loopback bridge (cookie + capability + Origin + sec-fetch-site)
+// is the real authenticator on that runtime, and chromium-desktop additionally
+// refuses any call before trustedUiOrigin is bound. Do not assume the frame
+// check protects the Chromium runtime.
 function isTrustedSender(event, win) {
   if (!event || !event.senderFrame) return false;
   if (!win || typeof win.isDestroyed !== "function" || win.isDestroyed()) return false;

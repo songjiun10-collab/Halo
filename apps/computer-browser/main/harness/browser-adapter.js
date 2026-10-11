@@ -42,17 +42,57 @@ const MAX_NODES_VISITED = 3000;
 const MAX_ELEMENTS = 100; // section 6: "100개 element"
 const HEADING_RESERVE = 40; // extra headings kept after MAX_ELEMENTS is reached
 const MAX_TEXT_BYTES = 12 * 1024; // section 6: "text 12 KiB"
+// Element names are capped in the page script by CHARACTERS (180), which lets
+// CJK names reach ~540 UTF-8 bytes each. The context packet sends up to 140
+// elements per turn, so names are additionally capped in BYTES here: ASCII
+// names keep their full 180 (equal), CJK names are bounded at 60 characters.
+// Measured on namu.wiki (2026-10-09): names over 120 chars held 2,006 bytes
+// before this cap. Nothing validates on the name text itself (interaction
+// fingerprints are computed in-page from the live DOM, not from this copy).
+const MAX_ELEMENT_NAME_BYTES = 180;
+function utf8ByteCap(value, maxBytes) {
+  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  let out = "";
+  let bytes = 0;
+  for (const char of value) {
+    const size = Buffer.byteLength(char, "utf8");
+    if (bytes + size > maxBytes) break;
+    out += char;
+    bytes += size;
+  }
+  return out;
+}
 // A PDF tab shows nothing to page scripts, so its text comes from the file.
 const MAX_PDF_TEXT_BYTES = 2 * MAX_TEXT_BYTES;
+// Computer-use screenshots are captured from the logical agent viewport
+// (1440x900 by default). The attachment is rendered at this cap instead of at
+// full viewport pixels. Measured 2026-10-09 with macOS Vision OCR (accurate
+// mode) against a dense console page (artifacts/screenshot-resolution/):
+// label recall is 98% at 1440, 95% at 1280, then falls off a cliff -- 51% at
+// 1024, 41% at 896, 20% at 768, 5% at 640. 1280 keeps legibility while Claude
+// image tokens drop 1,728 -> 1,366 (-21%); lower caps save more tokens but
+// measurably lose control labels, so they are not the default.
+const SCREENSHOT_MAX_WIDTH = 1280;
 const { extractPdfText, formatPdfObservationText, looksLikePdfUrl } = require("./pdf-text");
 const NAVIGATION_TIMEOUT_MS = 30000; // matches control-api.js's existing bound
 const { randomUUID } = require("node:crypto");
 const INTERACTION_WORLD_ID = 1001;
 const MAX_INPUT_BYTES = 4096;
+// evaluate bounds: the expression is page code, so it stays short enough to
+// review in an approval prompt, and its answer fits the planner context.
+const MAX_EXPRESSION_CHARS = 2000;
+const MAX_EXPRESSION_BYTES = 4096;
+const EVALUATE_RESULT_BYTES = 4096;
 const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
 const { evaluateLock } = require("../../shared/harness-contracts");
 const { validateCoordinateAction } = require("./computer-use-contract");
 const { PAGE_SNAPSHOT_SOURCE, parseSnapshot, verifyEffect } = require("./effect-verifier");
+const { findInPageOn } = require("./find-in-page");
+const { applyPageZoom, resolveZoomAction } = require("./page-zoom");
+const { copySelectionOn } = require("./selection-copy");
+const systemClipboard = require("./system-clipboard");
+const { runHwStep, validateStep, gateActionFor } = require("./halowright");
+const { classifyTarget } = require("./effect-classifier");
 
 // The http(s) origin of a URL string, or null.
 function bareOrigin(value) {
@@ -65,7 +105,7 @@ function bareOrigin(value) {
 }
 const UNSUPPORTED_ACTIONS = new Set(["download"]);
 const INTERACTION_ACTIONS = new Set(["click", "type", "submit_form"]);
-const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "observe", "click_at", "type_at", "press_key", ...INTERACTION_ACTIONS]);
+const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find", "zoom", "select_all", "copy", "observe", "click_at", "type_at", "press_key", "hw_step", "evaluate", ...INTERACTION_ACTIONS]);
 
 class BrowserAdapterError extends Error {
   constructor(code, message) {
@@ -101,6 +141,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
     const elements = [];
     const boundNodes = [];
     const textParts = [];
+    const visibilityCache = new WeakMap();
     const INTERACTIVE_TAGS = new Set(["A", "BUTTON", "INPUT", "TEXTAREA", "SELECT", "SUMMARY"]);
     const LANDMARK_TAGS = new Set(["MAIN", "NAV", "ASIDE", "HEADER", "FOOTER"]);
     const ROLE_TAGS = {
@@ -174,17 +215,26 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       return bytes;
     };
     const hidden = (node) => {
+      let isHidden = false;
       for (let current = node; current; current = current.parentElement) {
-        if (current.hasAttribute?.("hidden") || current.getAttribute("hidden") !== null || current.getAttribute("aria-hidden") === "true") return true;
+        if (current.hasAttribute?.("hidden") || current.getAttribute("hidden") !== null || current.getAttribute("aria-hidden") === "true") {
+          isHidden = true;
+          break;
+        }
       }
       let display = "";
-      if (typeof getComputedStyle === "function") {
+      if (!isHidden && typeof getComputedStyle === "function") {
         const style = getComputedStyle(node);
         display = style.display;
-        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return true;
+        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") isHidden = true;
       }
-      if (display !== "contents" && typeof node.getClientRects === "function" && node.getClientRects().length === 0) return true;
-      return false;
+      if (!isHidden && display !== "contents" && typeof node.getClientRects === "function" && node.getClientRects().length === 0) isHidden = true;
+      return isHidden;
+    };
+    // Memoize only the synchronous scan; retained action bindings must recheck live DOM.
+    const observedHidden = (node) => {
+      if (!visibilityCache.has(node)) visibilityCache.set(node, hidden(node));
+      return visibilityCache.get(node);
     };
     const formInfo = (node) => {
       const form = node.tagName === "FORM" ? node : node.form;
@@ -214,10 +264,10 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
         visited += 1;
         if (node.nodeType === 1) {
           if (node.shadowRoot && roots.length < 64) roots.push(node.shadowRoot);
-          const ownText = (node.childElementCount === 0 && !hidden(node) && node.tagName !== "INPUT" && node.tagName !== "TEXTAREA" && node.tagName !== "SELECT" ? (node.innerText || node.textContent || "") : "").trim().slice(0, 200);
+          const ownText = (node.childElementCount === 0 && !observedHidden(node) && node.tagName !== "INPUT" && node.tagName !== "TEXTAREA" && node.tagName !== "SELECT" ? (node.innerText || node.textContent || "") : "").trim().slice(0, 200);
           const role = roleOf(node);
           const isTextNode = ["P", "LI", "LABEL", "DT", "DD", "FIGCAPTION"].includes(node.tagName);
-          const shouldInclude = role && !hidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
+          const shouldInclude = role && !observedHidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
           // Headings get a small reserve past the element cap: on long articles the
           // nav and table-of-contents links fill the cap before the first section title.
           const withinCap = elements.length < ${maxElements} || (/^H[1-6]$/.test(node.tagName) && elements.length < ${maxElements} + ${HEADING_RESERVE});
@@ -269,6 +319,22 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
               entry.formAction = form.action;
               entry.formMethod = form.method;
             }
+            // PageAgent-style observation extras: hierarchy depth and live scroll
+            // distances, so a text-only planner can tell nested controls from
+            // top-level ones and see which region actually scrolls. Read-only:
+            // neither field is used for validation, gating or authorization.
+            let depth = 0;
+            for (let cursor = parent; cursor && included.has(cursor); cursor = cursor.parentElement) depth += 1;
+            entry.depth = Math.min(depth, 12);
+            if (typeof node.clientHeight === "number" && typeof node.scrollHeight === "number") {
+              const scrollable = {
+                up: Math.max(0, Math.round(node.scrollTop || 0)),
+                down: Math.max(0, Math.round(node.scrollHeight - node.clientHeight - (node.scrollTop || 0))),
+                left: Math.max(0, Math.round(node.scrollLeft || 0)),
+                right: Math.max(0, Math.round(node.scrollWidth - node.clientWidth - (node.scrollLeft || 0))),
+              };
+              if (scrollable.up + scrollable.down + scrollable.left + scrollable.right > 0) entry.scrollable = scrollable;
+            }
             elements.push(entry);
             boundNodes.push({ node, identity: fingerprint(node) });
             included.set(node, index);
@@ -304,9 +370,17 @@ class BrowserAdapter {
     randomId,
     permissionMode = "browse",
     assignedOrigin,
+    writeClipboard,
+    evaluateLeases,
+    taskId,
   } = {}) {
     if (!view) throw new BrowserAdapterError("invalid_config", "view is required");
     this._view = view;
+    // Optional: when set, `evaluate` runs only under an origin-scoped, expiring,
+    // use-limited lease for this task (EvaluateLeases); every use/denial is audited there.
+    this._evaluateLeases = evaluateLeases && typeof evaluateLeases.authorize === "function" ? evaluateLeases : null;
+    this._leaseTaskId = typeof taskId === "string" ? taskId : null;
+    this._writeClipboard = typeof writeClipboard === "function" ? writeClipboard : systemClipboard.writeText;
     this._scrollTimeoutMs = Number.isFinite(scrollTimeoutMs) && scrollTimeoutMs > 0 ? scrollTimeoutMs : 5000;
     if (!PERMISSION_MODES.includes(permissionMode)) throw new BrowserAdapterError("invalid_permission_mode", "permissionMode is invalid");
     this._permissionMode = permissionMode;
@@ -644,11 +718,16 @@ class BrowserAdapter {
       // Only error responses are surfaced, so ordinary observations stay unchanged.
       ...(this._lastHttpStatus >= 400 ? { httpStatus: this._lastHttpStatus } : {}),
       elements: raw.elements.map((el, index) => {
-        const { index: _index, parentIndex, ...entry } = el;
+        const { index: _index, parentIndex, depth, ...entry } = el;
         return {
           ...entry,
           elementId: String(index),
-          parentElementId: parentIndex === null || parentIndex === undefined ? null : String(parentIndex),
+          // Absence means "no included parent" / "depth 0": the fields are
+          // omitted when they carry no information (measured: a flat page sent
+          // 140 x "parentElementId":null + "depth":0 = 4,620 bytes per turn).
+          ...(parentIndex === null || parentIndex === undefined ? {} : { parentElementId: String(parentIndex) }),
+          ...(Number.isInteger(depth) && depth > 0 ? { depth } : {}),
+          ...(typeof entry.name === "string" ? { name: utf8ByteCap(entry.name, MAX_ELEMENT_NAME_BYTES) } : {}),
         };
       }),
       at: this._now(),
@@ -750,7 +829,11 @@ class BrowserAdapter {
     if (before.url !== observation.url) throw new BrowserAdapterError("stale_visual_observation", "browser URL changed after observation");
     let image;
     try {
-      image = await wc.capturePage({ x: 0, y: 0, width: before.width, height: before.height });
+      // CDP pages can render the capture smaller at capture time; the Electron
+      // fallback (and fakes) ignore the second argument. Normalized geometry is
+      // unaffected, so the logical viewport stays the binding's viewport.
+      const scale = wc.isCdp === true && before.width > SCREENSHOT_MAX_WIDTH ? SCREENSHOT_MAX_WIDTH / before.width : undefined;
+      image = await wc.capturePage({ x: 0, y: 0, width: before.width, height: before.height }, scale ? { scale } : undefined);
     } catch {
       throw new BrowserAdapterError("screenshot_failed", "browser surface screenshot capture failed");
     }
@@ -820,7 +903,17 @@ class BrowserAdapter {
     if (!SUPPORTED_ACTIONS.has(action.type)) {
       return { status: "failed", errorCode: "unknown_action" };
     }
-    if (!evaluateLock(this._intentLock, { action: action.type }).allowed) {
+    // hw_step performs an elementId action's effect under a locator; the
+    // adapter's own lock/mode check judges it as that action, and a malformed
+    // step never reaches the gate.
+    if (action.type === "hw_step") {
+      const valid = validateStep(action.step);
+      if (!valid.ok) {
+        return { status: "failed", errorCode: valid.errorCode };
+      }
+    }
+    const gateAction = action.type === "hw_step" ? gateActionFor(action.step.op) : action.type;
+    if (!evaluateLock(this._intentLock, { action: gateAction }).allowed) {
       return { status: "failed", errorCode: "intent_lock_denied" };
     }
     // A mode-denied action runs only when the task controller passes the
@@ -830,7 +923,7 @@ class BrowserAdapter {
     const grantOrigin = widenedBy?.origin;
     const originOk = grantOrigin === undefined || (typeof grantOrigin === "string" && bareOrigin(grantOrigin) === grantOrigin);
     const widened = !!widenedBy && originOk && (widenedBy.kind === "user_once" || (widenedBy.kind === "lease" && typeof widenedBy.leaseId === "string" && widenedBy.leaseId.length > 0));
-    if (!evaluateActionPolicy(this._permissionMode, action.type).allowed && !widened) {
+    if (!evaluateActionPolicy(this._permissionMode, gateAction).allowed && !widened) {
       return { status: "failed", errorCode: "permission_mode_denied" };
     }
     const expectedOrigin = widened && typeof grantOrigin === "string" ? grantOrigin : null;
@@ -856,8 +949,26 @@ class BrowserAdapter {
       case "type_at":
       case "press_key":
         return this._coordinateAction(action, { signal, documentEpoch, expectedOrigin });
+      case "hw_step":
+        return this._hwStep(action, { signal, documentEpoch });
+      case "evaluate":
+        if (this._evaluateLeases && !widened) {
+          const origin = bareOrigin(this._view.webContents.getURL());
+          if (!origin || !this._evaluateLeases.authorize(this._leaseTaskId, origin).allowed) {
+            return { status: "failed", errorCode: "evaluate_not_leased" };
+          }
+        }
+        return this._evaluate(action, { signal, expectedOrigin });
       case "scroll":
         return this._scroll(action.direction, action.amount);
+      case "find":
+        return this._find(action);
+      case "zoom":
+        return this._zoom(action);
+      case "select_all":
+        return this._selectAll();
+      case "copy":
+        return this._copy();
       case "observe":
         try {
           const observation = await this.observe({ signal });
@@ -944,6 +1055,46 @@ class BrowserAdapter {
       });
     } catch {
       return { status: "uncertain", errorCode: "coordinate_input_uncertain" };
+    }
+  }
+
+  // Halowright step: the planner names an element (role/name, label, text,
+  // placeholder or testid) instead of binding an elementId, and the host
+  // resolves it at execution time, waits until it is actionable, then acts and
+  // verifies the effect (halowright.js). The host's gate runs twice: the
+  // controller classifies the locator before dispatch (lock, mode, lease,
+  // approval), and `authorize` below re-checks the *resolved* element and the
+  // live origin before any input -- a missing or failing callback sends
+  // nothing. Secrets stay with the person: a fill that resolves to a password
+  // field is refused here.
+  async _hwStep(action, { signal, documentEpoch }) {
+    if (Object.keys(action).some(key => !["type", "step"].includes(key))) return { status: "failed", errorCode: "invalid_action" };
+    const valid = validateStep(action.step);
+    if (!valid.ok) return { status: "failed", errorCode: valid.errorCode };
+    const step = action.step;
+    const gateAction = gateActionFor(step.op);
+    const wc = this._view.webContents;
+    const origin = bareOrigin(wc.getURL?.() || "");
+    if (this._assignedOrigin && origin !== this._assignedOrigin) return { status: "failed", errorCode: "assigned_origin_mismatch" };
+    if (!evaluateLock(this._intentLock, { action: gateAction, targetOrigin: origin }).allowed) return { status: "failed", errorCode: "intent_lock_denied" };
+    await this._ensureReadyForScriptExecution(wc);
+    if (signal?.aborted) return { status: "cancelled", errorCode: "aborted" };
+    const epoch = this._documentEpoch;
+    const authorize = ({ target }) => {
+      if (this._disposed || this._documentEpoch !== epoch) return false;
+      const currentOrigin = bareOrigin(this._view.webContents.getURL?.() || "");
+      if (this._assignedOrigin && currentOrigin !== this._assignedOrigin) return false;
+      if (!evaluateLock(this._intentLock, { action: gateAction, targetOrigin: currentOrigin }).allowed) return false;
+      const resolved = { role: target?.role, name: target?.name, covered: false, disabled: false };
+      if (step.op === "fill" && target?.inputType === "password") return false;
+      if (step.op === "fill" && resolved.role !== undefined && classifyTarget(resolved, "type_at").gate === "deny") return false;
+      if (["click", "check", "uncheck", "select"].includes(step.op) && classifyTarget(resolved, "click_at").gate === "deny") return false;
+      return true;
+    };
+    try {
+      return await runHwStep(wc, step, { authorize });
+    } catch (error) {
+      return { status: "uncertain", errorCode: error?.code || "execute_threw" };
     }
   }
 
@@ -1035,6 +1186,30 @@ class BrowserAdapter {
                 (node.tagName === "INPUT" && ["file", "password"].includes((node.getAttribute("type") || "").toLowerCase())) || node.hasAttribute("download")) return failed("unsupported_click");
             const info = state.formInfo(node);
             if (info && !["", "_self"].includes(info.target)) return failed("unsupported_form");
+            // Full pointer/mouse sequence before activation, so controls that
+            // listen for pointerdown/mousedown (custom menus, sliders, canvas
+            // widgets) behave as they do under a real cursor. Adapted from
+            // PageAgent (github.com/alibaba/page-agent, MIT). Activation itself
+            // stays the single HTMLElement.prototype.click call the adapter's
+            // effect check already reasons about, and no gate or policy moves.
+            const rect = typeof node.getBoundingClientRect === "function" ? node.getBoundingClientRect() : null;
+            if (rect && rect.width > 0 && rect.height > 0 && typeof PointerEvent === "function") {
+              const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+              const doc = node.ownerDocument;
+              const hit = typeof doc.elementFromPoint === "function" ? doc.elementFromPoint(cx, cy) : null;
+              const pointerTarget = hit && (hit === node || node.contains(hit)) ? hit : node;
+              const pointerInit = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: 1 };
+              const mouseInit = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, button: 0, buttons: 1 };
+              pointerTarget.dispatchEvent(new PointerEvent("pointerover", pointerInit));
+              pointerTarget.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, cancelable: true, composed: true, clientX: cx, clientY: cy, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+              pointerTarget.dispatchEvent(new MouseEvent("mouseover", mouseInit));
+              pointerTarget.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+              pointerTarget.dispatchEvent(new PointerEvent("pointerdown", pointerInit));
+              pointerTarget.dispatchEvent(new MouseEvent("mousedown", mouseInit));
+              if (typeof node.focus === "function") node.focus({ preventScroll: true });
+              pointerTarget.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: 0 }));
+              pointerTarget.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, button: 0, buttons: 0 }));
+            }
             started = true; HTMLElement.prototype.click.call(node);
             if (["INPUT", "TEXTAREA"].includes(node.tagName) || node.isContentEditable) node.focus();
           }
@@ -1133,7 +1308,7 @@ class BrowserAdapter {
     const timedOut = new Promise((resolve) => {
       timer = setTimeout(() => resolve({ outcome: "timeout" }), this._navigationTimeoutMs);
     });
-    const ready = wc.loadURL(url).then(() => ({ outcome: "ok" })).catch(() => ({ outcome: "error" }));
+    const ready = wc.loadURL(url).then(() => ({ outcome: "ok" })).catch((error) => { if (process.env.HALO_DEBUG_ACTIONS) console.error("[navigate-fail]", String(error?.message ?? error).slice(0, 200)); return { outcome: "error" }; });
     const result = await Promise.race([ready, timedOut]);
     clearTimeout(timer);
     if (result.outcome === "timeout") {
@@ -1193,6 +1368,98 @@ class BrowserAdapter {
       clearTimeout(timer);
     }
     return { status: "ok" };
+  }
+
+  // Read-only page search (contracts/BROWSER-INTERACTIONS.md): scrolls to and
+  // selects the next/previous occurrence of text and reports found true/false.
+  // Repeated calls continue from the current selection, so a planner can walk
+  // matches without scrolling blind through a long page.
+  async _find(action) {
+    if (typeof action.text !== "string") return { status: "failed", errorCode: "invalid_action" };
+    const forward = action.direction !== "prev";
+    const wc = this._view.webContents;
+    await this._ensureReadyForScriptExecution(wc);
+    const result = await findInPageOn(wc, action.text, { forward });
+    if (!result.ok) return { status: "failed", errorCode: result.errorCode ?? "find_failed" };
+    return { status: "ok", found: result.found };
+  }
+
+  // Read-only page zoom (CSS zoom; see page-zoom.js for the measured
+  // trade-offs). Layout, hit-testing, observation geometry and captures scale
+  // together, so normalized coordinates stay exact. Not persisted across
+  // navigations: a new document starts at 1x.
+  async _zoom(action) {
+    const level = resolveZoomAction(action, this._zoomLevel ?? 1);
+    if (level === null) return { status: "failed", errorCode: "invalid_action" };
+    const wc = this._view.webContents;
+    await this._ensureReadyForScriptExecution(wc);
+    const result = await applyPageZoom(wc, level);
+    if (!result.ok) return { status: "failed", errorCode: result.errorCode ?? "zoom_failed" };
+    this._zoomLevel = result.level;
+    return { status: "ok", level: result.level };
+  }
+
+  // Selection and clipboard. select_all is selection-only (read-only); copy
+  // writes the selection to the OS clipboard and returns its text (bounded) so
+  // the planner can paste it elsewhere with a later type action. HALO never
+  // reads the user's clipboard.
+  async _selectAll() {
+    const wc = this._view.webContents;
+    await this._ensureReadyForScriptExecution(wc);
+    if (typeof wc.selectAll !== "function") return { status: "failed", errorCode: "unsupported_action" };
+    try {
+      wc.selectAll();
+      return { status: "ok" };
+    } catch {
+      return { status: "failed", errorCode: "select_all_failed" };
+    }
+  }
+
+  async _copy() {
+    const wc = this._view.webContents;
+    await this._ensureReadyForScriptExecution(wc);
+    const result = await copySelectionOn(wc, this._writeClipboard);
+    if (!result.ok) return { status: "failed", errorCode: result.errorCode ?? "copy_failed" };
+    return { status: "ok", chars: result.chars, text: result.text };
+  }
+
+  // One read-only JavaScript expression in the page's isolated world. The
+  // model's expression runs as page code -- that is why the controller
+  // always routes evaluate through a human approval and no lease can
+  // authorize it. Expression-only by construction (a statement is a syntax
+  // error, reported as evaluate_threw, never retried); the value must
+  // survive a page-side JSON round-trip or the step is uncertain.
+  async _evaluate(action, { signal } = {}) {
+    const expression = action?.expression;
+    if (typeof expression !== "string" || expression.length === 0 || expression.length > MAX_EXPRESSION_CHARS ||
+        Buffer.byteLength(expression, "utf8") > MAX_EXPRESSION_BYTES) {
+      return { status: "failed", errorCode: "invalid_expression" };
+    }
+    const wc = this._view.webContents;
+    await this._ensureReadyForScriptExecution(wc);
+    if (signal?.aborted) return { status: "cancelled", errorCode: "aborted" };
+    const code = `JSON.stringify((() => { let value; try { value = (${expression}); } catch (error) { return { ok: false, error: String((error && error.message) || error).slice(0, 200) }; } try { JSON.stringify(value); } catch { return { ok: false, error: "not_serializable" }; } return { ok: true, value }; })())`;
+    let raw;
+    try {
+      raw = await wc.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD_ID, [{ code }], false);
+    } catch {
+      return { status: "uncertain", errorCode: "evaluate_uncertain" };
+    }
+    let parsed = null;
+    try { parsed = JSON.parse(Array.isArray(raw) ? raw[0] : raw); } catch { /* handled below */ }
+    if (!parsed || typeof parsed !== "object") return { status: "uncertain", errorCode: "evaluate_uncertain" };
+    if (parsed.ok !== true) {
+      return { status: "uncertain", errorCode: parsed.error === "not_serializable" ? "evaluate_not_serializable" : "evaluate_threw" };
+    }
+    const text = typeof parsed.value === "string" ? parsed.value : JSON.stringify(parsed.value);
+    const bytes = Buffer.byteLength(text, "utf8");
+    if (bytes <= EVALUATE_RESULT_BYTES) {
+      return { status: "ok", evaluateResult: { authority: "untrusted_page", value: text, truncated: false } };
+    }
+    let end = EVALUATE_RESULT_BYTES;
+    const source = Buffer.from(text, "utf8");
+    while (end > 0 && (source[end] & 0xc0) === 0x80) end -= 1;
+    return { status: "ok", evaluateResult: { authority: "untrusted_page", value: source.subarray(0, end).toString("utf8"), truncated: true } };
   }
 }
 

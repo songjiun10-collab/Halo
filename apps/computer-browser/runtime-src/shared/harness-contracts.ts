@@ -116,7 +116,8 @@ const SEND_MESSAGE_FIELDS = Object.freeze([
 // design spec is explicit: "the user does not enter the count and it is not
 // a fixed product concurrency constant"). Actual concurrent execution is
 // gated by ResourceAdmission (Task 2) and same-origin serialization (Task 4).
-const MAX_CHILD_ASSIGNMENTS = 8;
+// No host-side cap: the coordinator (parent planner) decides how many agents a plan needs.
+const MAX_CHILD_ASSIGNMENTS = Number.MAX_SAFE_INTEGER;
 const MAX_CHILD_SUBGOAL_BYTES = 2000;
 const MAX_ENTRY_URL_CHARS = 2048;
 // Mirrors host-settings.js's own MEMORY_POLICIES enum (that module is
@@ -130,7 +131,7 @@ const MEMORY_POLICIES = Object.freeze(["budgeted", "user_override"]);
 // Bounds mirror the spec's section 8.1/10 "proposed v1 defaults for review";
 // they are enforced at the coordinator/controller layer (Task 4), not here --
 // this module only validates message SHAPE.
-const MESSAGE_KINDS = Object.freeze(["progress", "question", "answer", "steer", "handoff", "evidence"]);
+const MESSAGE_KINDS = Object.freeze(["progress", "question", "answer", "steer", "handoff", "evidence", "share", "claim"]);
 const MAX_MESSAGE_TEXT_BYTES = 8 * 1024; // section 6: "at most 8 KiB UTF-8 in v1"
 const MAX_IDEMPOTENCY_KEY_CHARS = 128;
 const MAX_MESSAGE_EVIDENCE_REFS = 8;
@@ -1031,9 +1032,6 @@ function validateProposalEnvelope(proposal: unknown, label: string = "proposal",
     assertPositiveInteger(proposal.requestedAgentCount, `${label}.requestedAgentCount`);
     if (!Array.isArray(proposal.assignments) || proposal.assignments.length === 0) {
       throw new ContractError("invalid_field", `${label}.assignments must be a non-empty array`);
-    }
-    if (proposal.assignments.length > MAX_CHILD_ASSIGNMENTS) {
-      throw new ContractError("field_too_large", `${label}.assignments exceeds the ${MAX_CHILD_ASSIGNMENTS}-item bound`);
     }
     if (proposal.requestedAgentCount !== proposal.assignments.length) {
       throw new ContractError("invalid_field", `${label}.requestedAgentCount must equal assignments.length`);

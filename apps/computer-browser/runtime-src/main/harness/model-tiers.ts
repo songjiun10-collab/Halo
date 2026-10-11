@@ -1,17 +1,18 @@
 "use strict";
 
-// Five capability/cost tiers for planner models, used when an orchestrator has
+// Six capability/cost tiers (1, 2, 3, 3.5, 4, 5) for planner models, used when an orchestrator has
 // to pick a model for a role. This module only classifies; it never selects.
-// 1 = top ... 5 = ultralight. The ids mirror the host
-// allowlists (providers/*-models.js); a test fails when an allowlisted model
+// 1 = top ... 5 = ultralight (3.5 sits between computer-use balanced and efficient).
+// The ids mirror the host allowlists (providers/*-models.js); a test fails when an allowlisted model
 // has no tier, so a new model cannot slip in unclassified.
 
-type ModelTier = 1 | 2 | 3 | 4 | 5;
+type ModelTier = 1 | 2 | 3 | 3.5 | 4 | 5;
 
 const TIER_LABELS: Readonly<Record<ModelTier, string>> = Object.freeze({
   1: "top",
   2: "high-performance balanced",
   3: "computer-use balanced",
+  3.5: "fast and capable",
   4: "efficient",
   5: "ultralight, low latency",
 });
@@ -21,6 +22,7 @@ const TIER_USE: Readonly<Record<ModelTier, string>> = Object.freeze({
   1: "complex, ambiguous multi-step UI work",
   2: "ordinary multi-step work",
   3: "computer-use-centred work",
+  3.5: "short multi-step work where speed matters but quality still counts",
   4: "narrow, repetitive work",
   5: "simple UI work where response time matters",
 });
@@ -42,12 +44,19 @@ const MODEL_TIERS: Readonly<Record<string, ModelTier>> = Object.freeze({
   "claude-fable-5-1": 1,
   // 2: high-performance balanced, plus older strong models and ordinary workhorses
   "gpt-6.1-sol": 2,
-  "claude-sonnet-5-5": 2,
-  "deepseek-ai/deepseek-v4.1-flash": 2,
+  "claude-sonnet-5": 2,
+  "claude-opus-5": 2,
+  "claude-fable-5": 2,
+  "claude-opus-4-8": 2,
+  "claude-opus-4-7": 2,
+  "claude-opus-4-6": 2,
+  "claude-sonnet-4-6": 2,
   "claude-opus-4-5-20251101": 2,
   "claude-opus-4-1-20250805": 2,
   "claude-opus-4-20250514": 2,
   "claude-sonnet-4-5-20250929": 2,
+  "claude-sonnet-5-5": 2,
+  "deepseek-ai/deepseek-v4.1-flash": 2,
   "gpt-6-sol": 2,
   "gpt-5.6-sol": 2,
   "moonshotai/kimi-k3": 2,
@@ -55,8 +64,10 @@ const MODEL_TIERS: Readonly<Record<string, ModelTier>> = Object.freeze({
   "opencode-default": 2,
   // 3: computer-use balanced
   "antigravity-default": 3,
+  // 3.5: fast and capable (between computer-use balanced and efficient)
+  "claude-haiku-5-5": 3.5,
+  "gpt-6-luna": 3.5,
   // 4: efficient
-  "gpt-6-luna": 4,
   "gpt-5.6-luna": 4,
   "gpt-5.6-terra": 4,
   "gpt-5.5": 4,
@@ -82,4 +93,22 @@ function modelsInTier(tier: ModelTier): string[] {
   return Object.keys(MODEL_TIERS).filter((model) => MODEL_TIERS[model] === tier);
 }
 
-export = { MODEL_TIERS, TIER_LABELS, TIER_USE, UNKNOWN_MODEL_TIER, tierOf, modelsInTier };
+// Tier 0 is not a model: it is an execution mode layered on a tier-1 model
+// (fan-out into child tasks, each verified by an independent read-only child).
+// It lives outside MODEL_TIERS/TIER_LABELS so the model tiers and the
+// allowlist coverage test stay as they are. This only classifies eligibility;
+// the host decides whether to run it.
+const ULTRACODE_TIER = 0;
+const ULTRACODE = Object.freeze({
+  tier: ULTRACODE_TIER,
+  label: "ultracode (orchestrated, verified)",
+  use: "large goals that split into independent parts and need cross-checked results",
+  baseTier: 1 as ModelTier,
+  durations: Object.freeze(["long"]),
+});
+
+function ultracodeEligible(model: unknown, durationId: unknown): boolean {
+  return tierOf(model) === ULTRACODE.baseTier && typeof durationId === "string" && ULTRACODE.durations.includes(durationId);
+}
+
+export = { MODEL_TIERS, TIER_LABELS, TIER_USE, UNKNOWN_MODEL_TIER, ULTRACODE_TIER, ULTRACODE, tierOf, modelsInTier, ultracodeEligible };

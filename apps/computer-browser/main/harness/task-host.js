@@ -31,8 +31,10 @@ const { escalationTarget } = require("./planner-escalation");
 const { routedModel } = require("./planner-routing");
 const { tierOf, modelsInTier, MODEL_TIERS } = require("./model-tiers");
 const { setDiscoveredNvidiaModels, saveDiscoveredNvidiaModels, listNvidiaModels } = require("./providers/nvidia-models");
-const { TaskController, TaskControllerError } = require("./task-controller");
+const { TaskController, TaskControllerError, FRICTION_TTL_MS } = require("./task-controller");
+const { FrictionLedger } = require("./friction-ledger");
 const { TaskQueue, TaskQueueError } = require("./task-queue");
+const { HumanHandoffQueue, needsHuman } = require("./human-handoff");
 const { ResourceAdmission } = require("./resource-admission");
 const { CoordinatorCore } = require("./coordinator-core");
 const { RoutineStore } = require("./routine-store");
@@ -42,6 +44,9 @@ const { AgentScheduleStore, AgentScheduler } = require("./agent-schedule");
 const { RoomStore } = require("./room-store");
 const { RoomOrchestrator, RoomError } = require("./room-orchestrator");
 const ROOM_PLANNER_IDLE_MS = 60 * 1000;
+// A task that has only been waiting (queued, or saved as recovered after a restart) this long is stopped for good.
+const STALE_WAIT_MS = 12 * 60 * 60 * 1000;
+const STALE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 const { MCP_PROVIDER_IDS, MCP_PROVIDER_CATALOG } = require("./host-settings");
 const { PLANNER_PROVIDERS } = require("./planner-providers");
 
@@ -86,7 +91,10 @@ class TaskHostError extends Error {
 
 class TaskHost {
   constructor({
+    evaluateLeases,
+    sessionVault,
     storageRoot,
+    staleWaitMs = STALE_WAIT_MS,
     releaseViewsOnReview = false,
     makeBrowser,
     makePlanner,
@@ -98,6 +106,9 @@ class TaskHost {
     captureAgentFrame,
     captureTaskFrame,
     sendTaskInput,
+    findTaskPage,
+    zoomTaskPage,
+    copyTaskSelection,
     now,
     segmentRotationCalls,
     noProgressThreshold,
@@ -113,10 +124,12 @@ class TaskHost {
     plannerFast,
     plannerEscalation,
     plannerRouting,
+    mcpRoutePreference,
     mcpProviders = [],
     memoryStore,
     activityJournal,
     strategyLearning,
+    onHumanHandoff = null,
     nvidiaModelsFile,
     settingsStore,
     usageLedger,
@@ -145,10 +158,20 @@ class TaskHost {
     }
 
     this._releaseViewsOnReview = releaseViewsOnReview === true;
+    // Last page-load time per origin, shared by every task this host runs, so
+    // several agents on one site together keep the same-site gap (one IP, one cadence).
+    this._navLedger = new Map();
+    // Origins that recently showed a human check, shared by every task (see task-controller FRICTION_TTL_MS).
+    this._frictionLedger = new FrictionLedger({ storageRoot, ttlMs: FRICTION_TTL_MS });
     this._storageRoot = storageRoot;
+    this._staleWaitMs = staleWaitMs;
+    this._staleTimer = null;
     this._captureAgentFrame = captureAgentFrame;
     this._captureTaskFrame = captureTaskFrame;
     this._sendTaskInput = sendTaskInput;
+    this._findTaskPage = findTaskPage;
+    this._zoomTaskPage = zoomTaskPage;
+    this._copyTaskSelection = copyTaskSelection;
     this._makeBrowser = makeBrowser;
     this._makePlanner = makePlanner;
     this._makeChildBrowser = makeChildBrowser || null;
@@ -175,6 +198,7 @@ class TaskHost {
     this._plannerFast = plannerFast === true;
     this._plannerEscalation = plannerEscalation === true;
     this._plannerRouting = plannerRouting === true;
+    this._mcpRoutePreference = mcpRoutePreference;
     this._mcpProviders = Array.isArray(mcpProviders) ? [...mcpProviders] : [];
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
@@ -184,6 +208,8 @@ class TaskHost {
     this._nvidiaModelsFile = typeof nvidiaModelsFile === "string" ? nvidiaModelsFile : null;
     this._settingsStore = settingsStore || null;
     this._usageLedger = usageLedger || null;
+    this._evaluateLeases = evaluateLeases || null;
+    this._sessionVault = sessionVault || null;
     this._usageSources = usageSources || {};
     this._subscriptionFetch = subscriptionFetch; // undefined -> global fetch
     this._subscriptionPlatform = subscriptionPlatform;
@@ -254,6 +280,7 @@ class TaskHost {
     this._queueReady = null;
     this._queueTransition = Promise.resolve();
     this._listeners = new Set();
+    this._handoffs = new HumanHandoffQueue({ notify: onHumanHandoff });
     this._rosterListeners = new Set();
     // taskId -> {store, controller, browser, planner}
     this._active = new Map();
@@ -514,6 +541,9 @@ class TaskHost {
       store,
       planner,
       browser,
+      navLedger: this._navLedger,
+      frictionLedger: this._frictionLedger,
+      ...(this._mcpRoutePreference ? { mcpRoutePreference: this._mcpRoutePreference } : {}),
       releaseViewsOnReview: this._releaseViewsOnReview,
       harnessProfile,
       // Only the Codex route accepts a screenshot; every other planner uses
@@ -584,7 +614,8 @@ class TaskHost {
     this._active.set(store.taskId, entry);
     entry.unsubscribeController = controller.onChange((snapshot) => {
       entry.snapshot = snapshot;
-      this._emit(store.taskId, snapshot, { goal: controller.getGoal(), browser: browser.getBrowserSnapshot?.() });
+      const handoff = this._trackHandoff(store, snapshot);
+      this._emit(store.taskId, snapshot, { goal: controller.getGoal(), browser: browser.getBrowserSnapshot?.(), ...(handoff ? { handoff } : {}) });
       const binding = store.taskProfile?.workGoalBinding;
       if (this._strategyLearning && (snapshot.state === "completed" || snapshot.state === "paused")) {
         const modelId = parentPin.plannerModel ?? DEFAULT_MODEL_BY_PROVIDER[parentPin.plannerProvider];
@@ -874,6 +905,27 @@ class TaskHost {
     if (typeof listener !== "function") throw new TypeError("onEvent requires a listener function");
     this._listeners.add(listener);
     return () => this._listeners.delete(listener);
+  }
+
+  // Human handoff bookkeeping for one controller snapshot: open a wait when
+  // the task pauses for a person, resolve it when the wait ends. Durable
+  // notes are best-effort; the in-memory queue backs listHandoffs() and the
+  // task event detail. A wait never auto-expires: only an explicit human
+  // action (or the task finishing) clears it.
+  _trackHandoff(store, snapshot) {
+    const waiting = this._handoffs.has(store.taskId);
+    if (snapshot.state === "paused" && needsHuman(snapshot.pauseReason)) {
+      const opened = this._handoffs.open({ taskId: store.taskId, reason: snapshot.pauseReason, detail: snapshot.needUserReason ?? null });
+      if (!opened?.created) return null;
+      void store.append({ type: "note", payload: { kind: "human_handoff", status: "waiting", reason: snapshot.pauseReason } }).catch(() => {});
+      return { status: "waiting", reason: snapshot.pauseReason, label: opened.record.label, since: opened.record.since };
+    }
+    if (!waiting) return null;
+    const outcome = snapshot.state === "completed" ? "completed" : snapshot.state === "stopped" ? "stopped" : "resumed";
+    const resolved = this._handoffs.resolve(store.taskId, { outcome });
+    if (!resolved) return null;
+    void store.append({ type: "note", payload: { kind: "human_handoff", status: "resolved", reason: resolved.reason, outcome } }).catch(() => {});
+    return { status: "resolved", reason: resolved.reason, outcome };
   }
 
   _emit(taskId, snapshot, detail = {}) {
@@ -1634,6 +1686,36 @@ class TaskHost {
       this._coordinator.recoveredBlocked = this._queue.pendingIds().length > 0;
     })();
     try { await this._queueReady; } catch (error) { this._queueReady = null; throw error; }
+    this._startStaleSweep();
+  }
+
+  // Only waiting tasks qualify (queued, or recovered and never resumed). A task a person paused,
+  // or one waiting on an approval, is never touched. Age counts from creation.
+  _startStaleSweep() {
+    if (this._staleTimer || this._closeRequested || !(this._staleWaitMs > 0)) return;
+    const run = () => { void this.sweepStaleWaiting().catch(() => {}); };
+    this._staleTimer = setInterval(run, Math.min(STALE_SWEEP_INTERVAL_MS, this._staleWaitMs));
+    this._staleTimer.unref?.();
+    // The first pass waits out startup so it never contends with recovery for a task's writer lock.
+    const first = setTimeout(run, Math.min(30_000, this._staleWaitMs));
+    first.unref?.();
+    this._staleFirst = first;
+  }
+
+  async sweepStaleWaiting() {
+    if (this._closeRequested) return [];
+    const cutoff = (this._now ?? Date.now)() - this._staleWaitMs;
+    const summaries = await this._listTaskSummaries();
+    const discarded = [];
+    for (const task of summaries) {
+      if (task.active) continue;
+      const waiting = task.state === "queued" || (task.state === "paused" && task.pauseReason === "recovered");
+      const created = Date.parse(task.createdAt ?? "");
+      if (!waiting || !Number.isFinite(created) || created > cutoff) continue;
+      try { await this.discardSavedTask(task.taskId); discarded.push(task.taskId); }
+      catch { /* it started or finished meanwhile; leave it alone */ }
+    }
+    return discarded;
   }
 
   // Recovered entries wait for a person and block automatic admission. A new
@@ -1927,6 +2009,15 @@ class TaskHost {
     return this._listTaskSummaries();
   }
 
+  // Tasks currently waiting on a person (captcha, need_user, uncertain
+  // execution). Read-only view; a wait clears only on an explicit human
+  // action (resume/stop/take-over) or when the task finishes -- it never
+  // expires or auto-retries on its own.
+  listHandoffs() {
+    this._assertOpen();
+    return this._handoffs.list();
+  }
+
   async _listTaskSummaries() {
     const ids = await TaskStore.listTaskIds({ storageRoot: this._storageRoot });
     const summaries = [];
@@ -2155,6 +2246,53 @@ class TaskHost {
     return entry.controller.getSnapshot();
   }
 
+  // Retires a saved task a person no longer wants, without ever attaching a
+  // browser or planner (resumeSavedTask() would run it). Only a task that is
+  // recovered and not attached qualifies; the stop is recorded durably so it
+  // stays stopped across restarts, and it leaves the FIFO.
+  async discardSavedTask(taskId) {
+    this._assertOpen();
+    await this._ensureQueue();
+    if (typeof taskId !== "string" || !taskId) throw new TaskHostError("invalid_task", "taskId is required");
+    if (this._active.has(taskId) || this._queuedStores.has(taskId) || this._queuedStartPromises.has(taskId)) {
+      throw new TaskHostError("not_discardable", "a task that is running or starting cannot be discarded");
+    }
+    await this._withStoreGate(async () => {
+      const store = await TaskStore.load(taskId, { storageRoot: this._storageRoot });
+      try {
+        const last = store.lastCheckpoint?.payload ?? {};
+        const task = last.task ?? {};
+        // Not attached to this host, so nothing is running it; only a task already finished has nothing to discard.
+        if (["stopped", "completed", "failed"].includes(task.state)) {
+          throw new TaskHostError("not_discardable", "this task already finished");
+        }
+        await store.append({ type: "note", payload: { kind: "discarded_by_user", actor: "trusted_host" } });
+        await store.checkpoint({ ...last, task: { ...task, state: "stopped", pauseReason: null } });
+      } finally {
+        await this._closeUnattachedTaskStore(store);
+      }
+    });
+    let nextId = null;
+    if (this._queue.activeIds().includes(taskId)) {
+      await this._queue.complete(taskId, "stopped");
+      nextId = this._queue.pendingIds()[0] ?? null;
+    } else if (this._queue.pendingIds().includes(taskId)) {
+      nextId = this._queue.pendingIds()[0] === taskId
+        ? await this._queue.skip(taskId, { reason: "discarded_by_user", actor: "trusted_host" })
+        : await this._queue.skipPending(taskId, { reason: "discarded_by_user", actor: "trusted_host" });
+    }
+    this._skippedRecovered.delete(taskId);
+    await this._coordinator.releaseLease(taskId);
+    this._runMemoryPolicies.delete(taskId);
+    this._runScopes.delete(taskId);
+    this._emit(taskId, { state: "stopped", pauseReason: null });
+    if (nextId && !this._coordinator.recoveredBlocked) {
+      const admitted = await this._admitNext();
+      if (admitted) this._startQueued(admitted).catch((error) => this._emit(admitted, { state: "paused", pauseReason: "queue_start_failed", error: error.message }));
+    }
+    return { taskId, state: "stopped" };
+  }
+
   async amendTask(taskId, amendmentInput) {
     const { controller } = this._require(taskId);
     await this._childCoordinator.withParentGoalLock(taskId, () => controller.amend(amendmentInput));
@@ -2313,6 +2451,39 @@ class TaskHost {
     return Boolean(await this._sendTaskInput(taskId, input));
   }
 
+  // Read-only find (Mod+F) on a taken-over task's visible page. Same
+  // fail-closed rule as input: only while the user owns the task, because a
+  // search scrolls the page.
+  async findInPage(taskId, query, options) {
+    this._assertOpen();
+    if (typeof taskId !== "string" || !taskId || typeof this._findTaskPage !== "function") {
+      return { ok: false, found: false, errorCode: "surface_unavailable" };
+    }
+    if (!this.canUseTaskBrowser(taskId)) return { ok: false, found: false, errorCode: "surface_unavailable" };
+    return (await this._findTaskPage(taskId, query, options ?? {})) ?? { ok: false, found: false, errorCode: "surface_unavailable" };
+  }
+
+  // Mod+/Mod-/Mod+0 on a taken-over task's visible page. Same fail-closed rule:
+  // only while the user owns the task.
+  async setZoom(taskId, request) {
+    this._assertOpen();
+    if (typeof taskId !== "string" || !taskId || typeof this._zoomTaskPage !== "function") {
+      return { ok: false, level: null, errorCode: "surface_unavailable" };
+    }
+    if (!this.canUseTaskBrowser(taskId)) return { ok: false, level: null, errorCode: "surface_unavailable" };
+    return (await this._zoomTaskPage(taskId, request ?? { direction: "reset" })) ?? { ok: false, level: null, errorCode: "surface_unavailable" };
+  }
+
+  // Mod+C on a taken-over task's visible page. Same fail-closed rule.
+  async copySelection(taskId) {
+    this._assertOpen();
+    if (typeof taskId !== "string" || !taskId || typeof this._copyTaskSelection !== "function") {
+      return { ok: false, chars: 0, errorCode: "surface_unavailable" };
+    }
+    if (!this.canUseTaskBrowser(taskId)) return { ok: false, chars: 0, errorCode: "surface_unavailable" };
+    return (await this._copyTaskSelection(taskId)) ?? { ok: false, chars: 0, errorCode: "surface_unavailable" };
+  }
+
   getTaskBrowser(taskId) {
     const { browser } = this._require(taskId);
     if (typeof browser.getBrowserSnapshot !== "function") {
@@ -2395,6 +2566,65 @@ class TaskHost {
     return this._usageLedger.summary();
   }
 
+  // Evaluate (page script) is off unless the user grants an origin-scoped, expiring,
+  // use-limited lease for one task. Grants and every use/denial land in the audit log.
+  async grantEvaluateLease({ taskId, origin, purpose } = {}) {
+    this._assertOpen();
+    if (!this._evaluateLeases) throw new TaskHostError("evaluate_leases_unavailable", "evaluate leases are not configured");
+    if (typeof taskId !== "string" || !taskId || typeof origin !== "string" || !/^https?:\/\/[^/]+$/.test(origin)) {
+      throw new TaskHostError("invalid_lease", "taskId and a bare http(s) origin are required");
+    }
+    this._evaluateLeases.grant(taskId, origin, typeof purpose === "string" ? purpose.slice(0, 200) : "");
+    return { granted: true };
+  }
+
+  async revokeEvaluateLease({ taskId, origin } = {}) {
+    this._assertOpen();
+    this._evaluateLeases?.revoke(taskId, origin);
+    return { revoked: true };
+  }
+
+  async grantTeamLease({ fromTeamId, toTeamId, purpose } = {}) {
+    this._assertOpen();
+    this._childCoordinator.grantTeamLease(fromTeamId, toTeamId, typeof purpose === "string" ? purpose.slice(0, 200) : "");
+    return { granted: true };
+  }
+
+  async revokeTeamLease({ fromTeamId, toTeamId } = {}) {
+    this._assertOpen();
+    this._childCoordinator.revokeTeamLease(fromTeamId, toTeamId);
+    return { revoked: true };
+  }
+
+  // Per-agent saved logins, by site. Values never leave the vault; only domains and counts do.
+  _agentPartition(agentId) {
+    if (!this._sessionVault) throw new TaskHostError("session_vault_unavailable", "no session vault is available");
+    const partition = `persist:halo-agent-${agentId}`;
+    if (!this._sessionVault.isPersistentPartition(partition)) throw new TaskHostError("invalid_agent", "agentId is not a valid agent id");
+    return partition;
+  }
+
+  async listSessionSites({ agentId } = {}) {
+    this._assertOpen();
+    return this._sessionVault.listSites(this._agentPartition(agentId));
+  }
+
+  async forgetSessionSite({ agentId, site } = {}) {
+    this._assertOpen();
+    return { forgotten: await this._sessionVault.forgetSite(this._agentPartition(agentId), site) };
+  }
+
+  async setSessionSites({ agentId, sites } = {}) {
+    this._assertOpen();
+    this._sessionVault.setAllowedSites(this._agentPartition(agentId), sites);
+    return { updated: true };
+  }
+
+  async getEvaluateAudit() {
+    this._assertOpen();
+    return this._evaluateLeases ? this._evaluateLeases.audit() : [];
+  }
+
   async getHostSettings() {
     this._assertOpen();
     if (!this._settingsStore) throw new TaskHostError("settings_unavailable", "host settings are unavailable");
@@ -2465,6 +2695,7 @@ class TaskHost {
     this._plannerFast = settings.plannerFast === true;
     this._plannerEscalation = settings.plannerEscalation === true;
     this._plannerRouting = settings.plannerRouting === true;
+    this._mcpRoutePreference = settings.mcpRoutePreference;
     this._mcpProviders = [...settings.mcpProviders];
     for (const entry of this._active.values()) {
       entry.controller.setPolicySettings({ ...settings, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
@@ -2599,6 +2830,8 @@ class TaskHost {
   close() {
     if (this._closePromise) return this._closePromise;
     this._closeRequested = true;
+    if (this._staleTimer) { clearInterval(this._staleTimer); this._staleTimer = null; }
+    if (this._staleFirst) { clearTimeout(this._staleFirst); this._staleFirst = null; }
     const attempt = (async () => {
       // Stop scheduling first so no new occurrence is launched during shutdown.
       // This never stops or cancels tasks; they are paused below like any other.

@@ -784,6 +784,134 @@ test("a task reloaded after reaching completed reports completed, not paused/rec
   await reloaded.close();
 });
 
+// --- Child report enforcement: a completed-but-unreported child holds the
+// parent in awaiting_verification until a human looks (and the planner is
+// told via the childPlan flags) ---
+
+async function driveParentFinish({ agents, criterionVerification = "host" }) {
+  const { store } = await makeStore({
+    originalRequest: "parent work",
+    criteria: [{ id: "visited", text: "page loaded", required: true, verification: criterionVerification }],
+  });
+  const browser = new BrowserAdapter({ view: makeFakeElectronView() });
+  let plannerCalls = 0;
+  const planner = {
+    next: async (context) => {
+      plannerCalls += 1;
+      if (plannerCalls === 1) {
+        return {
+          taskId: context.taskId,
+          goalVersion: context.goalVersion,
+          basedOnObservationId: context.observation.id,
+          criterionIds: ["visited"],
+          kind: "actions",
+          actions: [{ type: "navigate", url: "https://example.com" }],
+        };
+      }
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: ["visited"], kind: "finish", evidenceIds: [] };
+    },
+  };
+  const controller = new TaskController({
+    store, planner, browser, approve: allowApprove(), hostVerifier: () => true,
+    readChildPlan: async () => ({ agents }),
+  });
+  await controller.start();
+  return { controller, store };
+}
+
+test("a completed-but-unreported child holds the parent in awaiting_verification", async () => {
+  const { controller, store } = await driveParentFinish({
+    agents: [{ subgoal: "quiet child", status: "completed", reported: false, unreported: true }],
+  });
+  assert.equal(controller.getSnapshot().state, "awaiting_verification");
+  await store.close();
+});
+
+test("a child that reported before finishing does not block parent completion", async () => {
+  const { controller, store } = await driveParentFinish({
+    agents: [{ subgoal: "chatty child", status: "completed", reported: true }],
+  });
+  assert.equal(controller.getSnapshot().state, "completed");
+  await store.close();
+});
+
+test("confirmCriterion(verified) still waits when a child finished unreported", async () => {
+  const agents = [{ subgoal: "quiet child", status: "completed", reported: false, unreported: true }];
+  const { controller, store, pending } = await driveToAwaitingVerification({
+    extraController: { readChildPlan: async () => ({ agents }) },
+  });
+  const snapshot = await controller.confirmCriterion({
+    criterionId: "c1",
+    goalVersion: controller.getGoal().goalVersion,
+    evidenceId: pending.evidenceId,
+    outcome: "verified",
+  });
+  assert.equal(snapshot.state, "awaiting_verification");
+  await store.close();
+});
+
+test("an evaluate answer rides the next planner turn as observation.evaluateResult", async () => {
+  const { store } = await makeStore({
+    originalRequest: "read the title",
+    criteria: [{ id: "c1", text: "title read", required: true, verification: "host" }],
+  });
+  const contexts = [];
+  const browser = {
+    observe: async () => ({ id: "obs", url: "https://page.test/" }),
+    execute: async (action) => (action.type === "evaluate"
+      ? { status: "ok", evaluateResult: { authority: "untrusted_page", value: "Test", truncated: false } }
+      : { status: "ok" }),
+  };
+  const planner = {
+    next: async (context) => {
+      contexts.push(context);
+      const base = { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: ["c1"] };
+      return contexts.length === 1
+        ? { ...base, kind: "actions", actions: [{ type: "evaluate", expression: "document.title" }] }
+        : { ...base, kind: "finish", evidenceIds: [] };
+    },
+  };
+  const controller = new TaskController({ store, planner, browser, permissionMode: "interact", approve: allowApprove(), hostVerifier: () => true });
+  await controller.start();
+  assert.equal(controller.getSnapshot().state, "awaiting_approval");
+  await controller.approve(controller.getSnapshot().approvalQueue[0].id);
+  assert.equal(contexts.length >= 2, true);
+  assert.equal(contexts[1].observation.evaluateResult.result, "Test");
+  await store.close();
+});
+
+test("every planner turn carries the MCP route decision for the live page", async () => {
+  const { store } = await makeStore({
+    originalRequest: "route check",
+    criteria: [{ id: "c1", text: "done", required: true, verification: "host" }],
+  });
+  const contexts = [];
+  const browser = {
+    observe: async () => ({ id: "obs", url: "https://docs.test/guide" }),
+    execute: async () => ({ status: "ok" }),
+  };
+  const planner = {
+    next: async (context) => {
+      contexts.push(context);
+      const base = { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: ["c1"] };
+      return { ...base, kind: "finish", evidenceIds: [] };
+    },
+  };
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true });
+  await controller.start();
+  assert.deepEqual(contexts[0].progress.mcp.route, { path: "browser", domain: "docs.test", reason: "mcp_unavailable" });
+  await store.close();
+});
+
+test("an unknown MCP route preference fails fast at construction", async () => {
+  const { store } = await makeStore({ originalRequest: "route check" });
+  const browser = { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) };
+  const planner = { next: async () => { throw new Error("must not plan"); } };
+  assert.throws(() => new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true, mcpRoutePreference: "mcp_only" }),
+    { code: "invalid_config" });
+  await store.close();
+});
+
 // --- Task 5: confirmCriterion() -- the trusted-IPC-only path that lets a
 // human satisfy a "user"-verification criterion. progress.js's
 // verifyCriterion() only ever accepts a PRE-EXISTING verified/rejected
@@ -792,7 +920,7 @@ test("a task reloaded after reaching completed reports completed, not paused/rec
 // must reject a stale goalVersion/evidenceId rather than blindly trust
 // whatever the caller (main/ipc.js, ultimately the renderer) sends.
 
-async function driveToAwaitingVerification({ criterionVerification = "user", extraBrowser = {}, releaseViewsOnReview = false } = {}) {
+async function driveToAwaitingVerification({ criterionVerification = "user", extraBrowser = {}, releaseViewsOnReview = false, extraController = {} } = {}) {
   const { store } = await makeStore({
     originalRequest: "goal needing a human look",
     criteria: [{ id: "c1", text: "human confirms", required: true, verification: criterionVerification }],
@@ -812,7 +940,7 @@ async function driveToAwaitingVerification({ criterionVerification = "user", ext
       return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: ["c1"], kind: "finish", evidenceIds: [] };
     },
   };
-  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true, releaseViewsOnReview });
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true, releaseViewsOnReview, ...extraController });
   await controller.start();
   assert.equal(controller.getSnapshot().state, "awaiting_verification");
   const pending = controller.getSnapshot().criteriaStatus.find((c) => c.criterionId === "c1");
@@ -2769,8 +2897,8 @@ test("only a Multi-agent parent with a host child_plan hook is told it may split
   const running = { requestedAgentCount: 1, activeAgentCount: 1, queuedAgentCount: 0, parentGoalVersion: 1, memoryPolicy: "budgeted",
     agents: [{ agentId: "a", status: "running", assignedOrigin: "https://a.example", evidenceCount: 0, subgoal: "Flights" }] };
   const cases = [
-    ["multi_agent", true, async () => null, { enabled: true, maxAgents: 8, executionModes: ["host"], active: null }],
-    ["multi_agent", true, async () => running, { enabled: true, maxAgents: 8, executionModes: ["host"], active: { agents: [{ subgoal: "Flights", status: "running" }] } }],
+    ["multi_agent", true, async () => null, { enabled: true, maxAgents: Number.MAX_SAFE_INTEGER, executionModes: ["host"], active: null }],
+    ["multi_agent", true, async () => running, { enabled: true, maxAgents: Number.MAX_SAFE_INTEGER, executionModes: ["host"], active: { agents: [{ subgoal: "Flights", status: "running" }] } }],
     ["multi_agent", true, async () => { throw new Error("unreadable"); }, undefined],
     ["multi_agent", false, async () => null, undefined],
     ["browser", true, async () => null, undefined],

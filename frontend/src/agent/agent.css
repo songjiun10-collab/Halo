@@ -133,6 +133,11 @@
 .hx-typing{display:inline-flex;gap:2px;flex:none;align-items:center;height:16px}.hx-typing i{width:4px;height:4px;border-radius:50%;background:var(--muted-foreground);animation:hx-typing 1.1s ease-in-out infinite}.hx-typing i:nth-child(2){animation-delay:.15s}.hx-typing i:nth-child(3){animation-delay:.3s}
 @keyframes hx-typing{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-3px);opacity:1}}
 .hx-sbr__all{padding-left:37px;color:var(--muted-foreground)}
-.hx-sidebar[data-open="false"] .hx-sbr{justify-content:center;padding-inline:0}
+.hx-sidebar[data-open="false"] .hx-sbr{justify-content:center}
 .hx-sidebar[data-open="false"] .hx-sbr__n,.hx-sidebar[data-open="false"] .hx-sbr__badge,.hx-sidebar[data-open="false"] .hx-typing,.hx-sidebar[data-open="false"] .hx-sbr__all{display:none}
 @media(prefers-reduced-motion:reduce){.hx-typing i,.hx-sbr__st{animation:none!important}}
+/* Collapsed rail is 52px: one centered avatar per row (a team shows its first member) with the status dot as a corner badge. */
+.hx-sidebar[data-open="false"] .hx-sbr{position:relative;width:36px;max-width:100%;height:32px;margin-inline:auto;padding:0;gap:0}
+.hx-sidebar[data-open="false"] .hx-sbr__stack>span:nth-child(n+2){display:none}
+.hx-sidebar[data-open="false"] .hx-sbr__st{position:absolute;right:3px;bottom:3px;width:8px;height:8px;box-shadow:0 0 0 1px rgba(255,255,255,.6)}
+.hx-sidebar[data-open="false"] .hx-sbr__st[data-s=archived]{box-shadow:inset 0 0 0 1.5px color-mix(in oklab,var(--foreground) 35%,transparent)}

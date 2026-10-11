@@ -5,6 +5,10 @@ const { performance } = require("node:perf_hooks");
 const { WebContentsView } = require("./desktop-runtime");
 const { MIN_CHROME_HEIGHT } = require("./harness/browser-surfaces");
 const { dispatchBrowserInput } = require("./harness/browser-input");
+const { findInPageOn } = require("./harness/find-in-page");
+const { applyPageZoom, nextZoom, resolveZoomAction } = require("./harness/page-zoom");
+const { copySelectionOn } = require("./harness/selection-copy");
+const systemClipboard = require("./harness/system-clipboard");
 
 // The React shell has no fixed side panel, so the user's view fills the page
 // slot the renderer measures, exactly like task surfaces (BrowserSurfaces):
@@ -73,11 +77,13 @@ class ControlApi {
     maxDomLinksScanned,
     now,
     onPageVisit,
+    writeClipboard,
     webContentsViewClass = WebContentsView,
   } = {}) {
     this._onPageVisit = typeof onPageVisit === "function" ? onPageVisit : null;
     this._window = window;
     this._WebContentsView = webContentsViewClass;
+    this._writeClipboard = typeof writeClipboard === "function" ? writeClipboard : systemClipboard.writeText;
     this._socketPath = socketPath;
     // Injectable seams for tests only (defaults are the real Unix-socket
     // client / the real pacing floor / metrics clock). Production callers
@@ -155,6 +161,44 @@ class ControlApi {
   sendSurfaceInput(input) {
     if (!this._view || this._view.webContents.isDestroyed() || this._inFlightAgentActions.size || ["running", "awaiting_approval"].includes(this._task.state) || this._task.pauseReason === "user_takeover_pending") return false;
     return dispatchBrowserInput(this._view.webContents, this._view.getBounds(), input);
+  }
+
+  // Mod+F on the user's own tab: read-only find (window.find on Chromium,
+  // findInPage on Electron). Never runs while an agent action is in flight on
+  // this view, so a search cannot scroll a page out from under an executor.
+  async findInPage(query, options = {}) {
+    const wc = this._view && this._view.webContents;
+    if (!wc || (typeof wc.isDestroyed === "function" && wc.isDestroyed()) || this._inFlightAgentActions.size) {
+      return { ok: false, found: false, errorCode: "surface_unavailable" };
+    }
+    return findInPageOn(wc, query, options);
+  }
+
+  // Mod+/Mod-/Mod+0 on the user's own tab. The level is stored on the tab and
+  // re-applied after a navigation (see the did-navigate handler); never runs
+  // while an agent action is in flight on this view.
+  async setZoom(request) {
+    const wc = this._view && this._view.webContents;
+    if (!wc || (typeof wc.isDestroyed === "function" && wc.isDestroyed()) || this._inFlightAgentActions.size) {
+      return { ok: false, level: null, errorCode: "surface_unavailable" };
+    }
+    const tab = this._tabs.find((candidate) => candidate.id === this._activeTabId) ?? null;
+    const current = tab?.zoom ?? 1;
+    const level = typeof request === "string" ? nextZoom(current, request) : resolveZoomAction(request ?? {}, current);
+    if (level === null) return { ok: false, level: null, errorCode: "invalid_zoom_level" };
+    const result = await applyPageZoom(wc, level);
+    if (result.ok && tab) tab.zoom = result.level;
+    return result;
+  }
+
+  // Mod+C on the user's own tab: copy the page's current selection to the OS
+  // clipboard (HALO never reads it back). Same fail-closed rule as find/zoom.
+  async copySelection() {
+    const wc = this._view && this._view.webContents;
+    if (!wc || (typeof wc.isDestroyed === "function" && wc.isDestroyed()) || this._inFlightAgentActions.size) {
+      return { ok: false, chars: 0, errorCode: "surface_unavailable" };
+    }
+    return copySelectionOn(wc, this._writeClipboard);
   }
 
   _emit() {
@@ -253,7 +297,12 @@ class ControlApi {
     tab.view = view;
     const wc = view.webContents;
     wc.on("did-start-navigation", () => { if (this._view === view) this._syncPageState({ loadState: "loading" }); });
-    wc.on("did-navigate", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url, loadState: "ready" }); });
+    wc.on("did-navigate", (_e, url) => {
+      tab.url = url;
+      if (this._view === view) this._syncPageState({ url, loadState: "ready" });
+      // Mod+/- zoom is per-tab and survives navigation, like a browser's.
+      if (tab.zoom && tab.zoom !== 1) void applyPageZoom(wc, tab.zoom);
+    });
     wc.on("did-navigate-in-page", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url }); });
     wc.on("did-finish-load", () => { this._onPageVisit?.(wc); });
     wc.on("page-title-updated", (_e, title) => { tab.title = title; if (this._view === view) this._syncPageState({ title }); });

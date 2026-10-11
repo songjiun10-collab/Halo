@@ -71,6 +71,8 @@ test("target origin comes from the URL, the observed link, or the current page",
   assert.equal(actionTargetOrigin({ type: "follow_link", elementId: "3" }, obs), "https://github.com");
   assert.equal(actionTargetOrigin({ type: "follow_link", elementId: "9" }, obs), null);
   assert.equal(actionTargetOrigin({ type: "scroll" }, obs), "https://page.test");
+  assert.equal(actionTargetOrigin({ type: "hw_step", step: { op: "click", locator: { role: "button", name: "Go" } } }, obs), "https://page.test");
+  assert.equal(actionTargetOrigin({ type: "hw_step", step: { op: "press", key: "Enter" } }, null), null);
   assert.equal(actionTargetOrigin({ type: "navigate", url: "not a url" }, obs), null);
   assert.equal(actionTargetOrigin({ type: "scroll" }, null), null);
 });

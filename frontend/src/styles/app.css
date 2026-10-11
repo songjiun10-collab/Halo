@@ -237,6 +237,19 @@ code { font-family: var(--font-mono); }
 .hx-body { position: relative; flex: 1; min-height: 0; display: flex; }
 .hx-page { position: relative; flex: 1; min-width: 0; display: flex; }
 .hx-native-page { flex: 1; min-width: 0; background: var(--site-bg); position: relative; overflow: hidden; }
+/* Mod+F find bar: floats over the page slot; the host performs the search. */
+.hx-find {
+  position: absolute; top: 10px; inset-inline-end: 12px; z-index: 6;
+  display: flex; align-items: center; gap: 2px;
+  padding: 6px 8px; border: 1px solid var(--halo-glass-border, var(--border)); border-radius: var(--radius-md, 10px);
+  background: var(--surface-2); color: var(--foreground);
+  box-shadow: 0 8px 24px rgb(0 0 0 / .28);
+  font: 500 12.5px/1.4 var(--font-body);
+}
+.hx-find__input { width: 200px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--well, var(--hover)); color: inherit; font: inherit; }
+.hx-find__input:focus { outline: none; border-color: var(--border-strong); }
+.hx-find__status { min-width: 56px; padding: 0 6px; color: var(--muted-foreground); font-size: 11.5px; text-align: end; white-space: nowrap; }
+.hx-find .hx-icbtn { width: 24px; height: 24px; font-size: 13px; }
 .hx-snapshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: left top; pointer-events: none; user-select: none; }
 .hx-snapshot[data-swipe] { animation: .32s cubic-bezier(.32,.72,0,1) both hx-swipe-away-back; box-shadow: -12px 0 32px rgb(0 0 0 / .22); }
 .hx-snapshot[data-swipe="forward"] { animation-name: hx-swipe-away-forward; box-shadow: 12px 0 32px rgb(0 0 0 / .22); }
@@ -268,7 +281,11 @@ code { font-family: var(--font-mono); }
 
 /* A new tab: Halo's own dark surface, not the light web page. */
 .hx-site--home { display: flex; background: var(--backdrop); padding: 0; }
-.hx-home { margin: auto; width: min(40rem, calc(100% - 48px)); padding: 40px 0; text-align: center; }
+/* The design kit (design-system/components.css) is imported after this file, so
+   its plain .hx-home/.hx-home__input rules win by order. Match its specificity:
+   the system-7 home column is 40rem and the input must not collapse under the
+   Ask-mode row (input + Search/Ask + model picker + send needs ~556px). */
+:root .hx-home { margin: auto; width: min(40rem, calc(100% - 48px)); padding: 40px 0; text-align: center; }
 .hx-home__mark { width: 48px; height: 48px; color: var(--brand); }
 .hx-home__title { margin: var(--space-md) 0 28px; font-size: 28px; font-weight: 600; letter-spacing: -.01em; color: var(--foreground); }
 .hx-home__form { display: flex; align-items: center; gap: 8px; }
@@ -281,7 +298,12 @@ code { font-family: var(--font-mono); }
 .hx-home__form .hx-mpick { flex: none; max-width: 170px; border: 0; padding: 0; background: none; box-shadow: none; }
 .hx-home__form .hx-mpick__toggle { height: 56px; max-width: 170px; padding-inline: 16px; border-radius: 999px; font-size: 14px; }
 .hx-home__form .hx-mpick__toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hx-home__input { min-width: 180px; }
+/* Same order problem as .hx-home above; keep the input from collapsing when the
+   row is tight (the kit sets min-width: 0). Only where the desktop layout runs:
+   a window narrower than 681px cannot fit the row's minimum anyway. */
+@media (min-width: 681px) {
+  :root .hx-home__input { min-width: 180px; }
+}
 .hx-home__form .hx-btn { width: 56px; height: 56px; min-height: 56px; padding: 0; border-radius: 999px; }
 .hx-home__form .hx-btn .hx-ic { width: 20px; height: 20px; }
 .hx-home__recent { margin-top: 28px; display: flex; flex-direction: column; gap: 2px; text-align: left; }
@@ -428,7 +450,8 @@ code { font-family: var(--font-mono); }
 .hx-msg__actions { display: flex; justify-content: flex-end; gap: var(--space-xs); }
 
 .hx-chat__composer { display: flex; flex-direction: column; gap: var(--space-xs); }
-.hx-chat__row { display: flex; gap: var(--space-sm); }
+.hx-chat__row { display: flex; align-items: center; gap: var(--space-sm); }
+.hx-chat__row > .hx-chat__input { flex: 1; min-width: 0; }
 .hx-work { font-size: 12px; color: var(--muted-foreground); }
 .hx-work summary { cursor: pointer; padding: 2px 0; }
 .hx-work ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; }
@@ -678,6 +701,7 @@ kbd {
 .hx-settings__row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); font-size: 13px; }
 .hx-settings__row--stack { flex-direction: column; align-items: stretch; }
 .hx-settings__row select { max-width: 220px; height: 30px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--well); color: var(--foreground); font: inherit; }
+.hx-settings__row input[type="url"] { width: min(260px, 52%); height: 30px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--well); color: var(--foreground); font: inherit; }
 .hx-model-row .hx-model-row__body { display: grid; gap: 2px; }
 .hx-perm { color: var(--foreground); font: inherit; }
 .hx-perm:hover:not(:disabled) { border-color: var(--border-strong); }
@@ -831,7 +855,7 @@ section.hx-chat .hx-chat__thread { flex: 1 1 auto; min-height: 120px; overflow-y
     background: rgba(12, 14, 13, 0.76) !important; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none;
   }
   :root[data-platform="darwin"][data-theme="light"] .hx-sidebar { background: rgba(255, 255, 255, 0.72) !important; }
-  :root[data-platform="darwin"] .hx-sidebar[data-open="false"] { width: 52px; }
+  :root[data-platform="darwin"] .hx-sidebar[data-open="false"] { flex-basis: 52px; width: 52px; }
   :root[data-platform="darwin"] .hx-sidebar::before { content: ""; position: fixed; top: 0; left: 0; width: 244px; height: 44px; -webkit-app-region: drag; }
   :root[data-platform="darwin"] .hx-toolbar { -webkit-app-region: drag; }
   :root[data-platform="darwin"] .hx-toolbar button, :root[data-platform="darwin"] .hx-toolbar input, :root[data-platform="darwin"] .hx-toolbar a, :root[data-platform="darwin"] .hx-toolbar [role="button"] { -webkit-app-region: no-drag; }
@@ -887,6 +911,46 @@ section.hx-chat .hx-chat__thread { flex: 1 1 auto; min-height: 120px; overflow-y
 .hx-omni__mode button[aria-pressed="true"] { background: var(--hover); color: var(--foreground); }
 
 /* The planner picker inside the docked agent panel: a compact pill, never a wrapped circle. */
-.hx-chat__composer .hx-mpick { align-self: flex-start; max-width: 100%; }
+.hx-chat__composer .hx-mpick { flex: none; max-width: 42%; }
 .hx-chat__composer .hx-mpick__toggle { height: 30px; width: auto; min-width: 0; padding-inline: 12px; border-radius: 999px; font-size: 12.5px; white-space: nowrap; }
 .hx-chat__composer .hx-mpick__toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.hx-ext { position: relative; display: inline-flex; }
+.hx-ext__menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; display: grid; gap: 2px; min-width: 180px; padding: 4px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface, var(--background)); box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+.hx-ext__item { padding: 8px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--foreground); font: inherit; text-align: left; }
+.hx-ext__item:disabled { color: var(--muted-foreground); }
+.hx-ext__error { margin: 4px 8px; font-size: 12px; color: var(--muted-foreground); }
+@media (hover: hover) and (pointer: fine) { .hx-ext__item:hover:not(:disabled) { background: var(--hover); } }
+
+/* Chromium window: the patched browser puts native vibrancy behind the leading 244px column and the page default background is transparent, so the sidebar is real glass; every other surface stays solid. */
+:root[data-runtime="chromium"], :root[data-runtime="chromium"] body, :root[data-runtime="chromium"] .hx-app { background: transparent; }
+@media (min-width: 681px) {
+  :root[data-runtime="chromium"][data-platform="darwin"] .hx-sidebar { background: rgba(255, 255, 255, 0.04) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  :root[data-runtime="chromium"][data-platform="darwin"]:not([data-theme="light"]) .hx-sidebar { background: transparent !important; } /* the native blur carries this tint (--halo-vibrancy-tint) */
+  :root[data-runtime="chromium"][data-platform="darwin"][data-theme="light"] .hx-sidebar { background: rgba(255, 255, 255, 0.04) !important; }
+}
+
+/* The native glass behind the sidebar is always the light material, so the sidebar keeps light-theme text
+   whatever the app theme is; otherwise light-on-light text vanishes in dark theme. */
+@media (min-width: 681px) {
+  :root[data-runtime="chromium"][data-platform="darwin"] .hx-sidebar {
+    --foreground: #1d1f1e; --muted-foreground: #4f5651; --text-muted: #4f5651;
+    --border: rgba(0, 0, 0, 0.12); --border-strong: rgba(0, 0, 0, 0.38);
+    --hover: rgba(0, 0, 0, 0.06); --well: rgba(0, 0, 0, 0.08);
+    color: var(--foreground); color-scheme: light;
+  }
+}
+
+/* The self-built Chromium keeps DCHECKs on, and an animated `backdrop-filter: url(#…)` trips a style-resolver DCHECK that kills the UI renderer (the window flashes transparent). Keep the glass blur, drop only the SVG refraction reference, in the Chromium runtime. */
+:root[data-runtime="chromium"] .hx-mpick__pop, :root[data-runtime="chromium"] .hx-agentpick__menu, :root[data-runtime="chromium"] .hx-subconnect, :root[data-runtime="chromium"] .hx-agentmenu, :root[data-runtime="chromium"] .hx-ctxmenu, :root[data-runtime="chromium"] .hx-chat { -webkit-backdrop-filter: blur(34px) saturate(1.6) !important; backdrop-filter: blur(34px) saturate(1.6) !important; }
+
+/* Sidebar tab rows: a close button that appears on hover/focus, beside the row (never nested in it). */
+.hx-sidebar__tabrow { position: relative; display: flex; align-items: center; }
+.hx-sidebar__tabrow > .hx-sidebar__item { flex: 1; min-width: 0; padding-inline-end: 28px; }
+.hx-sidebar__tabclose { position: absolute; inset-inline-end: 6px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted-foreground); font: 500 15px/20px var(--font-body); cursor: pointer; opacity: 0; }
+.hx-sidebar__tabrow:hover .hx-sidebar__tabclose, .hx-sidebar__tabclose:focus-visible { opacity: 1; }
+.hx-sidebar__tabclose:hover { background: var(--hover); color: var(--foreground); }
+.hx-sidebar[data-open="false"] .hx-sidebar__tabclose { display: none; }

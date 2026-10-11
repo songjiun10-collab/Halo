@@ -7,20 +7,20 @@ const { evaluateActionPolicy, PERMISSION_MODES } = require("../main/harness/perm
 test("permission policy applies the four-mode action matrix", () => {
   const expected = {
     observe: {
-      observe: "allow", scroll: "allow", navigate: "deny", follow_link: "deny",
-      click: "deny", type: "deny", submit_form: "deny", download: "deny",
+      observe: "allow", scroll: "allow", find: "allow", zoom: "allow", select_all: "allow", copy: "deny", navigate: "deny", follow_link: "deny",
+      click: "deny", type: "deny", submit_form: "deny", download: "deny", evaluate: "deny",
     },
     browse: {
-      observe: "allow", scroll: "allow", navigate: "allow", follow_link: "allow",
-      click: "deny", type: "deny", submit_form: "deny", download: "deny",
+      observe: "allow", scroll: "allow", find: "allow", zoom: "allow", select_all: "allow", copy: "deny", navigate: "allow", follow_link: "allow",
+      click: "deny", type: "deny", submit_form: "deny", download: "deny", evaluate: "deny",
     },
     interact: {
-      observe: "allow", scroll: "allow", navigate: "allow", follow_link: "allow",
-      click: "human_review", type: "human_review", submit_form: "deny", download: "deny",
+      observe: "allow", scroll: "allow", find: "allow", zoom: "allow", select_all: "allow", copy: "human_review", navigate: "allow", follow_link: "allow",
+      click: "human_review", type: "human_review", submit_form: "deny", download: "deny", evaluate: "human_review",
     },
     full: {
-      observe: "allow", scroll: "allow", navigate: "allow", follow_link: "allow",
-      click: "allow", type: "allow", submit_form: "allow", download: "deny",
+      observe: "allow", scroll: "allow", find: "allow", zoom: "allow", select_all: "allow", copy: "allow", navigate: "allow", follow_link: "allow",
+      click: "allow", type: "allow", submit_form: "allow", download: "deny", evaluate: "allow",
     },
   };
 

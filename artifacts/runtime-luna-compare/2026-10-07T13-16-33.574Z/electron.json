@@ -1,0 +1,207 @@
+{
+  "arm": "electron",
+  "model": "gpt-6-luna",
+  "startupMs": null,
+  "rows": [
+    {
+      "schemaVersion": 1,
+      "harness": "halo-accuracy",
+      "taskId": "specs-retrieval",
+      "kind": "retrieval",
+      "verdict": "pass",
+      "reason": "reported the chip, display and memory the current specs state",
+      "ending": "paused",
+      "pauseReason": "need_user",
+      "answer": "The current laptop’s specifications page shows chip M4, display 11-inch, and memory 16GB.",
+      "finalUrl": "http://127.0.0.1:51388/specs",
+      "plannerCalls": 2,
+      "actionsUsed": 1,
+      "pageRequests": 2,
+      "wallMs": 12625,
+      "summary": {
+        "total": 3,
+        "graded": 3,
+        "passed": 2,
+        "failed": 1,
+        "blocked": 0,
+        "inconclusive": 0,
+        "unclassified": 0,
+        "passRate": 0.6666666666666666,
+        "reportable": true,
+        "caveat": "every run was graded"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "harness": "halo-accuracy",
+      "taskId": "returns-multihop-navigation",
+      "kind": "navigation",
+      "verdict": "pass",
+      "reason": "walked Support -> Shipping -> Returns",
+      "ending": "awaiting_verification",
+      "pauseReason": null,
+      "answer": "",
+      "finalUrl": "http://127.0.0.1:51388/support/shipping/returns",
+      "plannerCalls": 6,
+      "actionsUsed": 5,
+      "pageRequests": 4,
+      "wallMs": 31641,
+      "summary": {
+        "total": 3,
+        "graded": 3,
+        "passed": 2,
+        "failed": 1,
+        "blocked": 0,
+        "inconclusive": 0,
+        "unclassified": 0,
+        "passRate": 0.6666666666666666,
+        "reportable": true,
+        "caveat": "every run was graded"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "harness": "halo-accuracy",
+      "taskId": "store-mutation",
+      "kind": "mutation",
+      "verdict": "fail",
+      "reason": "submitted but never reached the confirmation page",
+      "ending": "paused",
+      "pauseReason": "need_user",
+      "answer": "The page still shows “Home store: (none)” after the Set home store click. Please review the store setting before I continue.",
+      "finalUrl": "http://127.0.0.1:51388/store",
+      "plannerCalls": 3,
+      "actionsUsed": 1,
+      "pageRequests": 2,
+      "wallMs": 18554,
+      "summary": {
+        "total": 3,
+        "graded": 3,
+        "passed": 2,
+        "failed": 1,
+        "blocked": 0,
+        "inconclusive": 0,
+        "unclassified": 0,
+        "passRate": 0.6666666666666666,
+        "reportable": true,
+        "caveat": "every run was graded"
+      }
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "graded": 3,
+    "passed": 2,
+    "failed": 1,
+    "blocked": 0,
+    "inconclusive": 0,
+    "unclassified": 0,
+    "passRate": 0.6666666666666666,
+    "reportable": true,
+    "caveat": "every run was graded"
+  },
+  "usage": [
+    {
+      "taskId": "specs-retrieval",
+      "provider": "codex",
+      "inputTokens": 12358,
+      "outputTokens": 94,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "specs-retrieval",
+      "provider": "codex",
+      "inputTokens": 12161,
+      "outputTokens": 101,
+      "cacheReadTokens": 1792,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 12167,
+      "outputTokens": 129,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 12021,
+      "outputTokens": 108,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 12035,
+      "outputTokens": 85,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 11978,
+      "outputTokens": 122,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 11976,
+      "outputTokens": 96,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 11973,
+      "outputTokens": 96,
+      "cacheReadTokens": 11008,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11854,
+      "outputTokens": 102,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 12015,
+      "outputTokens": 331,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    }
+  ],
+  "peakProcessTreeRssBytes": 1056800768,
+  "wallMs": 64483.241916
+}

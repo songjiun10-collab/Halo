@@ -1,4 +1,5 @@
 import { waitReasonLabel } from '../session/wait-reason'
+import { useShowAdvanced } from '../session/show-advanced'
 import { useEffect, useState } from 'react'
 import { nonEmptyVerbatim } from '../session/composer'
 import { Forward, Up } from './Icons'
@@ -42,6 +43,7 @@ export function HomeScreen({ activeTask, onSelectTab, onSubmit, onNavigate }: Pr
   const [value, setValue] = useState('')
   const [lockChips, setLockChips] = useState<Set<LockChip>>(new Set())
   const { settings, savingProvider, providerError, savingEffort, effortError, selectModel, selectEffort } = useModelSettings()
+  const showAdvanced = useShowAdvanced()
   const [recent, setRecent] = useState<TaskSummary[]>([])
   const [query, setQuery] = useState<'search' | 'ask'>('search')
   const [tab, setTab] = useState<'chats' | 'routines'>('chats')
@@ -101,7 +103,7 @@ export function HomeScreen({ activeTask, onSelectTab, onSubmit, onNavigate }: Pr
         {query === 'ask' && <ModelPicker settings={settings} onSelectModel={(id) => void selectModel(id)} onEffort={(effort) => void selectEffort(effort)} savingProvider={savingProvider} savingEffort={savingEffort} />}
         <button className="hx-btn hx-btn--primary hx-btn--compact" type="submit" disabled={!value.trim()} aria-label={query === 'ask' ? 'Send' : 'Go'}><Up /></button>
       </form>
-      {query === 'ask' && <LockChips value={lockChips} onChange={setLockChips} />}
+      {query === 'ask' && showAdvanced && <LockChips value={lockChips} onChange={setLockChips} />}
       {(providerError || effortError) && (
         <p className="hx-home__provider-status" role="alert">{providerError ? 'Could not update provider preference.' : 'Could not update effort.'}</p>
       )}

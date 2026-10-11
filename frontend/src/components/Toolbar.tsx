@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode, type Ref } from 'r
 import { currentUrl } from '../session/session'
 import { addressTarget } from '../session/navigation'
 import type { Tab } from '../session/types'
+import { ExtensionsMenu } from './ExtensionsMenu'
 import { ActivityLog, Back, Forward, Lock, Share, Sidebar, Tabs, Gear } from './Icons'
 
 interface Props {
@@ -65,6 +66,7 @@ export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onSha
         {controller}
       </div>
       <div className="hx-nav">
+        <ExtensionsMenu />
         <button className="hx-icbtn" aria-label="Share" aria-keyshortcuts="Control+Shift+S Meta+Shift+S" title="Share" aria-disabled={url.startsWith('halo://') || undefined} onClick={onShare}><Share /></button>
         <button className="hx-icbtn" aria-label="Show all tabs" aria-keyshortcuts="Control+Shift+A Meta+Shift+A" title="Show all tabs" onClick={onOverview}><Tabs /></button>
         <button className="hx-icbtn" aria-label="View task activity" title="View task activity" onClick={onActivity}><ActivityLog /></button>

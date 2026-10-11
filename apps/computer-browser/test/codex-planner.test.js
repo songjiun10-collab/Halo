@@ -23,9 +23,9 @@ test("the Codex model catalog is a frozen allowlist and effort never exceeds wha
   assert.ok(Object.isFrozen(CODEX_MODELS));
   assert.deepEqual(CODEX_MODEL_IDS, ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]);
   // Names as the Codex app's model menu shows them; generations per the server catalog.
-  assert.equal(DEFAULT_CODEX_MODEL, "gpt-6.1-sol");
+  assert.equal(DEFAULT_CODEX_MODEL, "gpt-6-luna");
   assert.deepEqual(CODEX_MODELS.map((m) => m.label), ["GPT-6.1 Sol", "GPT-6 Astra", "GPT-6 Sol", "GPT-6 Luna", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna", "GPT-5.5"]);
-  assert.deepEqual(CODEX_MODELS.filter((m) => !m.legacy).map((m) => m.id), ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
+  assert.deepEqual(CODEX_MODELS.filter((m) => !m.legacy).map((m) => m.id), ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"]);
   for (const m of CODEX_MODELS) { assert.ok(Object.isFrozen(m)); assert.equal(m.family, "gpt"); assert.equal(typeof m.description, "string"); }
   assert.equal(codexEffort("gpt-6-astra", "max"), "max");
   // ultra only where the server catalog offers it.

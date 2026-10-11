@@ -1,0 +1,467 @@
+{
+  "arm": "chromium",
+  "model": "gpt-6-luna",
+  "startupMs": 0,
+  "rows": [
+    {
+      "schemaVersion": 1,
+      "harness": "halo-accuracy",
+      "taskId": "specs-retrieval",
+      "kind": "retrieval",
+      "verdict": "pass",
+      "reason": "reported the chip, display and memory the current specs state",
+      "ending": "paused",
+      "pauseReason": "need_user",
+      "answer": "The CURRENT laptop specs page is open (http://127.0.0.1:51491/specs). It lists chip M4, 11-inch display, and 16GB memory. I did not use the archived specifications.",
+      "finalUrl": "http://127.0.0.1:51491/specs",
+      "plannerCalls": 2,
+      "actionsUsed": 1,
+      "pageRequests": 2,
+      "wallMs": 14574,
+      "summary": {
+        "total": 3,
+        "graded": 3,
+        "passed": 3,
+        "failed": 0,
+        "blocked": 0,
+        "inconclusive": 0,
+        "unclassified": 0,
+        "passRate": 1,
+        "reportable": true,
+        "caveat": "every run was graded"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "harness": "halo-accuracy",
+      "taskId": "returns-multihop-navigation",
+      "kind": "navigation",
+      "verdict": "pass",
+      "reason": "walked Support -> Shipping -> Returns",
+      "ending": "paused",
+      "pauseReason": "need_user",
+      "answer": "The Returns policy page is open. Please review it and confirm that you completed the requested steps: Support → Shipping → Returns policy.",
+      "finalUrl": "http://127.0.0.1:51491/support/shipping/returns",
+      "plannerCalls": 11,
+      "actionsUsed": 10,
+      "pageRequests": 4,
+      "wallMs": 62618,
+      "summary": {
+        "total": 3,
+        "graded": 3,
+        "passed": 3,
+        "failed": 0,
+        "blocked": 0,
+        "inconclusive": 0,
+        "unclassified": 0,
+        "passRate": 1,
+        "reportable": true,
+        "caveat": "every run was graded"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "harness": "halo-accuracy",
+      "taskId": "store-mutation",
+      "kind": "mutation",
+      "verdict": "pass",
+      "reason": "the server received the correct home-store request",
+      "ending": "paused",
+      "pauseReason": "no_progress",
+      "answer": "",
+      "finalUrl": "http://127.0.0.1:51491/store/confirm",
+      "plannerCalls": 23,
+      "actionsUsed": 21,
+      "pageRequests": 2,
+      "wallMs": 140985,
+      "summary": {
+        "total": 3,
+        "graded": 3,
+        "passed": 3,
+        "failed": 0,
+        "blocked": 0,
+        "inconclusive": 0,
+        "unclassified": 0,
+        "passRate": 1,
+        "reportable": true,
+        "caveat": "every run was graded"
+      }
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "graded": 3,
+    "passed": 3,
+    "failed": 0,
+    "blocked": 0,
+    "inconclusive": 0,
+    "unclassified": 0,
+    "passRate": 1,
+    "reportable": true,
+    "caveat": "every run was graded"
+  },
+  "usage": [
+    {
+      "taskId": "specs-retrieval",
+      "provider": "codex",
+      "inputTokens": 12351,
+      "outputTokens": 87,
+      "cacheReadTokens": 1792,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "specs-retrieval",
+      "provider": "codex",
+      "inputTokens": 12162,
+      "outputTokens": 129,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 12160,
+      "outputTokens": 102,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 12012,
+      "outputTokens": 132,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 12031,
+      "outputTokens": 85,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 11972,
+      "outputTokens": 115,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 11979,
+      "outputTokens": 172,
+      "cacheReadTokens": 1792,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 11975,
+      "outputTokens": 143,
+      "cacheReadTokens": 1792,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 11971,
+      "outputTokens": 104,
+      "cacheReadTokens": 11008,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 11974,
+      "outputTokens": 127,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 24213,
+      "outputTokens": 162,
+      "cacheReadTokens": 19968,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 11978,
+      "outputTokens": 177,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "returns-multihop-navigation",
+      "provider": "codex",
+      "inputTokens": 12068,
+      "outputTokens": 105,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11852,
+      "outputTokens": 85,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11907,
+      "outputTokens": 109,
+      "cacheReadTokens": 1792,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11811,
+      "outputTokens": 149,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11800,
+      "outputTokens": 84,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11794,
+      "outputTokens": 113,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11795,
+      "outputTokens": 106,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11796,
+      "outputTokens": 154,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11802,
+      "outputTokens": 155,
+      "cacheReadTokens": 11008,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11795,
+      "outputTokens": 128,
+      "cacheReadTokens": 1792,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11898,
+      "outputTokens": 166,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11846,
+      "outputTokens": 103,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11843,
+      "outputTokens": 116,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11841,
+      "outputTokens": 115,
+      "cacheReadTokens": 1792,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11846,
+      "outputTokens": 192,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11842,
+      "outputTokens": 104,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11843,
+      "outputTokens": 166,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11894,
+      "outputTokens": 134,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11849,
+      "outputTokens": 121,
+      "cacheReadTokens": 11008,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11846,
+      "outputTokens": 146,
+      "cacheReadTokens": 11008,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11849,
+      "outputTokens": 110,
+      "cacheReadTokens": 11008,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11844,
+      "outputTokens": 148,
+      "cacheReadTokens": 11008,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11846,
+      "outputTokens": 104,
+      "cacheReadTokens": 8960,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    },
+    {
+      "taskId": "store-mutation",
+      "provider": "codex",
+      "inputTokens": 11849,
+      "outputTokens": 84,
+      "cacheReadTokens": 0,
+      "cacheCreationTokens": 0,
+      "costUsd": 0,
+      "durationMs": 0
+    }
+  ],
+  "peakProcessTreeRssBytes": 912687104,
+  "wallMs": 219980.50591699997
+}

@@ -16,8 +16,27 @@ const os = require("node:os");
 const path = require("node:path");
 const STARTUP_TIMEOUT_MS = 30000;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+// V8 flags must reach the renderer as ONE --js-flags switch. base's CommandLine
+// stores switches in a map keyed by name, so a second --js-flags OVERWRITES the
+// first rather than merging with it, and the only duplicate-switch handlers in
+// the tree are the unit-test and test-launcher ones, which a launched browser
+// never installs. Appending our V8 flags after a caller-supplied --js-flags (or
+// vice versa) would therefore silently discard --max-old-space-size=512 and hand
+// the renderer V8's default, multi-GB heap. jsFlags() is the single place a
+// --js-flags switch is built.
+const V8_FLAGS = Object.freeze(["--max-old-space-size=512"]);
+function jsFlags(extra) {
+    const merged = [];
+    for (const flag of [...V8_FLAGS, ...(extra ?? [])]) {
+        if (!merged.includes(flag))
+            merged.push(flag);
+    }
+    return `--js-flags=${merged.join(" ")}`;
+}
 // Flags that cut idle memory and background traffic without weakening isolation.
-// Site isolation and the sandbox are deliberately left on.
+// Site isolation and the sandbox are deliberately left on. The --js-flags switch
+// is NOT listed here: it is assembled in launchFlags() so a caller's own V8
+// flags can be folded into the same single switch.
 const LEAN_FLAGS = Object.freeze([
     "--no-first-run",
     "--no-default-browser-check",
@@ -28,10 +47,24 @@ const LEAN_FLAGS = Object.freeze([
     "--disable-default-apps",
     "--disk-cache-size=1",
     "--media-cache-size=1",
-    "--js-flags=--max-old-space-size=512",
+    // Automation semantics kept on purpose: an offscreen agent page must keep
+    // running and render hover/pointer states, and these do not weaken a boundary.
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-print-preview",
+    "--autoplay-policy=no-user-gesture-required",
+    "--enable-automation",
+    "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4",
+    // Halo: no self-advertised automation. The UA/client hints stay the stock
+    // Chromium ones and navigator.webdriver stays off (chrome patch 3,
+    // chromium-patches/0003-Halo-*); the agent's declared identity is the Web Bot
+    // Auth signature instead. Builds without the patch ignore the switch.
+    "--halo-identity",
 ]);
 const MAC_CANDIDATES = Object.freeze([
     // Halo's own lean build (headless_shell: no browser UI, no extensions) is preferred when present.
+    path.join(os.homedir(), "chromium/src/out/TrialLean/headless_shell"),
     path.join(os.homedir(), "chromium/src/out/Trial/headless_shell"),
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -91,6 +124,10 @@ async function resolveEndpoint(endpoint, fetchImpl = fetch) {
 }
 // headless_shell is always headless and has no browser UI, so it takes no --headless flag.
 function isHeadlessShell(executablePath) { return path.basename(executablePath) === "headless_shell"; }
+// Width of the leading column (the sidebar) that gets native macOS vibrancy behind it; needs the patched Chromium, other builds ignore the switch.
+// Same colour as the sidebar scrim in app.css, painted natively so the blur outside the page's rounded corners matches it.
+const DESKTOP_VIBRANCY_TINT = "20,22,21,0.34";
+const DESKTOP_VIBRANCY_WIDTH = 244;
 function launchFlags(extra, headless, profile, executablePath = "", desktop = {}) {
     for (const flag of extra ?? []) {
         if (typeof flag !== "string" || !flag.startsWith("--") || FORBIDDEN_FLAG.test(flag)) {
@@ -108,13 +145,36 @@ function launchFlags(extra, headless, profile, executablePath = "", desktop = {}
         if (!desktop.desktop || appUrl.protocol !== "http:" || appUrl.hostname !== "127.0.0.1" || !appUrl.port || appUrl.username || appUrl.password)
             throw new CdpBrowserError("invalid_app_url", "desktop URL must be a private loopback origin");
     }
+    const extensionDirs = desktop.extensionDirs ?? [];
+    if (extensionDirs.length) {
+        if (!desktop.desktop)
+            throw new CdpBrowserError("invalid_extension", "only the desktop may load extensions");
+        for (const dir of extensionDirs) {
+            if (typeof dir !== "string" || !path.isAbsolute(dir) || dir.includes(",") || !fs.existsSync(path.join(dir, "manifest.json")))
+                throw new CdpBrowserError("invalid_extension", "extension must be an absolute directory with a manifest.json");
+        }
+    }
+    // Fold any caller-supplied V8 flags into the single --js-flags switch instead
+    // of appending a second one that would overwrite ours.
+    const extraFlags = extra ?? [];
+    const callerV8Flags = extraFlags
+        .filter((flag) => flag.startsWith("--js-flags="))
+        .flatMap((flag) => flag.slice("--js-flags=".length).split(" ").filter(Boolean));
+    const passthroughFlags = extraFlags.filter((flag) => !flag.startsWith("--js-flags="));
     return [
         ...(headless && !isHeadlessShell(executablePath) ? ["--headless=new", "--disable-gpu"] : []),
+        // headless_shell otherwise renders with SwiftShader and reports an unmistakably software GPU.
+        // The Mac's own GPU is what a person's browser reports, so use it (about +16MB per agent browser).
+        ...(isHeadlessShell(executablePath) && process.platform === "darwin" ? ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] : []),
         "--remote-debugging-port=0",
         "--remote-debugging-address=127.0.0.1",
         `--user-data-dir=${profile}`,
-        ...LEAN_FLAGS.filter((flag) => !(desktop.desktop && ["--disable-extensions", "--disable-component-update", "--disable-default-apps"].includes(flag))),
-        ...(extra ?? []),
+        ...LEAN_FLAGS.filter((flag) => !(desktop.desktop && ["--disable-extensions", "--disable-component-update", "--disable-default-apps", "--enable-automation", "--disk-cache-size=1", "--media-cache-size=1"].includes(flag))),
+        // The UI window opens on the primary (Retina) display at a usable size instead of wherever Chromium last left a small 1200px window.
+        ...(desktop.desktop ? ["--window-position=40,40", "--window-size=1600,1000", `--halo-vibrancy-width=${DESKTOP_VIBRANCY_WIDTH}`, `--halo-vibrancy-tint=${DESKTOP_VIBRANCY_TINT}`, "--enable-features=GlassFrame,VizBufferQueueDiscardOnVisibilityChange"] : []),
+        jsFlags(callerV8Flags),
+        ...passthroughFlags,
+        ...(extensionDirs.length ? [`--load-extension=${extensionDirs.join(",")}`] : []),
         ...(desktop.appUrl ? [`--app=${desktop.appUrl}`] : ["about:blank"]),
     ];
 }
@@ -134,6 +194,10 @@ async function launchBrowser(executablePath, options) {
             throw new CdpBrowserError("unsafe_profile", "desktop profile must be an owned private directory");
     }
     const flags = launchFlags(options.extraFlags, options.headless !== false, profile, executablePath, options);
+    // Generation marker paired with the pid for MemoryMonitor registration. Taken
+    // immediately before the spawn so it is strictly ordered against any later
+    // browser that might reuse the same pid.
+    const launchedAt = Date.now();
     const child = childProcess.spawn(executablePath, flags, { stdio: ["ignore", "ignore", "pipe"] });
     const cleanup = () => { if (!options.profilePath) {
         try {
@@ -158,6 +222,9 @@ async function launchBrowser(executablePath, options) {
     return {
         wsUrl,
         launched: true,
+        // Reached only after "DevTools listening", so the child exists and has a pid.
+        pid: child.pid,
+        launchedAt,
         close: () => new Promise((resolve) => {
             if (child.exitCode !== null) {
                 cleanup();
@@ -180,4 +247,4 @@ async function acquireCdpBrowser(options = {}) {
         throw new CdpBrowserError("no_browser", "set an endpoint, an executablePath or HALO_CHROMIUM");
     return launchBrowser(executable, options);
 }
-module.exports = { CdpBrowserError, LEAN_FLAGS, acquireCdpBrowser, resolveEndpoint, findChromium, launchFlags, isLoopbackEndpoint, isHeadlessShell };
+module.exports = { CdpBrowserError, LEAN_FLAGS, V8_FLAGS, jsFlags, acquireCdpBrowser, resolveEndpoint, findChromium, launchFlags, isLoopbackEndpoint, isHeadlessShell };

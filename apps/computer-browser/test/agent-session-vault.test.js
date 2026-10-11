@@ -85,3 +85,23 @@ test('concurrent saves land in order', async () => {
   await Promise.all([vault.save(P, [cookie({ value: 'old' })]), vault.save(P, [cookie({ value: 'new' })])]);
   assert.equal((await vault.load(P))[0].value, 'new');
 });
+
+test('listSites shows stored domains without values, and forgetSite removes only that site', async () => {
+  const { vault } = setup();
+  await vault.save(P, [cookie(), cookie({ name: 'b', domain: 'www.example.com' }), cookie({ name: 'c', domain: '.other.org' })]);
+  const sites = await vault.listSites(P);
+  assert.deepEqual(sites, [{ site: 'example.com', cookieCount: 2 }, { site: 'other.org', cookieCount: 1 }]);
+  assert.equal(JSON.stringify(sites).includes('SECRETVALUE'), false);
+  assert.equal(await vault.forgetSite(P, 'example.com'), true);
+  assert.deepEqual((await vault.load(P)).map((c) => c.domain), ['.other.org']);
+});
+
+test('setAllowedSites limits what save persists; null means every site', async () => {
+  const { vault } = setup();
+  vault.setAllowedSites(P, ['other.org']);
+  await vault.save(P, [cookie(), cookie({ name: 'c', domain: 'sub.other.org' })]);
+  assert.deepEqual((await vault.load(P)).map((c) => c.domain), ['sub.other.org']);
+  vault.setAllowedSites(P, null);
+  await vault.save(P, [cookie()]);
+  assert.equal((await vault.load(P)).length, 1);
+});

@@ -1,0 +1,218 @@
+{
+  "provider": "nvidia",
+  "model": "nvidia/nemotron-3-super-120b-a12b",
+  "keySource": "HALO Settings keychain",
+  "goal": "In the Support Console at http://127.0.0.1:64066/, search for refunds and report the ticket id shown in the results.",
+  "ending": {
+    "state": "awaiting_verification",
+    "pauseReason": null,
+    "needUserReason": null,
+    "budgets": {
+      "actionsUsed": 3,
+      "plannerCallsUsed": 4,
+      "activeMs": 48408
+    },
+    "error": null
+  },
+  "wallMs": 48420,
+  "ticketVisible": true,
+  "totals": {
+    "calls": 4,
+    "inputTokens": 10896,
+    "outputTokens": 3585
+  },
+  "calls": [
+    {
+      "call": 1,
+      "promptBytes": 8633,
+      "contextBytes": 1445,
+      "wallMs": 18212,
+      "usage": {
+        "provider": "nvidia",
+        "inputTokens": 2112,
+        "outputTokens": 698,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "costUsd": 0,
+        "durationMs": 18212
+      },
+      "observationUrl": "about:blank",
+      "computerUse": null,
+      "screenMapBytes": 0,
+      "elementCount": 0,
+      "elements": [],
+      "lastAction": null,
+      "kind": "actions",
+      "actionTypes": [
+        "navigate"
+      ],
+      "actions": [
+        {
+          "type": "navigate",
+          "elementId": null,
+          "key": null,
+          "text": null
+        }
+      ]
+    },
+    {
+      "call": 2,
+      "promptBytes": 11134,
+      "contextBytes": 2131,
+      "wallMs": 9422,
+      "usage": {
+        "provider": "nvidia",
+        "inputTokens": 2909,
+        "outputTokens": 847,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "costUsd": 0,
+        "durationMs": 9421
+      },
+      "observationUrl": "http://127.0.0.1:64066/",
+      "computerUse": "text",
+      "screenMapBytes": 155,
+      "elementCount": 4,
+      "elements": [
+        {
+          "id": "0",
+          "role": "heading",
+          "name": "Support Console"
+        },
+        {
+          "id": "1",
+          "role": "text",
+          "name": "Search tickets"
+        },
+        {
+          "id": "2",
+          "role": "textbox",
+          "name": "Search tickets"
+        },
+        {
+          "id": "3",
+          "role": "button",
+          "name": "Search"
+        }
+      ],
+      "lastAction": null,
+      "kind": "actions",
+      "actionTypes": [
+        "type"
+      ],
+      "actions": [
+        {
+          "type": "type",
+          "elementId": "2",
+          "key": null,
+          "text": "refunds"
+        }
+      ]
+    },
+    {
+      "call": 3,
+      "promptBytes": 11152,
+      "contextBytes": 2149,
+      "wallMs": 7336,
+      "usage": {
+        "provider": "nvidia",
+        "inputTokens": 2911,
+        "outputTokens": 599,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "costUsd": 0,
+        "durationMs": 7336
+      },
+      "observationUrl": "http://127.0.0.1:64066/",
+      "computerUse": "text",
+      "screenMapBytes": 155,
+      "elementCount": 4,
+      "elements": [
+        {
+          "id": "0",
+          "role": "heading",
+          "name": "Support Console"
+        },
+        {
+          "id": "1",
+          "role": "text",
+          "name": "Search tickets"
+        },
+        {
+          "id": "2",
+          "role": "textbox",
+          "name": "Search tickets",
+          "value": "refunds"
+        },
+        {
+          "id": "3",
+          "role": "button",
+          "name": "Search"
+        }
+      ],
+      "lastAction": null,
+      "kind": "actions",
+      "actionTypes": [
+        "click"
+      ],
+      "actions": [
+        {
+          "type": "click",
+          "elementId": "3",
+          "key": null,
+          "text": null
+        }
+      ]
+    },
+    {
+      "call": 4,
+      "promptBytes": 11398,
+      "contextBytes": 2239,
+      "wallMs": 13274,
+      "usage": {
+        "provider": "nvidia",
+        "inputTokens": 2964,
+        "outputTokens": 1441,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "costUsd": 0,
+        "durationMs": 13274
+      },
+      "observationUrl": "http://127.0.0.1:64066/",
+      "computerUse": "text",
+      "screenMapBytes": 155,
+      "elementCount": 4,
+      "elements": [
+        {
+          "id": "0",
+          "role": "heading",
+          "name": "Support Console"
+        },
+        {
+          "id": "1",
+          "role": "text",
+          "name": "Search tickets"
+        },
+        {
+          "id": "2",
+          "role": "textbox",
+          "name": "Search tickets",
+          "value": "refunds"
+        },
+        {
+          "id": "3",
+          "role": "button",
+          "name": "Search"
+        }
+      ],
+      "lastAction": {
+        "type": "click",
+        "target": "button \"Search\"",
+        "succeeded": true
+      },
+      "kind": "finish",
+      "actionTypes": [],
+      "actions": []
+    }
+  ]
+}

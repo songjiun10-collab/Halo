@@ -62,6 +62,12 @@ function createRecoveryPolicy(
 // This changes the next planner's available evidence, not model weights.
 function buildRecoveryFeedback(state: RecoveryState) {
   const reason = state.recent.at(-1)?.reason;
+  const nextActions: Record<string, string> = {
+    planner_error: "retry_planner_from_current_state",
+    observation_error: "capture_fresh_observation",
+    context_error: "rebuild_context_from_durable_goal",
+    no_progress: "replan_using_new_evidence",
+  };
   const guidance: Record<string, string> = {
     planner_error: "Re-read the current goal and observation; check proposal shape. Do not repeat uncertain actions or infer success from a transport failure.",
     observation_error: "Use the fresh observation, not old coordinates or element IDs. Do not repeat uncertain actions.",
@@ -69,7 +75,9 @@ function buildRecoveryFeedback(state: RecoveryState) {
     no_progress: "Change the approach using current evidence instead of repeating the same ineffective action. Do not repeat uncertain actions.",
   };
   if (!reason || !Object.hasOwn(guidance, reason)) return undefined;
-  return { authority: "host_diagnostic_not_permission", reason, recoveryAttemptsSpent: state.spent, guidance: guidance[reason] };
+  const attemptsInWindow = state.recent.filter((entry) => entry.reason === reason).length;
+  return { authority: "host_diagnostic_not_permission", reason, attempt: attemptsInWindow,
+    attemptsInWindow, recoveryAttemptsSpent: state.spent, nextAction: nextActions[reason], guidance: guidance[reason] };
 }
 
 interface ProposalBinding { taskId: string; goalVersion: number; basedOnObservationId: string; maxActions: number }

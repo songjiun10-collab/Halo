@@ -33,7 +33,7 @@ const METHODS = [
 // the trust boundary), so this list is just "what's reachable", not "what's
 // authorized".
 const HARNESS_METHODS = [
-  "createTask", "listTasks", "resumeSavedTask", "amendTask", "confirmCriterion", "getTaskDetail",
+  "createTask", "listTasks", "listHandoffs", "resumeSavedTask", "discardSavedTask", "amendTask", "confirmCriterion", "getTaskDetail",
   "taskApprove", "taskDeny", "taskLend", "taskRevokeLease", "taskPause", "taskStop", "taskTakeOver", "getTaskEvents", "getChildPlan", "listMcpProviders", "refreshPlannerModels",
   "getTaskBrowser", "taskBrowserAction", "setTaskViewport", "getHostSettings", "updateHostSettings", "getUsage", "setUsageLimit", "syncUsage",
   "getApiKeyStatus", "setApiKey", "clearApiKey",
@@ -59,7 +59,7 @@ const HARNESS_METHODS = [
   "setMemoryPolicy", "stopBackgroundService", "setBackgroundLaunchAtLogin",
 ];
 
-const WINDOW_METHODS = ["newWindow", "captureSurface", "copyText", "captureAgentFrame", "captureTaskFrame", "sendTaskInput", "sendSurfaceInput"];
+const WINDOW_METHODS = ["newWindow", "captureSurface", "copyText", "captureAgentFrame", "captureTaskFrame", "findInPage", "zoom", "copySelection", "sendTaskInput", "sendSurfaceInput"];
 
 const api = {};
 for (const method of METHODS) {

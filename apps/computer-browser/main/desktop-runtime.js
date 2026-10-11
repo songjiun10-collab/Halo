@@ -1,6 +1,8 @@
 "use strict";
 
 // Runtime selection happens in trusted launch configuration, before any page is loaded.
-module.exports = process.env.HALO_DESKTOP_RUNTIME === "chromium"
-  ? require("./harness/chromium-desktop")
-  : require("electron");
+if (process.env.HALO_DESKTOP_RUNTIME === "chromium") {
+  module.exports = require("./harness/chromium-desktop");
+} else {
+  throw Object.assign(new Error("HALO_DESKTOP_RUNTIME must select chromium"), { code: "desktop_runtime_not_selected" });
+}

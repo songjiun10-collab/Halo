@@ -11,6 +11,18 @@ const NVIDIA_MODELS = Object.freeze([
 // DeepSeek V4 Flash/Pro reached end of life on the hosted API (HTTP 410, checked
 // 2026-10-04). They stay in the allowlist so saved settings still load, but the
 // default must be a model that answers.
+//
+// moonshotai/kimi-k3 is in the allowlist but is NOT usable as a planner today
+// (measured 2026-10-08 against the hosted endpoint with a valid key): a trivial
+// "say ok" at max_tokens 8 returned ZERO response bytes in 45s of streaming, and
+// a full planner turn did not finish within 150s. That is a non-serving endpoint
+// rather than mere slowness -- a slow model still emits a slow first token, the
+// same test gave DeepSeek V4.1 Flash its first byte at 30s and Nemotron at 0.25s.
+// The most likely cause is account-level access (the catalog comment above notes
+// availability depends on the account) rather than the model itself. Selecting
+// it spends the 55s bridge timeout on every turn, so keep it only while the
+// investigation is open; test/nvidia-planner.test.js asserts only that the id is
+// routable, never that it answers.
 const DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b";
 // Ids discovered from the hosted /v1/models endpoint (host-fetched and
 // shape-checked by nvidia-model-catalog). They extend the built-in list only.

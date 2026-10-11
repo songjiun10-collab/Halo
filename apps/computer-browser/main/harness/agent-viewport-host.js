@@ -31,12 +31,17 @@
 // implement any "show agent page" action.
 
 const { installAgentRequestFilter } = require("./agent-request-filter");
+const { startSharpScreencast } = require("../sharp-screencast");
 const { BrowserWindow, WebContentsView } = require("../desktop-runtime");
 const { createHash } = require("node:crypto");
 const { BrowserAdapter } = require("./browser-adapter");
 const { createScreenshotAttachment } = require("./computer-use-contract");
 const { captureFrameJpeg } = require("./frame-capture");
 const { buildScreenMap } = require("./screen-map");
+// PageAgent-style indexed outline for the planner's text observation. Same
+// inputs/targets as screen-map; adds [elementId], hierarchy depth and scroll
+// distances when the snapshot supplies them. See dom-outline.js.
+const { buildDomOutline } = require("./dom-outline");
 const { ParkableView, SurfacePool, wakeOnUse } = require("./renderer-lifecycle");
 
 const AGENT_WIDTH = 1440;
@@ -105,7 +110,8 @@ class AgentViewportHost {
   // externally owned browser page (the Chromium engine). The page must already
   // enforce the hardening below itself; it is built synchronously and may finish
   // starting in the background.
-  constructor({ createWindow, createView, createPage, lifecycle, onIdle } = {}) {
+  constructor({ createWindow, createView, createPage, lifecycle, onIdle, evaluateLeases } = {}) {
+    this._evaluateLeases = evaluateLeases || null;
     const onIdleBrowser = typeof onIdle === "function" ? onIdle : undefined;
     // `lifecycle` (pool policy, or true for defaults) lets idle agent surfaces freeze and be
     // discarded under a live-renderer cap; off by default so a plain host is unchanged.
@@ -119,44 +125,48 @@ class AgentViewportHost {
     // separate from `_hosts` -- a child's hidden view and session partition
     // are never shared with its parent or a sibling.
     this._childHosts = new Map(); // childId -> {host, view, adapter}
-    // One hidden window holds every agent view. A BrowserWindow per view cost a
-    // window and a webContents each; the views stay independent renderers, so
-    // only the container is shared, and it is destroyed with its last view.
-    this._sharedHost = null;
-    this._sharedViewCount = 0;
+    // One hidden window per agent owner (task or child). Sharing one window
+    // across agents saved window handles but coupled every agent's renderer
+    // lifetime to every other's; separate windows keep teardown immediate
+    // and per-owner, and the pool still freezes/discards idle surfaces, so
+    // no new caps are needed to bound live renderers.
+    this._hiddenHosts = new Map();
     this._lastFrames = new Map(); // taskId -> {fingerprint, dataUrl}
   }
 
-  _acquireHiddenHost() {
-    const sh = this._sharedHost;
-    const gone = !sh || sh.destroyed === true || sh.isDestroyed?.() === true;
+  _acquireHiddenHost(ownerKey) {
+    const record = this._hiddenHosts.get(ownerKey);
+    const gone = !record || record.host.destroyed === true || record.host.isDestroyed?.() === true;
     if (gone) {
-      this._sharedHost = this._createWindow({
-        show: false,
-        width: AGENT_WIDTH,
-        height: AGENT_HEIGHT,
-        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+      this._hiddenHosts.set(ownerKey, {
+        host: this._createWindow({
+          show: false,
+          width: AGENT_WIDTH,
+          height: AGENT_HEIGHT,
+          webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+        }),
+        views: 0,
       });
-      this._sharedViewCount = 0;
     }
-    this._sharedViewCount += 1;
-    return this._sharedHost;
+    const live = this._hiddenHosts.get(ownerKey);
+    live.views += 1;
+    return live.host;
   }
 
-  _releaseHiddenHost(host, view) {
+  _releaseHiddenHost(ownerKey, host, view) {
     try {
       host.contentView.removeChildView?.(view);
     } catch {
       // The view may already be gone with its webContents.
     }
-    if (host !== this._sharedHost) {
+    const record = this._hiddenHosts.get(ownerKey);
+    if (!record || record.host !== host) {
       try { host.destroy(); } catch { /* best effort */ }
       return;
     }
-    this._sharedViewCount -= 1;
-    if (this._sharedViewCount <= 0) {
-      this._sharedHost = null;
-      this._sharedViewCount = 0;
+    record.views -= 1;
+    if (record.views <= 0) {
+      this._hiddenHosts.delete(ownerKey);
       try {
         host.destroy();
       } catch {
@@ -166,17 +176,18 @@ class AgentViewportHost {
   }
 
   // Shared by ensure()/ensureChild(): builds one hidden, fixed-size,
-  // never-shown view on the shared hidden window, on the given session partition.
-  _createHiddenViewPair(partition) {
-    if (!this._pool) return this._rawViewPair(partition);
+  // never-shown view in its owner's own hidden window, on the given session
+  // partition. The window dies with its last view (see _releaseHiddenHost).
+  _createHiddenViewPair(partition, ownerKey) {
+    if (!this._pool) return this._rawViewPair(partition, ownerKey);
     const view = new ParkableView({
       lazy: true,
       getSession: () => require("../desktop-runtime").session.fromPartition(partition),
       width: AGENT_WIDTH,
       height: AGENT_HEIGHT,
       create: () => {
-        const pair = this._rawViewPair(partition);
-        return { view: pair.view, dispose: () => this._releaseHiddenHost(pair.host, pair.view) };
+        const pair = this._rawViewPair(partition, ownerKey);
+        return { view: pair.view, dispose: () => this._releaseHiddenHost(ownerKey, pair.host, pair.view) };
       },
     });
     return { host: { contentView: { removeChildView() {} }, destroy() {} }, view };
@@ -190,11 +201,11 @@ class AgentViewportHost {
     return this._pool ? this._pool.counts() : null;
   }
 
-  _rawViewPair(partition) {
+  _rawViewPair(partition, ownerKey) {
     // A null page means the Electron engine is selected right now.
     const page = this._createPage ? this._createPage(partition) : null;
     if (page) return { host: { contentView: { removeChildView() {} }, destroy() {} }, view: page };
-    const host = this._acquireHiddenHost();
+    const host = this._acquireHiddenHost(ownerKey);
     const view = this._createView({
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition, offscreen: true },
     });
@@ -231,11 +242,12 @@ class AgentViewportHost {
     // what keeps this window permanently invisible and non-focus-stealing --
     // Electron does not auto-show or auto-focus a show:false BrowserWindow
     // (verified by Codex's integration/agent-viewport-spike.js, read-only).
-    const { host, view } = this._createHiddenViewPair(partition);
-    const adapter = new BrowserAdapter({ view });
+    const ownerKey = `task:${taskId}`;
+    const { host, view } = this._createHiddenViewPair(partition, ownerKey);
+    const adapter = new BrowserAdapter({ view, evaluateLeases: this._evaluateLeases, taskId });
     if (this._pool) wakeOnUse(adapter, view);
     this._pool?.register(`task:${taskId}`, view);
-    this._hosts.set(taskId, { host, view, adapter, agentId });
+    this._hosts.set(taskId, { host, view, adapter, agentId, ownerKey });
     return adapter;
   }
 
@@ -273,6 +285,44 @@ class AgentViewportHost {
     } catch {
       return null;
     }
+  }
+
+  // Live, read-only push of the agent page's frames (Chromium CDP pages only).
+  // Resolves to a stop function, or null when this page engine cannot stream and
+  // the caller should keep polling captureFrame. Each frame also becomes the
+  // "last frame" a parked or frozen surface keeps showing.
+  async openFrameStream(taskId, onFrame) {
+    const view = this._hosts.get(taskId)?.view;
+    if (!view || view.webContents.isDestroyed() || typeof onFrame !== "function") return null;
+    try { await view.wake?.(); } catch { return null; }
+    const page = view.webContents;
+    if (typeof page.startScreencast !== "function") return null;
+    let open = true;
+    let stopCast = null;
+    const stop = async () => {
+      if (!open) return;
+      open = false;
+      // The user looked away: the surface rejoins the idle freeze/discard
+      // policy instead of holding a renderer for a dead stream.
+      this._pool?.unpin(`task:${taskId}`);
+      if (this._hosts.get(taskId)?.view === view) await stopCast?.();
+    };
+    try {
+      // Agent pages render at 1x to keep memory low; the mirror's stills are captured
+      // at 2x so the user's view of the agent is sharp.
+      stopCast = await startSharpScreencast(page, { stillWidth: 3200, stillQuality: 80, density: 2, plain: { maxWidth: 1200, quality: 65 } }, (data) => {
+        if (!open || this._hosts.get(taskId)?.view !== view) return;
+        this._lastFrames.set(taskId, { fingerprint: null, dataUrl: `data:image/jpeg;base64,${data}` });
+        onFrame(data);
+      });
+    } catch {
+      open = false;
+      return null;
+    }
+    // The page the user is watching is exempt from idle freeze/discard while
+    // the stream is open; everything else keeps the existing policy.
+    this._pool?.pin(`task:${taskId}`);
+    return stop;
   }
 
   async captureComputerUseObservation(taskId, observation) {
@@ -324,7 +374,7 @@ class AgentViewportHost {
       throw error;
     }
     const geometry = await entry.adapter.captureScreenGeometry(observation);
-    const screenMap = buildScreenMap(Array.isArray(observation.elements) ? observation.elements : [], geometry.boxes);
+    const screenMap = buildDomOutline(Array.isArray(observation.elements) ? observation.elements : [], geometry.boxes);
     const binding = Object.freeze({
       observationId: geometry.observationId,
       taskId,
@@ -364,11 +414,12 @@ class AgentViewportHost {
     }
     // "isolated" (Task Branches) and "docker" get a throwaway partition: no cookies from the parent.
     const partition = execution === "docker" || execution === "isolated" ? childBrowserPartition(childId) : `halo-task-${parentTaskId}`;
-    const { host, view } = this._createHiddenViewPair(partition);
-    const adapter = new BrowserAdapter({ view, assignedOrigin, permissionMode: "observe" });
+    const ownerKey = `child:${childId}`;
+    const { host, view } = this._createHiddenViewPair(partition, ownerKey);
+    const adapter = new BrowserAdapter({ view, assignedOrigin, permissionMode: "observe", evaluateLeases: this._evaluateLeases, taskId: childId });
     if (this._pool) wakeOnUse(adapter, view);
     this._pool?.register(`child:${childId}`, view);
-    this._childHosts.set(childId, { host, view, adapter, parentTaskId, assignedOrigin, execution });
+    this._childHosts.set(childId, { host, view, adapter, parentTaskId, assignedOrigin, execution, ownerKey });
     return adapter;
   }
 
@@ -389,7 +440,7 @@ class AgentViewportHost {
     try {
       await entry.adapter.dispose?.();
     } finally {
-      this._releaseHiddenHost(entry.host, entry.view);
+      this._releaseHiddenHost(entry.ownerKey, entry.host, entry.view);
     }
   }
 

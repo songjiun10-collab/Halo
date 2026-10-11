@@ -22,3 +22,4 @@ export const Keyboard = () => <Icon><rect x="3" y="6" width="18" height="12" rx=
 export const ActivityLog = () => <Icon><path d="M4 5h16M4 12h16M4 19h16" /><path d="M8 5v.01M8 12v.01M8 19v.01" /></Icon>
 export const Gear = () => <Icon><circle cx="12" cy="12" r="3" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" /></Icon>
 export const Sidebar = () => <Icon><rect x="3.5" y="4" width="17" height="16" rx="2" /><path d="M9 4v16" /></Icon>
+export const Puzzle = () => <Icon><path d="M9 4.5a2 2 0 0 1 4 0V6h4.5v4.5H19a2 2 0 0 1 0 4h-1.5V19H13v-1.5a2 2 0 0 0-4 0V19H4.5v-4.5H6a2 2 0 0 0 0-4H4.5V6H9z" /></Icon>

@@ -240,3 +240,53 @@ test("plannerEffortMode accepts only auto or fixed", async () => {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("webBotAuth persists only with an https directory, and an empty directory clears it", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
+  try {
+    const settings = new HostSettingsStore({ storageRoot: root });
+    const enabled = await settings.update({ webBotAuth: true, webBotAuthDirectory: "https://agent.example.org" });
+    assert.equal(enabled.webBotAuth, true);
+    assert.equal(enabled.webBotAuthDirectory, "https://agent.example.org");
+    for (const webBotAuthDirectory of ["http://agent.example.org", "not a url", "https://user:pass@agent.example.org", 42]) {
+      await assert.rejects(settings.update({ webBotAuthDirectory }), { code: "invalid_web_bot_auth_directory" }, String(webBotAuthDirectory));
+    }
+    await assert.rejects(settings.update({ webBotAuth: "on" }), { code: "invalid_web_bot_auth" });
+    const cleared = await settings.update({ webBotAuthDirectory: "" });
+    assert.equal(cleared.webBotAuthDirectory, undefined, "an empty directory clears the field");
+    assert.equal(cleared.webBotAuth, true, "signing stays on until it is switched off");
+    assert.equal((await settings.load()).webBotAuthDirectory, undefined);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("mcpRoutePreference persists only a known preference and is optional", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
+  try {
+    const settings = new HostSettingsStore({ storageRoot: root });
+    assert.equal((await settings.load()).mcpRoutePreference, undefined, "unset by default (controller defaults to mcp_first)");
+    for (const mcpRoutePreference of ["mcp_first", "browser_first", "always_ask"]) {
+      assert.equal((await settings.update({ mcpRoutePreference })).mcpRoutePreference, mcpRoutePreference);
+    }
+    for (const bad of ["MCP_FIRST", "", 1, null]) {
+      await assert.rejects(settings.update({ mcpRoutePreference: bad }), { code: "invalid_mcp_route_preference" }, String(bad));
+    }
+    assert.equal((await settings.load()).mcpRoutePreference, "always_ask");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("showAdvanced is an optional boolean that defaults to unset (off)", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
+  try {
+    const settings = new HostSettingsStore({ storageRoot: root });
+    assert.equal((await settings.load()).showAdvanced, undefined);
+    assert.equal((await settings.update({ showAdvanced: true })).showAdvanced, true);
+    await assert.rejects(settings.update({ showAdvanced: "yes" }), { code: "invalid_show_advanced" });
+    assert.equal((await settings.update({ showAdvanced: false })).showAdvanced, false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

@@ -22,7 +22,7 @@ function validateBrowserInput(value: unknown): Input {
   if (input.modifiers !== undefined && !(Array.isArray(input.modifiers) && input.modifiers.length <= 4 && input.modifiers.every((modifier: unknown) => MODIFIERS.has(modifier as string)))) return fail();
   return { ...input, ...(input.modifiers ? { modifiers: [...input.modifiers] } : {}) };
 }
-function dispatchBrowserInput(wc: { sendInputEvent(input: Input): void; insertText(text: string): void }, bounds: { width: number; height: number }, value: unknown): boolean {
+function dispatchBrowserInput(wc: { sendInputEvent(input: Input): void; insertText(text: string): void; selectAll?(...args: unknown[]): unknown }, bounds: { width: number; height: number }, value: unknown): boolean {
   const input = validateBrowserInput(value);
   if (input.type === "insertText") { wc.insertText(input.text); return true; }
   if (input.type.startsWith("mouse")) {
@@ -31,6 +31,15 @@ function dispatchBrowserInput(wc: { sendInputEvent(input: Input): void; insertTe
     if (input.type === "mouseDown" || input.type === "mouseUp") Object.assign(event, { button: input.button ?? "left", clickCount: input.clickCount ?? 1 });
     if (input.type === "mouseWheel") Object.assign(event, { deltaX: input.deltaX ?? 0, deltaY: input.deltaY ?? 0 });
     wc.sendInputEvent(event); return true;
+  }
+  // Cmd/Ctrl+A performs the real select-all editing command. A synthesized
+  // raw key event alone does not reliably trigger Blink's editing commands
+  // (the same reason cdp-web-contents.selectAll sends commands:["selectAll"]),
+  // so route it through the engine helper when one exists.
+  const primaryModifier = (input.modifiers ?? []).some((modifier: string) => modifier === "meta" || modifier === "control");
+  if (input.type === "keyDown" && primaryModifier && input.key.toLowerCase() === "a" && typeof wc.selectAll === "function") {
+    wc.selectAll();
+    return true;
   }
   wc.sendInputEvent({ type: input.type, keyCode: input.key, modifiers: input.modifiers ?? [] });
   if (input.type === "keyDown" && input.key.length === 1 && !(input.modifiers ?? []).some((modifier: string) => ["meta", "control", "alt"].includes(modifier))) wc.sendInputEvent({ type: "char", keyCode: input.key, modifiers: input.modifiers ?? [] });

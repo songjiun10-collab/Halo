@@ -104,9 +104,9 @@ test("routing maps duration to a tier and stays within the supplied candidates",
   assert.equal(desiredTier("fast"), 4);
   assert.equal(desiredTier("long"), 1);
   assert.equal(desiredTier("short"), null);
-  const claude = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-sonnet-4-20250514"];
+  const claude = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-haiku-5-5"];
   assert.equal(routedModel({ durationId: "short", currentModel: "claude-sonnet-5-5", candidates: claude, tierOf }), null);
-  assert.equal(routedModel({ durationId: "fast", currentModel: "claude-opus-5-5", candidates: claude, tierOf }), "claude-sonnet-4-20250514");
+  assert.equal(routedModel({ durationId: "fast", currentModel: "claude-opus-5-5", candidates: claude, tierOf }), "claude-haiku-5-5");
   assert.equal(routedModel({ durationId: "long", currentModel: "claude-sonnet-5-5", candidates: claude, tierOf }), "claude-opus-5-5");
   assert.equal(routedModel({ durationId: "long", currentModel: "claude-opus-5-5", candidates: claude, tierOf }), null);
   assert.equal(routedModel({ durationId: "fast", currentModel: "x", candidates: [], tierOf }), null);

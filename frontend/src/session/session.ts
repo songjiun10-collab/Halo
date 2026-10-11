@@ -97,7 +97,7 @@ export class SessionStore {
   /** Host errors a person can act on get plain copy; anything else keeps the host's message. */
   private describeError(error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
-    if (/queued_behind_other_task|resume the oldest queued task first/.test(message)) {
+    if (/queued_behind_other_task|resume the oldest queued task first|wait for its FIFO admission/.test(message)) {
       const head = this.state.tasks.find((task) => task.queuePosition === 1)
       return head ? `Waiting in line behind “${head.originalRequest}”. Open it to resume it first, or start a new task.` : 'Waiting in line behind an earlier task. Resume it first, or start a new task.'
     }
@@ -341,8 +341,14 @@ export class SessionStore {
 
   /** From a task view the tab strip's + leaves the task (it keeps running) rather than silently doing nothing. */
   newBrowserTab = () => {
+    const leavingTask = !!this.state.activeTaskId
     if (this.state.activeTaskId) this.newTask()
-    return this.directTabCommand('newTab', () => this.api!.newTab(), () => false)
+    // With no real tab yet the UI shows a placeholder Home tab; the first new tab only materializes it, so open a second to make + visibly add one.
+    const materialize = !leavingTask && !this.state.tabs.length
+    return this.directTabCommand('newTab', async () => {
+      const first = await this.api!.newTab()
+      return materialize ? this.api!.newTab() : first
+    }, () => false)
   }
   selectBrowserTab = (tabId: string) => {
     if (tabId === this.state.activeTabId) return Promise.resolve(true)

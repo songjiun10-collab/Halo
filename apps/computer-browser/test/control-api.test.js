@@ -1141,8 +1141,8 @@ test("_findFirstOutboundLink records a dom_read error outcome when the page read
   assert.deepEqual(api.getMetricsSummary().dom_read.outcomes, { error: 1 });
 });
 
-function tabApi(clock) {
-  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { now: clock.now });
+function tabApi(clock, options = {}) {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { now: clock.now, ...options });
   const removed = [];
   api._window = { contentView: { addChildView() {}, removeChildView: (view) => removed.push(view) } };
   return { api, removed };
@@ -1226,4 +1226,74 @@ test("a muted tab that still reports an audio stream can be discarded", async ()
   assert.equal(api.discardTab(first.tabs[0].id), false, "audible and not muted");
   view.webContents.muted = true;
   assert.equal(api.discardTab(first.tabs[0].id), true, "muted: the user hears nothing");
+});
+
+test("findInPage searches the active tab read-only and fails closed without a live tab or during agent actions", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock);
+  assert.equal((await api.findInPage("x")).errorCode, "surface_unavailable", "no tab yet");
+
+  await api.navigate("https://a.example");
+  const view = fakeViews.at(-1);
+  let script = null;
+  view.webContents.executeJavaScript = async (code, userGesture) => { script = code; assert.equal(userGesture, true); return true; };
+  assert.deepEqual(await api.findInPage("refund policy"), { ok: true, found: true });
+  assert.ok(script.includes("window.find"));
+  assert.ok(script.includes(JSON.stringify("refund policy")));
+  assert.ok(script.includes("false, false, true"), "forward search by default");
+
+  api._inFlightAgentActions.add("probe");
+  assert.equal((await api.findInPage("x")).errorCode, "surface_unavailable", "never searches mid-action");
+  api._inFlightAgentActions.delete("probe");
+  assert.deepEqual(await api.findInPage("refund policy", { forward: false }), { ok: true, found: true });
+  assert.ok(script.includes("false, true, true"), "backward search when asked");
+});
+
+test("setZoom walks the per-tab ladder and re-applies it after navigation", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock);
+  assert.equal((await api.setZoom({ direction: "in" })).errorCode, "surface_unavailable", "no tab yet");
+
+  await api.navigate("https://a.example");
+  const view = fakeViews.at(-1);
+  view.webContents.executeJavaScript = async (code) => {
+    const m = /style\.zoom = "([^"]+)"/.exec(code);
+    return m ? m[1] : null;
+  };
+  assert.deepEqual(await api.setZoom({ direction: "in" }), { ok: true, level: 1.1 });
+  const tab = api._tabs.find((candidate) => candidate.id === api._activeTabId);
+  assert.equal(tab.zoom, 1.1, "the level is stored on the tab");
+
+  // The next call walks from the stored level, not from 1.
+  assert.deepEqual(await api.setZoom({ direction: "out" }), { ok: true, level: 1 });
+  assert.deepEqual(await api.setZoom({ direction: "in" }), { ok: true, level: 1.1 });
+
+  let reapplied = null;
+  const original = view.webContents.executeJavaScript;
+  view.webContents.executeJavaScript = async (code) => { reapplied = code; return original(code); };
+  view.webContents.emit("did-navigate", {}, "https://b.example");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(reapplied && reapplied.includes('style.zoom = "1.1"'), "a navigation re-applies the tab's level");
+
+  api._inFlightAgentActions.add("probe");
+  assert.equal((await api.setZoom({ direction: "in" })).errorCode, "surface_unavailable", "never zooms mid-action");
+});
+
+test("copySelection copies the active tab's selection through the injected writer", async () => {
+  const copied = [];
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock, { writeClipboard: (text) => { copied.push(text); return true; } });
+  assert.equal((await api.copySelection()).errorCode, "surface_unavailable", "no tab yet");
+
+  await api.navigate("https://a.example");
+  const view = fakeViews.at(-1);
+  view.webContents.executeJavaScript = async (code) => (code.includes("getSelection") ? "selected words" : null);
+  assert.deepEqual(await api.copySelection(), { ok: true, chars: 14, text: "selected words" });
+  assert.deepEqual(copied, ["selected words"]);
+
+  view.webContents.executeJavaScript = async () => "";
+  assert.deepEqual(await api.copySelection(), { ok: true, chars: 0, text: "" }, "an empty selection is not an error");
+
+  api._inFlightAgentActions.add("probe");
+  assert.equal((await api.copySelection()).errorCode, "surface_unavailable", "never copies mid-action");
 });

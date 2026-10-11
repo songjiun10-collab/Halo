@@ -2,9 +2,10 @@
 
 // Team board: while a child plan runs, what a child reports to its parent
 // (progress, evidence, handoff) is also posted by the host to the plan's
-// board, and every sibling reads the board as untrusted notes. No new route
-// exists: children still only message their parent, and the board is
-// written by the host from already-validated messages.
+// board, and every sibling reads the board as untrusted notes. Direct
+// sibling messages are a separate host-authorized route (see
+// child-agent-coordinator.test.js); the board stays written by the host
+// from already-validated messages.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -64,6 +65,7 @@ test("a child's report to its parent is posted to the board and read by its sibl
     assert.equal(forSecond.authority, "untrusted_sibling_notes");
     assert.equal(forSecond.parentTaskId, parent.taskId);
     assert.deepEqual(forSecond.entries.map((e) => [e.from, e.kind]), [["Flights", "progress"], ["Cars", "handoff"]]);
+    assert.deepEqual(forSecond.entries.map((e) => e.siblingTaskId), [childIds[0], childIds[2]], "entries name the sibling to address directly");
     assert.equal(forSecond.entries[0].text, "Cheapest flight is KE123 on Fri.");
     assert.match(forSecond.entries[1].text, /Rent a car/);
     assert.match(forSecond.entries[1].text, /Two options found/);
@@ -146,7 +148,7 @@ test("the context carries the board as untrusted notes within its own byte budge
   const goal = contracts.normalizeGoalSpec({ originalRequest: "child goal" }, { taskId: "44444444-4444-4444-8444-444444444444", goalVersion: 1, createdAt: new Date().toISOString() });
   const base = { goal, state: {}, observation: null, recentEvents: [] };
   assert.equal(Object.hasOwn(buildContext(base), "teamBoard"), false);
-  const entries = Array.from({ length: 40 }, (_, i) => ({ from: "Flights", kind: "progress", text: `${i}:${"z".repeat(900)}`, at: "2026-10-02T00:00:00.000Z" }));
+  const entries = Array.from({ length: 40 }, (_, i) => ({ from: "Flights", siblingTaskId: "22222222-2222-4222-8222-222222222222", kind: "progress", text: `${i}:${"z".repeat(900)}`, at: "2026-10-02T00:00:00.000Z" }));
   const context = buildContext({ ...base, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: "11111111-1111-4111-8111-111111111111", entries } });
   assert.equal(context.teamBoard.authority, "untrusted_sibling_notes");
   assert.ok(context.teamBoard.entries.length > 0 && context.teamBoard.entries.length < 40);

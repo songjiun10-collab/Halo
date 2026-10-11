@@ -1,0 +1,33 @@
+--- a/apps/computer-browser/main/harness/browser-adapter.js
++++ b/apps/computer-browser/main/harness/browser-adapter.js
+@@ -1045,6 +1045,30 @@
+                 (node.tagName === "INPUT" && ["file", "password"].includes((node.getAttribute("type") || "").toLowerCase())) || node.hasAttribute("download")) return failed("unsupported_click");
+             const info = state.formInfo(node);
+             if (info && !["", "_self"].includes(info.target)) return failed("unsupported_form");
++            // Full pointer/mouse sequence before activation, so controls that
++            // listen for pointerdown/mousedown (custom menus, sliders, canvas
++            // widgets) behave as they do under a real cursor. Adapted from
++            // PageAgent (github.com/alibaba/page-agent, MIT). Activation itself
++            // stays the single HTMLElement.prototype.click call the adapter's
++            // effect check already reasons about, and no gate or policy moves.
++            const rect = typeof node.getBoundingClientRect === "function" ? node.getBoundingClientRect() : null;
++            if (rect && rect.width > 0 && rect.height > 0 && typeof PointerEvent === "function") {
++              const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
++              const doc = node.ownerDocument;
++              const hit = typeof doc.elementFromPoint === "function" ? doc.elementFromPoint(cx, cy) : null;
++              const pointerTarget = hit && (hit === node || node.contains(hit)) ? hit : node;
++              const pointerInit = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: 1 };
++              const mouseInit = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, button: 0, buttons: 1 };
++              pointerTarget.dispatchEvent(new PointerEvent("pointerover", pointerInit));
++              pointerTarget.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, cancelable: true, composed: true, clientX: cx, clientY: cy, pointerId: 1, pointerType: "mouse", isPrimary: true }));
++              pointerTarget.dispatchEvent(new MouseEvent("mouseover", mouseInit));
++              pointerTarget.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false, cancelable: true, composed: true, clientX: cx, clientY: cy }));
++              pointerTarget.dispatchEvent(new PointerEvent("pointerdown", pointerInit));
++              pointerTarget.dispatchEvent(new MouseEvent("mousedown", mouseInit));
++              if (typeof node.focus === "function") node.focus({ preventScroll: true });
++              pointerTarget.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: 0 }));
++              pointerTarget.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, button: 0, buttons: 0 }));
++            }
+             started = true; HTMLElement.prototype.click.call(node);
+             if (["INPUT", "TEXTAREA"].includes(node.tagName) || node.isContentEditable) node.focus();
+           }

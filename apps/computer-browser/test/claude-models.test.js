@@ -22,7 +22,7 @@ const NODE = "/usr/local/bin/node";
 test("the model catalog is a frozen allowlist with versioned Opus, Sonnet and Haiku plus legacy entries", () => {
   assert.ok(Object.isFrozen(CLAUDE_MODELS));
   assert.ok(Object.isFrozen(CLAUDE_MODEL_IDS));
-  assert.equal(DEFAULT_CLAUDE_MODEL, "claude-opus-5-5");
+  assert.equal(DEFAULT_CLAUDE_MODEL, "claude-sonnet-5-5");
   assert.deepEqual(CLAUDE_MODEL_IDS, CLAUDE_MODELS.map((m) => m.id));
   assert.equal(new Set(CLAUDE_MODEL_IDS).size, CLAUDE_MODEL_IDS.length);
   for (const model of CLAUDE_MODELS) {
@@ -32,7 +32,7 @@ test("the model catalog is a frozen allowlist with versioned Opus, Sonnet and Ha
     assert.equal(typeof model.legacy, "boolean");
   }
   const current = CLAUDE_MODELS.filter((m) => !m.legacy).map((m) => m.label);
-  assert.ok(current.includes("Opus 5.5") && current.includes("Sonnet 5.5") && current.includes("Haiku 4.5"));
+  assert.ok(current.includes("Opus 5.5") && current.includes("Sonnet 5.5") && current.includes("Haiku 5.5"));
   const legacy = CLAUDE_MODELS.filter((m) => m.legacy).map((m) => m.family);
   for (const family of ["opus", "sonnet", "haiku"]) assert.ok(legacy.includes(family), family);
 });
@@ -81,11 +81,11 @@ const CONTEXT = {
 
 test("the bridge spawns claude with the chosen model in place of the opus alias, and rejects unknown models", async () => {
   let args;
-  const bridge = new ClaudeCodeBridge({ model: "claude-sonnet-4-5-20250929", spawnFn: (command, a) => { args = a; return fakeChild(); } });
+  const bridge = new ClaudeCodeBridge({ model: "claude-sonnet-4-6", spawnFn: (command, a) => { args = a; return fakeChild(); } });
   bridge.start(CONTEXT).catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
   const expected = [...CLI_ARGS];
-  expected[CLI_ARGS.indexOf("--model") + 1] = "claude-sonnet-4-5-20250929";
+  expected[CLI_ARGS.indexOf("--model") + 1] = "claude-sonnet-4-6";
   assert.deepEqual(args, [...expected, "--effort", "medium"]);
   assert.equal(args.filter((a) => a === "--model").length, 1);
   await bridge.close();
@@ -95,7 +95,7 @@ test("the bridge spawns claude with the chosen model in place of the opus alias,
 test("plannerModel is an optional allowlisted setting that keeps the v5 shape when unset", async () => {
   const base = { version: 5, executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", plannerEffortMode: "auto", memoryPolicy: "budgeted", plannerProvider: "claude_code", mcpProviders: [] };
   assert.deepEqual(validateSettings(base), base);
-  assert.deepEqual(validateSettings({ ...base, plannerModel: "claude-opus-4-1-20250805" }), { ...base, plannerModel: "claude-opus-4-1-20250805" });
+  assert.deepEqual(validateSettings({ ...base, plannerModel: "claude-opus-4-6" }), { ...base, plannerModel: "claude-opus-4-6" });
   for (const plannerModel of ["opus", "", null, "claude-gpt"]) {
     assert.throws(() => validateSettings({ ...base, plannerModel }), (error) => error.code === "invalid_planner_model", String(plannerModel));
   }
@@ -107,7 +107,7 @@ test("plannerModel is an optional allowlisted setting that keeps the v5 shape wh
   await assert.rejects(store.update({ plannerModel: "--tools" }, { actor: "user" }), (error) => error.code === "invalid_planner_model");
 });
 
-test("ultra is a host effort level; Claude has no ultra, so the bridge runs it as max", async () => {
+test("ultra is a host effort level; Claude has no ultra, so the bridge runs it as ultracode", async () => {
   const { PLANNER_EFFORTS } = require("../main/harness/host-settings");
   const { effortForRoute } = require("../main/harness/planner-effort-policy");
   assert.deepEqual(PLANNER_EFFORTS, ["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -117,6 +117,15 @@ test("ultra is a host effort level; Claude has no ultra, so the bridge runs it a
   const bridge = new ClaudeCodeBridge({ spawnFn: (command, a) => { args = a; return fakeChild(); } });
   bridge.start({ ...CONTEXT, progress: { ...CONTEXT.progress, plannerEffort: "ultra" } }).catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(args.slice(-2), ["--effort", "max"]);
+  assert.deepEqual(args.slice(-2), ["--effort", "ultracode"]);
   await bridge.close();
+});
+
+test("API-key-only models stay out of the allowlist so no picker or setting can reach them", () => {
+  const { CLAUDE_API_MODELS, isClaudeModel } = require("../main/harness/providers/claude-models");
+  assert.ok(CLAUDE_API_MODELS.length > 0);
+  for (const model of CLAUDE_API_MODELS) {
+    assert.equal(isClaudeModel(model.id), false, model.id);
+    assert.equal(CLAUDE_MODEL_IDS.includes(model.id), false, model.id);
+  }
 });

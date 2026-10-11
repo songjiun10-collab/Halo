@@ -50,6 +50,7 @@
     "runtime-src/main/harness/chromium-keychain.ts",
     "runtime-src/main/harness/session-vault.ts",
     "runtime-src/main/harness/chromium-session.ts",
+    "runtime-src/main/harness/chromium-ui-guard.ts",
     "runtime-src/main/harness/chromium-desktop.ts",
     "runtime-src/main/harness/browser-input.ts",
     "runtime-src/main/harness/effect-verifier.ts",
@@ -57,6 +58,7 @@
     "runtime-src/main/harness/halowright.ts",
     "runtime-src/main/harness/frame-capture.ts",
     "runtime-src/main/harness/computer-use-observation.ts",
-    "runtime-src/main/harness/turn-memory-preparation.ts"
+    "runtime-src/main/harness/turn-memory-preparation.ts",
+    "runtime-src/main/harness/web-bot-auth.ts"
   ]
 }

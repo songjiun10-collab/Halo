@@ -46,13 +46,13 @@ test('the picker lists exactly the host model allowlist', () => {
 })
 
 test('versioned Opus, Sonnet and Haiku are listed, with legacy models in their own group', () => {
-  const html = renderToStaticMarkup(React.createElement(ModelPicker, { settings: { ...settings, plannerModel: 'claude-sonnet-4-5-20250929' }, onSelectModel: () => {}, onEffort: () => {}, defaultOpen: true, defaultView: 'models' }))
-  assert.match(html, /<span title="Claude Sonnet 4.5">Sonnet 4.5<\/span>/, 'the closed toggle shows the short model name, full name on hover')
-  for (const label of ['Opus 5.5', 'Sonnet 5.5', 'Haiku 4.5', 'Opus 4.5', 'Opus 4.1', 'Opus 4', 'Sonnet 4', 'Sonnet 3.7', 'Haiku 3.5']) {
+  const html = renderToStaticMarkup(React.createElement(ModelPicker, { settings: { ...settings, plannerModel: 'claude-sonnet-4-6' }, onSelectModel: () => {}, onEffort: () => {}, defaultOpen: true, defaultView: 'models' }))
+  assert.match(html, /<span title="Claude Sonnet 4.6">Sonnet 4.6<\/span>/, 'the closed toggle shows the short model name, full name on hover')
+  for (const label of ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Haiku 4.5', 'Sonnet 5', 'Opus 5', 'Fable 5', 'Opus 4.8', 'Opus 4.7', 'Opus 4.6', 'Sonnet 4.6']) {
     assert.match(html, new RegExp(`<span>${label.replace('.', '\\.')}</span>`), label)
   }
-  assert.match(html, /Opus 5\.5[\s\S]*class="hx-mpick__fold" aria-expanded="true"[^>]*>Legacy[\s\S]*Opus 4\.5/)
-  assert.match(html, /role="radio" aria-checked="true"[^>]*>(?:(?!<\/button>).)*Sonnet 4\.5/)
+  assert.match(html, /Opus 5\.5[\s\S]*class="hx-mpick__fold" aria-expanded="true"[^>]*>Legacy[\s\S]*Opus 4\.8/)
+  assert.match(html, /role="radio" aria-checked="true"[^>]*>(?:(?!<\/button>).)*Sonnet 4\.6/)
   assert.equal(html.match(/aria-checked="true"/g).length, 1)
 })
 
@@ -101,7 +101,7 @@ test('legacy models stay folded unless the pinned model is one of them', () => {
 test('like the Codex app, the popover opens on effort: label, model name with a chevron, dotted slider, reset', () => {
   const html = renderToStaticMarkup(React.createElement(ModelPicker, { settings: { ...settings, plannerProvider: 'codex_cli', plannerEffort: 'low' }, onSelectModel: () => {}, onEffort: () => {}, defaultOpen: true }))
   assert.match(html, /<div class="hx-mpick__pop" data-view="effort">/)
-  assert.match(html, /class="hx-mpick__card" data-level="low"[\s\S]*<b>Light<\/b>[\s\S]*class="hx-mpick__model"[^>]*>GPT-6\.1 Sol<svg/)
+  assert.match(html, /class="hx-mpick__card" data-level="low"[\s\S]*<b>Light<\/b>[\s\S]*class="hx-mpick__model"[^>]*>GPT-6 Luna<svg/)
   assert.match(html, /class="hx-mpick__reset" aria-label="Reset effort"/)
   assert.match(html, /<div class="hx-effort" data-level="low">[\s\S]*type="range"/)
   assert.doesNotMatch(html, /<p>Codex<\/p>/, 'the model list waits behind the chevron')
@@ -120,8 +120,8 @@ test('Claude and Codex share one effort card; only the level names follow each a
     assert.equal(html.match(/class="hx-effort__dot"/g).length, 6)
     assert.doesNotMatch(html, /data-variant|Faster|Recommended|hx-mpick__help|hx-effort__fill/)
   }
-  assert.match(claude, /<b>Ultracode<\/b>[\s\S]*class="hx-mpick__model"[^>]*>Opus 5\.5<svg/)
-  assert.match(codex, /<b>Ultra<\/b>[\s\S]*class="hx-mpick__model"[^>]*>GPT-6\.1 Sol<svg/)
+  assert.match(claude, /<b>Ultracode<\/b>[\s\S]*class="hx-mpick__model"[^>]*>Sonnet 5.5<svg/)
+  assert.match(codex, /<b>Ultra<\/b>[\s\S]*class="hx-mpick__model"[^>]*>GPT-6 Luna<svg/)
   const low = renderToStaticMarkup(React.createElement(ModelPicker, { settings: { ...settings, plannerEffort: 'low' }, onSelectModel: () => {}, onEffort: () => {}, defaultOpen: true }))
   assert.match(low, /<b>Low<\/b>/)
 })

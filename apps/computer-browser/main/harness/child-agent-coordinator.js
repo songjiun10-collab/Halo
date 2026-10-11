@@ -22,12 +22,21 @@ const { TaskController } = require("./task-controller");
 const { resolveTaskProfile } = require("../../shared/task-profile-router");
 const { validateTaskProfileSelectedPayload } = require("../../shared/task-profile-contracts");
 const { MessageMailbox, MessageMailboxError } = require("./message-mailbox");
+const { CrossTeamLeases, TeamConversationLog, TeamCommsError, requestTeamHelp: planTeamHelp } = require("./team-comms-policy");
+const { TeamBudgets, TeamBudgetError } = require("./team-budgets");
+const { CommsGuard, CommsGuardError } = require("./comms-guard");
 const { TeamBoardStore, BOARD_KINDS, MAX_BOARD_TEXT_CHARS } = require("./team-board-store");
 
 // Team board (see readTeamBoard): newest entries a sibling's context and the
 // renderer's plan summary carry.
 const BOARD_CONTEXT_ENTRIES = 12;
 const BOARD_SUMMARY_ENTRIES = 20;
+
+// A sibling question unanswered this long (planner turns are slow model
+// calls) is escalated to the parent instead of hanging the dialog. This is
+// a duration, not a quota: per-dialog quotas come from the mailbox's own
+// 50-message conversation limit, unchanged.
+const SIBLING_ASK_TIMEOUT_MS = 120_000;
 
 // A handoff's structured summary as one bounded line of board text.
 function handoffText(handoff) {
@@ -87,6 +96,8 @@ class ChildAgentCoordinator {
     noProgressThreshold,
     plannerEffort,
     reserveBytesPerChild = DEFAULT_CHILD_RESERVE_BYTES,
+    siblingAskTimeoutMs = SIBLING_ASK_TIMEOUT_MS,
+    teamBudgets,
     onPlanChange,
   } = {}) {
     if (typeof storageRoot !== "string" || storageRoot.length === 0) {
@@ -112,6 +123,10 @@ class ChildAgentCoordinator {
     // change reaches children created afterwards.
     this._plannerEffort = plannerEffort;
     this._reserveBytesPerChild = reserveBytesPerChild;
+    // Test seam for the sibling ask timeout; production uses the default.
+    // Must stay positive: a non-positive timeout would expire every ask.
+    this._siblingAskTimeoutMs = Number.isFinite(siblingAskTimeoutMs) && siblingAskTimeoutMs > 0
+      ? siblingAskTimeoutMs : SIBLING_ASK_TIMEOUT_MS;
     // Optional display hook: called with a parentTaskId whenever a child's
     // summary status may have changed (see getPlanSummary).
     this._onPlanChange = typeof onPlanChange === "function" ? onPlanChange : null;
@@ -133,6 +148,12 @@ class ChildAgentCoordinator {
     this._cancellingPlans = new Set();
     // childId -> { outcome: "completed"|"stopped"|"failed", reason? }
     this._terminalChildren = new Map();
+    // Sibling pair conversations, by deterministic conversation id (see
+    // _siblingConversationId): { parentTaskId, pair: [first, second] }.
+    // Populated at send time and rebuilt from accepted plans on demand, so
+    // the mailbox can authorize a sibling leg without trusting any
+    // caller-supplied relationship.
+    this._siblingConversations = new Map();
     // Children that sent their parent at least one progress or handoff report.
     this._reportedChildren = new Set();
     // A failed start whose teardown itself failed keeps its lease reserved.
@@ -163,10 +184,17 @@ class ChildAgentCoordinator {
     // child plan share one serialization point, so a stale-version check
     // cannot be invalidated before the corresponding message append.
     this._parentGoalLocks = new Map();
-    // conversationId in this V1 scheme is exactly the childId: a child has
-    // exactly one parent (Global Constraints: no nested/shared children), so
-    // the childId alone already uniquely identifies the relationship.
+    // conversationId in this scheme is the childId for a parent<->child
+    // leg, or a deterministic pair id (see _siblingConversationId) for a
+    // sibling leg: a child has exactly one parent (Global Constraints: no
+    // nested/shared children), so either form already uniquely identifies
+    // the relationship.
     this._board = new TeamBoardStore({ storageRoot });
+    this._commsGuard = new CommsGuard();
+    // Cross-team traffic: teams are active plans (lead = parent task, members = parent + children).
+    this._teamLeases = new CrossTeamLeases();
+    this._teamLog = new TeamConversationLog();
+    this._teamBudgets = teamBudgets || new TeamBudgets({ perTeam: { messages: 500 }, crossTeam: { messages: 20 }, pool: { messages: 0 } });
     this._mailbox = new MessageMailbox({
       getTaskStore: (taskId) => this._activeStores.get(taskId) || this._liveChildren.get(taskId)?.store,
       getConversationTaskIds: (conversationId) => this._relationshipForConversation(conversationId),
@@ -240,9 +268,38 @@ class ChildAgentCoordinator {
   }
 
   _relationshipForConversation(conversationId) {
+    if (typeof conversationId === "string" && conversationId.startsWith("sib-")) {
+      const known = this._siblingConversations.get(conversationId);
+      if (known) return { parentTaskId: known.parentTaskId, siblingPair: known.pair };
+      // Cold registry (e.g. after a restart): an accepted, uncancelled plan
+      // cached in this process still resolves its pairs deterministically.
+      for (const [parentTaskId, plan] of this._plans) {
+        if (!plan || plan.state === "cancelled" || !Array.isArray(plan.childIds)) continue;
+        for (let i = 0; i < plan.childIds.length; i++) {
+          for (let j = i + 1; j < plan.childIds.length; j++) {
+            if (this._siblingConversationId(parentTaskId, plan.childIds[i], plan.childIds[j]) === conversationId) {
+              const pair = [plan.childIds[i], plan.childIds[j]].sort();
+              this._siblingConversations.set(conversationId, { parentTaskId, pair });
+              return { parentTaskId, siblingPair: pair };
+            }
+          }
+        }
+      }
+      return null; // unknown sibling conversation: mailbox treats this as unauthorized_route
+    }
     const parentTaskId = this._childParent.get(conversationId);
     if (!parentTaskId) return null; // unknown conversation: mailbox treats this as unauthorized_route
     return { parentTaskId, childTaskId: conversationId };
+  }
+
+  // Deterministic per-pair conversation id for two accepted children of one
+  // parent. Same pair always yields the same id (both directions share one
+  // 50-message quota), it fits the journal id charset, and it reveals
+  // nothing about the members -- membership is verified host-side.
+  _siblingConversationId(parentTaskId, childA, childB) {
+    const [first, second] = childA < childB ? [childA, childB] : [childB, childA];
+    const digest = crypto.createHash("sha256").update(`sib|${parentTaskId}|${first}|${second}`, "utf8").digest("hex").slice(0, 60);
+    return `sib-${digest}`;
   }
 
   // Validates and accepts a parent planner's child_plan proposal: mints one
@@ -411,13 +468,24 @@ class ChildAgentCoordinator {
   async getPlanSummary(parentTaskId) {
     const plan = await this._resolveActivePlan(parentTaskId);
     if (!plan || plan.state === "cancelled") return null;
+    const fullBoard = await this._planBoard(parentTaskId, plan);
+    const lastNoteOf = (childId) => {
+      for (let i = fullBoard.length - 1; i >= 0; i--) if (fullBoard[i].childTaskId === childId) return String(fullBoard[i].text ?? "").slice(0, 200);
+      return null;
+    };
     const agents = plan.assignments.map(({ childId, origin, subgoal }) => {
       const terminal = this._terminalChildren.get(childId);
+      const startedAt = this._liveChildren.get(childId)?.startedAt;
+      const model = this._liveChildren.get(childId)?.planner?.model;
+      const lastNote = lastNoteOf(childId);
       return {
+        ...(startedAt ? { startedAt } : {}),
+        ...(lastNote ? { lastNote } : {}),
+        ...(typeof model === "string" && model ? { model } : {}),
         agentId: childId,
         status: this._liveChildren.get(childId)?.summaryStatus ?? this._childState(childId),
         assignedOrigin: origin,
-        evidenceCount: 0,
+        evidenceCount: this._evidenceCountOf(childId),
         // The parent-authored label, so the UI names a child by its job, not its UUID.
         ...(typeof subgoal === "string" && subgoal ? { subgoal: subgoal.slice(0, 200) } : {}),
         ...(terminal?.reason ? { reason: terminal.reason } : {}),
@@ -426,7 +494,7 @@ class ChildAgentCoordinator {
       };
     });
     const count = (status) => agents.filter((agent) => agent.status === status).length;
-    const board = (await this._planBoard(parentTaskId, plan)).slice(-BOARD_SUMMARY_ENTRIES)
+    const board = fullBoard.slice(-BOARD_SUMMARY_ENTRIES)
       .map((entry) => ({ entryId: entry.entryId, agentId: entry.childTaskId, kind: entry.kind, text: entry.text, at: entry.at }));
     return {
       requestedAgentCount: agents.length,
@@ -441,6 +509,16 @@ class ChildAgentCoordinator {
       agents,
       ...(board.length ? { board } : {}),
     };
+  }
+
+  // Criteria the live child has attached evidence to (from its controller snapshot).
+  _evidenceCountOf(childId) {
+    try {
+      const status = this._liveChildren.get(childId)?.controller?.getSnapshot()?.criteriaStatus;
+      return Array.isArray(status) ? status.filter((entry) => entry && entry.evidenceId).length : 0;
+    } catch {
+      return 0;
+    }
   }
 
   _notifyPlanChange(parentTaskId) {
@@ -528,6 +606,7 @@ class ChildAgentCoordinator {
       payload: { planId: plan.planId, reason },
     });
     this._plans.set(parentTaskId, { ...plan, state: "cancelled" });
+    try { this._teamBudgets.release(parentTaskId); } catch { /* never spent: nothing to return */ }
     this._cancellingPlans.delete(parentTaskId);
     this._notifyPlanChange(parentTaskId);
   }
@@ -863,7 +942,7 @@ class ChildAgentCoordinator {
         readTeamBoard: () => this.readTeamBoard(childId),
       });
 
-      live = { controller, browser, planner, store: childStore, leaseId, origin, parentTaskId };
+      live = { controller, browser, planner, store: childStore, leaseId, origin, parentTaskId, startedAt: new Date().toISOString() };
       this._liveChildren.set(childId, live);
       live.summaryStatus = "running";
       this._notifyPlanChange(parentTaskId);
@@ -1106,7 +1185,8 @@ class ChildAgentCoordinator {
   // the parent) and a child's controller (senderTaskId is the child).
   // Never trusts the proposal's own recipientTaskId beyond checking it
   // against the one accepted relationship this coordinator actually knows
-  // (no sibling routing, no forged sender/recipient IDs).
+  // (parent<->child, or two accepted children of one parent; no forged
+  // sender/recipient IDs).
   async handleSendMessage(senderTaskId, proposal) {
     if (!contracts.UUID_RE.test(senderTaskId || "")) {
       throw new ChildAgentCoordinatorError("invalid_field", "senderTaskId must be a UUID");
@@ -1133,6 +1213,83 @@ class ChildAgentCoordinator {
     }
   }
 
+  _teams() {
+    const teams = [];
+    for (const [parentTaskId, plan] of this._plans) {
+      if (plan && plan.state !== "cancelled" && Array.isArray(plan.childIds)) {
+        teams.push({ teamId: parentTaskId, leadTaskId: parentTaskId, members: [parentTaskId, ...plan.childIds] });
+      }
+    }
+    return teams;
+  }
+
+  grantTeamLease(fromTeamId, toTeamId, purpose) {
+    try {
+      this._teamLeases.grant(fromTeamId, toTeamId, purpose);
+    } catch (err) {
+      if (err instanceof TeamCommsError) throw new ChildAgentCoordinatorError(err.code, err.message);
+      throw err;
+    }
+  }
+
+  revokeTeamLease(fromTeamId, toTeamId) {
+    this._teamLeases.revoke(fromTeamId, toTeamId);
+    this._teamLog.revoke(fromTeamId, toTeamId);
+  }
+
+  listTeamConversation(fromTeamId, toTeamId) {
+    return this._teamLog.list(fromTeamId, toTeamId);
+  }
+
+  // A team lead asks another team's lead for help. Needs an active directed lease, is budgeted
+  // per cross-team channel, and joins the team-level wait graph so two leads cannot deadlock.
+  // Delivery is a journal note on the receiving lead's task (no cross-team mailbox exists).
+  async requestTeamHelp(fromTaskId, { toTeamId, text, idempotencyKey } = {}) {
+    try {
+      const teams = this._teams();
+      const plan = planTeamHelp({ teams, leases: this._teamLeases, from: fromTaskId, toTeamId, text });
+      const fromTeam = teams.find((team) => team.members.includes(fromTaskId)).teamId;
+      const questionId = `team:${fromTeam}:${idempotencyKey}`;
+      this._commsGuard.noteQuestion({ id: questionId, from: fromTeam, to: toTeamId });
+      try {
+        this._teamBudgets.spendCrossTeam(fromTeam, toTeamId, "messages");
+        await this._activeStores.get(plan.recipientTaskId)?.append({
+          type: "note", payload: { kind: "cross_team_help", fromTeamId: fromTeam, text: String(text ?? "").slice(0, 2000) },
+        });
+      } catch (err) {
+        this._commsGuard.noteAnswer(questionId);
+        throw err;
+      }
+      this._teamLog.record({ fromTeam, toTeam: toTeamId, text: String(text ?? "").slice(0, 2000), at: Date.now() });
+      return { recipientTaskId: plan.recipientTaskId, duplicate: false };
+    } catch (err) {
+      if (err instanceof TeamCommsError || err instanceof TeamBudgetError || err instanceof CommsGuardError) {
+        throw new ChildAgentCoordinatorError(err.code, err.message);
+      }
+      throw err;
+    }
+  }
+
+  // Shares one note with the whole team (parent and siblings, never the sender).
+  // Each leg is an ordinary send_message, so route, goal-version, quota and
+  // send-rate checks apply per recipient; a refused leg fails the broadcast.
+  async broadcastToTeam(senderTaskId, { text, idempotencyKey } = {}) {
+    const parentTaskId = this._childParent.get(senderTaskId) || senderTaskId;
+    const plan = await this._resolveActivePlan(parentTaskId);
+    if (!plan || plan.state === "cancelled") {
+      throw new ChildAgentCoordinatorError("no_active_plan", "no active child plan for this broadcast");
+    }
+    const targets = this._commsGuard.broadcastTargets(senderTaskId, [parentTaskId, ...plan.childIds]);
+    const sent = [];
+    for (const recipientTaskId of targets) {
+      const result = await this._handleSendMessage(senderTaskId, {
+        kind: "send_message", recipientTaskId, messageKind: "share", text, idempotencyKey: `${idempotencyKey}:${recipientTaskId}`,
+      });
+      sent.push({ ...result, recipientTaskId });
+    }
+    return sent;
+  }
+
   async _handleSendMessage(senderTaskId, proposal) {
     if (!contracts.UUID_RE.test(senderTaskId || "")) {
       throw new ChildAgentCoordinatorError("invalid_field", "senderTaskId must be a UUID");
@@ -1145,19 +1302,38 @@ class ChildAgentCoordinator {
     let parentTaskId, childTaskId, conversationId, plan;
     const parentOfSender = this._childParent.get(senderTaskId);
     if (parentOfSender) {
-      // Sender is a known child: may only message its own parent. steer is
-      // parent-to-child-only (defense in depth -- planner-stdio.js's
-      // role:"child" transport already rejects this at the wire boundary).
-      if (recipientTaskId !== parentOfSender) {
-        throw new ChildAgentCoordinatorError("unauthorized_route", "a child may only message its own parent");
-      }
+      // Sender is a known child. steer is parent-to-child-only (defense in
+      // depth -- planner-stdio.js's role:"child" transport already rejects
+      // this at the wire boundary), for siblings and parents alike.
       if (proposal.messageKind === "steer") {
         throw new ChildAgentCoordinatorError("unauthorized_route", "steer is a parent-to-child-only message kind");
       }
-      parentTaskId = parentOfSender;
-      childTaskId = senderTaskId;
-      conversationId = senderTaskId;
-      plan = await this._resolveActivePlan(parentTaskId);
+      plan = await this._resolveActivePlan(parentOfSender);
+      if (recipientTaskId === parentOfSender) {
+        // ... to its own parent, as before.
+        parentTaskId = parentOfSender;
+        childTaskId = senderTaskId;
+        conversationId = senderTaskId;
+        plan = await this._resolveActivePlan(parentTaskId);
+      } else {
+        // ... or to an accepted sibling under the same parent. The pair
+        // shares one deterministic conversation (one quota), and the child
+        // leg of the envelope always names the recipient child.
+        // (No claim-style preemption primitive exists yet: same-element
+        // contention has no host lock to check, so it is intentionally not
+        // mapped onto these message kinds.)
+        if (!plan || plan.state === "cancelled" || !plan.childIds.includes(recipientTaskId) ||
+            this._childParent.get(recipientTaskId) !== parentOfSender) {
+          throw new ChildAgentCoordinatorError("unauthorized_route", "recipient is not an accepted sibling of this child");
+        }
+        parentTaskId = parentOfSender;
+        childTaskId = recipientTaskId;
+        conversationId = this._siblingConversationId(parentTaskId, senderTaskId, recipientTaskId);
+        this._siblingConversations.set(conversationId, {
+          parentTaskId,
+          pair: senderTaskId < recipientTaskId ? [senderTaskId, recipientTaskId] : [recipientTaskId, senderTaskId],
+        });
+      }
     } else {
       // Sender must be a parent whose active plan's accepted children
       // include the claimed recipient.
@@ -1204,7 +1380,24 @@ class ChildAgentCoordinator {
           return this._mailbox.send(envelope);
         });
       }
-      const sent = await this._mailbox.send(envelope);
+      const questionId = `${senderTaskId}:${proposal.idempotencyKey}`;
+      try {
+        this._teamBudgets.spend(parentTaskId, "messages");
+        this._commsGuard.checkSend(senderTaskId);
+        if (proposal.messageKind === "question") this._commsGuard.noteQuestion({ id: questionId, from: senderTaskId, to: recipientTaskId });
+      } catch (guardError) {
+        if (guardError instanceof TeamBudgetError) throw new ChildAgentCoordinatorError(guardError.code, guardError.message);
+        if (guardError instanceof CommsGuardError) throw new ChildAgentCoordinatorError(guardError.code, guardError.message);
+        throw guardError;
+      }
+      let sent;
+      try {
+        sent = await this._mailbox.send(envelope);
+      } catch (sendError) {
+        if (proposal.messageKind === "question") this._commsGuard.noteAnswer(questionId);
+        throw sendError;
+      }
+      if (proposal.messageKind === "answer") this._commsGuard.noteAnswerBetween(recipientTaskId, senderTaskId);
       if (senderTaskId === childTaskId && (proposal.messageKind === "progress" || proposal.messageKind === "handoff")) this._reportedChildren.add(childTaskId);
       if (senderTaskId === childTaskId) await this._postToBoard(parentTaskId, plan, envelope, sent);
       return sent;
@@ -1241,8 +1434,10 @@ class ChildAgentCoordinator {
   }
 
   // What a CHILD reads of its siblings' posts, as untrusted notes named by
-  // each sibling's parent-authored subgoal. null for anything not a child of
-  // an active plan (a parent already receives these as messages).
+  // each sibling's parent-authored subgoal. siblingTaskId lets the child
+  // address that sibling directly (same UUIDs the host already reveals as
+  // pending-message senders). null for anything not a child of an active
+  // plan (a parent already receives these as messages).
   async readTeamBoard(childTaskId) {
     const parentTaskId = this._childParent.get(childTaskId);
     if (!parentTaskId) return null;
@@ -1252,7 +1447,7 @@ class ChildAgentCoordinator {
     const entries = (await this._planBoard(parentTaskId, plan))
       .filter((entry) => entry.childTaskId !== childTaskId)
       .slice(-BOARD_CONTEXT_ENTRIES)
-      .map((entry) => ({ from: labels.get(entry.childTaskId) ?? "Agent", kind: entry.kind, text: entry.text, at: entry.at }));
+      .map((entry) => ({ from: labels.get(entry.childTaskId) ?? "Agent", siblingTaskId: entry.childTaskId, kind: entry.kind, text: entry.text, at: entry.at }));
     return { authority: "untrusted_sibling_notes", parentTaskId, entries };
   }
 
@@ -1303,15 +1498,25 @@ class ChildAgentCoordinator {
   }
 
   // Aggregated, relationship-authorized pending messages FOR recipientTaskId
-  // -- a child's only possible sender is its own parent; a parent's pending
-  // messages are aggregated across every one of its accepted children, in
-  // assignment order (each child's own messages stay in that child's
-  // journal order). Never trusts a caller-supplied sender: this is exactly
-  // the "listPending caller authorization belongs in coordinator" boundary.
+  // -- a child's senders are its own parent plus its accepted siblings; a
+  // parent's pending messages are aggregated across every one of its
+  // accepted children, in assignment order (each child's own messages stay
+  // in that child's journal order). Never trusts a caller-supplied sender:
+  // this is exactly the "listPending caller authorization belongs in
+  // coordinator" boundary.
   async listPendingMessages(recipientTaskId) {
     const parentOfRecipient = this._childParent.get(recipientTaskId);
     if (parentOfRecipient) {
-      return this._mailbox.listPending({ senderTaskId: parentOfRecipient, recipientTaskId });
+      const fromParent = await this._mailbox.listPending({ senderTaskId: parentOfRecipient, recipientTaskId });
+      const plan = await this._resolveActivePlan(parentOfRecipient).catch(() => null);
+      if (!plan || plan.state === "cancelled" || !Array.isArray(plan.childIds)) return fromParent;
+      const fromSiblings = [];
+      for (const childId of plan.childIds) {
+        if (childId === recipientTaskId) continue;
+        const fromSibling = await this._mailbox.listPending({ senderTaskId: childId, recipientTaskId });
+        fromSiblings.push(...fromSibling);
+      }
+      return [...fromParent, ...fromSiblings];
     }
     const plan = await this._resolveActivePlan(recipientTaskId);
     if (!plan || plan.state === "cancelled") return [];
@@ -1320,7 +1525,80 @@ class ChildAgentCoordinator {
       const fromChild = await this._mailbox.listPending({ senderTaskId: childId, recipientTaskId });
       results.push(...fromChild);
     }
+    await this._expireStaleSiblingAsks(recipientTaskId, plan);
     return results;
+  }
+
+  // A sibling question with no answer after SIBLING_ASK_TIMEOUT_MS (or whose
+  // recipient can never answer because it already retired) is escalated to
+  // the parent as a journal note -- the asker is never left hanging on a
+  // dead dialog, and nothing is auto-answered on anyone's behalf. Runs on
+  // the parent's aggregation path; one note per question, ever.
+  async _expireStaleSiblingAsks(parentTaskId, plan) {
+    // Questions the guard has waited on past its timeout stop counting in the wait graph.
+    this._commsGuard.expireQuestions();
+    const parentStore = this._activeStores.get(parentTaskId) || null;
+    if (!parentStore || !Array.isArray(plan.childIds) || plan.childIds.length < 2) return;
+    let parentEvents = null;
+    const alreadyNoted = async (messageId) => {
+      parentEvents = parentEvents || await this._journalEvents(parentStore);
+      return parentEvents.some((event) => event.type === "note" &&
+        event.payload?.kind === "sibling_ask_timeout" && event.payload?.messageId === messageId);
+    };
+    for (let i = 0; i < plan.childIds.length; i++) {
+      for (let j = i + 1; j < plan.childIds.length; j++) {
+        const [first, second] = plan.childIds[i] < plan.childIds[j]
+          ? [plan.childIds[i], plan.childIds[j]] : [plan.childIds[j], plan.childIds[i]];
+        const conversationId = this._siblingConversationId(parentTaskId, first, second);
+        this._siblingConversations.set(conversationId, { parentTaskId, pair: [first, second] });
+        for (const [asker, recipient] of [[first, second], [second, first]]) {
+          const askerStore = this._activeStores.get(asker) || this._liveChildren.get(asker)?.store || null;
+          const recipientStore = this._activeStores.get(recipient) || this._liveChildren.get(recipient)?.store || null;
+          if (!askerStore) continue;
+          const askerEvents = await this._journalEvents(askerStore);
+          const questions = askerEvents.filter((event) => event.type === "message_sent" &&
+            event.payload?.conversationId === conversationId && event.payload?.kind === "question" &&
+            event.payload?.senderTaskId === asker && event.payload?.recipientTaskId === recipient);
+          if (questions.length === 0) continue;
+          const recipientEvents = recipientStore ? await this._journalEvents(recipientStore) : [];
+          for (const question of questions) {
+            const messageId = question.payload.messageId;
+            // The store stamps `at` in wall-clock (task-store append owns the
+            // field), so expiry is measured in wall-clock too -- not in the
+            // coordinator's injectable clock.
+            const askedAt = Date.parse(question.at) || 0;
+            const answered = recipientEvents.some((event) => event.type === "message_sent" &&
+              event.payload?.conversationId === conversationId && event.payload?.senderTaskId === recipient &&
+              (event.payload?.inReplyToMessageId === messageId ||
+                (event.payload?.kind === "answer" && Date.parse(event.at) >= askedAt)));
+            if (answered) continue;
+            const recipientGone = !this._liveChildren.has(recipient) &&
+              (this._terminalChildren.get(recipient)?.outcome ?? null) !== null;
+            if (!recipientGone && Date.now() - askedAt < this._siblingAskTimeoutMs) continue;
+            if (recipientGone) this._commsGuard.noteAnswerBetween(asker, recipient);
+            if (await alreadyNoted(messageId)) continue;
+            await parentStore.append({ type: "note", payload: { kind: "sibling_ask_timeout",
+              askerTaskId: asker, recipientTaskId: recipient, messageId, conversationId,
+              question: String(question.payload?.text ?? "").slice(0, 200),
+              reason: recipientGone ? "recipient_retired" : "ask_timeout" } });
+          }
+        }
+      }
+    }
+  }
+
+  // Bounded full-journal scan (mailbox readJournal equivalent for a store
+  // this coordinator already holds): expiry checks need every message_sent,
+  // not just the recent-events window.
+  async _journalEvents(store) {
+    const events = [];
+    let since = 0;
+    for (;;) {
+      const page = await store.getEvents({ since });
+      if (page.length === 0) return events;
+      events.push(...page);
+      since = page[page.length - 1].seq;
+    }
   }
 
   // Thin pass-through: MessageMailbox.recordConsumed() already validates

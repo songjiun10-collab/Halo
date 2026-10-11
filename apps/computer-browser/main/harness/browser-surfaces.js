@@ -6,12 +6,18 @@
 const MIN_CHROME_HEIGHT = 94; // 42px tab strip + 52px toolbar, before outer padding.
 const { dispatchBrowserInput } = require("./browser-input");
 const { captureFrameJpeg } = require("./frame-capture");
+const { findInPageOn } = require("./find-in-page");
+const { applyPageZoom, nextZoom, resolveZoomAction } = require("./page-zoom");
+const { copySelectionOn } = require("./selection-copy");
+const systemClipboard = require("./system-clipboard");
 
 class BrowserSurfaces {
-  constructor(win, { isUserControlled = () => false } = {}) {
+  constructor(win, { isUserControlled = () => false, writeClipboard } = {}) {
     this._win = win;
     this._isUserControlled = isUserControlled;
+    this._writeClipboard = typeof writeClipboard === "function" ? writeClipboard : systemClipboard.writeText;
     this._views = new Map();
+    this._zoom = new Map(); // taskId -> user zoom level (Mod+/Mod-/Mod+0)
     this._request = null;
     this._resize = () => this._layout();
     win.on("resize", this._resize);
@@ -31,9 +37,15 @@ class BrowserSurfaces {
     };
     view.webContents.on("before-input-event", guardInput);
     view.webContents.on("before-mouse-event", guardInput);
+    // A human zoom survives navigation on the same surface, like a browser's.
+    view.webContents.on("did-navigate", () => {
+      const level = this._zoom.get(taskId);
+      if (level && level !== 1) void applyPageZoom(view.webContents, level);
+    });
     view.webContents.once("destroyed", () => {
       if (this._views.get(taskId) !== view) return;
       this._views.delete(taskId);
+      this._zoom.delete(taskId);
       if (!this._win.isDestroyed()) this._win.contentView.removeChildView(view);
     });
     this._layout();
@@ -69,6 +81,41 @@ class BrowserSurfaces {
     const view = this._views.get(taskId);
     if (!view || view.webContents.isDestroyed() || !this._isUserControlled(taskId)) return false;
     return dispatchBrowserInput(view.webContents, view.getBounds(), input);
+  }
+
+  // Read-only find (Mod+F) on the task's visible page. Same fail-closed rule as
+  // input: a search scrolls the page, which must not disturb an agent mid-run.
+  async findInPage(taskId, query, options = {}) {
+    const view = this._views.get(taskId);
+    if (!view || view.webContents.isDestroyed() || !this._isUserControlled(taskId)) {
+      return { ok: false, found: false, errorCode: "surface_unavailable" };
+    }
+    return findInPageOn(view.webContents, query, options);
+  }
+
+  // Mod+/Mod-/Mod+0 on the task's visible page while the user owns it. The
+  // level is remembered per task and re-applied after navigation.
+  async setZoom(taskId, request) {
+    const view = this._views.get(taskId);
+    if (!view || view.webContents.isDestroyed() || !this._isUserControlled(taskId)) {
+      return { ok: false, level: null, errorCode: "surface_unavailable" };
+    }
+    const current = this._zoom.get(taskId) ?? 1;
+    const level = typeof request === "string" ? nextZoom(current, request) : resolveZoomAction(request ?? {}, current);
+    if (level === null) return { ok: false, level: null, errorCode: "invalid_zoom_level" };
+    const result = await applyPageZoom(view.webContents, level);
+    if (result.ok) this._zoom.set(taskId, result.level);
+    return result;
+  }
+
+  // Mod+C on the task's visible page while the user owns it: copy the current
+  // selection to the OS clipboard (HALO never reads it back).
+  async copySelection(taskId) {
+    const view = this._views.get(taskId);
+    if (!view || view.webContents.isDestroyed() || !this._isUserControlled(taskId)) {
+      return { ok: false, chars: 0, errorCode: "surface_unavailable" };
+    }
+    return copySelectionOn(view.webContents, this._writeClipboard);
   }
 
   _layout() {

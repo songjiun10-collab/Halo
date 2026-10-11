@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Serves the signed Web Bot Auth key directory on 127.0.0.1:8787 so a TLS
+  reverse proxy (deploy/Caddyfile) can publish it at
+  https://<domain>/.well-known/http-message-signatures-directory.
+
+  The response is signed fresh per request with the Halo key, so it cannot be
+  a static file. Key path matches what the app itself loads
+  (main/index.js -> <userData>/harness-data/web-bot-auth-key.pem).
+
+  Install (user-level, no sudo):
+    cp deploy/com.halo.web-bot-auth-directory.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.halo.web-bot-auth-directory.plist
+  Check:
+    launchctl print gui/$(id -u)/com.halo.web-bot-auth-directory | head -20
+    curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/.well-known/http-message-signatures-directory
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.halo.web-bot-auth-directory</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/songjiun/.nvm/versions/node/v22.22.1/bin/node</string>
+        <string>/Users/songjiun/Halo/apps/computer-browser/tools/web-bot-auth.js</string>
+        <string>directory</string>
+        <string>--key</string>
+        <string>/Users/songjiun/Library/Application Support/halo-computer-browser/harness-data/web-bot-auth-key.pem</string>
+        <string>--port</string>
+        <string>8787</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/songjiun/.nvm/versions/node/v22.22.1/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/songjiun/Library/Logs/halo-web-bot-auth.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/songjiun/Library/Logs/halo-web-bot-auth.log</string>
+</dict>
+</plist>

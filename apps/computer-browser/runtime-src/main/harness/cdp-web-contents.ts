@@ -20,10 +20,16 @@ interface CdpTransport {
   onEvent(handler: (method: string, params: Json, sessionId?: string) => void): () => void;
   close(): void;
 }
-interface CdpPageOptions { url?: string; width?: number; height?: number; commandTimeoutMs?: number; isolated?: boolean; hardened?: boolean; session?: any; sharedContext?: (transport: CdpTransport) => Promise<string> }
+interface CdpPageOptions { url?: string; width?: number; height?: number; commandTimeoutMs?: number; isolated?: boolean; hardened?: boolean; session?: any; sharedContext?: (transport: CdpTransport) => Promise<string>; signRequestHeaders?: (url: string) => Record<string, string> | null; deviceScaleFactor?: number }
 // Same ad/tracker list the Electron agent session uses, so both engines refuse the same hosts.
 const { isBlockedUrl } = require("./agent-request-filter") as { isBlockedUrl: (url: string) => boolean };
-const DENIED_PERMISSIONS = ["geolocation", "notifications", "camera", "microphone", "midi", "clipboard-read", "clipboard-write", "screen-wake-lock", "persistent-storage", "background-sync", "idle-detection", "window-management", "local-fonts", "display-capture"];
+// Chromium has no "deny everything" switch: the CDP path must name each permission,
+// unlike the Electron path's setPermissionRequestHandler(callback(false)) default-deny.
+// Unknown names are ignored by the `.catch`, so this is kept a superset of the
+// device/privacy permissions an agent page must never hold (the Electron typings'
+// full permission list is the reference). Deny-by-name remains best-effort: any
+// permission Chromium adds after this list is not covered here.
+const DENIED_PERMISSIONS = ["geolocation", "notifications", "camera", "microphone", "midi", "clipboard-read", "clipboard-write", "screen-wake-lock", "persistent-storage", "background-sync", "idle-detection", "window-management", "local-fonts", "display-capture", "usb", "serial", "hid", "bluetooth", "nfc", "file-system-access", "accessibility-events", "storage-access", "top-level-storage-access", "periodic-background-sync", "payment-handler", "smart-card", "speaker-selection", "captured-surface-control", "protected-media-identifier", "keyboard-lock", "pointer-lock", "vr", "ar", "hand-tracking", "ambient-light-sensor", "accelerometer", "gyroscope", "magnetometer"];
 interface HistoryEntry { id: number; url: string }
 
 const DEFAULT_WIDTH = 1280;
@@ -65,6 +71,30 @@ function pngSize(png: Buffer): { width: number; height: number } {
   // IHDR width/height are big-endian uint32 at bytes 16 and 20.
   if (png.length < 24 || png.toString("ascii", 1, 4) !== "PNG") return { width: 0, height: 0 };
   return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+}
+
+// Web Bot Auth headers a signer may have added on an earlier interception are
+// replaced, never accumulated; Fetch.continueRequest sends back the full set.
+const SIGNATURE_REQUEST_HEADERS = new Set(["signature", "signature-agent", "signature-input"]);
+
+// Fetch.continueRequest overrides the request header set, so the full set must
+// be sent back: every existing header (minus stale signature headers) plus the
+// new ones. Cookies are attached by the network stack after interception, so
+// the jar is unaffected.
+function mergeRequestHeaders(existing: unknown, extra: Record<string, string>): Array<{ name: string; value: string }> {
+  const merged: Array<{ name: string; value: string }> = [];
+  const seen = new Set<string>();
+  const push = (name: unknown, value: unknown): void => {
+    const normalized = String(name ?? "");
+    const lower = normalized.toLowerCase();
+    if (normalized.length === 0 || seen.has(lower) || SIGNATURE_REQUEST_HEADERS.has(lower)) return;
+    seen.add(lower);
+    merged.push({ name: normalized, value: String(value ?? "") });
+  };
+  if (Array.isArray(existing)) for (const entry of existing) push((entry as Json)?.name, (entry as Json)?.value);
+  else if (existing && typeof existing === "object") for (const [name, value] of Object.entries(existing)) push(name, value);
+  for (const [name, value] of Object.entries(extra)) merged.push({ name, value });
+  return merged;
 }
 
 // One browser-level WebSocket multiplexing sessions (flatten:true).
@@ -144,16 +174,33 @@ class CdpWebContents {
   private viewportWidth = DEFAULT_WIDTH;
   private viewportHeight = DEFAULT_HEIGHT;
   private viewportChange: Promise<void> = Promise.resolve();
+  // Fire-and-forget input is the renderer's synchronous contract, but its CDP
+  // command must still settle before a following DOM read or screenshot. Keep
+  // those commands ordered without making pointer/key dispatch block the UI.
+  private inputChain: Promise<void> = Promise.resolve();
   private readonly webContentsId = nextWebContentsId++;
   private readonly listeners = new Map<string, Set<EventListener>>();
   private unsubscribe: () => void;
   private url = "about:blank";
   private title = "";
   private mainFrameId = "";
+  // Loader id of the last main-frame navigation (initial frame tree or
+  // Page.frameNavigated). navigate() uses it to correlate
+  // Page.domContentEventFired with the navigation it is actually waiting for:
+  // that event carries only a timestamp, and the root frame's
+  // DOMContentLoaded is the readiness signal (subframes cannot produce it --
+  // inspector_page_agent.cc's DomContentLoadedEventFired emits only for
+  // inspected_frames_->Root()).
+  private mainFrameLoaderId: string | null = null;
   private httpStatus: number | null = null;
   private history: HistoryEntry[] = [];
   private historyIndex = -1;
+  // worldId -> live executionContextId for the isolated world this page created.
   private readonly worlds = new Map<number, number>();
+  // Bumped whenever a cached world is known to be gone, so the next
+  // createIsolatedWorld asks for a name Chromium has no dead entry for. See
+  // isolatedWorldName().
+  private worldIncarnation = 0;
   private destroyed = false;
   private sessionId = "";
   private screencast: ((jpegBase64: string) => void) | null = null;
@@ -212,13 +259,18 @@ class CdpWebContents {
     const { sessionId } = await transport.send("Target.attachToTarget", { targetId, flatten: true });
     this.sessionId = sessionId;
     if (hardened) await this.harden(scope);
-    await this.rawCmd("Page.enable");
-    await this.rawCmd("Network.enable");
-    await this.rawCmd("Runtime.enable");
-    await this.rawCmd("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+    const [, , , tree] = await Promise.all([
+      this.rawCmd("Page.enable"),
+      this.rawCmd("Network.enable"),
+      this.rawCmd("Runtime.enable"),
+      this.rawCmd("Page.getFrameTree"),
+      this.rawCmd("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: this.options.deviceScaleFactor ?? 1, mobile: false }),
+      this.rawCmd("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] }).catch(() => undefined),
+      this.rawCmd("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => undefined),
+    ]);
     this.viewportWidth = width; this.viewportHeight = height;
-    const tree = await this.rawCmd("Page.getFrameTree");
-    this.mainFrameId = tree.frameTree.frame.id;
+    this.mainFrameId = tree?.frameTree?.frame?.id ?? "";
+    this.mainFrameLoaderId = typeof tree?.frameTree?.frame?.loaderId === "string" ? tree.frameTree.frame.loaderId : null;
     await this.refreshHistory();
     if (url !== "about:blank") await this.navigate(url);
   }
@@ -239,9 +291,30 @@ class CdpWebContents {
       const protocol = new URL(url).protocol;
       if (protocol !== "http:" && protocol !== "https:") allowed = protocol === "about:" || protocol === "blob:" || protocol === "data:" ? !isDocument || url === "about:blank" : false;
     } catch { allowed = false; }
+    // Recreate Electron's synchronous navigation veto at Chromium's request
+    // boundary. BrowserAdapter installs its assigned-origin and Intent Lock
+    // listeners on these events; without this bridge, a page's own
+    // location=..., meta refresh, or server redirect bypasses those checks.
+    if (allowed && isDocument && params.frameId === this.mainFrameId) {
+      let prevented = false;
+      const event = { preventDefault() { prevented = true; } };
+      this.emit(params.redirectedRequestId ? "will-redirect" : "will-navigate", event, url);
+      if (prevented) allowed = false;
+    }
     if (allowed && !isDocument && isBlockedUrl(url)) allowed = false;
-    const command = allowed ? "Fetch.continueRequest" : "Fetch.failRequest";
-    this.rawCmd(command, allowed ? { requestId: params.requestId } : { requestId: params.requestId, errorReason: "BlockedByClient" }).catch(() => undefined);
+    if (allowed) {
+      // Web Bot Auth: the host's signer adds identity headers on top of the
+      // request's own headers. A signing failure must never block or delay the
+      // request, so it falls back to an unsigned continue.
+      let extra: Record<string, string> | null = null;
+      try { extra = this.options.signRequestHeaders?.(url) ?? null; } catch { extra = null; }
+      const continueParams = extra && Object.keys(extra).length > 0
+        ? { requestId: params.requestId, headers: mergeRequestHeaders(params.request?.headers, extra) }
+        : { requestId: params.requestId };
+      this.rawCmd("Fetch.continueRequest", continueParams).catch(() => undefined);
+      return;
+    }
+    this.rawCmd("Fetch.failRequest", { requestId: params.requestId, errorReason: "BlockedByClient" }).catch(() => undefined);
   }
   isDestroyed(): boolean { return this.destroyed; }
 
@@ -289,7 +362,8 @@ class CdpWebContents {
         if (!params.frame?.parentId) {
           this.url = params.frame.url;
           this.mainFrameId = params.frame.id;
-          this.worlds.clear();
+          if (typeof params.frame.loaderId === "string" && params.frame.loaderId) this.mainFrameLoaderId = params.frame.loaderId;
+          this.invalidateWorlds();
           // Emit before the history refresh: Electron orders did-navigate before did-stop-loading,
           // and the adapter's epoch must not move after a load has already been reported done.
           this.emit("did-navigate", {}, this.url, this.httpStatus ?? 0, "");
@@ -312,8 +386,21 @@ class CdpWebContents {
       case "Page.domContentEventFired":
         this.emit("dom-ready");
         break;
+      // A lifecycle freeze (Page.setWebLifecycleState "frozen", plus the
+      // Memory.forciblyPurgeJavaScriptMemory that freeze() sends with it) destroys
+      // each context with its own event and never emits
+      // Runtime.executionContextsCleared, so a world cached before the freeze
+      // would otherwise survive as a dead id. The map is keyed by worldId and
+      // holds contextIds as its values, so the check is over the values.
+      case "Runtime.executionContextDestroyed": {
+        const destroyed = params.executionContextId as number;
+        for (const cached of this.worlds.values()) {
+          if (cached === destroyed) { this.invalidateWorlds(); break; }
+        }
+        break;
+      }
       case "Runtime.executionContextsCleared":
-        this.worlds.clear();
+        this.invalidateWorlds();
         break;
       case "Page.screencastFrame": {
         // Ack first so Chromium keeps producing frames; the listener only ever sees the newest bytes.
@@ -350,7 +437,7 @@ class CdpWebContents {
   async setViewportSize(width: number, height: number): Promise<void> {
     if (![width, height].every((value) => Number.isInteger(value) && value > 0 && value <= 16384)) return Promise.reject(new Error("invalid_viewport"));
     const update = this.viewportChange.catch(() => undefined).then(async () => {
-      await this.cmd("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+      await this.cmd("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: this.options.deviceScaleFactor ?? 1, mobile: false });
       this.viewportWidth = width; this.viewportHeight = height;
     });
     this.viewportChange = update;
@@ -364,37 +451,127 @@ class CdpWebContents {
     await this.ready;
     return this.navigate(url);
   }
+  // Resolves when the new document is readable, not when every subresource has
+  // finished. The first trustworthy signal wins:
+  //   - Page.domContentEventFired for THIS navigation's loader id (root frame
+  //     only; correlated by mainFrameLoaderId so a previous page's late DCL
+  //     cannot resolve us), or
+  //   - Page.frameStoppedLoading, but only once this navigation has started
+  //     (frameStartedLoading) or committed (frameNavigated): the previous
+  //     page's trailing did-stop-loading can arrive after the next navigate()
+  //     call has already begun waiting, and resolving on it would hand back a
+  //     document that has not even committed yet (observed as stale_document
+  //     in the readiness probe), or
+  //   - page destruction.
+  // Measured on real pages (2026-10-09): DCL arrives 40ms-1.5s before full load
+  // and observe() already works at DCL, so this is the per-navigation wait the
+  // browser-use-speed work targets. The adapter's timeout still bounds the
+  // whole wait; a navigation with no loaderId (same-document) keeps the old
+  // stop-based wait, and a download resolves without waiting for a document.
   private async navigate(url: string): Promise<void> {
     if (this.destroyed) throw new Error("cdp_destroyed: page is closed");
-    const stopped = new Promise<void>((resolve) => {
-      const done = () => { this.removeListener("did-stop-loading", done); this.removeListener("destroyed", done); resolve(); };
-      this.on("did-stop-loading", done);
-      this.on("destroyed", done);
+    let expectedLoaderId: string | null = null;
+    let navStarted = false;
+    let navCommitted = false;
+    let done: () => void = () => {};
+    const ready = new Promise<void>((resolve) => {
+      let settled = false;
+      done = () => {
+        if (settled) return;
+        settled = true;
+        this.removeListener("did-start-navigation", onStart);
+        this.removeListener("did-navigate", onCommitted);
+        this.removeListener("dom-ready", onDomReady);
+        this.removeListener("did-stop-loading", onStopped);
+        this.removeListener("destroyed", onDestroyed);
+        resolve();
+      };
+      const onStart = () => { if (expectedLoaderId !== null) navStarted = true; };
+      const onCommitted = () => { if (expectedLoaderId !== null && this.mainFrameLoaderId === expectedLoaderId) navCommitted = true; };
+      const onDomReady = () => { if (expectedLoaderId !== null && this.mainFrameLoaderId === expectedLoaderId) done(); };
+      const onStopped = () => { if (navCommitted || navStarted) done(); };
+      const onDestroyed = () => done();
+      this.on("did-start-navigation", onStart);
+      this.on("did-navigate", onCommitted);
+      this.on("dom-ready", onDomReady);
+      this.on("did-stop-loading", onStopped);
+      this.on("destroyed", onDestroyed);
     });
-    const result = await this.rawCmd("Page.navigate", { url });
-    if (result.errorText) {
-      this.emit("did-fail-load", {}, -1, String(result.errorText), url, true);
-      throw new Error(`navigation_error: ${result.errorText}`);
+    try {
+      const result = await this.rawCmd("Page.navigate", { url });
+      if (result.errorText) {
+        this.emit("did-fail-load", {}, -1, String(result.errorText), url, true);
+        throw new Error(`navigation_error: ${result.errorText}`);
+      }
+      if (result.isDownload) {
+        done();
+        return;
+      }
+      if (result.loaderId) {
+        expectedLoaderId = String(result.loaderId);
+        await ready;
+      } else {
+        done();
+      }
+    } catch (error) {
+      done();
+      throw error;
     }
-    if (result.loaderId) await stopped;
   }
   stop(): void { this.cmd("Page.stopLoading").catch(() => undefined); }
 
   async executeJavaScript(code: string): Promise<any> {
     return this.evaluate(code);
   }
+  // The world name must be unique per incarnation. Chromium keys created worlds
+  // by name for the life of the frame: after a lifecycle freeze destroys the
+  // context, re-creating the SAME name returns the dead contextId forever
+  // (verified against a real out/Trial Chromium -- see the freeze regression in
+  // test/renderer-lifecycle.test.js). A fresh suffix is what actually produces a
+  // live world again.
+  private isolatedWorldName(worldId: number): string {
+    return `halo-${worldId}-${this.worldIncarnation}`;
+  }
+
+  // Drops the cached world and forces the next call to build a new one. Used when
+  // Chromium reports the context is gone, which a plain cache clear cannot undo.
+  private invalidateWorlds(): void {
+    this.worlds.clear();
+    this.worldIncarnation += 1;
+  }
+
+  private async createWorldContext(worldId: number): Promise<number> {
+    const created = await this.cmd("Page.createIsolatedWorld", { frameId: this.mainFrameId, worldName: this.isolatedWorldName(worldId), grantUniveralAccess: false });
+    const contextId = created.executionContextId as number;
+    this.worlds.set(worldId, contextId);
+    return contextId;
+  }
+
+  // Chromium answers Runtime.evaluate on a dead context with this message. It
+  // means the cached world is gone, never that the page script failed, so the
+  // only correct response is to rebuild the world and run the script once more.
+  // The cdp_error: prefix is required so a page script that happens to throw the
+  // same text (script_error: ...) is not mistaken for a dead world.
+  private static isMissingContext(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.startsWith("cdp_error:") && message.includes("Cannot find context with specified id");
+  }
+
   async executeJavaScriptInIsolatedWorld(worldId: number, scripts: Array<{ code: string }>, _userGesture?: boolean): Promise<any> {
-    let contextId = this.worlds.get(worldId);
-    if (contextId === undefined) {
-      const created = await this.cmd("Page.createIsolatedWorld", { frameId: this.mainFrameId, worldName: `halo-${worldId}`, grantUniveralAccess: false });
-      contextId = created.executionContextId as number;
-      this.worlds.set(worldId, contextId);
-    }
+    const contextId = this.worlds.get(worldId) ?? await this.createWorldContext(worldId);
     let value: any;
-    for (const script of scripts) value = await this.evaluate(script.code, contextId);
+    try {
+      for (const script of scripts) value = await this.evaluate(script.code, contextId);
+    } catch (error) {
+      if (!CdpWebContents.isMissingContext(error)) throw error;
+      this.invalidateWorlds();
+      const recreated = await this.createWorldContext(worldId);
+      for (const script of scripts) value = await this.evaluate(script.code, recreated);
+    }
     return value;
   }
   private async evaluate(expression: string, contextId?: number): Promise<any> {
+    await this.inputChain;
     const result = await this.cmd("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true, userGesture: true, ...(contextId === undefined ? {} : { contextId }) });
     if (result.exceptionDetails) throw new Error(`script_error: ${result.exceptionDetails.exception?.description ?? result.exceptionDetails.text ?? "evaluation failed"}`);
     return result.result?.value;
@@ -402,54 +579,61 @@ class CdpWebContents {
 
   sendInputEvent(event: Json): void {
     const modifiers = modifierMask(event.modifiers);
-    const swallow = (promise: Promise<any>) => { promise.catch(() => undefined); };
+    const enqueue = (method: string, params: Json) => {
+      this.inputChain = this.inputChain.then(() => this.cmd(method, params)).then(() => undefined).catch(() => undefined);
+    };
     switch (event.type) {
       case "mouseMove":
-        swallow(this.cmd("Input.dispatchMouseEvent", { type: "mouseMoved", x: event.x, y: event.y, modifiers }));
+        enqueue("Input.dispatchMouseEvent", { type: "mouseMoved", x: event.x, y: event.y, modifiers });
         break;
       case "mouseDown":
       case "mouseUp":
-        swallow(this.cmd("Input.dispatchMouseEvent", {
+        enqueue("Input.dispatchMouseEvent", {
           type: event.type === "mouseDown" ? "mousePressed" : "mouseReleased", x: event.x, y: event.y, modifiers,
           button: event.button ?? "left", clickCount: event.clickCount ?? 1,
-        }));
+        });
         break;
       case "mouseWheel":
-        swallow(this.cmd("Input.dispatchMouseEvent", { type: "mouseWheel", x: event.x, y: event.y, deltaX: event.deltaX ?? 0, deltaY: event.deltaY ?? 0, modifiers }));
+        // This WebContents-compatible entry point receives Electron wheel signs.
+        // CDP uses DOM signs (positive = right/down), the opposite convention.
+        enqueue("Input.dispatchMouseEvent", { type: "mouseWheel", x: event.x, y: event.y, deltaX: -(event.deltaX ?? 0), deltaY: -(event.deltaY ?? 0), modifiers });
         break;
       case "keyDown":
       case "keyUp": {
         const info = keyInfo(String(event.keyCode));
-        swallow(this.cmd("Input.dispatchKeyEvent", {
+        enqueue("Input.dispatchKeyEvent", {
           type: event.type === "keyDown" ? "rawKeyDown" : "keyUp", key: info.key, code: info.code,
           windowsVirtualKeyCode: info.vk, nativeVirtualKeyCode: info.vk, modifiers,
-        }));
+        });
         break;
       }
       case "char": {
         const info = keyInfo(String(event.keyCode));
         const text = info.text ?? info.key;
-        swallow(this.cmd("Input.dispatchKeyEvent", { type: "char", key: info.key, code: info.code, text, unmodifiedText: text, modifiers }));
+        enqueue("Input.dispatchKeyEvent", { type: "char", key: info.key, code: info.code, text, unmodifiedText: text, modifiers });
         break;
       }
       default:
         break;
     }
   }
-  insertText(text: string): void { this.cmd("Input.insertText", { text }).catch(() => undefined); }
+  insertText(text: string): void {
+    this.inputChain = this.inputChain.then(() => this.cmd("Input.insertText", { text })).then(() => undefined).catch(() => undefined);
+  }
   selectAll(): void {
     this.cmd("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: MODIFIER_BITS.meta, commands: ["selectAll"] })
       .then(() => this.cmd("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: MODIFIER_BITS.meta }))
       .catch(() => undefined);
   }
 
-  async captureJpeg({ maxWidth, quality }: { maxWidth: number; quality: number }): Promise<Buffer> {
-    if (!Number.isInteger(maxWidth) || maxWidth < 1 || maxWidth > 8192 || !Number.isInteger(quality) || quality < 1 || quality > 100) throw new Error("invalid_capture_options");
+  // density > 1 renders the still at that multiple of the page's own pixel density (a 1x agent page captured sharp).
+  async captureJpeg({ maxWidth, quality, density = 1 }: { maxWidth: number; quality: number; density?: number }): Promise<Buffer> {
+    if (!Number.isInteger(maxWidth) || maxWidth < 1 || maxWidth > 8192 || !Number.isInteger(quality) || quality < 1 || quality > 100 || !(density >= 1 && density <= 4)) throw new Error("invalid_capture_options");
     await this.ready;
     await this.viewportChange;
     const width = this.viewportWidth, height = this.viewportHeight;
     const shot = await this.cmd("Page.captureScreenshot", { format: "jpeg", quality, captureBeyondViewport: false,
-      clip: { x: 0, y: 0, width, height, scale: Math.min(1, maxWidth / width) } });
+      clip: { x: 0, y: 0, width, height, scale: Math.min(density, maxWidth / width) } });
     return Buffer.from(String(shot.data), "base64");
   }
 
@@ -459,7 +643,10 @@ class CdpWebContents {
     await this.ready;
     await this.viewportChange;
     this.screencast = onFrame;
-    await this.cmd("Page.startScreencast", { format: "jpeg", quality, maxWidth, maxHeight: Math.min(8192, Math.round(maxWidth * 2)), everyNthFrame: 1 });
+    // Agent mirrors are for progress visibility, not remote desktop control.
+    // Keep Chromium's initial-frame behavior intact; throttle at the consumer
+    // if mirror traffic needs further tuning.
+    await this.cmd("Page.startScreencast", { format: "jpeg", quality, maxWidth, maxHeight: Math.min(8192, Math.round(maxWidth * 2)) });
   }
   async stopScreencast(): Promise<void> {
     this.screencast = null;
@@ -467,8 +654,14 @@ class CdpWebContents {
     await this.cmd("Page.stopScreencast").catch(() => undefined);
   }
 
-  async capturePage(rect?: { x: number; y: number; width: number; height: number }): Promise<CdpImage> {
-    const clip = rect ? { clip: { ...rect, scale: 1 } } : {};
+  // rect defines WHAT to capture (logical viewport pixels); options.scale
+  // renders it smaller at capture time (Page.captureScreenshot clip.scale), so
+  // a bounded attachment costs fewer pixels without changing the layout the
+  // page sees. Geometry stays normalized, so callers keep the logical rect.
+  async capturePage(rect?: { x: number; y: number; width: number; height: number }, options?: { scale?: number }): Promise<CdpImage> {
+    const requested = options?.scale;
+    const scale = typeof requested === "number" && Number.isFinite(requested) && requested > 0 && requested <= 1 ? requested : 1;
+    const clip = rect ? { clip: { ...rect, scale } } : {};
     const shot = await this.cmd("Page.captureScreenshot", { format: "png", ...clip });
     const png = Buffer.from(String(shot.data), "base64");
     const size = pngSize(png);
@@ -484,6 +677,40 @@ class CdpWebContents {
     if (this.destroyed) return;
     await this.ready.catch(() => undefined);
     await this.rawCmd("Memory.forciblyPurgeJavaScriptMemory").catch(() => undefined);
+  }
+
+  // High-level API convenience helpers for direct agent/script usage
+  async evaluateJson<T = any>(expression: string): Promise<T> {
+    return this.evaluate(expression);
+  }
+
+  async clickAt(x: number, y: number): Promise<void> {
+    await this.ready;
+    await this.cmd("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+    await this.cmd("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  }
+
+  async typeText(text: string): Promise<void> {
+    await this.ready;
+    await this.cmd("Input.insertText", { text });
+  }
+
+  async scrollBy(deltaX: number, deltaY: number, x = 0, y = 0): Promise<void> {
+    await this.ready;
+    await this.cmd("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX, deltaY });
+  }
+
+  async waitForSelector(selector: string, timeoutMs = 10000): Promise<boolean> {
+    await this.ready;
+    const start = Date.now();
+    const cleanSelector = JSON.stringify(selector);
+    while (Date.now() - start < timeoutMs) {
+      if (this.destroyed) return false;
+      const found = await this.evaluate(`Boolean(document.querySelector(${cleanSelector}))`).catch(() => false);
+      if (found) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
   }
 
   close(): void {
@@ -529,4 +756,4 @@ function createCdpView(provider: () => Promise<CdpTransport>, options: CdpPageOp
   };
 }
 
-export = { createCdpView, CdpWebContents, connectCdpTransport, openCdpView, modifierMask, keyInfo, pngSize };
+export = { createCdpView, CdpWebContents, connectCdpTransport, openCdpView, mergeRequestHeaders, modifierMask, keyInfo, pngSize };

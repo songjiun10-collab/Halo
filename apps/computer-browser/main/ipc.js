@@ -26,7 +26,9 @@ const LEGACY_METHODS = [
 const HARNESS_METHODS = {
   "halo:createTask": "createTask",
   "halo:listTasks": "listTasks",
+  "halo:listHandoffs": "listHandoffs",
   "halo:resumeSavedTask": "resumeSavedTask",
+  "halo:discardSavedTask": "discardSavedTask",
   "halo:amendTask": "amendTask",
   "halo:confirmCriterion": "confirmCriterion",
   "halo:getTaskDetail": "getTaskDetail",
@@ -45,6 +47,14 @@ const HARNESS_METHODS = {
   "halo:taskBrowserAction": "taskBrowserAction",
   "halo:setTaskViewport": "setTaskViewport",
   "halo:getHostSettings": "getHostSettings",
+  "halo:grantEvaluateLease": "grantEvaluateLease",
+  "halo:revokeEvaluateLease": "revokeEvaluateLease",
+  "halo:getEvaluateAudit": "getEvaluateAudit",
+  "halo:listSessionSites": "listSessionSites",
+  "halo:forgetSessionSite": "forgetSessionSite",
+  "halo:setSessionSites": "setSessionSites",
+  "halo:grantTeamLease": "grantTeamLease",
+  "halo:revokeTeamLease": "revokeTeamLease",
   "halo:getUsage": "getUsage",
   "halo:setUsageLimit": "setUsageLimit",
   "halo:syncUsage": "syncUsage",
@@ -158,7 +168,7 @@ const SHARED_RUNTIME_METHODS = new Set(["setMemoryPolicy", "setLaunchAtLogin"]);
 //     snapshot (main/harness/background-runtime-ui.js).
 //   launchAgent: optional {isInstalled, enable, disable} for "start at
 //     login" (main/harness/background-launch-agent.js).
-module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNewWindow, launchAgentInstalled, launchAgent, captureAgentFrame, captureTaskFrame, sendTaskInput } = {}) {
+module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNewWindow, launchAgentInstalled, launchAgent, captureAgentFrame, openAgentFrameStream, captureTaskFrame, sendTaskInput } = {}) {
   const ipc = ipcMain || require("./desktop-runtime").ipcMain;
   let registry = registries.get(ipc);
   if (!registry) {
@@ -235,6 +245,20 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
     return Promise.resolve(captureAgentFrame(taskId));
   });
 
+  // Live version of the same read-only look: frames are pushed on "halo:agentFrame" ({ taskId, frame }).
+  // Answers false when the engine cannot stream, and the renderer keeps polling captureAgentFrame.
+  addHandler("halo:startAgentStream", (event, taskId) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:startAgentStream: rejected untrusted sender"));
+    if (typeof taskId !== "string" || !taskId || typeof openAgentFrameStream !== "function") return Promise.resolve(false);
+    return surfaceStreams.startAgent(owner.win, taskId, openAgentFrameStream);
+  });
+  addHandler("halo:stopAgentStream", (event) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:stopAgentStream: rejected untrusted sender"));
+    return surfaceStreams.stopAgent(owner.win);
+  });
+
   addHandler("halo:captureTaskFrame", (event, taskId) => {
     if (!findContext(event)) return Promise.reject(new Error("halo:captureTaskFrame: rejected untrusted sender"));
     if (typeof taskId !== "string" || !taskId || typeof captureTaskFrame !== "function") return Promise.resolve(null);
@@ -249,6 +273,53 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
     const owner = findContext(event);
     if (!owner) return Promise.reject(new Error("halo:sendSurfaceInput: rejected untrusted sender"));
     return Promise.resolve(owner.controlApi.sendSurfaceInput(input));
+  });
+
+  // Mod+F find. taskId null/undefined searches the user's own active tab;
+  // a taskId searches a taken-over task's visible page (fail-closed on both:
+  // direct requires a live tab and no in-flight agent action, task requires
+  // user ownership).
+  addHandler("halo:findInPage", (event, taskId, query, options) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:findInPage: rejected untrusted sender"));
+    if (typeof query !== "string") return Promise.reject(new Error("halo:findInPage: query must be a string"));
+    if (taskId !== null && taskId !== undefined) {
+      if (typeof taskId !== "string" || !taskId || typeof owner.taskHost?.findInPage !== "function") {
+        return Promise.resolve({ ok: false, found: false, errorCode: "surface_unavailable" });
+      }
+      return Promise.resolve(owner.taskHost.findInPage(taskId, query, options ?? {}));
+    }
+    if (typeof owner.controlApi?.findInPage !== "function") return Promise.resolve({ ok: false, found: false, errorCode: "surface_unavailable" });
+    return Promise.resolve(owner.controlApi.findInPage(query, options ?? {}));
+  });
+
+  // Mod+/Mod-/Mod+0. Same routing as find: the user's own tab, or a
+  // taken-over task page.
+  addHandler("halo:zoom", (event, taskId, request) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:zoom: rejected untrusted sender"));
+    if (taskId !== null && taskId !== undefined) {
+      if (typeof taskId !== "string" || !taskId || typeof owner.taskHost?.setZoom !== "function") {
+        return Promise.resolve({ ok: false, level: null, errorCode: "surface_unavailable" });
+      }
+      return Promise.resolve(owner.taskHost.setZoom(taskId, request ?? {}));
+    }
+    if (typeof owner.controlApi?.setZoom !== "function") return Promise.resolve({ ok: false, level: null, errorCode: "surface_unavailable" });
+    return Promise.resolve(owner.controlApi.setZoom(request ?? {}));
+  });
+
+  // Mod+C copy of the page's current selection. Same routing as find/zoom.
+  addHandler("halo:copySelection", (event, taskId) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:copySelection: rejected untrusted sender"));
+    if (taskId !== null && taskId !== undefined) {
+      if (typeof taskId !== "string" || !taskId || typeof owner.taskHost?.copySelection !== "function") {
+        return Promise.resolve({ ok: false, chars: 0, errorCode: "surface_unavailable" });
+      }
+      return Promise.resolve(owner.taskHost.copySelection(taskId));
+    }
+    if (typeof owner.controlApi?.copySelection !== "function") return Promise.resolve({ ok: false, chars: 0, errorCode: "surface_unavailable" });
+    return Promise.resolve(owner.controlApi.copySelection());
   });
 
   if (taskHost) registry.harnessEnabled = true;

@@ -7,7 +7,7 @@ const crypto = require("node:crypto");
 const MAX_BODY = 65_536;
 const EVENTS = {
     onEvent: "halo:event", onTaskEvent: "halo:taskEvent", onAgentRosterEvent: "halo:agentRosterEvent",
-    onRoomEvent: "halo:roomEvent", onBackgroundRuntimeEvent: "halo:backgroundRuntimeEvent", onSurfaceFrame: "halo:surfaceFrame",
+    onRoomEvent: "halo:roomEvent", onBackgroundRuntimeEvent: "halo:backgroundRuntimeEvent", onSurfaceFrame: "halo:surfaceFrame", onAgentFrame: "halo:agentFrame",
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".gif": "image/gif", ".woff2": "font/woff2", ".ico": "image/x-icon" };
 /** One window owns one private loopback origin. Remote pages never get this bridge. */
@@ -19,8 +19,19 @@ function createRendererBridge(options) {
     let origin = "";
     let started = false;
     let inflight = 0;
-    const cookieName = "halo_renderer";
-    const authenticated = (req) => (req.headers.cookie ?? "").split(/;\s*/).includes(`${cookieName}=${cookieToken}`);
+    // A random per-bridge cookie name, not a fixed "halo_renderer": cookies are
+    // host-scoped and ignore the port, so two windows on 127.0.0.1 would otherwise
+    // share one name and every bridge would receive the other windows' tokens.
+    const cookieName = `halo_renderer_${crypto.randomBytes(8).toString("hex")}`;
+    const timingSafeEqual = (a, b) => { const left = Buffer.from(a); const right = Buffer.from(b); return left.length === right.length && crypto.timingSafeEqual(left, right); };
+    const authenticated = (req) => {
+        for (const part of (req.headers.cookie ?? "").split(/;\s*/)) {
+            const eq = part.indexOf("=");
+            if (eq > 0 && part.slice(0, eq) === cookieName && timingSafeEqual(part.slice(eq + 1), cookieToken))
+                return true;
+        }
+        return false;
+    };
     const server = http.createServer((req, res) => { void handle(req, res).catch(() => { if (!res.headersSent)
         res.writeHead(500); res.end(); }); });
     server.headersTimeout = 10_000;
@@ -29,7 +40,7 @@ function createRendererBridge(options) {
 (() => {
   const capability = ${JSON.stringify(capability)};
   const listeners = new Map();
-  const api = { runtime: 'chromium', layout: Object.freeze(${JSON.stringify(options.layout)}) };
+  const api = { runtime: 'chromium', surfaceMode: ${JSON.stringify(options.remoteSurfaces ? "remote" : "native")}, layout: Object.freeze(${JSON.stringify(options.layout)}) };
   async function invoke(channel, args) {
     const response = await fetch('/rpc', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-halo-capability': capability }, body: JSON.stringify({ channel, args }) });
     if (!response.ok) throw new Error('Halo host request failed (' + response.status + ')');
@@ -57,11 +68,15 @@ function createRendererBridge(options) {
             res.end();
             return;
         }
-        res.setHeader("Cache-Control", "no-store");
+        const url = new URL(req.url ?? "/", origin);
+        const immutableAsset = /^\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\.(?:js|css|woff2|svg)$/.test(url.pathname);
+        // Vite emits content-hashed assets, so caching these across reloads is safe:
+        // a changed build gets a new URL. HTML and the per-window bridge carry live
+        // capabilities and must never be reused from cache.
+        res.setHeader("Cache-Control", immutableAsset ? "public, max-age=31536000, immutable" : "no-store");
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("Referrer-Policy", "no-referrer");
         res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; font-src 'self' data:; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
-        const url = new URL(req.url ?? "/", origin);
         if (req.method === "GET" && url.pathname === `/bootstrap/${cookieToken}`) {
             res.setHeader("Set-Cookie", `${cookieName}=${cookieToken}; HttpOnly; SameSite=Strict; Path=/`);
             res.writeHead(303, { Location: "/" });
@@ -74,7 +89,8 @@ function createRendererBridge(options) {
             return;
         }
         if (url.pathname === "/rpc" && req.method === "POST") {
-            if (req.headers.origin !== origin || req.headers["x-halo-capability"] !== capability || req.headers["content-type"] !== "application/json") {
+            const presented = req.headers["x-halo-capability"];
+            if (req.headers.origin !== origin || typeof presented !== "string" || !timingSafeEqual(presented, capability) || req.headers["content-type"] !== "application/json") {
                 res.writeHead(403);
                 res.end();
                 return;

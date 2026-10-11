@@ -14,7 +14,9 @@ const { launchFlags } = require("../main/harness/cdp-browser-host");
 
 test("Chromium bridge admits only its authenticated local renderer, and preserves RPC error codes", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-ui-"));
+  await fs.mkdir(path.join(root, "assets"));
   await fs.writeFile(path.join(root, "index.html"), '<html><head><meta http-equiv="Content-Security-Policy" content="default-src \'self\'; connect-src \'none\'" /></head><body>Halo</body></html>');
+  await fs.writeFile(path.join(root, "assets", "app-a1B2c3D4.js"), "export {};");
   const calls = [];
   const bridge = createRendererBridge({ root, methods: ["navigate"], layout: {}, invoke: async (channel, args) => {
     calls.push([channel, args]);
@@ -33,6 +35,10 @@ test("Chromium bridge admits only its authenticated local renderer, and preserve
   assert.doesNotMatch(html, /connect-src 'none'/, "a page-level CSP must not block the bridge's /rpc and /events");
   assert.match(page.headers.get("content-security-policy"), /connect-src 'self'/);
   const script = await (await fetch(`${origin}/halo-bridge.js`, { headers: { cookie } })).text();
+  assert.match(script, /surfaceMode: "native"/);
+  const asset = await fetch(`${origin}/assets/app-a1B2c3D4.js`, { headers: { cookie } });
+  assert.match(asset.headers.get("cache-control"), /max-age=31536000/);
+  assert.match(asset.headers.get("cache-control"), /immutable/);
   const capability = /const capability = "([a-f0-9]+)"/.exec(script)[1];
   const invoke = (args, other = {}) => fetch(`${origin}/rpc`, { method: "POST", headers: { cookie, origin, "content-type": "application/json", "x-halo-capability": capability, ...other }, body: JSON.stringify({ channel: "halo:navigate", args }) });
   assert.deepEqual(await (await invoke(["https://example.com"])).json(), { result: { ok: true } });
@@ -58,6 +64,18 @@ test("Chromium encrypted storage authenticates data and never falls back to plai
   assert.throws(() => storage.decryptString(Buffer.from("plain text")), /unsupported_ciphertext/);
 });
 
+test("attached Chromium renderer advertises remote browser surfaces", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-remote-ui-"));
+  await fs.writeFile(path.join(root, "index.html"), "<html><head></head><body>Halo</body></html>");
+  const bridge = createRendererBridge({ root, methods: [], layout: {}, remoteSurfaces: true, invoke: async () => null });
+  const { origin, url } = await bridge.start();
+  t.after(async () => { await bridge.close(); await fs.rm(root, { recursive: true }); });
+  const bootstrap = await fetch(url, { redirect: "manual" });
+  const cookie = bootstrap.headers.get("set-cookie").split(";")[0];
+  const script = await (await fetch(`${origin}/halo-bridge.js`, { headers: { cookie } })).text();
+  assert.match(script, /surfaceMode: "remote"/);
+});
+
 test("CDP session cookie operations stay inside their assigned browser context", async () => {
   const calls = [];
   const transport = { send: async (method, params, sessionId) => {
@@ -76,6 +94,29 @@ test("CDP session cookie operations stay inside their assigned browser context",
   assert.equal(calls.some(([method]) => method === "Storage.clearCookies"), false, "removing one cookie never clears unrelated cookies");
   assert.equal(calls[0][1].cookies[0].sameSite, "None");
   await assert.rejects(session.cookies.set({ url: "file:///etc/passwd", name: "a", value: "x" }));
+});
+
+test("clearing a Chromium session clears website storage only in that session context", async () => {
+  const calls = [];
+  const transport = { send: async (method, params = {}, sessionId) => {
+    calls.push([method, params, sessionId]);
+    if (method === "Target.getTargets") return { targetInfos: [
+      { targetId: "owned-page", type: "page", browserContextId: "agent-a", url: "https://example.test/" },
+      { targetId: "other-page", type: "page", browserContextId: "agent-b", url: "https://private.test/" },
+    ] };
+    if (method === "Target.attachToTarget") return { sessionId: "owned-session" };
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { url: "https://example.test/", childFrames: [
+      { url: "https://embedded.test/frame", childFrames: [] },
+    ] } } };
+    return {};
+  } };
+  const session = new CdpSession(async () => ({ transport, contextId: "agent-a" }));
+  await session.clearStorageData();
+  assert.ok(calls.some(([method, params]) => method === "Storage.clearCookies" && params.browserContextId === "agent-a"));
+  const cleared = calls.filter(([method]) => method === "Storage.clearDataForOrigin");
+  assert.deepEqual(cleared.map(([, params]) => params.origin).sort(), ["https://embedded.test", "https://example.test"]);
+  assert.ok(cleared.every(([, params, sessionId]) => params.storageTypes === "all" && sessionId === "owned-session"));
+  assert.equal(calls.some(([, params]) => params.browserContextId === "agent-b"), false);
 });
 
 test("Chromium human takeover accepts Unicode composition and rejects malformed input before dispatch", () => {
@@ -101,8 +142,14 @@ test("the desktop launch preserves installed extensions while agent launch keeps
   const desktop = launchFlags(undefined, false, "/private/profile", "/Applications/Chromium", { desktop: true, appUrl: "http://127.0.0.1:8123/" });
   assert.equal(desktop.includes("--disable-extensions"), false);
   assert.ok(desktop.includes("--app=http://127.0.0.1:8123/"));
+  assert.equal(desktop.includes("--disk-cache-size=1"), false, "the user's browser profile must retain Chromium's normal HTTP cache");
+  assert.equal(desktop.includes("--media-cache-size=1"), false, "the user's browser profile must retain media cache");
+  assert.ok(desktop.some((flag) => /^--halo-vibrancy-width=\d+$/.test(flag)), "the patched Chromium turns the leading column into native glass");
+  assert.ok(desktop.includes("--enable-features=GlassFrame,VizBufferQueueDiscardOnVisibilityChange"));
+  assert.equal(desktop.includes("--enable-automation"), false, "the UI window shows no automation infobar");
   const agent = launchFlags(undefined, true, "/private/agent", "/Applications/Chromium");
   assert.ok(agent.includes("--disable-extensions"));
+  assert.ok(agent.includes("--disk-cache-size=1"), "isolated agent contexts keep their bounded cache profile");
   assert.equal(agent.some((flag) => flag.startsWith("--app=")), false);
   assert.throws(() => launchFlags(undefined, false, "/private/profile", "/Applications/Chromium", { desktop: true, appUrl: "https://attacker.example/" }), /invalid_app_url/);
 });
@@ -111,4 +158,23 @@ test("the Chromium runtime can be loaded by Node without resolving Electron", ()
   const { execFileSync } = require("node:child_process");
   const script = `const Module=require('node:module'); const load=Module._load; Module._load=function(name,...args){if(name==='electron')throw new Error('Electron loaded');return load.call(this,name,...args)};process.env.HALO_DESKTOP_RUNTIME='chromium';const desktop=require('./main/desktop-runtime');const {AgentViewportHost}=require('./main/harness/agent-viewport-host');const {ControlApi}=require('./main/control-api');require('./main/ipc');console.log(desktop.isChromium,typeof AgentViewportHost,typeof ControlApi);`;
   assert.equal(execFileSync(process.execPath, ["-e", script], { cwd: path.resolve(__dirname, ".."), encoding: "utf8" }).trim(), "true function function");
+});
+
+test("an unconfigured Node host fails explicitly instead of loading another desktop runtime", () => {
+  const { execFileSync } = require("node:child_process");
+  const script = `const Module=require('node:module');const load=Module._load;Module._load=function(name,...args){if(name==='electron')throw new Error('unexpected Electron load');return load.call(this,name,...args)};delete process.env.HALO_DESKTOP_RUNTIME;try{require('./main/desktop-runtime')}catch(error){console.log(error.code);process.exitCode=error.code==='desktop_runtime_not_selected'?0:1}`;
+  assert.equal(execFileSync(process.execPath, ["-e", script], { cwd: path.resolve(__dirname, ".."), encoding: "utf8" }).trim(), "desktop_runtime_not_selected");
+});
+
+test("desktop loads only explicit unpacked extensions and the agent browser never does", () => {
+  const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "halo-ext-"));
+  fs.writeFileSync(path.join(dir, "manifest.json"), "{}");
+  try {
+    const flags = launchFlags(undefined, false, "/private/profile", "/Applications/Chromium", { desktop: true, extensionDirs: [dir] });
+    assert.ok(flags.includes(`--load-extension=${dir}`));
+    assert.throws(() => launchFlags(undefined, true, "/private/agent", "/Applications/Chromium", { extensionDirs: [dir] }), /invalid_extension/);
+    assert.throws(() => launchFlags(undefined, false, "/p", "/A", { desktop: true, extensionDirs: ["relative"] }), /invalid_extension/);
+    assert.throws(() => launchFlags(undefined, false, "/p", "/A", { desktop: true, extensionDirs: ["/nonexistent/x"] }), /invalid_extension/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

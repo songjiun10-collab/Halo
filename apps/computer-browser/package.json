@@ -2,19 +2,18 @@
   "name": "halo-computer-browser",
   "version": "0.1.0-beta",
   "private": true,
-  "description": "Computer-use browser research extension for Halo. main/preload/approver are owned by Claude (runtime + approve/execute boundary); renderer/ is owned by Codex (UI). See docs/superpowers/specs/2026-09-26-computer-use-browser-design.md.",
+  "description": "Chromium-first computer-use browser and research runtime for Halo, with a local Node.js host and authenticated Chromium renderer bridge.",
   "main": "main/index.js",
   "scripts": {
     "build:runtime": "node tools/build-runtime.js",
     "check:runtime": "node tools/build-runtime.js --check",
     "build": "npm run check:runtime && npm --prefix ../../frontend run build",
     "start": "npm run build && node tools/start-chromium.js",
-    "start:electron": "npm run build && electron .",
     "start:chromium": "npm run build && node tools/start-chromium.js",
     "start:chromium:service": "npm run check:runtime && node tools/start-chromium.js --halo-background-service",
     "test": "npm run check:runtime && node --test",
     "typecheck": "tsc -p tsconfig.audit.json && tsc -p tsconfig.runtime.json --noEmit && tsc -p tsconfig.runtime-harness.json --noEmit && tsc -p tsconfig.runtime-integration.json --noEmit",
-    "test:renderer:e2e": "npm run build && electron integration/phase2-renderer-electron.js"
+    "test:renderer:e2e": "npm run build && node --test test/chromium-renderer-e2e.test.js"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

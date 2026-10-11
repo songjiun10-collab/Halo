@@ -171,3 +171,43 @@ test("hung dispatch times out as uncertain and bars new observation until its re
   await assert.rejects(p.browser.observe(), { code: "interaction_pending" });
   complete({ status: "ok" }); await Promise.resolve();
 });
+
+test("evaluate runs one expression in the isolated world and returns its JSON value", async () => {
+  const p = page();
+  assert.equal(p.browser.supportsAction("evaluate"), true);
+  const ok = await p.browser.execute({ type: "evaluate", expression: "document.title" });
+  assert.equal(ok.status, "ok");
+  assert.equal(ok.evaluateResult.value, "Test");
+  assert.equal(ok.evaluateResult.truncated, false);
+  const throwing = await p.browser.execute({ type: "evaluate", expression: "missingVar.foo" });
+  assert.equal(throwing.status, "uncertain");
+  assert.equal(throwing.errorCode, "evaluate_threw");
+  const cyclic = await p.browser.execute({ type: "evaluate", expression: "(() => { const o = {}; o.self = o; return o; })()" });
+  assert.equal(cyclic.status, "uncertain");
+  assert.equal(cyclic.errorCode, "evaluate_not_serializable");
+  const long = await p.browser.execute({ type: "evaluate", expression: "'x'.repeat(5000)" });
+  assert.equal(long.status, "ok");
+  assert.equal(long.evaluateResult.truncated, true);
+  assert.ok(Buffer.byteLength(long.evaluateResult.value, "utf8") <= 4096);
+  for (const expression of ["", "x".repeat(2001), "€".repeat(1500), null, 7]) {
+    assert.equal((await p.browser.execute({ type: "evaluate", expression })).errorCode, "invalid_expression");
+  }
+  // A statement is not an expression: the script fails to parse, so nothing
+  // ever executes.
+  assert.equal((await p.browser.execute({ type: "evaluate", expression: "while (true) {}" })).errorCode, "evaluate_uncertain");
+});
+
+test("evaluate is refused without a lease when the adapter has evaluate leases, and audited", async () => {
+  const { EvaluateLeases } = require("../main/harness/evaluate-lease");
+  const leases = new EvaluateLeases({ maxUses: 1 });
+  const p = page({ evaluateLeases: leases, taskId: "task-a" });
+  const denied = await p.browser.execute({ type: "evaluate", expression: "document.title" });
+  assert.equal(denied.status, "failed");
+  assert.equal(denied.errorCode, "evaluate_not_leased");
+  leases.grant("task-a", "https://example.test", "read title");
+  const ok = await p.browser.execute({ type: "evaluate", expression: "document.title" });
+  assert.equal(ok.status, "ok");
+  const spent = await p.browser.execute({ type: "evaluate", expression: "document.title" });
+  assert.equal(spent.errorCode, "evaluate_not_leased");
+  assert.deepEqual(leases.audit().map((e) => e.type), ["denied", "grant", "use", "denied"]);
+});

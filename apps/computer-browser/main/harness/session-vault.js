@@ -62,7 +62,29 @@ function createSessionVault(options) {
             return false;
         }
     }
+    // A "site" is the cookie domain without a leading dot or "www."; an allowed site also covers its subdomains.
+    const siteOf = (domain) => domain.replace(/^\./, "").replace(/^www\./, "").toLowerCase();
+    const covers = (allowed, domain) => { const site = siteOf(domain); return site === allowed || site.endsWith(`.${allowed}`); };
+    // null (or never set) = persist every site, which is the previous behavior.
+    const allowedSites = new Map();
     return Object.freeze({
+        setAllowedSites(partition, sites) {
+            const uuid = uuidOf(partition);
+            if (!uuid)
+                return;
+            allowedSites.set(uuid, Array.isArray(sites) ? sites.map((site) => siteOf(String(site))) : null);
+        },
+        async listSites(partition) {
+            const counts = new Map();
+            for (const cookie of await this.load(partition))
+                counts.set(siteOf(cookie.domain), (counts.get(siteOf(cookie.domain)) ?? 0) + 1);
+            return [...counts].map(([site, cookieCount]) => ({ site, cookieCount })).sort((a, b) => a.site.localeCompare(b.site));
+        },
+        async forgetSite(partition, site) {
+            const target = siteOf(String(site));
+            const kept = (await this.load(partition)).filter((cookie) => !covers(target, cookie.domain));
+            return this.save(partition, kept, { replace: true });
+        },
         isPersistentPartition(partition) { return uuidOf(partition) !== null; },
         async load(partition) {
             const uuid = uuidOf(partition);
@@ -94,8 +116,11 @@ function createSessionVault(options) {
                 return [];
             }
         },
-        save(partition, cookies) {
+        save(partition, cookies, options = {}) {
             const uuid = uuidOf(partition);
+            const allowed = uuid && !options.replace ? allowedSites.get(uuid) ?? null : null;
+            if (allowed && Array.isArray(cookies))
+                cookies = cookies.filter((cookie) => allowed.some((site) => covers(site, cookie.domain)));
             if (!uuid || !Array.isArray(cookies) || cookies.length > MAX_COOKIES || !encryptionAvailable() || unreadable.has(uuid))
                 return Promise.resolve(false);
             // One write at a time per partition so an older save can never land after a newer one.

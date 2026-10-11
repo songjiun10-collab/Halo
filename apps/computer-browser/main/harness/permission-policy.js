@@ -10,12 +10,17 @@ class PermissionPolicyError extends Error {
 
 const PERMISSION_MODES = Object.freeze(["observe", "browse", "interact", "full"]);
 const ACTIONS = Object.freeze([
-  "observe", "scroll", "navigate", "follow_link", "click", "type", "click_at", "type_at", "press_key", "submit_form", "download",
+  "observe", "scroll", "find", "zoom", "select_all", "copy", "navigate", "follow_link", "click", "type", "click_at", "type_at", "press_key", "submit_form", "download", "evaluate",
 ]);
 const ACTION_SET = new Set(ACTIONS);
-const READ_ONLY = new Set(["observe", "scroll"]);
+const READ_ONLY = new Set(["observe", "scroll", "find", "zoom", "select_all"]);
 const BROWSE_ACTIONS = new Set([...READ_ONLY, "navigate", "follow_link"]);
-const INTERACT_ACTIONS = new Set(["click", "type", "click_at", "type_at", "press_key"]);
+// evaluate runs page JavaScript, so it always needs a human even though it
+// only reads by default: a lease can never authorize it (see
+// capability-lease.js LEASE_ACTIONS) and observe/browse cannot propose it.
+// copy writes the OS clipboard (a user-side effect), so it is human-gated
+// like the other interact actions.
+const INTERACT_ACTIONS = new Set(["click", "type", "click_at", "type_at", "press_key", "evaluate", "copy"]);
 const FULL_ACTIONS = new Set([...BROWSE_ACTIONS, ...INTERACT_ACTIONS, "submit_form"]);
 
 function evaluateActionPolicy(mode, action) {

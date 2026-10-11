@@ -1,0 +1,249 @@
+{
+  "arm": "electron",
+  "warmup": {
+    "arm": "electron",
+    "rows": [
+      {
+        "schemaVersion": 1,
+        "harness": "halo-accuracy",
+        "taskId": "specs-retrieval",
+        "kind": "retrieval",
+        "verdict": "pass",
+        "reason": "reported the chip, display and memory the current specs state",
+        "ending": "paused",
+        "pauseReason": "need_user",
+        "answer": "M4, 11-inch, 16GB.",
+        "finalUrl": "http://127.0.0.1:51945/specs",
+        "plannerCalls": 2,
+        "actionsUsed": 1,
+        "pageRequests": 2,
+        "wallMs": 290,
+        "summary": {
+          "total": 3,
+          "graded": 3,
+          "passed": 3,
+          "failed": 0,
+          "blocked": 0,
+          "inconclusive": 0,
+          "unclassified": 0,
+          "passRate": 1,
+          "reportable": true,
+          "caveat": "every run was graded"
+        }
+      },
+      {
+        "schemaVersion": 1,
+        "harness": "halo-accuracy",
+        "taskId": "walkthrough-navigation",
+        "kind": "navigation",
+        "verdict": "pass",
+        "reason": "reached chapter 2",
+        "ending": "awaiting_verification",
+        "pauseReason": null,
+        "answer": "",
+        "finalUrl": "http://127.0.0.1:51945/walkthrough/2",
+        "plannerCalls": 2,
+        "actionsUsed": 1,
+        "pageRequests": 2,
+        "wallMs": 152,
+        "summary": {
+          "total": 3,
+          "graded": 3,
+          "passed": 3,
+          "failed": 0,
+          "blocked": 0,
+          "inconclusive": 0,
+          "unclassified": 0,
+          "passRate": 1,
+          "reportable": true,
+          "caveat": "every run was graded"
+        }
+      },
+      {
+        "schemaVersion": 1,
+        "harness": "halo-accuracy",
+        "taskId": "returns-multihop-navigation",
+        "kind": "navigation",
+        "verdict": "pass",
+        "reason": "walked Support -> Shipping -> Returns",
+        "ending": "awaiting_verification",
+        "pauseReason": null,
+        "answer": "",
+        "finalUrl": "http://127.0.0.1:51945/support/shipping/returns",
+        "plannerCalls": 4,
+        "actionsUsed": 3,
+        "pageRequests": 4,
+        "wallMs": 3160,
+        "summary": {
+          "total": 3,
+          "graded": 3,
+          "passed": 3,
+          "failed": 0,
+          "blocked": 0,
+          "inconclusive": 0,
+          "unclassified": 0,
+          "passRate": 1,
+          "reportable": true,
+          "caveat": "every run was graded"
+        }
+      }
+    ],
+    "summary": {
+      "total": 3,
+      "graded": 3,
+      "passed": 3,
+      "failed": 0,
+      "blocked": 0,
+      "inconclusive": 0,
+      "unclassified": 0,
+      "passRate": 1,
+      "reportable": true,
+      "caveat": "every run was graded"
+    },
+    "metrics": {
+      "observe": {
+        "calls": 8,
+        "ms": 15.58233300000029
+      },
+      "execute": {
+        "calls": 8,
+        "ms": 386.4277520000014,
+        "byAction": {
+          "navigate": {
+            "calls": 4,
+            "ms": 343.88416800000095
+          },
+          "follow_link": {
+            "calls": 4,
+            "ms": 42.543584000000465
+          }
+        }
+      }
+    },
+    "wallMs": 5117.612125000001
+  },
+  "runs": [
+    {
+      "arm": "electron",
+      "rows": [
+        {
+          "schemaVersion": 1,
+          "harness": "halo-accuracy",
+          "taskId": "specs-retrieval",
+          "kind": "retrieval",
+          "verdict": "pass",
+          "reason": "reported the chip, display and memory the current specs state",
+          "ending": "paused",
+          "pauseReason": "need_user",
+          "answer": "M4, 11-inch, 16GB.",
+          "finalUrl": "http://127.0.0.1:51952/specs",
+          "plannerCalls": 2,
+          "actionsUsed": 1,
+          "pageRequests": 2,
+          "wallMs": 162,
+          "summary": {
+            "total": 3,
+            "graded": 3,
+            "passed": 3,
+            "failed": 0,
+            "blocked": 0,
+            "inconclusive": 0,
+            "unclassified": 0,
+            "passRate": 1,
+            "reportable": true,
+            "caveat": "every run was graded"
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "harness": "halo-accuracy",
+          "taskId": "walkthrough-navigation",
+          "kind": "navigation",
+          "verdict": "pass",
+          "reason": "reached chapter 2",
+          "ending": "awaiting_verification",
+          "pauseReason": null,
+          "answer": "",
+          "finalUrl": "http://127.0.0.1:51952/walkthrough/2",
+          "plannerCalls": 2,
+          "actionsUsed": 1,
+          "pageRequests": 2,
+          "wallMs": 141,
+          "summary": {
+            "total": 3,
+            "graded": 3,
+            "passed": 3,
+            "failed": 0,
+            "blocked": 0,
+            "inconclusive": 0,
+            "unclassified": 0,
+            "passRate": 1,
+            "reportable": true,
+            "caveat": "every run was graded"
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "harness": "halo-accuracy",
+          "taskId": "returns-multihop-navigation",
+          "kind": "navigation",
+          "verdict": "pass",
+          "reason": "walked Support -> Shipping -> Returns",
+          "ending": "awaiting_verification",
+          "pauseReason": null,
+          "answer": "",
+          "finalUrl": "http://127.0.0.1:51952/support/shipping/returns",
+          "plannerCalls": 4,
+          "actionsUsed": 3,
+          "pageRequests": 4,
+          "wallMs": 3170,
+          "summary": {
+            "total": 3,
+            "graded": 3,
+            "passed": 3,
+            "failed": 0,
+            "blocked": 0,
+            "inconclusive": 0,
+            "unclassified": 0,
+            "passRate": 1,
+            "reportable": true,
+            "caveat": "every run was graded"
+          }
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "graded": 3,
+        "passed": 3,
+        "failed": 0,
+        "blocked": 0,
+        "inconclusive": 0,
+        "unclassified": 0,
+        "passRate": 1,
+        "reportable": true,
+        "caveat": "every run was graded"
+      },
+      "metrics": {
+        "observe": {
+          "calls": 8,
+          "ms": 10.996123000000807
+        },
+        "execute": {
+          "calls": 8,
+          "ms": 351.84316800000124,
+          "byAction": {
+            "navigate": {
+              "calls": 4,
+              "ms": 304.520168
+            },
+            "follow_link": {
+              "calls": 4,
+              "ms": 47.32300000000123
+            }
+          }
+        }
+      },
+      "wallMs": 4960.856167
+    }
+  ]
+}
