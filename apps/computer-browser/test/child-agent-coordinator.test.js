@@ -1738,3 +1738,47 @@ test("getPlanSummary() reports each child's lastNote from the team board", async
   await parent.close();
   await Promise.all(childStores.map((s) => s.close()));
 });
+
+test("real Chromium: what a team observes on a live page is shared in-team, sent cross-team under a lease, and metered", { skip: !require("../main/harness/cdp-browser-host").findChromium() && "no Chromium binary", timeout: 60000 }, async (t) => {
+  const http = require("node:http");
+  const { acquireCdpBrowser } = require("../main/harness/cdp-browser-host");
+  const { openCdpView } = require("../main/harness/cdp-web-contents");
+  const { BrowserAdapter } = require("../main/harness/browser-adapter");
+  const { TeamBudgets } = require("../main/harness/team-budgets");
+  const server = http.createServer((_request, response) => { response.setHeader("content-type", "text/html"); response.end("<title>Prices</title><h1>Widget costs 42 USD</h1>"); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let browser;
+  let view;
+  t.after(async () => { view?.closeConnection(); if (browser) await browser.close(); await new Promise((resolve) => server.close(resolve)); });
+  browser = await acquireCdpBrowser({ headless: true, startupTimeoutMs: 15000 });
+  view = await openCdpView(browser.wsUrl, { width: 900, height: 600 });
+  const adapter = new BrowserAdapter({ view });
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/` })).status, "ok");
+  const observed = (await adapter.observe()).elements.map((element) => element.name ?? "").join(" ");
+  const finding = /Widget costs 42 USD/.exec(observed)?.[0];
+  assert.ok(finding, "the live page was observed");
+
+  const storageRoot = await mkTempRoot();
+  const budgets = new TeamBudgets({ perTeam: { messages: 3 }, crossTeam: { messages: 1 }, pool: { messages: 0 } });
+  const coordinator = new ChildAgentCoordinator({ storageRoot, teamBudgets: budgets });
+  const a = await setUpAcceptedPlan(coordinator, storageRoot);
+  const b = await setUpAcceptedPlan(coordinator, storageRoot);
+
+  // item 5: in-team, the observation reaches every sibling and the lead
+  const shared = await coordinator.broadcastToTeam(a.childIds[0], { text: finding, idempotencyKey: "live-1" });
+  assert.equal(shared.length, a.childIds.length);
+  // item 6: cross-team only under a lease, lead to lead
+  await assert.rejects(coordinator.requestTeamHelp(a.parent.taskId, { toTeamId: b.parent.taskId, text: finding, idempotencyKey: "live-2" }), { code: "no_lease" });
+  coordinator.grantTeamLease(a.parent.taskId, b.parent.taskId, "share the price");
+  const helped = await coordinator.requestTeamHelp(a.parent.taskId, { toTeamId: b.parent.taskId, text: finding, idempotencyKey: "live-2" });
+  assert.equal(helped.recipientTaskId, b.parent.taskId);
+  assert.match(coordinator.listTeamConversation(a.parent.taskId, b.parent.taskId)[0].text ?? JSON.stringify(coordinator.listTeamConversation(a.parent.taskId, b.parent.taskId)[0]), /42 USD/);
+  // item 7: the cross-team budget is spent, and cancelling returns the team's budget
+  await assert.rejects(coordinator.requestTeamHelp(a.parent.taskId, { toTeamId: b.parent.taskId, text: "again", idempotencyKey: "live-3" }), (error) => ["budget_exhausted", "deadlock"].includes(error.code));
+  await coordinator.cancelPlan(a.parent.taskId, "done", { parentStore: a.parent });
+  assert.throws(() => budgets.remaining(a.parent.taskId), { code: "unknown_team" });
+
+  await a.parent.close(); await b.parent.close();
+  await Promise.all([...a.childStores, ...b.childStores].map((s) => s.close()));
+});
