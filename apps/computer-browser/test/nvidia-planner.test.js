@@ -133,3 +133,16 @@ test("a proposal that omits taskId/goalVersion is completed from the host contex
   await assert.rejects(none.start({}), { code: "invalid_proposal" });
   await Promise.all([bridge.close(), inferred.close(), wrong.close(), none.close()]);
 });
+
+test("a proposal that omits basedOnObservationId is completed from context.observation.id, a present one is kept", async () => {
+  const { NvidiaPlannerBridge } = require("../main/harness/providers/nvidia-planner-bridge");
+  const { basedOnObservationId, ...bare } = proposal;
+  const context = { goal: { taskId: proposal.taskId, goalVersion: proposal.goalVersion }, observation: { id: basedOnObservationId } };
+  const fill = new NvidiaPlannerBridge({ apiKey: "test-only", fetchFn: async () => reply(JSON.stringify(bare)) });
+  assert.deepEqual(await fill.start(context), proposal);
+  const keep = new NvidiaPlannerBridge({ apiKey: "test-only", fetchFn: async () => reply(JSON.stringify({ ...bare, basedOnObservationId: "obs-own" })) });
+  assert.equal((await keep.start(context)).basedOnObservationId, "obs-own");
+  const none = new NvidiaPlannerBridge({ apiKey: "test-only", fetchFn: async () => reply(JSON.stringify(bare)) });
+  await assert.rejects(none.start({ goal: context.goal }), { code: "invalid_proposal" });
+  await Promise.all([fill.close(), keep.close(), none.close()]);
+});
