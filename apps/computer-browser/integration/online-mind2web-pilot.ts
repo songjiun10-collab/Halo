@@ -180,7 +180,7 @@ async function runTask(task: Task, output: string, repeat = 0) {
       args:[launch.worker,"--model",PILOT_MODEL],
       ...(launch.env ? {env:launch.env} : {}),
       cwd:path.resolve(__dirname,".."),timeoutMs:60000,onUsage:(usage: any)=>usages.push(usage)});
-    controller = new TaskController({store,browser,permissionMode:PERMISSION_MODE,harnessProfile:"middle",plannerEffort:"medium",
+    controller = new TaskController({store,browser,permissionMode:PERMISSION_MODE,harnessProfile:"middle",plannerEffort:"medium",finishEvidenceRejections:1,
       approve:pilotDecision,hostVerifier:()=>false,
       planner:{close:()=>planner.close(),next:async(context: any, options: any)=>{
         calls++; contextBytes += Buffer.byteLength(JSON.stringify(context));
@@ -232,8 +232,8 @@ async function main() {
   const rows=JSON.parse(bytes.toString("utf8"));
   const compare=process.env.HALO_PILOT_SET==="compare20";
   const repeats=compare&&Number(process.env.HALO_PILOT_REPEATS)>0?Math.min(Number(process.env.HALO_PILOT_REPEATS),5):1;
-  const only=process.env.HALO_PILOT_ONLY;
-  const tasks=(compare?selectCompareTasks(rows):selectPilotTasks(rows)).filter(task=>!only||task.task_id.startsWith(only));
+  const only=process.env.HALO_PILOT_ONLY?.split(",").map(v=>v.trim()).filter(Boolean);
+  const tasks=(compare?selectCompareTasks(rows):selectPilotTasks(rows)).filter(task=>!only?.length||only.some(prefix=>task.task_id.startsWith(prefix)));
   const output=await fs.mkdtemp(path.join(os.homedir(),"Downloads","halo-online-mind2web-"));
   await fs.chmod(output,0o700);
   const manifest={schemaVersion:1,datasetSha256:EXPECTED_SHA,taskIds:tasks.map(t=>t.task_id),model:PILOT_MODEL,plannerProvider:PILOT_PROVIDER,
