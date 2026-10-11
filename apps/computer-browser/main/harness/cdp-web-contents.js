@@ -396,7 +396,9 @@ class CdpWebContents {
                     this.httpStatus = Number.isInteger(params.response?.status) ? params.response.status : null;
                 break;
             case "Page.frameNavigated":
-                if (!params.frame?.parentId) {
+                // A request vetoed at the Fetch boundary leaves Chromium on its error page;
+                // Electron's synchronous veto never navigates, so the page keeps its URL.
+                if (!params.frame?.parentId && !String(params.frame?.url ?? "").startsWith("chrome-error://")) {
                     this.url = params.frame.url;
                     this.mainFrameId = params.frame.id;
                     if (typeof params.frame.loaderId === "string" && params.frame.loaderId)
