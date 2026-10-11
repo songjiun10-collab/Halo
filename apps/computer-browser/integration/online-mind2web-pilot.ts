@@ -27,14 +27,17 @@ const PERMISSION_MODE = PILOT_SCOPE === "full" ? "full" : "browse";
 // NVIDIA worker. The NVIDIA key is read from the app's own key store (never
 // from argv, never written to an artifact) unless NVIDIA_API_KEY is already in
 // the environment.
-const PILOT_PROVIDER = process.env.HALO_PILOT_PROVIDER === "nvidia" ? "nvidia" : "codex";
-const PILOT_MODEL = process.env.HALO_PILOT_MODEL || (PILOT_PROVIDER === "nvidia" ? "deepseek-ai/deepseek-v4.1-flash" : "gpt-6-luna");
+// HALO_PILOT_PROVIDER=claude runs the Claude Code worker with the operator'"'"'s own logged-in `claude` CLI
+// (their personal account; nothing is shared or proxied).
+const PILOT_PROVIDER = process.env.HALO_PILOT_PROVIDER === "nvidia" ? "nvidia" : process.env.HALO_PILOT_PROVIDER === "claude" ? "claude" : "codex";
+const PILOT_MODEL = process.env.HALO_PILOT_MODEL || (PILOT_PROVIDER === "nvidia" ? "deepseek-ai/deepseek-v4.1-flash" : PILOT_PROVIDER === "claude" ? "claude-haiku-5-5" : "gpt-6-luna");
 // Per-task active budget in ms; the value actually used is recorded in both
 // run.json and manifest.json. A slow model can need more wall time than the
 // Codex default, and comparing runs across models requires knowing this number.
 const PILOT_MAX_ACTIVE_MS = Number(process.env.HALO_PILOT_MAX_ACTIVE_MS) > 0 ? Number(process.env.HALO_PILOT_MAX_ACTIVE_MS) : 180000;
 
 async function plannerLaunch() {
+  if (PILOT_PROVIDER === "claude") return { worker: path.resolve(__dirname, "../main/harness/providers/claude-code-worker.js"), env: undefined };
   if (PILOT_PROVIDER !== "nvidia") return { worker: path.resolve(__dirname, "../main/harness/providers/codex-planner-worker.js"), env: undefined };
   let key = process.env.NVIDIA_API_KEY;
   if (!key) {

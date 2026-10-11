@@ -31,6 +31,15 @@ const CLAUDE = Object.freeze({
     max: "At max effort, tie every proposal to a criterion; do not start extra review rounds or expand scope.",
     ultra: "At the highest available effort, tie every proposal to a criterion; do not start extra review rounds or expand scope.",
   }),
+  "claude-haiku-5-5": Object.freeze({
+    base: "Haiku 5.5 is HALO's latency-oriented profile: prefer a direct proposal grounded in the current observation. Never propose observe twice in a row: an observe-only proposal only re-reads a page you already have. Once the page shows what the goal asks for, record it with ONE observe action that lists the criterionId; on the very next turn propose kind \"finish\" with the evidenceIds from context.progress.criteriaStatus (evidence still pending host review is what finish uses), and never observe again. If the page does not show it yet, act (scroll, click, search, follow a link), using the site's own search before giving up or asking the person.",
+    low: "At low effort, choose one clear next step and use the next host observation to resolve uncertainty.",
+    medium: "At medium effort, batch only independent actions already supported by the observation; keep dependent steps for the next turn.",
+    high: "At high effort, use extra reasoning only for the criterion's actual ambiguity; keep the action path short and verify with host evidence.",
+    xhigh: "At xhigh, do not add speculative exploration; keep the proposal short.",
+    max: "At max, do not add speculative exploration; keep the proposal short.",
+    ultra: "At the highest available effort, do not add speculative exploration; keep the proposal short.",
+  }),
   "claude-haiku-4-5-20251001": Object.freeze({
     base: "Haiku 4.5 is HALO's latency-oriented profile. Prefer a direct, low-token proposal grounded in the current observation; do not spend calls re-reading known state. Never trade away a required criterion, evidence check, or human approval for speed.",
     low: "At low effort, choose one clear next step instead of constructing a speculative multi-step route; use the next host observation to resolve uncertainty.",

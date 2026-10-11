@@ -147,3 +147,8 @@ test("a proposal that omits basedOnObservationId is completed from context.obser
   await assert.rejects(none.start({ goal: context.goal }), { code: "invalid_proposal" });
   await Promise.all([fill.close(), keep.close(), none.close()]);
 });
+
+test("Haiku 5.5 guidance forbids back-to-back observe-only proposals", () => {
+  const { getModelPromptGuidance } = require("../main/harness/providers/model-prompt-guidance");
+  assert.match(getModelPromptGuidance("claude", "claude-haiku-5-5"), /never propose observe twice in a row/i);
+});
