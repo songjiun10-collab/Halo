@@ -101,7 +101,7 @@ function actionStep(index: number, action: any, beforeUrl: string, result: any) 
 async function captureTerminalEvidence(view: any, dir: string, snapshot: any) {
   if (!view?.webContents || typeof view.webContents.capturePage !== "function") return { captureError: "terminal_capture_unavailable" };
   try {
-    const image = await view.webContents.capturePage();
+    const image = await view.webContents.capturePage().catch((error: any) => { console.error(`exec_throw capture_failed ${action.type} ${error?.code ?? error?.message}`); throw error; });
     if (!image || typeof image.toPNG !== "function" || typeof image.getSize !== "function") throw new Error("terminal_capture_invalid");
     const png = image.toPNG();
     const size = image.getSize();
@@ -135,7 +135,7 @@ async function runTask(task: Task, output: string, repeat = 0) {
   let snapshot: any, terminalProposal: any = null, terminalEvidence: any = null, errorCode: string | null = null;
   let recordingError = false;
   const recordExecution = async (action: any, invoke: () => Promise<any>) => {
-    if (!PERMITTED_ACTIONS.has(action.type)) throw new Error("benchmark_scope_denied");
+    if (!PERMITTED_ACTIONS.has(action.type)) { console.error(`exec_throw scope_denied ${action.type}`); throw new Error("benchmark_scope_denied"); }
     const index = actions.length;
     const before = view.webContents.getURL();
     // Fail closed: a missing screenshot must not silently create an unrecorded action.
@@ -144,7 +144,7 @@ async function runTask(task: Task, output: string, repeat = 0) {
     const t0 = benchClock.now();
     let result: any;
     try { result = await invoke(); }
-    catch (error: any) { result = {status:"execution_uncertain",errorCode:error?.code ?? "execution_throw"}; throw error; }
+    catch (error: any) { console.error(`exec_throw invoke_failed ${action.type} ${error?.code ?? error?.message}`); result = {status:"execution_uncertain",errorCode:error?.code ?? "execution_throw"}; throw error; }
     finally {
       const step = actionStep(index,action,before,result);
       actions.push(step);
@@ -222,7 +222,8 @@ async function main() {
   const rows=JSON.parse(bytes.toString("utf8"));
   const compare=process.env.HALO_PILOT_SET==="compare20";
   const repeats=compare&&Number(process.env.HALO_PILOT_REPEATS)>0?Math.min(Number(process.env.HALO_PILOT_REPEATS),5):1;
-  const tasks=compare?selectCompareTasks(rows):selectPilotTasks(rows);
+  const only=process.env.HALO_PILOT_ONLY;
+  const tasks=(compare?selectCompareTasks(rows):selectPilotTasks(rows)).filter(task=>!only||task.task_id.startsWith(only));
   const output=await fs.mkdtemp(path.join(os.homedir(),"Downloads","halo-online-mind2web-"));
   await fs.chmod(output,0o700);
   const manifest={schemaVersion:1,datasetSha256:EXPECTED_SHA,taskIds:tasks.map(t=>t.task_id),model:PILOT_MODEL,plannerProvider:PILOT_PROVIDER,
