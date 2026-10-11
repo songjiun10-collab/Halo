@@ -95,4 +95,8 @@ test("real Chromium: TaskController drives a form through planner hw_step propos
   assert.equal(script.length, 0, "every proposed hw_step was executed");
   const result = await view.webContents.executeJavaScript("document.getElementById('result').textContent");
   assert.equal(result, "Subscribed: a@b.co / pro");
+  // The planner must be able to see that a select landed, or it repeats the step (seen with a real model).
+  const observed = await adapter.observe();
+  const dropdown = (observed.elements ?? []).find((element) => element.role === "combobox");
+  assert.equal(dropdown?.value, "Pro");
 });
