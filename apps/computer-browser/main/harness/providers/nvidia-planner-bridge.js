@@ -61,7 +61,7 @@ class NvidiaPlannerBridge {
       if (!Array.isArray(data?.choices) || data.choices.length !== 1 || choice.finish_reason !== "stop" || choice.message?.role !== "assistant"
         || typeof choice.message.content !== "string" || choice.message.tool_calls?.length || choice.message.function_call || choice.message.refusal) throw failure("invalid_response");
       const text = stripCodeFence(choice.message.content);
-      const proposal = room ? parseRoomTurn(text) : parseAndValidateProposal(text);
+      const proposal = room ? parseRoomTurn(text) : parseAndValidateProposal(text, { taskId: context.taskId, goalVersion: context.goalVersion });
       this._usage = normalizeUsage("nvidia", { usage: data.usage, duration_ms: performance.now() - started });
       return proposal;
     }).catch((error) => {

@@ -592,12 +592,19 @@ function extractProposalText(envelope) {
   return stripCodeFence(envelope.result);
 }
 
-function parseAndValidateProposal(proposalText) {
+// taskId and goalVersion are host-known identifiers the model only echoes. A model that omits them
+// (Nemotron did on ~1 in 4 turns) would burn a whole repair call, so a MISSING field is filled from
+// the host's context; a present-but-wrong one is left alone and still rejected by the envelope check.
+function parseAndValidateProposal(proposalText, identity) {
   let proposal;
   try {
     proposal = JSON.parse(proposalText);
   } catch {
     throw new ClaudeCodeBridgeError("invalid_proposal_json", "claude CLI result text is not valid JSON");
+  }
+  if (identity && proposal && typeof proposal === "object" && !Array.isArray(proposal)) {
+    if (proposal.taskId === undefined && typeof identity.taskId === "string") proposal.taskId = identity.taskId;
+    if (proposal.goalVersion === undefined && Number.isInteger(identity.goalVersion)) proposal.goalVersion = identity.goalVersion;
   }
   try {
     contracts.validateProposalEnvelope(proposal);

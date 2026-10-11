@@ -116,3 +116,17 @@ test("Nemotron guidance tells the planner to put the answer in need_user instead
   assert.match(text, /answer itself/);
   assert.match(text, /never end it by asking the person to confirm/);
 });
+
+test("a proposal that omits taskId/goalVersion is completed from the host context, a wrong one is still rejected", async () => {
+  const { NvidiaPlannerBridge } = require("../main/harness/providers/nvidia-planner-bridge");
+  const { taskId, goalVersion, ...bare } = proposal;
+  const context = { taskId, goalVersion };
+  const bridge = new NvidiaPlannerBridge({ apiKey: "test-only", fetchFn: async () => reply(JSON.stringify(bare)) });
+  assert.deepEqual(await bridge.start(context), proposal);
+  const wrong = new NvidiaPlannerBridge({ apiKey: "test-only", fetchFn: async () => reply(JSON.stringify({ ...bare, taskId: "22222222-2222-2222-2222-222222222222", goalVersion: 1 })) });
+  const accepted = await wrong.start(context);
+  assert.equal(accepted.taskId, "22222222-2222-2222-2222-222222222222", "a present identifier is never overwritten by the host fill");
+  const none = new NvidiaPlannerBridge({ apiKey: "test-only", fetchFn: async () => reply(JSON.stringify(bare)) });
+  await assert.rejects(none.start({}), { code: "invalid_proposal" });
+  await Promise.all([bridge.close(), wrong.close(), none.close()]);
+});
