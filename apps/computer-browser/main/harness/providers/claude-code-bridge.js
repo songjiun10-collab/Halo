@@ -605,6 +605,8 @@ function parseAndValidateProposal(proposalText, identity) {
   if (identity && proposal && typeof proposal === "object" && !Array.isArray(proposal)) {
     if (proposal.taskId === undefined && typeof identity.taskId === "string") proposal.taskId = identity.taskId;
     if (proposal.goalVersion === undefined && Number.isInteger(identity.goalVersion)) proposal.goalVersion = identity.goalVersion;
+    // Omitted "kind" next to an actions array can only mean "actions"; any other shape stays invalid.
+    if (proposal.kind === undefined && Array.isArray(proposal.actions)) proposal.kind = "actions";
   }
   try {
     contracts.validateProposalEnvelope(proposal);
