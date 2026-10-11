@@ -12,7 +12,7 @@ const READ_ONLY = new Set(["navigate", "follow_link", "scroll", "observe", "reco
 // Everything the product's Full permission mode permits the planner to try,
 // plus the journaling-only record_evidence. submit_form is included because
 // FULL_ACTIONS has it; download is not (the policy denies it).
-const FULL_SCOPE_ACTIONS = new Set(["navigate", "follow_link", "scroll", "observe", "click", "type", "click_at", "type_at", "press_key", "submit_form", "hw_step", "record_evidence"]);
+const FULL_SCOPE_ACTIONS = new Set(["navigate", "find", "zoom", "select_all", "follow_link", "scroll", "observe", "click", "type", "click_at", "type_at", "press_key", "submit_form", "hw_step", "record_evidence"]);
 // Benchmark scope. "readonly" is the default and the only mode that acts
 // without side effects. "full" mirrors the product's Full permission mode so a
 // model is not judged on a constraint it never sees in the product -- but it
