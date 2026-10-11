@@ -1782,3 +1782,50 @@ test("real Chromium: what a team observes on a live page is shared in-team, sent
   await a.parent.close(); await b.parent.close();
   await Promise.all([...a.childStores, ...b.childStores].map((s) => s.close()));
 });
+
+test("real Chromium: two sibling children observe different live pages at the same time and broadcast concurrently without loss or leakage", { skip: !require("../main/harness/cdp-browser-host").findChromium() && "no Chromium binary", timeout: 60000 }, async (t) => {
+  const http = require("node:http");
+  const { acquireCdpBrowser } = require("../main/harness/cdp-browser-host");
+  const { openCdpView } = require("../main/harness/cdp-web-contents");
+  const { BrowserAdapter } = require("../main/harness/browser-adapter");
+  const server = http.createServer((request, response) => {
+    // Each page answers slowly and differently so the two observations genuinely overlap.
+    setTimeout(() => { response.setHeader("content-type", "text/html"); response.end(`<title>${request.url}</title><h1>Stock for ${request.url.slice(1)} is ${request.url.length * 7}</h1>`); }, 150);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let browser;
+  const views = [];
+  t.after(async () => { for (const view of views) { try { view.closeConnection(); } catch { /* ignore */ } } if (browser) await browser.close(); await new Promise((resolve) => server.close(resolve)); });
+  browser = await acquireCdpBrowser({ headless: true, startupTimeoutMs: 15000 });
+  views.push(await openCdpView(browser.wsUrl, { width: 800, height: 600 }), await openCdpView(browser.wsUrl, { width: 800, height: 600 }));
+
+  const storageRoot = await mkTempRoot();
+  const coordinator = new ChildAgentCoordinator({ storageRoot });
+  const a = await setUpAcceptedPlan(coordinator, storageRoot);
+  const b = await setUpAcceptedPlan(coordinator, storageRoot);
+  const [first, second] = a.childIds;
+  const observeOwnPage = async (view, pathName) => {
+    const adapter = new BrowserAdapter({ view });
+    assert.equal((await adapter.execute({ type: "navigate", url: `${base}/${pathName}` })).status, "ok");
+    const text = (await adapter.observe()).elements.map((element) => element.name ?? "").join(" ");
+    return /Stock for \w+ is \d+/.exec(text)?.[0];
+  };
+  const [findingA, findingB] = await Promise.all([observeOwnPage(views[0], "alpha"), observeOwnPage(views[1], "bravo")]);
+  assert.match(findingA, /alpha/);
+  assert.match(findingB, /bravo/);
+
+  const [sentA, sentB] = await Promise.all([
+    coordinator.broadcastToTeam(first, { text: findingA, idempotencyKey: "par-a" }),
+    coordinator.broadcastToTeam(second, { text: findingB, idempotencyKey: "par-b" }),
+  ]);
+  const teamSize = a.childIds.length; // lead + siblings, minus the sender
+  assert.equal(sentA.length, teamSize);
+  assert.equal(sentB.length, teamSize);
+  assert.ok(!sentA.some((delivery) => delivery.recipientTaskId === first), "no echo to the sender");
+  assert.ok(sentA.some((delivery) => delivery.recipientTaskId === second) && sentB.some((delivery) => delivery.recipientTaskId === first), "siblings receive each other's finding");
+  assert.equal(coordinator.listTeamConversation(a.parent.taskId, b.parent.taskId).length, 0, "nothing leaks across teams");
+
+  await a.parent.close(); await b.parent.close();
+  await Promise.all([...a.childStores, ...b.childStores].map((s) => s.close()));
+});
