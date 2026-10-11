@@ -115,6 +115,7 @@ test("Nemotron guidance tells the planner to put the answer in need_user instead
   const text = getModelPromptGuidance("nvidia", "nvidia/nemotron-3-super-120b-a12b");
   assert.match(text, /answer itself/);
   assert.match(text, /never end it by asking the person to confirm/);
+  assert.match(text, /never propose observe twice in a row/);
 });
 
 test("a proposal that omits taskId/goalVersion is completed from the host context, a wrong one is still rejected", async () => {
