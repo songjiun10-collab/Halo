@@ -47,3 +47,13 @@ test("terminal evidence preserves the final page screenshot and bounded page ide
   assert.equal(result.state,"paused");
   assert.deepEqual(await fs.readFile(path.join(dir,"trajectory","final.png")),png);
 });
+
+test("actionStep records every action the full scope permits (find/zoom/select_all/hw_step must not throw)", () => {
+  const url = "https://example.test/";
+  const find = actionStep(1, { type: "find", text: "Contact us" }, url, { status: "ok" });
+  assert.match(find.action, /FIND -> text Contact us \| SUCCESS/);
+  assert.match(actionStep(2, { type: "zoom", level: 2 }, url, { status: "ok" }).action, /ZOOM/);
+  assert.match(actionStep(3, { type: "select_all" }, url, { status: "ok" }).action, /SELECT/);
+  const hw = actionStep(4, { type: "hw_step", step: { op: "fill", locator: { label: "Email" }, text: "a" } }, url, { status: "ok" });
+  assert.match(hw.action, /TYPE -> fill/);
+});

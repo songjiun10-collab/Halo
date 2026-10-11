@@ -85,14 +85,19 @@ function pilotDecision(descriptor: {action: string}) {
 }
 function actionStep(index: number, action: any, beforeUrl: string, result: any) {
   const verb = {navigate:"NAVIGATE",follow_link:"CLICK",scroll:"SCROLL",observe:"WAIT",
-    click:"CLICK",click_at:"CLICK",type:"TYPE",type_at:"TYPE",press_key:"PRESS",submit_form:"SUBMIT"}[action.type as string];
+    click:"CLICK",click_at:"CLICK",type:"TYPE",type_at:"TYPE",press_key:"PRESS",submit_form:"SUBMIT",
+    find:"FIND",zoom:"ZOOM",select_all:"SELECT",hw_step:({click:"CLICK",fill:"TYPE",press:"PRESS",select:"SELECT",check:"CLICK",uncheck:"CLICK",hover:"HOVER",scroll:"SCROLL",get_text:"READ"} as any)[action.step?.op] ?? "STEP"}[action.type as string];
   if (!verb) throw new Error("unsupported_factual_action");
   const status = result?.status === "ok" ? "SUCCESS" : ["error","failed"].includes(result?.status) ? "FAILED" : undefined;
   const detail = action.type === "navigate" ? action.url
     : ["follow_link","click","type","submit_form"].includes(action.type) ? `element ${action.elementId ?? "?"}`
     : ["click_at","type_at"].includes(action.type) ? `at ${action.x},${action.y}`
     : action.type === "press_key" ? `key ${String(action.key ?? "?").slice(0,24)}`
-    : action.type === "scroll" ? `${action.direction} ${action.amount}` : "observe current page";
+    : action.type === "scroll" ? `${action.direction} ${action.amount}`
+    : action.type === "find" ? `text ${String(action.text ?? "?").slice(0,60)}`
+    : action.type === "zoom" ? "page zoom"
+    : action.type === "select_all" ? "select all"
+    : action.type === "hw_step" ? `${action.step?.op ?? "?"} ${JSON.stringify(action.step?.locator ?? {}).slice(0,80)}` : "observe current page";
   return { step:index, action:`page -> ${verb} -> ${detail}${verb !== "WAIT" && status ? ` | ${status}` : ""}`,
     thought:null, screenshot:`trajectory/${String(index).padStart(4,"0")}.png`, url:beforeUrl,
     ...(verb !== "WAIT" && status ? {action_status:status} : {}) };
@@ -101,7 +106,7 @@ function actionStep(index: number, action: any, beforeUrl: string, result: any) 
 async function captureTerminalEvidence(view: any, dir: string, snapshot: any) {
   if (!view?.webContents || typeof view.webContents.capturePage !== "function") return { captureError: "terminal_capture_unavailable" };
   try {
-    const image = await view.webContents.capturePage().catch((error: any) => { console.error(`exec_throw capture_failed ${action.type} ${error?.code ?? error?.message}`); throw error; });
+    const image = await view.webContents.capturePage().catch((error: any) => { console.error(`exec_throw capture_failed terminal ${error?.code ?? error?.message}`); throw error; });
     if (!image || typeof image.toPNG !== "function" || typeof image.getSize !== "function") throw new Error("terminal_capture_invalid");
     const png = image.toPNG();
     const size = image.getSize();
@@ -139,8 +144,10 @@ async function runTask(task: Task, output: string, repeat = 0) {
     const index = actions.length;
     const before = view.webContents.getURL();
     // Fail closed: a missing screenshot must not silently create an unrecorded action.
-    const image = await view.webContents.capturePage();
-    await fs.writeFile(path.join(dir,"trajectory",`${String(index).padStart(4,"0")}.png`), image.toPNG(), {flag:"wx",mode:0o600});
+    try {
+      const image = await view.webContents.capturePage();
+      await fs.writeFile(path.join(dir,"trajectory",`${String(index).padStart(4,"0")}.png`), image.toPNG(), {flag:"wx",mode:0o600});
+    } catch (error: any) { console.error(`exec_throw pre_capture_failed ${action.type} ${error?.code ?? error?.message}`); throw error; }
     const t0 = benchClock.now();
     let result: any;
     try { result = await invoke(); }
