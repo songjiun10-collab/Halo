@@ -63,7 +63,7 @@ function runElectronIntegration({ timeoutMs, profile }) {
 
 test(
   "real Electron + real AgentViewportHost + real approver/planner: same-journey memory/latency, cold/warm, cross-task isolation, real crash recovery",
-  { timeout: 180000 },
+  { timeout: 180000, skip: "stale since the Chromium-only desktop runtime (e2ad6fe): this harness drives Electron-only APIs (getOSProcessId, session.setCertificateVerifyProc) and main/desktop-runtime.js refuses to load without HALO_DESKTOP_RUNTIME=chromium; equivalent Chromium coverage lives in renderer-lifecycle, agent-viewport-host and chromium-memory-accounting tests" },
   async (t) => {
     const profile = await createElectronTestProfile();
     t.after(() => profile.cleanup());

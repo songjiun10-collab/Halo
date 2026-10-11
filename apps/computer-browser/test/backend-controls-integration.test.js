@@ -10,7 +10,7 @@ const APP_ROOT = path.resolve(__dirname, "..");
 const ELECTRON_BIN = path.join(APP_ROOT, "node_modules", ".bin", "electron");
 const SCRIPT = path.join(APP_ROOT, "integration", "backend-controls-electron.js");
 
-test("real Electron verifies backend controls plus resource-gated parallel planner and approver execution", { timeout: 90000 }, async (t) => {
+test("real Electron verifies backend controls plus resource-gated parallel planner and approver execution", { timeout: 90000, skip: "stale since the Chromium-only desktop runtime (e2ad6fe): this harness drives Electron-only APIs (getOSProcessId, session.setCertificateVerifyProc) and main/desktop-runtime.js refuses to load without HALO_DESKTOP_RUNTIME=chromium; equivalent Chromium coverage lives in renderer-lifecycle, agent-viewport-host and chromium-memory-accounting tests" }, async (t) => {
   const profile = await createElectronTestProfile();
   t.after(() => profile.cleanup());
   const result = await new Promise((resolve, reject) => {
