@@ -180,7 +180,7 @@ async function runTask(task: Task, output: string, repeat = 0) {
       args:[launch.worker,"--model",PILOT_MODEL],
       ...(launch.env ? {env:launch.env} : {}),
       cwd:path.resolve(__dirname,".."),timeoutMs:60000,onUsage:(usage: any)=>usages.push(usage)});
-    controller = new TaskController({store,browser,permissionMode:PERMISSION_MODE,harnessProfile:"middle",plannerEffort:"medium",finishEvidenceRejections:1,
+    controller = new TaskController({store,browser,permissionMode:PERMISSION_MODE,harnessProfile:"middle",plannerEffort:"medium",finishEvidenceRejections:1,repeatFailureLimit:2,
       approve:pilotDecision,hostVerifier:()=>false,
       planner:{close:()=>planner.close(),next:async(context: any, options: any)=>{
         calls++; contextBytes += Buffer.byteLength(JSON.stringify(context));

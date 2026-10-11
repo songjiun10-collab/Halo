@@ -2322,6 +2322,48 @@ test("a second evidence-free finish is accepted once the rejection budget is use
   await off.store.close();
 });
 
+function repeatRun({ store, repeatFailureLimit, errorCode = "navigation_error" }) {
+  const executed = [];
+  const contexts = [];
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "navigate", url: "https://example.test/dead" }] };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async (action) => { executed.push(action); return { status: "failed", errorCode }; } },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    ...(repeatFailureLimit === undefined ? {} : { repeatFailureLimit }),
+  });
+  return { controller, executed, contexts };
+}
+
+test("an identical action that failed deterministically twice is not dispatched again, the planner is told, and repeated blocks pause no_progress", async () => {
+  const { store } = await makeStore({ originalRequest: "repeat", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, executed, contexts } = repeatRun({ store, repeatFailureLimit: 2 });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(executed.length, 2, "only the first two attempts reach the browser");
+  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_blocked"), true);
+  await store.close();
+});
+
+test("the repeat-failure gate is off by default and ignores non-deterministic errors", async () => {
+  const off = await makeStore({ originalRequest: "off", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 6 } });
+  const a = repeatRun({ store: off.store });
+  await a.controller.start();
+  assert.equal(a.executed.length > 2, true);
+  await off.store.close();
+  const other = await makeStore({ originalRequest: "stale", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 6 } });
+  const b = repeatRun({ store: other.store, repeatFailureLimit: 2, errorCode: "stale_document" });
+  await b.controller.start();
+  assert.equal(b.executed.length > 2, true);
+  await other.store.close();
+});
+
 test("short and middle keep today's behavior: an unmet finish goes to awaiting_verification and the context has no goalPersistence", async () => {
   for (const profile of ["short", "middle"]) {
     const { store } = await makeStore({ originalRequest: "not persistent", criteria: HOST_CRITERIA });

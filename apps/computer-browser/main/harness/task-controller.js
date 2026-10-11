@@ -343,6 +343,7 @@ class TaskController {
     frictionLedger,
     groundingCorrections = 1,
     finishEvidenceRejections = 0,
+    repeatFailureLimit = 0,
     maxRecoveries,
     plannerImageInput = true,
     visionAssist = null,
@@ -607,6 +608,12 @@ class TaskController {
     this._finishEvidenceBudget = Number.isInteger(finishEvidenceRejections) && finishEvidenceRejections >= 0 ? finishEvidenceRejections : 0;
     this._finishEvidenceRejections = 0;
     this._finishFeedback = null;
+    // An identical action that already failed this many times with a deterministic error is not dispatched again
+    // (compare20 run 1: 16x the same failing navigate, 12x the same failing select). 0 = off.
+    this._repeatFailureLimit = Number.isInteger(repeatFailureLimit) && repeatFailureLimit >= 0 ? repeatFailureLimit : 0;
+    this._repeatFailures = new Map();
+    this._repeatBlocked = 0;
+    this._repeatFeedback = null;
     this._groundingReport = null;
     this._observedCorpus = [];
     this._observedCorpusBytes = 0;
@@ -2383,6 +2390,7 @@ class TaskController {
               ...(this._recentHumanChecks().length > 0 ? { recentHumanChecks: this._recentHumanChecks() } : {}),
               ...(this._groundingFeedback ? { groundingFeedback: { ...this._groundingFeedback } } : {}),
               ...(this._finishFeedback ? { finishFeedback: { ...this._finishFeedback } } : {}),
+              ...(this._repeatFeedback ? { repeatFailureFeedback: { ...this._repeatFeedback } } : {}),
               mcp: { enabled: this._mcpAvailableToPlanner(),
                 actions: ["mcp_search", "mcp_describe", "mcp_propose"],
                 route: { path: mcpRoute.path, ...(mcpRoute.domain ? { domain: mcpRoute.domain } : {}), reason: mcpRoute.reason } },
@@ -2489,6 +2497,7 @@ class TaskController {
           this._loopHint = false;
           this._groundingFeedback = null;
           this._finishFeedback = null;
+          this._repeatFeedback = null;
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -2799,6 +2808,21 @@ class TaskController {
           await this._store.append({ type: "note", payload: { kind: "invalid_action", actionType: "hw_step", errorCode: valid.errorCode } });
           continue;
         }
+      }
+
+      if (this._repeatFailureLimit > 0 && (this._repeatFailures.get(repeatActionKey(action)) ?? 0) >= this._repeatFailureLimit) {
+        this._repeatBlocked += 1;
+        this._repeatFeedback = {
+          note: "repeat_blocked",
+          actionType: action.type,
+          guidance: "This exact action already failed repeatedly with the same error and was not run again. Change the target, the approach or the page, or report need_user.",
+        };
+        await this._store.append({ type: "note", payload: { kind: "repeat_blocked", actionType: action.type, blocked: this._repeatBlocked } });
+        if (this._repeatBlocked >= REPEAT_BLOCK_PAUSE) {
+          await this._pauseWith("no_progress");
+          return "stop_loop";
+        }
+        return "continue";
       }
 
       const requestId = randomUUID();
@@ -3187,6 +3211,15 @@ class TaskController {
       ? result.observation
       : null;
 
+    if (this._repeatFailureLimit > 0 && result.action) {
+      const repeatKey = repeatActionKey(result.action);
+      if (result.status === "failed" && DETERMINISTIC_FAILURES.has(result.errorCode)) {
+        this._repeatFailures.set(repeatKey, (this._repeatFailures.get(repeatKey) ?? 0) + 1);
+      } else if (result.status === "ok") {
+        this._repeatFailures.delete(repeatKey);
+      }
+    }
+
     // An evaluate answer is page data for the next planner turn, not
     // verification evidence: it rides the observation, never the criteria.
     if (result.status === "ok" && result.evaluateResult && typeof result.evaluateResult.value === "string") {
@@ -3289,6 +3322,14 @@ class TaskController {
       }
     }
   }
+}
+
+const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable"]);
+const REPEAT_BLOCK_PAUSE = 3;
+// Same action, ignoring the per-observation/per-request ids that change every turn.
+function repeatActionKey(action) {
+  const { observationId, requestId, id, actionId, ...rest } = action ?? {};
+  return JSON.stringify(rest, Object.keys(rest).sort());
 }
 
 module.exports = { TaskController, TaskControllerError, FRICTION_TTL_MS };
