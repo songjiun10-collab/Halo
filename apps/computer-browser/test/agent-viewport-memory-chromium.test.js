@@ -1,7 +1,7 @@
 "use strict";
 
 // Real-Electron end-to-end evidence for the P0 agent-viewport memory/latency
-// acceptance gate (see integration/agent-viewport-memory-electron.js's own
+// acceptance gate (see integration/agent-viewport-memory-chromium.js's own
 // header for what this specifically proves and what it deliberately does
 // NOT re-prove). Same orchestration-only pattern as
 // test/long-horizon-integration.test.js: spawn the real `electron` binary
@@ -15,18 +15,20 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
-const { createElectronTestProfile } = require("./electron-test-profile");
 
 const APP_ROOT = path.resolve(__dirname, "..");
-const ELECTRON_BIN = path.join(APP_ROOT, "node_modules", ".bin", "electron");
-const SCRIPT = path.join(APP_ROOT, "integration", "agent-viewport-memory-electron.js");
+const CHROMIUM = [process.env.HALO_CHROMIUM, path.join(os.homedir(), "chromium/src/out/TrialLean/headless_shell")].find((candidate) => candidate && require("node:fs").existsSync(candidate));
+const SCRIPT = path.join(APP_ROOT, "integration", "agent-viewport-memory-chromium.js");
 
-function runElectronIntegration({ timeoutMs, profile }) {
+function runChromiumIntegration({ timeoutMs }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(ELECTRON_BIN, profile.argsFor(SCRIPT), {
+    const child = spawn(process.execPath, [SCRIPT], {
       cwd: APP_ROOT,
       env: {
         ...process.env,
+        HALO_DESKTOP_RUNTIME: "chromium",
+        HALO_CHROMIUM: CHROMIUM,
+        HALO_NODE_COMMAND: process.execPath,
         HALO_PYTHON: process.env.HALO_PYTHON || path.join(APP_ROOT, "..", "..", ".venv", "bin", "python"),
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -36,7 +38,7 @@ function runElectronIntegration({ timeoutMs, profile }) {
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`agent-viewport-memory-electron.js did not finish within ${timeoutMs}ms\nstderr tail:\n${stderr.slice(-4000)}`));
+      reject(new Error(`agent-viewport-memory-chromium.js did not finish within ${timeoutMs}ms\nstderr tail:\n${stderr.slice(-4000)}`));
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
@@ -62,27 +64,25 @@ function runElectronIntegration({ timeoutMs, profile }) {
 }
 
 test(
-  "real Electron + real AgentViewportHost + real approver/planner: same-journey memory/latency, cold/warm, cross-task isolation, real crash recovery",
-  { timeout: 180000, skip: "stale since the Chromium-only desktop runtime (e2ad6fe): this harness drives Electron-only APIs (getOSProcessId, session.setCertificateVerifyProc) and main/desktop-runtime.js refuses to load without HALO_DESKTOP_RUNTIME=chromium; equivalent Chromium coverage lives in renderer-lifecycle, agent-viewport-host and chromium-memory-accounting tests" },
+  "real Chromium runtime + real AgentViewportHost + real approver/planner: same-journey memory/latency, cold/warm, cross-task isolation, real crash recovery",
+  { timeout: 180000, skip: !CHROMIUM && "no Chromium binary" },
   async (t) => {
-    const profile = await createElectronTestProfile();
-    t.after(() => profile.cleanup());
     let result;
     try {
-      result = await runElectronIntegration({ timeoutMs: 170000, profile });
+      result = await runChromiumIntegration({ timeoutMs: 170000 });
     } catch (err) {
-      if (/ENOENT|spawn.*electron/i.test(String(err.message))) {
-        t.skip(`electron binary unavailable in this environment: ${err.message}`);
+      if (/ENOENT/i.test(String(err.message))) {
+        t.skip(`runtime unavailable in this environment: ${err.message}`);
         return;
       }
       throw err;
     }
 
     if (result.error) {
-      throw new Error(`agent-viewport-memory-electron.js reported an internal error: ${result.error}`);
+      throw new Error(`agent-viewport-memory-chromium.js reported an internal error: ${result.error}`);
     }
 
-    assert.equal(result.real, true, "this must be the real-Electron run, not a stand-in");
+    assert.equal(result.real, true, "this must be the real Chromium-runtime run, not a stand-in");
 
     // --- Peak aggregate memory: the actual <1GB requirement, over BOTH
     // tasks' hidden agent renderers plus planner/approver. ---

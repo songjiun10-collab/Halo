@@ -69,7 +69,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const { spawn, execFile } = require("node:child_process");
-const { app, BrowserWindow, WebContentsView } = require("electron");
+const { app, BrowserWindow, WebContentsView } = require("../main/desktop-runtime");
 const { performance } = require("node:perf_hooks");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -235,12 +235,12 @@ async function main() {
       partition: `halo-task-${taskId}`,
     } });
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    view.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
-    view.webContents.session.setPermissionCheckHandler(() => false);
+    view.webContents.session.setPermissionRequestHandler?.((_wc, _permission, callback) => callback(false));
+    view.webContents.session.setPermissionCheckHandler?.(() => false);
     view.webContents.on("will-navigate", (event, url) => {
       if (!/^https?:\/\//i.test(url)) event.preventDefault();
     });
-    view.webContents.session.on("will-download", (event) => event.preventDefault());
+    view.webContents.session.on?.("will-download", (event) => event.preventDefault());
     mainWin.contentView.addChildView(view);
     view.setBounds({ x: 0, y: 0, width: 1280, height: 800 });
     view.setVisible(false);
@@ -404,12 +404,25 @@ async function main() {
   // (no live renderer process attached yet), so capturing this at
   // makeBrowser()-time (before any navigation) would silently produce a
   // meaningless pid and make every pid-based check below vacuously true.
-  const task1AgentPid = agentWc1.getOSProcessId();
-  assert.ok(Number.isInteger(task1AgentPid) && task1AgentPid > 0, `agent view must have a real OS renderer process id by now, got ${task1AgentPid}`);
+  // Chromium runtime: the page is a CDP target, so the crashed renderer is the
+  // renderer process that disappears from SystemInfo.getProcessInfo after Page.crash.
+  const rendererPids = async () => {
+    const info = await agentWc1.transport.send("SystemInfo.getProcessInfo", {});
+    return new Set((info.processInfo ?? []).filter((p) => p.type === "renderer").map((p) => p.id));
+  };
+  const before = await rendererPids();
   const goneEventPromise = waitForRenderProcessGone(agentWc1);
-  agentWc1.forcefullyCrashRenderer();
+  void agentWc1.cmd("Page.crash").catch(() => undefined);
   const crashDetails = await goneEventPromise;
-  const pidGoneAfterCrash = await waitForPidGone(task1AgentPid);
+  let task1AgentPid = 0;
+  let pidGoneAfterCrash = false;
+  for (let attempt = 0; attempt < 50 && !pidGoneAfterCrash; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const after = await rendererPids().catch(() => new Set());
+    const gone = [...before].filter((pid) => !after.has(pid));
+    if (gone.length > 0) { task1AgentPid = gone[0]; pidGoneAfterCrash = true; }
+  }
+  assert.ok(Number.isInteger(task1AgentPid) && task1AgentPid > 0, `a renderer process must disappear after the crash, got ${task1AgentPid}`);
   const crashSample = await sample("task1_after_agent_view_crash");
 
   let disposeAfterCrashThrew = false;
@@ -534,10 +547,10 @@ async function main() {
   assert.ok(result.failureRecovery.pass, `agent-view crash recovery must hold: ${JSON.stringify(result.failureRecovery)}`);
 
   process.stdout.write(`RESULT_JSON:${JSON.stringify(result)}\n`);
-  app.quit();
+  process.exit(0);
 }
 
 main().catch((err) => {
   process.stdout.write(`RESULT_JSON:${JSON.stringify({ real: true, error: String((err && err.stack) || err) })}\n`);
-  app.exit(1);
+  process.exit(1);
 });

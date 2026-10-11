@@ -2,14 +2,15 @@
 
 // Real Electron integration for the backend controls added in phase 2. The
 // task planner is deterministic test code; HTTPS is a local self-signed
-// fixture accepted only by this task's isolated Electron session.
+// fixture accepted only by this task's isolated Chromium pages. Chromium-runtime port of
+// backend-controls-electron.js (no Electron APIs; certificate errors are ignored per page over CDP).
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const https = require("node:https");
 const { execFileSync, execFile, spawn } = require("node:child_process");
-const { app, BrowserWindow, WebContentsView } = require("electron");
+const { app, BrowserWindow, WebContentsView } = require("../main/desktop-runtime");
 const { BrowserAdapter } = require("../main/harness/browser-adapter");
 const { AgentViewportHost, applyBrowserHardening, makeDualSurfaceBrowser } = require("../main/harness/agent-viewport-host");
 const { TaskHost } = require("../main/harness/task-host");
@@ -25,6 +26,10 @@ const APP_ROOT = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(APP_ROOT, "..", "..", "..");
 const APPROVER_SCRIPT = path.join(APP_ROOT, "approver", "approver_service.py");
 const LONG_HORIZON_PLANNER = path.join(APP_ROOT, "fixtures", "scripted-planner-long-horizon.js");
+
+function trustFixtureCert(webContents) {
+  void webContents.cmd("Security.setIgnoreCertificateErrors", { ignore: true }).catch(() => undefined);
+}
 
 function processTreeRss(pid) {
   return new Promise((resolve) => {
@@ -91,7 +96,7 @@ async function runParallelAdmission(tempRoot, url) {
       view.setBounds({ x: 0, y: 0, width: 1280, height: 800 });
       const visibleAdapter = new BrowserAdapter({ view });
       const agentAdapter = agentViewportHost.ensure(taskId);
-      agentViewportHost._hosts.get(taskId).view.webContents.session.setCertificateVerifyProc((_request, callback) => callback(0));
+      trustFixtureCert(agentViewportHost._hosts.get(taskId).view.webContents);
       return makeDualSurfaceBrowser({ agentAdapter, visibleAdapter, disposeAgent: () => agentViewportHost.dispose(taskId) });
     },
     makePlanner: () => new PlannerStdioAdapter({
@@ -250,7 +255,7 @@ async function main() {
       partition: `halo-backend-controls-${id}`,
     } });
     applyBrowserHardening(view.webContents);
-    view.webContents.session.setCertificateVerifyProc((_request, callback) => callback(0));
+    trustFixtureCert(view.webContents);
     window.contentView.addChildView(view);
     view.setBounds({ x: 0, y: 0, width: 1000, height: 700 });
     const browser = new BrowserAdapter({ view });
@@ -357,11 +362,11 @@ async function main() {
     if (window && !window.isDestroyed()) window.destroy();
     await new Promise((resolve) => server.close(resolve));
     await fs.rm(tempRoot, { recursive: true, force: true });
-    app.exit(exitCode);
+    process.exit(exitCode);
   }
 }
 
 main().catch((error) => {
   process.stdout.write(`RESULT_JSON:${JSON.stringify({ real: true, error: String(error.stack || error) })}\n`);
-  app.exit(1);
+  process.exit(1);
 });

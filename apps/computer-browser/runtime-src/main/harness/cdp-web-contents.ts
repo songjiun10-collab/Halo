@@ -348,7 +348,12 @@ class CdpWebContents {
       this.transport.send("Target.closeTarget", { targetId: params.targetInfo.targetId }).catch(() => undefined);
       return;
     }
-    if (method === "Target.targetCrashed" && params.targetId === this.targetId) { this.markDestroyed(); return; }
+    if (method === "Target.targetCrashed" && params.targetId === this.targetId) {
+      // Electron parity: a crashed renderer reports render-process-gone before the page is gone.
+      this.emit("render-process-gone", {}, { reason: "crashed" });
+      this.markDestroyed();
+      return;
+    }
     if (method === "Target.detachedFromTarget" && params.sessionId === this.sessionId) { this.markDestroyed(); return; }
     if (session !== this.sessionId) return;
     switch (method) {

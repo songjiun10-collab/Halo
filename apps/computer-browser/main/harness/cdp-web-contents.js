@@ -378,6 +378,8 @@ class CdpWebContents {
             return;
         }
         if (method === "Target.targetCrashed" && params.targetId === this.targetId) {
+            // Electron parity: a crashed renderer reports render-process-gone before the page is gone.
+            this.emit("render-process-gone", {}, { reason: "crashed" });
             this.markDestroyed();
             return;
         }

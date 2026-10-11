@@ -4,20 +4,19 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { createElectronTestProfile } = require("./electron-test-profile");
+const os = require("node:os");
+const fs = require("node:fs");
 
 const APP_ROOT = path.resolve(__dirname, "..");
-const ELECTRON_BIN = path.join(APP_ROOT, "node_modules", ".bin", "electron");
-const SCRIPT = path.join(APP_ROOT, "integration", "backend-controls-electron.js");
+const CHROMIUM = [process.env.HALO_CHROMIUM, path.join(os.homedir(), "chromium/src/out/TrialLean/headless_shell")].find((candidate) => candidate && fs.existsSync(candidate));
+const SCRIPT = path.join(APP_ROOT, "integration", "backend-controls-chromium.js");
 
-test("real Electron verifies backend controls plus resource-gated parallel planner and approver execution", { timeout: 90000, skip: "stale since the Chromium-only desktop runtime (e2ad6fe): this harness drives Electron-only APIs (getOSProcessId, session.setCertificateVerifyProc) and main/desktop-runtime.js refuses to load without HALO_DESKTOP_RUNTIME=chromium; equivalent Chromium coverage lives in renderer-lifecycle, agent-viewport-host and chromium-memory-accounting tests" }, async (t) => {
-  const profile = await createElectronTestProfile();
-  t.after(() => profile.cleanup());
+test("real Chromium runtime verifies backend controls plus resource-gated parallel planner and approver execution", { timeout: 150000, skip: !CHROMIUM && "no Chromium binary" }, async (t) => {
   const result = await new Promise((resolve, reject) => {
-    const child = spawn(ELECTRON_BIN, profile.argsFor(SCRIPT), { cwd: APP_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [SCRIPT], { cwd: APP_ROOT, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HALO_DESKTOP_RUNTIME: "chromium", HALO_CHROMIUM: CHROMIUM, HALO_PYTHON: process.env.HALO_PYTHON || path.join(APP_ROOT, "..", "..", ".venv", "bin", "python") } });
     let stdout = "";
     let stderr = "";
-    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`backend control integration timed out\n${stderr.slice(-4000)}`)); }, 80000);
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`backend control integration timed out\n${stderr.slice(-4000)}`)); }, 140000);
     child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("error", (error) => { clearTimeout(timer); reject(error); });
@@ -29,7 +28,7 @@ test("real Electron verifies backend controls plus resource-gated parallel plann
       catch (error) { reject(new Error(`invalid result JSON: ${error.message}`)); }
     });
   }).catch((error) => {
-    if (/ENOENT|spawn.*electron/i.test(String(error.message))) { t.skip(`Electron unavailable: ${error.message}`); return null; }
+    if (/ENOENT/i.test(String(error.message))) { t.skip(`runtime unavailable: ${error.message}`); return null; }
     throw error;
   });
   if (!result) return;
