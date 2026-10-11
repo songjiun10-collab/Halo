@@ -2180,7 +2180,7 @@ test("navigation memory stays bounded: visited and frontier are capped and hrefs
   await store.close();
 });
 
-function goalRun({ profile, criteria, script, store }) {
+function goalRun({ profile, criteria, script, store, finishEvidenceRejections }) {
   // script: array of functions (context) => partial proposal, one per planner turn.
   let turn = 0;
   const contexts = [];
@@ -2196,6 +2196,7 @@ function goalRun({ profile, criteria, script, store }) {
     approve: allowApprove(),
     hostVerifier: () => true,
     harnessProfile: profile,
+    ...(finishEvidenceRejections === undefined ? {} : { finishEvidenceRejections }),
   });
   return { controller, contexts, turns: () => turn };
 }
@@ -2294,6 +2295,31 @@ test("long: a criterion that needs a human keeps the awaiting_verification hando
   assert.equal(snapshot.state, "awaiting_verification");
   assert.equal(turns(), 1);
   await store.close();
+});
+
+test("a finish with no recorded evidence is sent back once with host feedback, then an evidence observe lets it through", async () => {
+  const { store } = await makeStore({ originalRequest: "needs evidence", criteria: [{ id: "reached", text: "show the page", required: true, verification: "user" }] });
+  const { controller, contexts, turns } = goalRun({ profile: "middle", store, finishEvidenceRejections: 1, script: [finish, gatherEvidence, finish] });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "awaiting_verification");
+  assert.equal(turns(), 3, "finish, observe, finish");
+  assert.equal(contexts[0].progress.finishFeedback, undefined);
+  assert.equal(contexts[1].progress.finishFeedback.reason, "no_evidence_recorded");
+  assert.equal(contexts[2].progress.finishFeedback, undefined, "feedback lasts for one turn");
+  await store.close();
+});
+
+test("a second evidence-free finish is accepted once the rejection budget is used, and the default is off", async () => {
+  const one = await makeStore({ originalRequest: "budget", criteria: [{ id: "reached", text: "show the page", required: true, verification: "user" }] });
+  const limited = goalRun({ profile: "middle", store: one.store, finishEvidenceRejections: 1, script: [finish] });
+  assert.equal((await limited.controller.start()).state, "awaiting_verification");
+  assert.equal(limited.turns(), 2, "one rejection, then the same finish is accepted");
+  await one.store.close();
+  const off = await makeStore({ originalRequest: "default off", criteria: [{ id: "reached", text: "show the page", required: true, verification: "user" }] });
+  const unchanged = goalRun({ profile: "middle", store: off.store, script: [finish] });
+  assert.equal((await unchanged.controller.start()).state, "awaiting_verification");
+  assert.equal(unchanged.turns(), 1);
+  await off.store.close();
 });
 
 test("short and middle keep today's behavior: an unmet finish goes to awaiting_verification and the context has no goalPersistence", async () => {

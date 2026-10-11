@@ -546,6 +546,8 @@ class TaskHost {
       ...(this._mcpRoutePreference ? { mcpRoutePreference: this._mcpRoutePreference } : {}),
       releaseViewsOnReview: this._releaseViewsOnReview,
       harnessProfile,
+      // A finish with no recorded evidence is sent back once (Haiku compare20: 10/15 finishes had none, all 3 wrong ones among them).
+      finishEvidenceRejections: 1,
       // Only the Codex route accepts a screenshot; every other planner uses
       // the text screen map for computer use.
       plannerImageInput: parentPin.plannerProvider === "codex_cli",

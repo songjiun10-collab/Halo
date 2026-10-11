@@ -342,6 +342,7 @@ class TaskController {
     navLedger,
     frictionLedger,
     groundingCorrections = 1,
+    finishEvidenceRejections = 0,
     maxRecoveries,
     plannerImageInput = true,
     visionAssist = null,
@@ -601,6 +602,11 @@ class TaskController {
     this._groundingBudget = Number.isInteger(groundingCorrections) && groundingCorrections >= 0 ? groundingCorrections : 1;
     this._groundingCorrections = 0;
     this._groundingFeedback = null;
+    // A finish with no recorded evidence for any criterion is sent back this many times before it is accepted:
+    // in the Haiku 5.5 compare20 run 10 of 15 finishes had no evidence observe and all 3 plainly wrong ones were among them.
+    this._finishEvidenceBudget = Number.isInteger(finishEvidenceRejections) && finishEvidenceRejections >= 0 ? finishEvidenceRejections : 0;
+    this._finishEvidenceRejections = 0;
+    this._finishFeedback = null;
     this._groundingReport = null;
     this._observedCorpus = [];
     this._observedCorpusBytes = 0;
@@ -1244,6 +1250,7 @@ class TaskController {
     this._leaveActive();
     // A pause ends any pending grounding correction; a resume starts clean.
     this._groundingFeedback = null;
+    this._finishFeedback = null;
     this._task = { state: "paused", pauseReason: reason };
     // Pause reasons otherwise live only in the latest checkpoint; keep each one
     // in the journal so "why does it keep pausing" can be answered afterwards.
@@ -2375,6 +2382,7 @@ class TaskController {
               ...(this._captchaNotice ? { captchaReroute: { ...this._captchaNotice } } : {}),
               ...(this._recentHumanChecks().length > 0 ? { recentHumanChecks: this._recentHumanChecks() } : {}),
               ...(this._groundingFeedback ? { groundingFeedback: { ...this._groundingFeedback } } : {}),
+              ...(this._finishFeedback ? { finishFeedback: { ...this._finishFeedback } } : {}),
               mcp: { enabled: this._mcpAvailableToPlanner(),
                 actions: ["mcp_search", "mcp_describe", "mcp_propose"],
                 route: { path: mcpRoute.path, ...(mcpRoute.domain ? { domain: mcpRoute.domain } : {}), reason: mcpRoute.reason } },
@@ -2480,6 +2488,7 @@ class TaskController {
           this._pendingContextRead = null;
           this._loopHint = false;
           this._groundingFeedback = null;
+          this._finishFeedback = null;
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -2592,6 +2601,16 @@ class TaskController {
               break;
             }
             continue; // the goal is not met: keep working, the planner is told why via context.progress.goalPersistence
+          }
+          if (!completion.complete && this._criteriaStatus.size === 0 && this._finishEvidenceRejections < this._finishEvidenceBudget) {
+            this._finishEvidenceRejections += 1;
+            this._finishFeedback = {
+              authority: "host_finish_not_permission",
+              reason: "no_evidence_recorded",
+              guidance: "finish needs evidence: no criterion has a recorded observation yet. Check that the CURRENT page shows exactly what the goal asks for (the requested item, value or state, not just a related page, a search box or a landing page). If it does, propose one observe with that criterionId, then finish. If it does not, keep working toward it.",
+            };
+            await this._store.append({ type: "note", payload: { kind: "finish_rejected", reason: "no_evidence_recorded", rejections: this._finishEvidenceRejections } });
+            continue;
           }
           this._leaveActive();
           if (completion.complete) {
