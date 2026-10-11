@@ -1,0 +1,122 @@
+[
+ {
+  "task_id": "ade4c09ad3fdb1607209750924cd232f",
+  "website": "https://www.flightaware.com/",
+  "confirmed_task": "Compare available plans for the AeroAPI on Flightaware.",
+  "level": "easy"
+ },
+ {
+  "task_id": "fb7b4f784cfde003e2548fdf4e8d6b4f",
+  "website": "https://www.discogs.com/",
+  "confirmed_task": "Open the page with an overview of the submission of releases on Discogs.",
+  "level": "medium"
+ },
+ {
+  "task_id": "b320c68bffc1f3c7f2a8dc9d5478fb27",
+  "website": "https://www.ign.com/",
+  "confirmed_task": "Find a walkthrough for the game \"The Legend of Zelda: Breath of the Wild\" on ign.",
+  "level": "medium"
+ },
+ {
+  "task_id": "4091bdd3fa64a5b0d912bc08eaf9c824",
+  "website": "https://new.mta.info/",
+  "confirmed_task": "Find the list of neighborhood maps for Brooklyn on new.mta.info.",
+  "level": "easy"
+ },
+ {
+  "task_id": "d71be72aa25c3eab8eea47a0e60382e2",
+  "website": "https://www.apple.com/",
+  "confirmed_task": "Find technical specs for the latest Macbook Air on Apple.",
+  "level": "easy"
+ },
+ {
+  "task_id": "005be9dd91c95669d6ddde9ae667125c",
+  "website": "https://www.qatarairways.com/",
+  "confirmed_task": "Find the weight of baggage allowance for economy class on Qatar Airways.",
+  "level": "easy"
+ },
+ {
+  "task_id": "0632e496d37badee0350dad358f047c5",
+  "website": "https://cookpad.com/",
+  "confirmed_task": "Browse recipes for gluten-free chocolate chip cookies that can be made without nuts.",
+  "level": "easy"
+ },
+ {
+  "task_id": "16200f51d63f0a47a58fa17acd49e368",
+  "website": "https://cookpad.com/",
+  "confirmed_task": "Find a recipe that includes eggplant and mushrooms.",
+  "level": "easy"
+ },
+ {
+  "task_id": "180ed2ec377ef3a4af9035a21522091a",
+  "website": "https://umich.edu/",
+  "confirmed_task": "Find the way to give a gift to UM-Dearborn.",
+  "level": "easy"
+ },
+ {
+  "task_id": "1fc28d91d25ccd1c6ba268101326a654",
+  "website": "https://www.google.com/finance/",
+  "confirmed_task": "Find the 5-day price chart for Bitcoin.",
+  "level": "easy"
+ },
+ {
+  "task_id": "20a460a8fe1971b84411c5b1e6ac4186",
+  "website": "https://www.stubhub.com/",
+  "confirmed_task": "Show theatre events for Las Vegas and select one.",
+  "level": "easy"
+ },
+ {
+  "task_id": "2207bb4f21786690cfed20b37253fb8b",
+  "website": "https://www.theweathernetwork.com/",
+  "confirmed_task": "Check the current wind speed in Calgary, Alberta.",
+  "level": "easy"
+ },
+ {
+  "task_id": "23204728192da9f73197a613d9681c18",
+  "website": "https://www.mayoclinic.org/",
+  "confirmed_task": "What are the Symptoms and causes of fever?",
+  "level": "easy"
+ },
+ {
+  "task_id": "246d654fab7c31d9651007e39e75f74f",
+  "website": "https://www.recreation.gov/",
+  "confirmed_task": "Open the most helpful 5-star reviews of Alpine Ridge.",
+  "level": "easy"
+ },
+ {
+  "task_id": "2532fd402d3c741b79894e6ff2269f53",
+  "website": "https://www.thumbtack.com/",
+  "confirmed_task": "find electricians near 10203.",
+  "level": "easy"
+ },
+ {
+  "task_id": "26810ed9c123a62992e3eed31db3c5ee",
+  "website": "https://www.accuweather.com/",
+  "confirmed_task": "Show daily weather for New York City.",
+  "level": "easy"
+ },
+ {
+  "task_id": "26a0e5c21c145dd8448aa92f35bec5ea",
+  "website": "https://www.healthgrades.com/",
+  "confirmed_task": "Browse optometrists who offer telehealth services in Columbus, OH.",
+  "level": "easy"
+ },
+ {
+  "task_id": "271b36efd4346721b5542488ff997042",
+  "website": "https://www.bestbuy.com/",
+  "confirmed_task": "Browse 8K Samsung TVs that are open box.",
+  "level": "easy"
+ },
+ {
+  "task_id": "29526b17a32485742b5ab63507e99417",
+  "website": "https://www.drugs.com/",
+  "confirmed_task": "Browse Humira dosage information.",
+  "level": "easy"
+ },
+ {
+  "task_id": "29b7372d5a3884a2ba831af2d117af3c",
+  "website": "https://www.google.com/finance/",
+  "confirmed_task": "Browse the first top news of Microsoft stock on Google Finance.",
+  "level": "easy"
+ }
+]

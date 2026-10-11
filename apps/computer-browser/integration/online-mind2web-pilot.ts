@@ -12,7 +12,7 @@ const READ_ONLY = new Set(["navigate", "follow_link", "scroll", "observe", "reco
 // Everything the product's Full permission mode permits the planner to try,
 // plus the journaling-only record_evidence. submit_form is included because
 // FULL_ACTIONS has it; download is not (the policy denies it).
-const FULL_SCOPE_ACTIONS = new Set(["navigate", "follow_link", "scroll", "observe", "click", "type", "click_at", "type_at", "press_key", "submit_form", "record_evidence"]);
+const FULL_SCOPE_ACTIONS = new Set(["navigate", "follow_link", "scroll", "observe", "click", "type", "click_at", "type_at", "press_key", "submit_form", "hw_step", "record_evidence"]);
 // Benchmark scope. "readonly" is the default and the only mode that acts
 // without side effects. "full" mirrors the product's Full permission mode so a
 // model is not judged on a constraint it never sees in the product -- but it
@@ -46,6 +46,17 @@ async function plannerLaunch() {
   }
   if (!key) throw new Error("nvidia_api_key_unavailable");
   return { worker: path.resolve(__dirname, "../main/harness/providers/nvidia-planner-worker.js"), env: { NVIDIA_API_KEY: key } };
+}
+
+// The Aside comparison set: the 5 pilot tasks plus 15 more "easy" tasks, chosen by a fixed rule so both products
+// can be given the same list. Sorted by task_id, tasks that transact, sign in or book are skipped.
+const RISKY_TASK = /\b(buy|purchase|book|order|checkout|check out|sign up|signup|register|subscribe|log ?in|sign ?in|apply for|submit|reserve|reservation|rent|pay|donate|cart|ticket|flight|hotel|account|password)\b/i;
+function selectCompareTasks(rows: Task[], extra = 15): Task[] {
+  const base = selectPilotTasks(rows);
+  const taken = new Set(base.map(task => task.task_id));
+  const more = rows.filter(row => row.level === "easy" && !taken.has(row.task_id) && !RISKY_TASK.test(row.confirmed_task) && /^https:\/\//.test(row.website))
+    .sort((a, b) => a.task_id < b.task_id ? -1 : 1).slice(0, extra);
+  return [...base, ...more];
 }
 
 function selectPilotTasks(rows: Task[]): Task[] {
@@ -107,14 +118,14 @@ async function captureTerminalEvidence(view: any, dir: string, snapshot: any) {
   }
 }
 
-async function runTask(task: Task, output: string) {
+async function runTask(task: Task, output: string, repeat = 0) {
   const { TaskStore } = require("../main/harness/task-store");
   const { TaskController } = require("../main/harness/task-controller");
   const { PlannerStdioAdapter } = require("../main/harness/planner-stdio");
   const { BrowserAdapter } = require("../main/harness/browser-adapter");
   const { acquireCdpBrowser } = require("../main/harness/cdp-browser-host");
   const { openCdpView } = require("../main/harness/cdp-web-contents");
-  const dir = path.join(output, task.task_id);
+  const dir = path.join(output, repeat ? `${task.task_id}-r${repeat}` : task.task_id);
   await fs.mkdir(path.join(dir,"trajectory"), {recursive:true,mode:0o700});
   const actions: any[] = [], outcomes: any[] = [], proposals: any[] = [];
   let launched: any, view: any, browser: any, store: any, planner: any, controller: any, timer: any, launch: any;
@@ -179,7 +190,7 @@ async function runTask(task: Task, output: string) {
     const finalAnswer = typeof snapshot?.needUserReason === "string" ? snapshot.needUserReason.slice(0,2000) : "";
     const result={schema_version:"online-mind2web-v2",task:task.confirmed_task,task_id:task.task_id,
       agent_final_answer:finalAnswer,reference_length:task.reference_length,action_history:actions};
-    const run={schemaVersion:1,benchmark:"Online-Mind2Web",model:PILOT_MODEL,plannerProvider:PILOT_PROVIDER,benchmarkScope:PILOT_SCOPE,permissionMode:PERMISSION_MODE,maxActiveMs:PILOT_MAX_ACTIVE_MS,harness:"Halo",graded:false,success:null,
+    const run={schemaVersion:1,benchmark:"Online-Mind2Web",repeat,model:PILOT_MODEL,plannerProvider:PILOT_PROVIDER,benchmarkScope:PILOT_SCOPE,permissionMode:PERMISSION_MODE,maxActiveMs:PILOT_MAX_ACTIVE_MS,harness:"Halo",graded:false,success:null,
       taskId:task.task_id,state:snapshot?.state??"startup_error",pauseReason:snapshot?.pauseReason??null,errorCode,
       terminalProposal:terminalProposal?{kind:terminalProposal.kind,evidenceIds:terminalProposal.evidenceIds??[],...(terminalProposal.kind==="need_user"?{reason:finalAnswer}:{})}:null,
       terminalEvidence,
@@ -208,12 +219,15 @@ async function main() {
   if (!dataset || !path.isAbsolute(dataset)) throw new Error("absolute_dataset_path_required");
   const bytes=await fs.readFile(dataset);
   if (nodeCrypto.createHash("sha256").update(bytes).digest("hex")!==EXPECTED_SHA) throw new Error("dataset_revision_mismatch");
-  const tasks=selectPilotTasks(JSON.parse(bytes.toString("utf8")));
+  const rows=JSON.parse(bytes.toString("utf8"));
+  const compare=process.env.HALO_PILOT_SET==="compare20";
+  const repeats=compare&&Number(process.env.HALO_PILOT_REPEATS)>0?Math.min(Number(process.env.HALO_PILOT_REPEATS),5):1;
+  const tasks=compare?selectCompareTasks(rows):selectPilotTasks(rows);
   const output=await fs.mkdtemp(path.join(os.homedir(),"Downloads","halo-online-mind2web-"));
   await fs.chmod(output,0o700);
   const manifest={schemaVersion:1,datasetSha256:EXPECTED_SHA,taskIds:tasks.map(t=>t.task_id),model:PILOT_MODEL,plannerProvider:PILOT_PROVIDER,
     benchmarkScope:PILOT_SCOPE,permissionMode:PERMISSION_MODE,
-    effort:"medium",concurrency:1,timeoutMs:PILOT_MAX_ACTIVE_MS,maxPlannerCalls:25,maxActions:50,viewport:{width:1440,height:900},
+    set:compare?"compare20":"pilot5",repeats,effort:"medium",concurrency:1,timeoutMs:PILOT_MAX_ACTIVE_MS,maxPlannerCalls:25,maxActions:50,viewport:{width:1440,height:900},
     graded:false,scope:PILOT_SCOPE === "full"
       ? "five selected public tasks run with the product's Full permission mode: the agent clicks and types on live public pages. Not a representative full-benchmark score."
       : "five selected public read-only tasks; not a representative full-benchmark score",output};
@@ -222,12 +236,17 @@ async function main() {
   const runs=[];
   // Real sites see this machine's one IP: space the tasks out so a pilot never reads as a burst.
   const gapMs=Number(process.env.HALO_PILOT_GAP_MS)>=0&&process.env.HALO_PILOT_GAP_MS!==undefined?Number(process.env.HALO_PILOT_GAP_MS):30000;
-  for(const [i,task] of tasks.entries()){
-    if(i>0&&gapMs>0) await new Promise((resolve)=>setTimeout(resolve,gapMs));
-    runs.push(await runTask(task,output));
+  // Repeats run as whole passes over the list, so one site is never hit twice in a row.
+  let first=true;
+  for(let repeat=1;repeat<=repeats;repeat++){
+    for(const task of tasks){
+      if(!first&&gapMs>0) await new Promise((resolve)=>setTimeout(resolve,gapMs));
+      first=false;
+      runs.push(await runTask(task,output,compare?repeat:0));
+    }
   }
   await fs.writeFile(path.join(output,"summary.json"),JSON.stringify({manifest,runs},null,2),{mode:0o600});
   process.stdout.write(JSON.stringify({event:"pilot_finished",output,attempted:runs.length,graded:false})+"\n");
 }
-module.exports={selectPilotTasks,readOnlyDecision,pilotDecision,actionStep,captureTerminalEvidence};
+module.exports={selectPilotTasks,selectCompareTasks,readOnlyDecision,pilotDecision,actionStep,captureTerminalEvidence};
 if(require.main===module) main().catch((error:any)=>{console.error(error?.message??"pilot_failed");process.exitCode=1;});
