@@ -37,9 +37,19 @@ const IRREVERSIBLE_NAME = new RegExp([
 // The part of the list above that is a purchase (not a transfer, withdrawal or
 // account removal). Only a payment the user ordered in chat can be let through
 // (see payment-mandate); everything else stays refused.
+// The final step of a checkout, in the wording real shops use (corpus: fixtures/payment-button-labels.json,
+// measured by test/payment-detection-corpus.test.js). Steps that only move toward checkout ("Proceed to
+// checkout", "Add to cart") and settings or history pages are deliberately not payments. A button this misses
+// still goes to the human approval gate, so a gap costs friction, not safety; a false match costs more, so
+// the short ambiguous words ("Purchase", "결제 진행") only match as the whole label.
 const PAYMENT_NAME = new RegExp([
-  "\\b(pay now|confirm payment|place order|complete purchase|buy now|pay \\$?[\\d,.]+)\\b",
+  "\\b(pay now|confirm payment|place (?:your )?order|complete purchase|buy now|pay \\$?[\\d,.]+)\\b",
+  "\\b(complete (?:the |your )?(?:order|purchase|payment)|confirm (?:and pay|order|your order|purchase)|submit (?:payment|your order|order))$",
+  "^purchase$",
   "결제하기|결제 확인|주문하기|구매하기|바로 구매",
+  "^(?:\\d[\\d,]*원\\s*)?결제(?: 진행(?:하기)?)?$",
+  "^주문 완료하기$",
+  "注文を確定|今すぐ購入|今すぐ支払",
 ].join("|"), "i");
 
 // A name that also reads as a transfer or account removal is never a purchase.
