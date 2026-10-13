@@ -176,7 +176,7 @@ class TaskHost {
     this._plannerFast = plannerFast === true;
     this._plannerEscalation = plannerEscalation === true;
     this._plannerRouting = plannerRouting === true;
-    this._paymentsEnabled = paymentsEnabled !== false;
+    this._paymentsEnabled = paymentsEnabled === true;
     this._mcpProviders = Array.isArray(mcpProviders) ? [...mcpProviders] : [];
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
@@ -2468,10 +2468,10 @@ class TaskHost {
     this._plannerFast = settings.plannerFast === true;
     this._plannerEscalation = settings.plannerEscalation === true;
     this._plannerRouting = settings.plannerRouting === true;
-    this._paymentsEnabled = settings.paymentsEnabled !== false;
+    this._paymentsEnabled = settings.paymentsEnabled === true;
     this._mcpProviders = [...settings.mcpProviders];
     for (const entry of this._active.values()) {
-      entry.controller.setPolicySettings({ ...settings, paymentsEnabled: settings.paymentsEnabled !== false, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
+      entry.controller.setPolicySettings({ ...settings, paymentsEnabled: settings.paymentsEnabled === true, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
     }
     return settings;
   }

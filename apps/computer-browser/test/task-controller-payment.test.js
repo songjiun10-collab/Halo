@@ -9,7 +9,7 @@ const { TaskController } = require("../main/harness/task-controller");
 
 const PAY = { type: "click", elementId: "1" };
 
-async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }), controllerOptions = {} }) {
+async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }), controllerOptions = { paymentsEnabled: true } }) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-payment-controller-"));
   const store = await TaskStore.create({ originalRequest: request }, { storageRoot });
   const executed = [];
@@ -132,4 +132,10 @@ test("kill switch: turning payments off mid-task revokes a mandate that was alre
   assert.ok(kinds(on).includes("mandate_granted"));
   on.controller.setPolicySettings({ paymentsEnabled: false });
   assert.ok(on.controller._mandates.every((m) => m.revoked === true));
+});
+
+test("payments are off by default: without an explicit opt-in a clear order grants nothing", async (t) => {
+  const r = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", controllerOptions: {} });
+  assert.equal(kinds(r).includes("mandate_granted"), false);
+  assert.equal(r.executed.length, 0);
 });

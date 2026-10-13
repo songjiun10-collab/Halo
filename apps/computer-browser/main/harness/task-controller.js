@@ -265,7 +265,7 @@ class TaskController {
     routineRunner,
     routineRun,
     batchReadOnlyActions = true,
-    paymentsEnabled = true,
+    paymentsEnabled = false,
     harnessProfile,
     makeMcpBroker,
     mcpEnabled,
@@ -305,8 +305,8 @@ class TaskController {
     this._planner = planner;
     this._routineRunner = routineRunner || null;
     this._batchReadOnlyActions = batchReadOnlyActions !== false;
-    // Kill switch: only an explicit false turns payments off for this controller.
-    this._paymentsEnabled = paymentsEnabled !== false;
+    // Opt-in: payments stay refused unless the host explicitly passes true (fail closed).
+    this._paymentsEnabled = paymentsEnabled === true;
     const checkpointedRoutineRun = store.lastCheckpoint?.payload?.routineRun;
     this._routineRun = checkpointedRoutineRun ? { ...checkpointedRoutineRun } : routineRun ? { ...routineRun } : null;
     if (this._routineRunner && (!this._routineRun ||
@@ -653,7 +653,7 @@ class TaskController {
     if (permissionMode !== undefined) this._permissionMode = permissionMode;
     if (plannerEffort !== undefined) this._plannerEffort = plannerEffort;
     if (paymentsEnabled !== undefined) {
-      this._paymentsEnabled = paymentsEnabled !== false;
+      this._paymentsEnabled = paymentsEnabled === true;
       // Turning payments off takes effect now: a mandate already granted dies with it.
       if (!this._paymentsEnabled) for (const mandate of this._mandates) mandate.revoked = true;
     }

@@ -51,7 +51,7 @@ async function scenario(name, { request, total, expectPosts, expectPause }) {
   await page.webContents.loadURL(`${origin}/`);
   let turn = 0;
   const controller = new TaskController({
-    store, browser, permissionMode: "interact", approve: async () => ({ decision: "allow", reasons: [] }), hostVerifier: () => true,
+    store, browser, permissionMode: "interact", paymentsEnabled: true, approve: async () => ({ decision: "allow", reasons: [] }), hostVerifier: () => true,
     planner: { next: async (c) => {
       const base = { taskId: c.taskId, goalVersion: c.goalVersion, basedOnObservationId: c.observation.id, criterionIds: [] };
       if (turn++ > 0) return { ...base, kind: "finish", evidenceIds: [] };

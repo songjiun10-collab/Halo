@@ -105,7 +105,7 @@ function validateSettings(value) {
   if (hasAwareness && typeof value.contextAwareness !== "boolean") {
     throw new HostSettingsError("invalid_context_awareness", "contextAwareness must be a boolean");
   }
-  // Payment kill switch: false makes the host refuse every payment mandate and approval. Unset keeps today's behavior.
+  // Payments are opt-in: only true lets the host grant a payment mandate. Unset or false refuses every payment.
   const hasPaymentsEnabled = Object.prototype.hasOwnProperty.call(value, "paymentsEnabled");
   if (hasPaymentsEnabled && typeof value.paymentsEnabled !== "boolean") {
     throw new HostSettingsError("invalid_payments_enabled", "paymentsEnabled must be a boolean");
