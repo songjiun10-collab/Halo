@@ -59,7 +59,7 @@ const HARNESS_METHODS = [
   "setMemoryPolicy", "stopBackgroundService", "setBackgroundLaunchAtLogin",
 ];
 
-const WINDOW_METHODS = ["newWindow", "captureSurface", "copyText", "captureAgentFrame", "captureTaskFrame", "sendTaskInput", "sendSurfaceInput"];
+const WINDOW_METHODS = ["newWindow", "captureSurface", "copyText", "captureAgentFrame", "captureTaskFrame", "sendTaskInput", "sendSurfaceInput", "voiceAvailable", "transcribeAudio"];
 
 const api = {};
 for (const method of METHODS) {

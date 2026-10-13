@@ -3,9 +3,11 @@ import { AGENT } from '../session/session'
 import { nonEmptyVerbatim } from '../session/composer'
 import type { Actor, ChatMessage, PendingCriterion, TimelineEvent } from '../session/types'
 import { HaloMark } from './Logo'
+import { Mic, Stop } from './Icons'
 import { ModelPicker } from './ModelPicker'
 import { workSummary, workedForLabel } from '../session/work-summary'
 import { useModelSettings } from '../hooks/useModelSettings'
+import { appendTranscript, useVoiceInput } from '../hooks/useVoiceInput'
 
 const actorName: Record<Actor, string> = { claude: AGENT, you: 'You', halo: 'Halo' }
 
@@ -36,6 +38,7 @@ export function HaloChat({ taskLabel, tabContext, messages, timeline = [], recen
   const ref = useRef<HTMLElement>(null)
   const [value, setValue] = useState('')
   const model = useModelSettings()
+  const voice = useVoiceInput((text) => setValue((current) => appendTranscript(current, text)))
   const work = workSummary(timeline)
   const opener = useRef<HTMLElement | null>(null)
   const closeRef = useRef(onClose)
@@ -140,8 +143,21 @@ export function HaloChat({ taskLabel, tabContext, messages, timeline = [], recen
             aria-label={isTaskActive ? 'Amend task goal' : 'What should the agent do?'}
             title={isTaskActive ? 'Sending this records a goal update; it is not a live conversation.' : 'Start a new task.'}
           />
+          {voice.available && (
+            <button
+              className="hx-chat__mic"
+              type="button"
+              data-state={voice.state}
+              aria-label={voice.state === 'recording' ? 'Stop recording' : voice.state === 'transcribing' ? 'Turning speech into text' : 'Speak your request'}
+              aria-pressed={voice.state === 'recording'}
+              title={voice.state === 'recording' ? 'Stop and turn it into text' : 'Speak (stays on this computer)'}
+              disabled={voice.state === 'transcribing'}
+              onClick={voice.toggle}
+            >{voice.state === 'recording' ? <Stop /> : <Mic />}</button>
+          )}
           <button className="hx-chat__send" type="submit" aria-label="Send" title="Send" disabled={!value.trim()}>↑</button>
         </div>
+        {voice.error && <p className="hx-settings__error" role="alert">{voice.error}</p>}
         <ModelPicker settings={model.settings} onSelectModel={(id) => void model.selectModel(id)} onEffort={(effort) => void model.selectEffort(effort)} savingProvider={model.savingProvider} savingEffort={model.savingEffort} />
       </form>
     </section>

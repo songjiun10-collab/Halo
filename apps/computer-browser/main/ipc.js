@@ -158,7 +158,7 @@ const SHARED_RUNTIME_METHODS = new Set(["setMemoryPolicy", "setLaunchAtLogin"]);
 //     snapshot (main/harness/background-runtime-ui.js).
 //   launchAgent: optional {isInstalled, enable, disable} for "start at
 //     login" (main/harness/background-launch-agent.js).
-module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNewWindow, launchAgentInstalled, launchAgent, captureAgentFrame, captureTaskFrame, sendTaskInput } = {}) {
+module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNewWindow, launchAgentInstalled, launchAgent, captureAgentFrame, captureTaskFrame, sendTaskInput, voice } = {}) {
   const ipc = ipcMain || require("./desktop-runtime").ipcMain;
   let registry = registries.get(ipc);
   if (!registry) {
@@ -249,6 +249,20 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
     const owner = findContext(event);
     if (!owner) return Promise.reject(new Error("halo:sendSurfaceInput: rejected untrusted sender"));
     return Promise.resolve(owner.controlApi.sendSurfaceInput(input));
+  });
+
+  // Voice input: the clip stays on this machine (main/harness/voice-transcriber.js).
+  addHandler("halo:voiceAvailable", (event) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:voiceAvailable: rejected untrusted sender"));
+    return Promise.resolve(!!voice && voice.available());
+  });
+  addHandler("halo:transcribeAudio", (event, audio, options) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:transcribeAudio: rejected untrusted sender"));
+    if (!voice) return Promise.reject(Object.assign(new Error("voice input is not available"), { code: "not_set_up" }));
+    const bytes = audio instanceof ArrayBuffer ? Buffer.from(audio) : ArrayBuffer.isView(audio) ? Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength) : null;
+    if (!bytes) return Promise.reject(Object.assign(new Error("audio must be binary"), { code: "bad_audio" }));
+    const language = typeof options?.language === "string" ? options.language : "auto";
+    return voice.transcribe(bytes, { language }).catch((error) => { throw Object.assign(new Error(error.message), { code: error.code || "failed" }); });
   });
 
   if (taskHost) registry.harnessEnabled = true;

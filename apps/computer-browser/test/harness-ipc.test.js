@@ -416,3 +416,31 @@ test("room channels dispatch to the TaskHost and room events reach the window", 
   roomListener({ roomId: "t", message: { text: "hi" } });
   assert.deepEqual(win._sent.at(-1), { channel: "halo:roomEvent", payload: { roomId: "t", message: { text: "hi" } } });
 });
+
+test("voice channels: only the trusted window reaches the transcriber, audio must be binary, errors keep their code", async () => {
+  const ipcMain = makeFakeIpcMain();
+  const win = makeFakeWin();
+  const calls = [];
+  const voice = { available: () => true, transcribe: async (buf, opts) => { calls.push([buf.length, opts]); return { text: "안녕" }; } };
+  registerIpc(win, { onChange: () => () => {} }, { ipcMain, voice });
+  const ok = trustedEvent(win);
+  const stranger = { senderFrame: { url: "https://evil.example/" } };
+
+  assert.equal(await ipcMain._invoke("halo:voiceAvailable", ok), true);
+  await assert.rejects(() => ipcMain._invoke("halo:voiceAvailable", stranger), /untrusted/);
+  await assert.rejects(() => ipcMain._invoke("halo:transcribeAudio", stranger, new ArrayBuffer(4)), /untrusted/);
+  await assert.rejects(() => ipcMain._invoke("halo:transcribeAudio", ok, "not audio"), { code: "bad_audio" });
+  assert.deepEqual(await ipcMain._invoke("halo:transcribeAudio", ok, new Uint8Array([1, 2, 3]), { language: "ko" }), { text: "안녕" });
+  assert.deepEqual(calls, [[3, { language: "ko" }]]);
+
+  const failing = makeFakeIpcMain();
+  const win2 = makeFakeWin();
+  registerIpc(win2, { onChange: () => () => {} }, { ipcMain: failing, voice: { available: () => false, transcribe: async () => { throw Object.assign(new Error("nope"), { code: "not_set_up" }); } } });
+  await assert.rejects(() => failing._invoke("halo:transcribeAudio", trustedEvent(win2), new ArrayBuffer(4)), { code: "not_set_up" });
+  assert.equal(await failing._invoke("halo:voiceAvailable", trustedEvent(win2)), false);
+
+  const none = makeFakeIpcMain();
+  const win3 = makeFakeWin();
+  registerIpc(win3, { onChange: () => () => {} }, { ipcMain: none });
+  assert.equal(await none._invoke("halo:voiceAvailable", trustedEvent(win3)), false);
+});

@@ -121,6 +121,9 @@ export interface HaloBrowserApi {
   sendSurfaceInput?: (input: TaskInput) => Promise<boolean>
   /** Optional: older hosts lack it. */
   copyText?: (text: string) => Promise<boolean>
+  /** Voice input (whisper.cpp on this computer). Optional: older hosts and machines without the program lack it. */
+  voiceAvailable?: () => Promise<boolean>
+  transcribeAudio?: (wav: ArrayBuffer, options?: { language?: string }) => Promise<{ text: string }>
   setBrowserBounds: (bounds: BrowserViewport) => Promise<unknown>
   onEvent: (callback: (event: { snapshot: DirectBrowserSnapshot }) => void) => () => void
   createTask(input: GoalInput): Promise<{ taskId: string; snapshot: TaskSnapshot; goal: GoalSpec }>

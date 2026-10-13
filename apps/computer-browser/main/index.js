@@ -14,6 +14,7 @@ const crypto = require("crypto");
 const { spawn, execFile } = require("child_process");
 const { ControlApi } = require("./control-api");
 const registerIpc = require("./ipc");
+const { VoiceTranscriber } = require("./harness/voice-transcriber");
 const layoutConstants = require("../shared/layout-constants");
 const { requestDecision } = require("./approver-client");
 const { TaskHost } = require("./harness/task-host");
@@ -642,6 +643,7 @@ async function createWindow(socketPath, attachedClient = undefined) {
   });
   registerIpc(win, controlApi, {
     taskHost,
+    voice: new VoiceTranscriber({ voiceDir: path.join(app.getPath("userData"), "voice") }),
     // An attached UI has no agent views of its own; the service process owns them.
     captureAgentFrame: (taskId) => (attachedClient ? attachedClient.captureAgentFrame(taskId) : agentViewportHost.captureFrame(taskId)),
     // Only an attached UI needs these: its task views live in the service process.
