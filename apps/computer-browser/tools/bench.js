@@ -6,7 +6,12 @@
 // the host settings back and stops the service, even if the run fails.
 //
 //   node tools/bench.js <tasks.json> <out.jsonl> [--limit 20] [--timeout 300]
-//        [--provider codex_cli] [--model gpt-6-luna] [--mode full]
+//        [--provider codex_cli] [--model gpt-6-luna] [--mode full] [--payments]
+//
+// Safety rules stay on in a benchmark. --payments only turns on the opt-in so a task that clearly
+// orders a purchase (one site, one limit, in the request text) can run; it is switched back off
+// afterwards. Tasks that hit a card field, a password or an uncovered payment click pause with
+// need_user or an approval, and show up as such in the summary.
 //
 // Close the normal Halo window first: both use the same user data directory.
 
@@ -47,7 +52,7 @@ function summarize(outFile) {
 
 async function main() {
   const [tasksFile, outFile] = process.argv.slice(2);
-  if (!tasksFile || !outFile) throw new Error("usage: bench.js <tasks.json> <out.jsonl> [--limit n] [--timeout s] [--provider id] [--model id] [--mode full]");
+  if (!tasksFile || !outFile) throw new Error("usage: bench.js <tasks.json> <out.jsonl> [--limit n] [--timeout s] [--provider id] [--model id] [--mode full] [--payments]");
   spawnSync("pkill", ["-f", "computer-browser/node_modules"]);
   await sleep(2000);
   const log = fs.openSync(flag("service-log", "/tmp/halo-bench-service.log"), "w");
@@ -62,6 +67,7 @@ async function main() {
       permissionMode: flag("mode", "full"),
       ...(flag("provider") ? { plannerProvider: flag("provider") } : {}),
       ...(flag("model") ? { plannerModel: flag("model") } : {}),
+      ...(process.argv.includes("--payments") ? { paymentsEnabled: true } : {}),
     });
     const run = spawnSync("node", [path.join(__dirname, "bench-runner.js"), tasksFile, outFile,
       "--timeout", flag("timeout", "300"), ...(flag("limit") ? ["--limit", flag("limit")] : [])], { cwd: APP_DIR, stdio: "inherit" });
@@ -69,6 +75,7 @@ async function main() {
   } finally {
     await client.updateHostSettings({
       permissionMode: before.permissionMode, plannerProvider: before.plannerProvider, plannerModel: before.plannerModel,
+      paymentsEnabled: before.paymentsEnabled === true,
     }).catch((error) => console.error("settings were NOT restored:", error.code || error.message, JSON.stringify(before)));
     await client.stopService?.().catch(() => {});
     await client.detach().catch(() => {});
