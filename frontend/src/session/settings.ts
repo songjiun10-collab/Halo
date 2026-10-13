@@ -31,6 +31,16 @@ export function paymentsSwitchPatch(settings: HostSettings, confirmOn: () => boo
   return confirmOn() ? { paymentsEnabled: true } : null
 }
 
+/** The beta-expiry line for Settings; null on a development build. Quiet until the last two weeks. */
+export function buildExpiryNotice(settings: HostSettings): { text: string; urgent: boolean } | null {
+  const e = settings.buildExpiry
+  if (!e) return null
+  if (e.expired) return { text: 'This beta build has expired. Download a newer build to run tasks.', urgent: true }
+  if (e.daysLeft === null || e.daysLeft > 14) return null
+  const text = e.daysLeft <= 1 ? 'This beta build expires within a day.' : `This beta build expires in ${e.daysLeft} days.`
+  return { text, urgent: e.daysLeft <= 3 }
+}
+
 /** One host settings change; null when there is no host or it refused. */
 export async function saveSetting(api: Pick<HaloBrowserApi, 'updateHostSettings'> | undefined, patch: SettingsPatch): Promise<HostSettings | null> {
   if (!api) return null

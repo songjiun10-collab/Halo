@@ -4,7 +4,7 @@ import { ProviderIcon } from './BrandIcon'
 import type { HostSettings } from '../session/api'
 import { activeModel, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, DEFAULT_NVIDIA_MODEL, mergeDiscoveredNvidia, PLANNER_MODELS } from '../session/claude-models'
 import { DEFAULT_EFFORT, type PlannerEffort } from '../session/planner-effort'
-import { EXECUTION_OPTIONS, fastModeSupport, paymentsSwitchPatch, PERMISSION_OPTIONS, saveSetting, type SettingsPatch } from '../session/settings'
+import { buildExpiryNotice, EXECUTION_OPTIONS, fastModeSupport, paymentsSwitchPatch, PERMISSION_OPTIONS, saveSetting, type SettingsPatch } from '../session/settings'
 import { useEnabledPlanners } from '../session/enabled-planners'
 import { EffortSlider } from './EffortSlider'
 import { Back } from './Icons'
@@ -195,6 +195,7 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
         <Cards label="Execution mode" options={EXECUTION_OPTIONS} value={settings.executionMode} disabled={saving} onPick={(executionMode) => onChange({ executionMode })} />
       </div>
 
+      {(() => { const n = buildExpiryNotice(settings); return n && <p className={n.urgent ? 'hx-settings__error' : 'hx-settings__hint'} role={n.urgent ? 'alert' : undefined}>{n.text}</p> })()}
       {error && <p className="hx-settings__error" role="alert">{error}</p>}
       </div>
     </section>

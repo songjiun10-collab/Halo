@@ -63,3 +63,12 @@ test("the clock is read each time: a build that expires while running refuses th
   now = day + 1;
   await assert.rejects(() => Promise.resolve().then(() => host.createTask({ originalRequest: "second" })), { code: "build_expired" });
 });
+
+test("settings carry a read-only build expiry notice only for a beta build", async () => {
+  const dev = await makeHost({ settingsStore: { load: async () => ({ version: 1 }) } });
+  assert.equal((await dev.host.getHostSettings()).buildExpiry, undefined);
+
+  const beta = await makeHost({ settingsStore: { load: async () => ({ version: 1 }) }, buildInfo: { expiresAt: day, invalid: false }, wallClock: () => day - 3 * 86_400_000 + 1000 });
+  const settings = await beta.host.getHostSettings();
+  assert.deepEqual(settings.buildExpiry, { expired: false, daysLeft: 3, expiresAt: day });
+});

@@ -126,3 +126,13 @@ test('the payments switch asks before turning on, never before turning off, and 
   assert.deepEqual(paymentsSwitchPatch({ ...base, paymentsEnabled: true }, () => { asked += 1; return false }), { paymentsEnabled: false })
   assert.equal(asked, 0, 'turning off needs no question')
 })
+
+test('buildExpiryNotice stays quiet on dev builds and early beta, warns in the last two weeks', () => {
+  const { buildExpiryNotice } = settingsLib
+  assert.equal(buildExpiryNotice(base), null)
+  assert.equal(buildExpiryNotice({ ...base, buildExpiry: { expired: false, daysLeft: 30, expiresAt: 1 } }), null)
+  assert.deepEqual(buildExpiryNotice({ ...base, buildExpiry: { expired: false, daysLeft: 10, expiresAt: 1 } }), { text: 'This beta build expires in 10 days.', urgent: false })
+  assert.equal(buildExpiryNotice({ ...base, buildExpiry: { expired: false, daysLeft: 3, expiresAt: 1 } }).urgent, true)
+  assert.match(buildExpiryNotice({ ...base, buildExpiry: { expired: false, daysLeft: 1, expiresAt: 1 } }).text, /within a day/)
+  assert.equal(buildExpiryNotice({ ...base, buildExpiry: { expired: true, daysLeft: 0, expiresAt: null } }).urgent, true)
+})

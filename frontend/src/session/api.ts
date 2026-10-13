@@ -94,6 +94,8 @@ export interface HostSettings {
   strategyLearning?: boolean
   /** Payments are opt-in: only true lets the host act on a clear chat order to pay. Unset is off. */
   paymentsEnabled?: boolean
+  /** Read-only, present only on a beta build with an expiry date. Never sent back in a patch. */
+  buildExpiry?: { expired: boolean; daysLeft: number | null; expiresAt: number | null }
 }
 export interface HaloBrowserApi {
   readonly runtime?: 'chromium'

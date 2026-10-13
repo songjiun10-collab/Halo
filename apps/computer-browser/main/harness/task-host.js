@@ -2409,7 +2409,11 @@ class TaskHost {
   async getHostSettings() {
     this._assertOpen();
     if (!this._settingsStore) throw new TaskHostError("settings_unavailable", "host settings are unavailable");
-    return this._settingsStore.load();
+    const settings = await this._settingsStore.load();
+    // Read-only notice for the settings screen; never stored, never accepted back by updateHostSettings.
+    const status = this._buildInfo ? checkBuild(this._buildInfo, this._wallClock()) : null;
+    if (!status || (status.expiresAt === null && !status.invalid)) return settings;
+    return { ...settings, buildExpiry: { expired: status.expired, daysLeft: status.daysLeft, expiresAt: status.expiresAt } };
   }
 
   // Opt-in (plannerRouting): a model of the configured provider whose tier fits
