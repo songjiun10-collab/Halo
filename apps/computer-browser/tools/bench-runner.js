@@ -7,7 +7,14 @@
 // is counted as "finished", and grading is left to a person or a separate
 // grader reading the journal.
 //
-// Usage: node tools/bench-runner.js <tasks.json> <out.jsonl> [--timeout 600] [--limit 20]
+// Usage: node tools/bench-runner.js <tasks.json> <out.jsonl> [--timeout 600] [--limit 20] [--assist]
+//
+// --assist: a person is at the keyboard. When a task stops because it needs card, password, code or
+// personal details, the runner waits for the person to type them into the page themselves (Halo
+// never types them), then resumes the task. Human waiting time is recorded as humanWaitMs and left
+// out of durationMs and the timeout, so speed numbers stay comparable. The agent still never sees
+// the values. This needs a window the person can see; the headless background service has none,
+// so run the app normally (npm start) and point the runner at it for assisted rounds.
 // tasks.json: [{ "task_id", "level", "task", "website" }]
 
 const fs = require("node:fs");
@@ -25,17 +32,39 @@ function arg(name, fallback) {
   return i > -1 ? Number(process.argv[i + 1]) : fallback;
 }
 
+// The two pause reasons host rules write when a person must type something themselves.
+function needsHumanInput(snapshot) {
+  return snapshot?.state === "paused" && snapshot.pauseReason === "need_user" && /^\[(비밀 정보|개인 식별 정보)\]/.test(snapshot.needUserReason ?? "");
+}
+
+function waitForEnter(prompt) {
+  return new Promise((resolve) => {
+    const rl = require("node:readline").createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(prompt, () => { rl.close(); resolve(); });
+  });
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function runTask(client, item, timeoutMs) {
+async function runTask(client, item, timeoutMs, assist = false) {
   const started = Date.now();
+  let humanWaitMs = 0;
+  let assists = 0;
   const created = await client.createTask({ originalRequest: item.website ? `${item.task}\nStart at ${item.website}` : item.task });
   const taskId = created.taskId;
   let snapshot = created.snapshot ?? {};
-  while (Date.now() - started < timeoutMs) {
+  while (Date.now() - started - humanWaitMs < timeoutMs) {
     await sleep(3000);
     ({ snapshot } = await client.getTaskDetail(taskId));
     if (!snapshot) continue;
+    if (assist && needsHumanInput(snapshot)) {
+      const asked = Date.now();
+      await waitForEnter(`\n[${item.task_id.slice(0, 8)}] Halo needs you to type this yourself. Do it in the page, then press Enter: `);
+      humanWaitMs += Date.now() - asked;
+      assists += 1;
+      await client.resumeSavedTask(taskId).catch(() => {});
+      continue;
+    }
     if (SETTLED.has(snapshot.state)) break;
     if (snapshot.state === "paused" && PAUSE_GIVE_UP.has(snapshot.pauseReason)) break;
   }
@@ -47,7 +76,8 @@ async function runTask(client, item, timeoutMs) {
   return {
     task_id: item.task_id, level: item.level, halo_task_id: taskId,
     state: timedOut ? "timeout" : snapshot.state, pauseReason: snapshot?.pauseReason ?? null,
-    durationMs: Date.now() - started,
+    durationMs: Date.now() - started - humanWaitMs,
+    ...(assist ? { humanWaitMs, assists } : {}),
     // For an information task the planner's answer arrives as need_user.
     answer: snapshot?.needUserReason ?? snapshot?.finalAnswer ?? snapshot?.summary ?? snapshot?.resultSummary ?? null,
   };
@@ -67,7 +97,7 @@ async function main() {
   await client.connect();
   try {
     for (const item of tasks) {
-      const row = await runTask(client, item, timeoutMs).catch((error) => ({ task_id: item.task_id, level: item.level, state: "error", error: error.code || error.message }));
+      const row = await runTask(client, item, timeoutMs, process.argv.includes("--assist")).catch((error) => ({ task_id: item.task_id, level: item.level, state: "error", error: error.code || error.message }));
       fs.appendFileSync(outFile, `${JSON.stringify(row)}\n`);
       console.log(row.task_id.slice(0, 8), row.level, row.state, row.pauseReason ?? "", row.durationMs ?? "");
     }
@@ -76,4 +106,6 @@ async function main() {
   }
 }
 
-main().catch((error) => { console.error(error); process.exit(1); });
+if (require.main === module) main().catch((error) => { console.error(error); process.exit(1); });
+
+module.exports = { needsHumanInput };

@@ -6,7 +6,7 @@
 // the host settings back and stops the service, even if the run fails.
 //
 //   node tools/bench.js <tasks.json> <out.jsonl> [--limit 20] [--timeout 300]
-//        [--provider codex_cli] [--model gpt-6-luna] [--mode full] [--payments]
+//        [--provider codex_cli] [--model gpt-6-luna] [--mode full] [--payments] [--assist]
 //
 // Safety rules stay on in a benchmark. --payments only turns on the opt-in so a task that clearly
 // orders a purchase (one site, one limit, in the request text) can run; it is switched back off
@@ -70,7 +70,7 @@ async function main() {
       ...(process.argv.includes("--payments") ? { paymentsEnabled: true } : {}),
     });
     const run = spawnSync("node", [path.join(__dirname, "bench-runner.js"), tasksFile, outFile,
-      "--timeout", flag("timeout", "300"), ...(flag("limit") ? ["--limit", flag("limit")] : [])], { cwd: APP_DIR, stdio: "inherit" });
+      "--timeout", flag("timeout", "300"), ...(process.argv.includes("--assist") ? ["--assist"] : []), ...(flag("limit") ? ["--limit", flag("limit")] : [])], { cwd: APP_DIR, stdio: "inherit" });
     if (run.status !== 0) console.error("runner exited with", run.status);
   } finally {
     await client.updateHostSettings({
