@@ -136,3 +136,14 @@ test('buildExpiryNotice stays quiet on dev builds and early beta, warns in the l
   assert.match(buildExpiryNotice({ ...base, buildExpiry: { expired: false, daysLeft: 1, expiresAt: 1 } }).text, /within a day/)
   assert.equal(buildExpiryNotice({ ...base, buildExpiry: { expired: true, daysLeft: 0, expiresAt: null } }).urgent, true)
 })
+
+test('permissionModePatch asks only when moving to Full, and does nothing for the current mode', () => {
+  const { permissionModePatch } = settingsLib
+  let asked = 0
+  assert.deepEqual(permissionModePatch(base, 'observe', () => { asked += 1; return false }), { permissionMode: 'observe' })
+  assert.equal(asked, 0, 'going down or sideways needs no question')
+  assert.equal(permissionModePatch(base, 'full', () => { asked += 1; return false }), null)
+  assert.equal(asked, 1)
+  assert.deepEqual(permissionModePatch(base, 'full', () => true), { permissionMode: 'full' })
+  assert.equal(permissionModePatch({ ...base, permissionMode: 'full' }, 'full', () => true), null)
+})

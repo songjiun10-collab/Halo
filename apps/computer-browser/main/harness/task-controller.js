@@ -2716,7 +2716,10 @@ class TaskController {
       // apply; Enter (which can submit a form) keeps the human gate.
       const autoRun = gate.policy.allowed && gate.policy.approval === "human" &&
         (paymentOk || isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets) || isAutoDomAction(action, this._lastObservation));
-      const policy = autoRun ? { ...gate.policy, approval: "approver" } : gate.policy;
+      let policy = autoRun ? { ...gate.policy, approval: "approver" } : gate.policy;
+      // Full mode skips approval for ordinary actions, but a payment click that no order covers
+      // (payments off, no order, other site) goes back to the person instead of becoming a silent purchase.
+      if (policy.approval === "bypass" && !paymentOk && this._paymentTarget(action)) policy = { ...policy, approval: "human" };
       // Mode-denied actions may be widened by the user, but never for
       // unattended runs or for actions this browser cannot perform.
       const widen = !policy.allowed;

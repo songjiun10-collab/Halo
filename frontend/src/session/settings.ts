@@ -8,7 +8,7 @@ export const PERMISSION_OPTIONS: readonly { value: HostSettings['permissionMode'
   { value: 'observe', label: 'Observe', hint: 'Reads and scrolls the page only.' },
   { value: 'browse', label: 'Browse', hint: 'Also opens pages and follows links, each checked by the approver.' },
   { value: 'interact', label: 'Interact', hint: 'Also clicks and types; you approve anything that could send, buy or delete.' },
-  { value: 'full', label: 'Full', hint: 'Also submits forms. Skips approval for every allowed action.' },
+  { value: 'full', label: 'Full', hint: 'Also submits forms. Skips approval for allowed actions; payments and card or password entry still wait for you.' },
 ]
 
 export const EXECUTION_OPTIONS: readonly { value: HostSettings['executionMode']; label: string; hint: string }[] = [
@@ -29,6 +29,13 @@ export function fastModeSupport(settings: HostSettings | null): 'no_planner' | '
 export function paymentsSwitchPatch(settings: HostSettings, confirmOn: () => boolean): SettingsPatch | null {
   if (settings.paymentsEnabled === true) return { paymentsEnabled: false }
   return confirmOn() ? { paymentsEnabled: true } : null
+}
+
+/** What picking a permission card changes. Moving up to Full (no approval for allowed actions) must be confirmed; null leaves it as is. */
+export function permissionModePatch(settings: HostSettings, mode: HostSettings['permissionMode'], confirmFull: () => boolean): SettingsPatch | null {
+  if (mode === settings.permissionMode) return null
+  if (mode === 'full' && !confirmFull()) return null
+  return { permissionMode: mode }
 }
 
 /** The beta-expiry line for Settings; null on a development build. Quiet until the last two weeks. */

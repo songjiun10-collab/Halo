@@ -148,3 +148,25 @@ test("a payment button that submits to another site is not covered by this site'
   assert.equal(snap.pauseReason, "need_user");
   assert.match(snap.needUserReason, /다른 사이트/);
 });
+
+test("Full mode skips approval for ordinary actions but a payment click without a covering order still waits for the person", async (t) => {
+  // Payments off (default): nothing covers the click, and Full's bypass must not become a silent purchase.
+  const off = await run(t, { request: "shop.example 둘러봐줘", controllerOptions: { permissionMode: "full" } });
+  assert.equal(off.executed.length, 0, "the payment click did not run");
+  assert.equal(off.controller.getSnapshot().approvalQueue.length, 1, "it waits for the person");
+
+  // Payments on but no order for this site: same.
+  const noOrder = await run(t, { request: "shop.example 둘러봐줘", controllerOptions: { permissionMode: "full", paymentsEnabled: true } });
+  assert.equal(noOrder.executed.length, 0);
+  assert.equal(noOrder.controller.getSnapshot().approvalQueue.length, 1);
+
+  // An ordinary click in Full still runs without asking.
+  const plain = await run(t, { request: "shop.example 둘러봐줘", actions: [{ type: "click", elementId: "0" }], controllerOptions: { permissionMode: "full" } });
+  assert.equal(plain.executed.length, 1);
+  assert.equal(plain.controller.getSnapshot().approvalQueue.length, 0);
+
+  // A covering order still pays at once in Full.
+  const ordered = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", controllerOptions: { permissionMode: "full", paymentsEnabled: true } });
+  assert.equal(ordered.executed.length, 1);
+  assert.ok(kinds(ordered).includes("payment_authorized"));
+});

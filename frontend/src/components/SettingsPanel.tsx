@@ -4,7 +4,7 @@ import { ProviderIcon } from './BrandIcon'
 import type { HostSettings } from '../session/api'
 import { activeModel, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, DEFAULT_NVIDIA_MODEL, mergeDiscoveredNvidia, PLANNER_MODELS } from '../session/claude-models'
 import { DEFAULT_EFFORT, type PlannerEffort } from '../session/planner-effort'
-import { buildExpiryNotice, EXECUTION_OPTIONS, fastModeSupport, paymentsSwitchPatch, PERMISSION_OPTIONS, saveSetting, type SettingsPatch } from '../session/settings'
+import { buildExpiryNotice, EXECUTION_OPTIONS, fastModeSupport, paymentsSwitchPatch, PERMISSION_OPTIONS, permissionModePatch, saveSetting, type SettingsPatch } from '../session/settings'
 import { useEnabledPlanners } from '../session/enabled-planners'
 import { EffortSlider } from './EffortSlider'
 import { Back } from './Icons'
@@ -173,7 +173,7 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
 
       <div className="hx-settings__section">
         <p className="hx-settings__label">What the agent may do</p>
-        <Cards label="Permission mode" options={PERMISSION_OPTIONS} value={settings.permissionMode} disabled={saving} onPick={(permissionMode) => onChange({ permissionMode })} />
+        <Cards label="Permission mode" options={PERMISSION_OPTIONS} value={settings.permissionMode} disabled={saving} onPick={(permissionMode) => { const patch = permissionModePatch(settings, permissionMode, () => typeof window !== 'undefined' && window.confirm('Switch to Full?\n\nHalo will click, type and submit forms without asking you first. Payments, card numbers and passwords still stop and wait for you, but other irreversible actions will not.')); if (patch) onChange(patch) }} />
       </div>
 
       <div className="hx-settings__section">
