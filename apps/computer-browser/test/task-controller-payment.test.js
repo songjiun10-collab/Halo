@@ -1,0 +1,119 @@
+"use strict";
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
+const { TaskStore } = require("../main/harness/task-store");
+const { TaskController } = require("../main/harness/task-controller");
+
+const PAY = { type: "click", elementId: "1" };
+
+async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }) }) {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-payment-controller-"));
+  const store = await TaskStore.create({ originalRequest: request }, { storageRoot });
+  const executed = [];
+  let planned = 0;
+  const browser = {
+    supportsAction: () => true,
+    observe: async () => ({ id: "obs", documentEpoch: 1, url: "https://shop.example/checkout", text: `Item $10.00\nShipping $2.50\n${total}`, elements: [
+      { elementId: "0", role: "link", name: "Cart", href: "https://shop.example/cart" },
+      { elementId: "1", role: "button", name: "Place order", formAction: "https://shop.example/pay", formMethod: "post" },
+    ] }),
+    execute: async (action) => { executed.push(action); return { status: "ok" }; },
+  };
+  const controller = new TaskController({
+    store, browser, permissionMode: "interact", approve: approver, hostVerifier: () => true,
+    planner: { next: async (c) => {
+      const base = { taskId: c.taskId, goalVersion: c.goalVersion, basedOnObservationId: c.observation.id, criterionIds: [] };
+      planned += 1;
+      return planned === 1 ? { ...base, kind: "actions", actions } : { ...base, kind: "finish", evidenceIds: [] };
+    } },
+  });
+  t.after(async () => { await controller.stop(); await store.close(); await fs.rm(storageRoot, { recursive: true, force: true }); });
+  await controller.start();
+  const notes = (await store.getEvents()).filter((e) => e.type === "note").map((e) => e.payload);
+  return { controller, executed, notes, get planned() { return planned; } };
+}
+const kinds = (r) => r.notes.map((n) => n.kind);
+
+test("a clear chat order pays at once: no approval queue, mandate and payment are journaled", async (t) => {
+  const r = await run(t, { request: "shop.example에서 $20 이하로 구매해줘" });
+  assert.equal(r.executed.length, 1);
+  assert.deepEqual(r.executed[0], PAY);
+  assert.equal(r.controller.getSnapshot().approvalQueue.length, 0);
+  assert.ok(kinds(r).includes("mandate_granted"));
+  const paid = r.notes.find((n) => n.kind === "payment_authorized");
+  assert.deepEqual({ currency: paid.currency, amountMinor: paid.amountMinor, maxAmountMinor: paid.maxAmountMinor, origin: paid.origin }, { currency: "USD", amountMinor: 1250, maxAmountMinor: 2000, origin: "https://shop.example" });
+  assert.equal(JSON.stringify(r.notes).includes("4111"), false, "no card data in the journal");
+});
+
+test("a total over the user's cap pauses with a question instead of paying or refusing", async (t) => {
+  const r = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", total: "Total $25.00" });
+  assert.equal(r.executed.length, 0);
+  const snap = r.controller.getSnapshot();
+  assert.equal(snap.state, "paused");
+  assert.equal(snap.pauseReason, "need_user");
+  assert.match(snap.needUserReason, /한도/);
+  assert.ok(kinds(r).includes("payment_question"));
+  assert.equal(kinds(r).includes("payment_authorized"), false);
+});
+
+test("an unreadable total asks, and a different site asks", async (t) => {
+  const none = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", total: "thanks for shopping" });
+  assert.equal(none.executed.length, 0);
+  assert.match(none.controller.getSnapshot().needUserReason, /금액/);
+  const other = await run(t, { request: "other.example에서 $20 이하로 구매해줘" });
+  assert.equal(other.executed.length, 0);
+  assert.match(other.controller.getSnapshot().needUserReason, /다른 사이트/);
+});
+
+test("an unclear order asks before doing anything", async (t) => {
+  for (const [request, reason] of [["물티슈 사줘", /사이트/], ["shop.example에서 물티슈 사줘", /한도/], ["철수에게 5만원 송금해줘", /송금/]]) {
+    const r = await run(t, { request });
+    assert.equal(r.executed.length, 0, request);
+    assert.equal(r.planned, 0, "the planner is not even called");
+    const snap = r.controller.getSnapshot();
+    assert.equal(snap.pauseReason, "need_user");
+    assert.match(snap.needUserReason, reason);
+  }
+});
+
+test("without a payment order, a payment click is not auto-run: the human gate decides, as before", async (t) => {
+  for (const request of ["update my profile", "shop.example 결제 직전까지만 해줘 3만원", "shop.example에서 사지 마 $20"]) {
+    const r = await run(t, { request });
+    assert.equal(r.executed.length, 0, request);
+    assert.equal(r.controller.getSnapshot().approvalQueue.length, 1, request);
+    assert.equal(kinds(r).includes("payment_authorized"), false);
+  }
+});
+
+test("one order pays once: a second payment click is not covered", async (t) => {
+  const r = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", actions: [PAY, PAY] });
+  assert.equal(r.executed.length, 1);
+  assert.equal(r.notes.filter((n) => n.kind === "payment_authorized").length, 1);
+  assert.equal(r.controller.getSnapshot().approvalQueue.length, 1, "the second click falls back to the human gate");
+});
+
+test("the independent approver still has the last word on a covered payment", async (t) => {
+  const r = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", approver: async () => ({ decision: "deny", reasons: ["policy"] }) });
+  assert.equal(r.executed.length, 0);
+  assert.equal(r.controller.getSnapshot().approvalQueue.length, 0);
+});
+
+test("the user's answer to the question (an amendment) completes the order and the payment then runs", async (t) => {
+  const r = await run(t, { request: "shop.example에서 물티슈 사줘" });
+  assert.equal(r.controller.getSnapshot().pauseReason, "need_user");
+  assert.equal(r.executed.length, 0);
+  await r.controller.amend({ text: "한도는 $20 이하로 해줘" });
+  await r.controller.resume();
+  assert.equal(r.executed.length, 1, "the click ran once the cap was given");
+  assert.equal(r.controller.getSnapshot().approvalQueue.length, 0);
+});
+
+test("a resume without an answer does not ask again and does not pay", async (t) => {
+  const r = await run(t, { request: "shop.example에서 물티슈 사줘" });
+  await r.controller.resume();
+  assert.equal(r.executed.length, 0);
+  assert.equal(r.notes.filter((n) => n.kind === "payment_question").length, 1);
+});

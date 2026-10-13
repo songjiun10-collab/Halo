@@ -28,7 +28,8 @@ const { adaptiveEffort } = require("./planner-effort-policy");
 const { createRecoveryPolicy, buildRecoveryFeedback, buildProposalFeedback } = require("./recovery-policy");
 const { resolveTarget } = require("./screen-map");
 const { TaskBranchManager } = require("./task-branch-manager");
-const { classifyTarget } = require("./effect-classifier");
+const { classifyTarget, isPaymentControl } = require("./effect-classifier");
+const payments = require("./payment-mandate");
 const { buildContext } = require("./context-builder");
 const { ContextRefCatalog } = require("./context-refs");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
@@ -448,6 +449,9 @@ class TaskController {
     // Leases live only as long as this controller: a restarted task starts
     // with none, which is stricter than replaying them from the journal.
     this._leases = [];
+    // Payment Mandates made from the user's own chat request (see payment-mandate.js). Not restored after a restart.
+    this._mandates = [];
+    this._mandateGoalVersion = null;
     this._browser.setIntentLock?.(this._goal.lock ?? null);
     this._epoch = 0;
     this._loopRunning = false;
@@ -1900,6 +1904,9 @@ class TaskController {
         const epoch = this._epoch;
         this._enterActive();
 
+        // An unclear payment order is asked about before any planning happens.
+        if (await this._ensureMandate() === "stop_loop") break;
+
         const pressure = this._memoryMonitor.getPressureLevel();
         if (pressure === "pause" || pressure === "emergency") {
           await this._pauseForMemoryPressure(pressure);
@@ -2452,6 +2459,74 @@ class TaskController {
     return evidence;
   }
 
+  // The user's chat request is the payment authorization. Read it once per goal
+  // version: a clear order becomes a single-use mandate, an unclear one pauses the
+  // task with a question, and anything else leaves payments refused. Unattended
+  // runs (routines, schedules) never get one, and a goal version that already paid
+  // never gets a second.
+  async _ensureMandate() {
+    const version = this._goal.goalVersion;
+    if (this._mandateGoalVersion === version) return "ok";
+    this._mandateGoalVersion = version;
+    for (const old of this._mandates) old.revoked = true;
+    if (this._routineRunner || this._goal.trigger) return "ok";
+    const userText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
+    const verdict = payments.mandateFromUserRequest(userText);
+    if (verdict.kind === "none") return "ok";
+    if (verdict.kind === "ask") {
+      await this._store.append({ type: "note", payload: { kind: "payment_question", reason: verdict.reason } });
+      this._needUserReason = verdict.question;
+      await this._pauseWith("need_user");
+      return "stop_loop";
+    }
+    const paid = (await this._store.getEvents()).some((e) => e.type === "note" && e.payload?.kind === "payment_authorized" && e.goalVersion === version);
+    if (paid) return "ok";
+    const mandate = payments.createMandate({ id: randomUUID(), taskId: this._goal.taskId, origin: verdict.origin, currency: verdict.currency, maxAmountMinor: verdict.maxAmountMinor, now: this._monotonicNow(), wallNow: Date.now() });
+    await this._store.append({ type: "note", payload: { kind: "mandate_granted", mandateId: mandate.id, origin: mandate.origin, currency: mandate.currency, maxAmountMinor: mandate.maxAmountMinor, expiresAt: mandate.expiresAt } });
+    this._mandates.push(mandate);
+    return "ok";
+  }
+
+  // The control a payment-like action would press, or null. Only the host's own
+  // reads count: the screen map for coordinate clicks, the last observation for DOM clicks.
+  _paymentTarget(action) {
+    if (action.type === "click_at" && this._screenTargets && this._screenTargets.observationId === action.observationId && hasComputerUseAdapter(this._store.taskProfile)) {
+      const hit = resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y));
+      return isPaymentControl(hit) ? hit : null;
+    }
+    if (action.type === "click" || action.type === "submit_form") {
+      const element = this._lastObservation?.elements?.find((el) => el.elementId === action.elementId);
+      if (!element || typeof element.name !== "string") return null;
+      const target = { role: element.role === "link" ? "link" : "button", name: element.name, covered: false, disabled: !!element.disabled };
+      return isPaymentControl(target) ? target : null;
+    }
+    return null;
+  }
+
+  // pay: the user's order covers this payment; ask: pause with a question;
+  // refuse/null: nobody ordered a payment, the existing gates apply unchanged.
+  async _decidePayment(action) {
+    const target = this._paymentTarget(action);
+    if (!target) return null;
+    const observation = this._lastObservation;
+    let origin = null;
+    try { origin = new URL(observation?.url ?? "").origin; } catch { /* unreadable page url */ }
+    const request = { origin, amount: payments.findPayableAmount(target.name, observation?.text) };
+    const verdict = payments.decidePayment({ mandates: this._mandates, request, now: this._monotonicNow() });
+    if (verdict.decision === "pay") {
+      const m = verdict.mandate;
+      payments.consumeMandate(m); // spent before the journal write: a failed write never hands the use back
+      await this._store.append({ type: "note", payload: { kind: "payment_authorized", mandateId: m.id, origin, currency: m.currency, amountMinor: request.amount.amountMinor, maxAmountMinor: m.maxAmountMinor, control: target.name.slice(0, 80) } });
+      return verdict;
+    }
+    if (verdict.decision === "ask") {
+      await this._store.append({ type: "note", payload: { kind: "payment_question", reason: verdict.reason } });
+      this._needUserReason = verdict.question;
+      await this._pauseWith("need_user");
+    }
+    return verdict;
+  }
+
   async _dispatchActionsBatch(proposal, epoch) {
     if (this._batchReadOnlyActions && proposal.actions.length > 1 && proposal.actions.every((action) => isReadOnlyAction(action.type))) {
       const outcome = await this._dispatchReadOnlyBatch(proposal, epoch);
@@ -2485,6 +2560,11 @@ class TaskController {
         }
         continue;
       }
+      // A payment button the user ordered in chat, within their cap and on their
+      // site, is let through to the approver alone; an odd one asks the user.
+      const paymentVerdict = await this._decidePayment(action);
+      if (paymentVerdict?.decision === "ask") return "stop_loop";
+      const paymentOk = paymentVerdict?.decision === "pay";
       // Text mode only (the control under the point is known): a click on a
       // control that moves money or destroys an account is refused whatever the
       // permission mode, lease or approver says. The planner sees the note.
@@ -2492,7 +2572,7 @@ class TaskController {
           (action.type === "click_at" || action.type === "type_at") && hasComputerUseAdapter(this._store.taskProfile)) {
         const hit = resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y));
         const verdict = classifyTarget(hit, action.type);
-        if (verdict.gate === "deny") {
+        if (verdict.gate === "deny" && !paymentOk) {
           await this._store.append({ type: "note", payload: { kind: "effect_denied", actionType: action.type, effect: verdict.effect, reason: verdict.reason } });
           if (this._routineRunner) {
             await this._denyRoutineStep({ decision: "deny", reasons: [verdict.reason] });
@@ -2505,7 +2585,7 @@ class TaskController {
       // approver's verdict alone. The mode, lock and one-use screen binding still
       // apply; Enter (which can submit a form) keeps the human gate.
       const autoRun = gate.policy.allowed && gate.policy.approval === "human" &&
-        (isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets) || isAutoDomAction(action, this._lastObservation));
+        (paymentOk || isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets) || isAutoDomAction(action, this._lastObservation));
       const policy = autoRun ? { ...gate.policy, approval: "approver" } : gate.policy;
       // Mode-denied actions may be widened by the user, but never for
       // unattended runs or for actions this browser cannot perform.

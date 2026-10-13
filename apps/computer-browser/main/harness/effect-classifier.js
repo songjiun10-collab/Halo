@@ -20,6 +20,18 @@ const IRREVERSIBLE_NAME = new RegExp([
     "\\b(delete (?:my )?account|close (?:my )?account|permanently delete|delete forever|erase all data|deactivate account)\\b",
     "송금|이체|출금|결제하기|결제 확인|계정 삭제|회원 탈퇴|영구 삭제|계정 폐쇄",
 ].join("|"), "i");
+// The part of the list above that is a purchase (not a transfer, withdrawal or
+// account removal). Only a payment the user ordered in chat can be let through
+// (see payment-mandate); everything else stays refused.
+const PAYMENT_NAME = new RegExp([
+    "\\b(pay now|confirm payment|place order|complete purchase|buy now|pay \\$?[\\d,.]+)\\b",
+    "결제하기|결제 확인|주문하기|구매하기|바로 구매",
+].join("|"), "i");
+// A name that also reads as a transfer or account removal is never a purchase.
+const IRREVERSIBLE_NAME_NON_PAYMENT = new RegExp([
+    "\\b(transfer|wire|send money|withdraw|delete|close (?:my )?account|deactivate)\\b",
+    "송금|이체|출금|탈퇴|계정",
+].join("|"), "i");
 // Buttons that only move around the page or reveal more of it.
 const BENIGN_BUTTON = /^(?:search|find|go|next|previous|prev|back|close|cancel|dismiss|menu|more|show(?: more| all)?|hide|expand|collapse|open|filter|sort|view(?: details)?|details|learn more|read more|검색|다음|이전|뒤로|닫기|취소|메뉴|더보기|보기|열기|필터|정렬|자세히(?: 보기)?)$/i;
 const normalize = (value) => value.normalize("NFKC").replace(/\s+/g, " ").trim();
@@ -50,4 +62,12 @@ function classifyTarget(target, actionType) {
         return { gate: "auto", effect: "navigation", reason: "button that only moves around the page" };
     return { gate: "ask", effect: "unknown", reason: role === "button" ? "a button the host cannot rule out as effect-bearing" : "not a recognized interactive control" };
 }
-module.exports = { classifyTarget };
+function isPaymentControl(target) {
+    if (!target || target.covered || target.disabled)
+        return false;
+    if (target.role !== "button" && target.role !== "link")
+        return false;
+    const name = normalize(target.name);
+    return !!name && PAYMENT_NAME.test(name) && !IRREVERSIBLE_NAME_NON_PAYMENT.test(name);
+}
+module.exports = { classifyTarget, isPaymentControl };

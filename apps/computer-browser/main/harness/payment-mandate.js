@@ -9,7 +9,7 @@
 // be given by the user. Pure helpers: the task controller owns the list and
 // journals every grant, check, use and expiry. No card data lives here.
 
-const MANDATE_DEFAULTS = Object.freeze({ minutes: 10, maxMinutes: 15 });
+const MANDATE_DEFAULTS = Object.freeze({ minutes: 30, maxMinutes: 60 });
 // Smallest currency unit exponent. A currency missing here cannot be mandated.
 const CURRENCY_EXPONENT = Object.freeze({ USD: 2, EUR: 2, GBP: 2, CAD: 2, AUD: 2, CHF: 2, KRW: 0, JPY: 0 });
 const SYMBOL_CURRENCY = Object.freeze({ "$": "USD", "€": "EUR", "£": "GBP", "₩": "KRW", "¥": "JPY", "원": "KRW" });
@@ -89,6 +89,93 @@ function parsePageAmount(text) {
   return found.size === 1 ? [...found.values()][0] : null;
 }
 
+// ---- Reading the user's own chat request ---------------------------------
+// The user's message is the authorization. A clear one (it says to pay/buy,
+// names where, and caps the amount) becomes a single-use mandate and the
+// payment goes through at once; anything unclear becomes a question for the
+// user, never a guess. Money transfers to people are always a question.
+
+const PAY_INTENT = /(결제|구매|구입|주문|사\s?줘|사\s?주세요|사\s?와|예약|\bbuy\b|\bpurchase\b|\border\b|\bpay\b|\bcheck\s?out\b)/iu;
+const TRANSFER_INTENT = /(송금|이체|입금|환전|\bsend money\b|\bwire\b|\btransfer (?:funds|money)\b)/iu;
+// "don't pay", "stop before paying", "결제 직전까지": the user is limiting, not ordering.
+const PAY_LIMIT = /(하지\s?(마|말)|말고|말아|않|전까지|직전|직전까지|취소|\bdon'?t\b|\bdo not\b|\bnever\b|\bbefore (?:paying|buying|checkout|ordering)\b|\bwithout (?:paying|buying)\b|\bstop before\b)/iu;
+const KO_UNIT = { "만": 10_000, "천": 1_000, "백": 100 };
+
+// "3만 5천원", "1만원", "5천원", "12,000원" -> KRW; other currencies reuse the page parser.
+function parseRequestAmount(text) {
+  if (typeof text !== "string" || text.length > 2000) return null;
+  const found = new Map();
+  const add = (currency, amountMinor) => found.set(`${currency}:${amountMinor}`, { currency, amountMinor });
+  for (const m of text.matchAll(/(?<![\d,.])((?:\d+\s?만)?\s?(?:\d+\s?천)?\s?(?:\d+\s?백)?)\s?원/gu)) {
+    const body = m[1].trim();
+    if (!body || !/[만천백]/u.test(body)) continue;
+    let total = 0;
+    for (const part of body.matchAll(/(\d+)\s?([만천백])/gu)) total += Number(part[1]) * KO_UNIT[part[2]];
+    if (total > 0 && Number.isSafeInteger(total)) add("KRW", total);
+  }
+  for (const m of text.matchAll(/\S{0,24}/gu)) {
+    if (!m[0]) continue;
+    const one = parsePageAmount(m[0]);
+    if (one) add(one.currency, one.amountMinor);
+  }
+  return found.size === 1 ? [...found.values()][0] : null;
+}
+
+function originsIn(text) {
+  const origins = new Set();
+  for (const m of text.matchAll(/\bhttps?:\/\/[^\s)>"']+/giu)) {
+    const o = originOf(m[0]);
+    if (o) origins.add(o);
+  }
+  for (const m of text.matchAll(/(?<![\w@/.])((?:[a-z0-9-]+\.)+[a-z]{2,})(?![\w.-])/giu)) {
+    const o = originOf(`https://${m[1].toLowerCase()}`);
+    if (o) origins.add(o);
+  }
+  return origins;
+}
+
+// -> { kind: "none" } no payment asked
+//    { kind: "ask", reason, question } unclear: pause and ask the user
+//    { kind: "mandate", origin, currency, maxAmountMinor } clear: pay when it comes to it
+function mandateFromUserRequest(text, { entryUrl = null } = {}) {
+  if (typeof text !== "string" || !text.trim()) return { kind: "none" };
+  const transfer = TRANSFER_INTENT.test(text);
+  const intent = PAY_INTENT.test(text);
+  if (!transfer && !intent) return { kind: "none" };
+  if (transfer) return { kind: "ask", reason: "transfer", question: "송금·이체는 받는 사람과 금액을 직접 확인해야 해요. 어디로 얼마를 보낼지 알려 주세요." };
+  // "don't pay" / "stop before paying" is a clear instruction, not a question:
+  // no mandate, so any payment later is refused.
+  if (PAY_LIMIT.test(text)) return { kind: "none", reason: "payment_declined" };
+  const origins = originsIn(text);
+  if (entryUrl && origins.size === 0) {
+    const o = originOf(entryUrl);
+    if (o) origins.add(o);
+  }
+  if (origins.size === 0) return { kind: "ask", reason: "no_merchant", question: "어느 사이트에서 결제할까요? 주소를 알려 주세요." };
+  if (origins.size > 1) return { kind: "ask", reason: "many_merchants", question: "결제할 사이트가 여러 곳으로 보여요. 어느 사이트에서 결제할까요?" };
+  const amount = parseRequestAmount(text);
+  if (!amount) return { kind: "ask", reason: "no_amount", question: "결제 금액 한도를 알려 주세요. 예: 3만원 이하, 또는 $20 이하." };
+  if (amount.amountMinor > MAX_AMOUNT_MINOR) return { kind: "ask", reason: "amount_too_large", question: "금액이 너무 커요. 한도를 다시 알려 주세요." };
+  return { kind: "mandate", origin: [...origins][0], currency: amount.currency, maxAmountMinor: amount.amountMinor };
+}
+
+// The amount a payment button will charge, as the host can read it: a price in
+// the button's own label first, otherwise a price on a "total"-style line of the
+// page text. Exactly one distinct amount must come out of it; otherwise null.
+const TOTAL_LINE = /(?:total|amount due|order total|grand total|you pay|합계|총\s?(?:결제\s?)?금액|결제\s?금액|주문\s?금액|최종\s?결제)[^\n]{0,60}/giu;
+
+function findPayableAmount(controlName, pageText) {
+  const fromLabel = parsePageAmount(typeof controlName === "string" ? controlName : "");
+  if (fromLabel) return fromLabel;
+  if (typeof pageText !== "string") return null;
+  const amounts = new Map();
+  for (const line of pageText.matchAll(TOTAL_LINE)) {
+    const one = parsePageAmount(line[0]);
+    if (one) amounts.set(`${one.currency}:${one.amountMinor}`, one);
+  }
+  return amounts.size === 1 ? [...amounts.values()][0] : null;
+}
+
 // Verdict for one payment-like action. `request` carries what the host saw:
 // the page origin and the amount parsed from page text (or null).
 function authorizePayment({ mandates, request, now }) {
@@ -104,9 +191,25 @@ function authorizePayment({ mandates, request, now }) {
   return { ok: true, mandate: covering[0] };
 }
 
+// What the controller does with a payment-like action: pay now, ask the user,
+// or refuse (no one asked for a payment). The user's request already authorized
+// a clear payment, so nothing else stands between a covered payment and its run.
+function decidePayment({ mandates, request, now }) {
+  const verdict = authorizePayment({ mandates, request, now });
+  if (verdict.ok) return { decision: "pay", mandate: verdict.mandate };
+  if (verdict.reason === "no_mandate") return { decision: "refuse", reason: verdict.reason };
+  const questions = {
+    origin_mismatch: "다른 사이트에서 결제하려고 해요. 이 사이트에서 결제해도 될까요?",
+    amount_unreadable: "결제 금액을 화면에서 정확히 읽지 못했어요. 금액을 확인하고 진행할까요?",
+    currency_mismatch: "요청하신 통화와 다른 통화로 결제하려고 해요. 계속할까요?",
+    over_limit: "결제 금액이 정해 주신 한도를 넘어요. 그래도 진행할까요?",
+  };
+  return { decision: "ask", reason: verdict.reason, question: questions[verdict.reason] };
+}
+
 function consumeMandate(mandate) {
   if (mandate.usesLeft < 1) throw new MandateError("mandate_used", "this mandate was already used");
   mandate.usesLeft -= 1;
 }
 
-module.exports = { MANDATE_DEFAULTS, CURRENCY_EXPONENT, MAX_AMOUNT_MINOR, MandateError, createMandate, isMandateLive, parsePageAmount, authorizePayment, consumeMandate };
+module.exports = { MANDATE_DEFAULTS, CURRENCY_EXPONENT, MAX_AMOUNT_MINOR, MandateError, createMandate, isMandateLive, parsePageAmount, parseRequestAmount, mandateFromUserRequest, authorizePayment, decidePayment, findPayableAmount, consumeMandate };
