@@ -8,3 +8,6 @@ __pycache__/
 .claude/
 node_modules/
 release/
+
+# Written by the beta packaging step (tools/set-build-expiry.js); a development checkout has none.
+apps/computer-browser/build-info.json

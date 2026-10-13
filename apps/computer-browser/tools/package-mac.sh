@@ -12,6 +12,10 @@ for d in main preload renderer shared approver assets contracts runtime-src; do
   cp -R "$ROOT/apps/computer-browser/$d" "$STAGE/apps/computer-browser/$d"
 done
 cp "$ROOT/apps/computer-browser/package.json" "$ROOT/apps/computer-browser/package-lock.json" "$STAGE/apps/computer-browser/"
+# Beta builds expire: HALO_BUILD_EXPIRES=2027-02-28 (or +30 for thirty days from now) writes build-info.json.
+if [ -n "${HALO_BUILD_EXPIRES:-}" ]; then
+  node "$ROOT/apps/computer-browser/tools/set-build-expiry.js" "$STAGE/apps/computer-browser/build-info.json" "$HALO_BUILD_EXPIRES"
+fi
 cp -R "$ROOT/halo" "$STAGE/halo"
 cp "$ROOT/experiments/__init__.py" "$STAGE/experiments/"
 cp -R "$ROOT/experiments/e007_dual_agent_provenance_gate" "$STAGE/experiments/"

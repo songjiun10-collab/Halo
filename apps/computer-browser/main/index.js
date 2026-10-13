@@ -17,6 +17,7 @@ const registerIpc = require("./ipc");
 const layoutConstants = require("../shared/layout-constants");
 const { requestDecision } = require("./approver-client");
 const { TaskHost } = require("./harness/task-host");
+const { readBuildInfo } = require("./harness/build-expiry");
 const { UsageLedger } = require("./harness/usage-ledger");
 const { BrowserAdapter } = require("./harness/browser-adapter");
 const { BrowserSurfaces } = require("./harness/browser-surfaces");
@@ -580,6 +581,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     plannerFast: settings.plannerFast,
     plannerEscalation: settings.plannerEscalation,
     paymentsEnabled: settings.paymentsEnabled,
+    buildInfo: readBuildInfo(path.join(__dirname, "..", "build-info.json")),
     plannerRouting: settings.plannerRouting,
     mcpProviders: settings.mcpProviders,
     makeMcpBroker: makeHarnessMcpBroker,

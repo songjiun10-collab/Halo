@@ -32,6 +32,7 @@ const { routedModel } = require("./planner-routing");
 const { tierOf, modelsInTier, MODEL_TIERS } = require("./model-tiers");
 const { setDiscoveredNvidiaModels, saveDiscoveredNvidiaModels, listNvidiaModels } = require("./providers/nvidia-models");
 const { TaskController, TaskControllerError } = require("./task-controller");
+const { checkBuild } = require("./build-expiry");
 const { TaskQueue, TaskQueueError } = require("./task-queue");
 const { ResourceAdmission } = require("./resource-admission");
 const { CoordinatorCore } = require("./coordinator-core");
@@ -114,6 +115,8 @@ class TaskHost {
     plannerEscalation,
     plannerRouting,
     paymentsEnabled,
+    buildInfo = null,
+    wallClock = Date.now,
     mcpProviders = [],
     memoryStore,
     activityJournal,
@@ -177,6 +180,9 @@ class TaskHost {
     this._plannerEscalation = plannerEscalation === true;
     this._plannerRouting = plannerRouting === true;
     this._paymentsEnabled = paymentsEnabled === true;
+    // Beta build expiry: an expired (or unreadable) build starts and resumes no tasks. See build-expiry.js.
+    this._buildInfo = buildInfo;
+    this._wallClock = typeof wallClock === "function" ? wallClock : Date.now;
     this._mcpProviders = Array.isArray(mcpProviders) ? [...mcpProviders] : [];
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
@@ -471,6 +477,7 @@ class TaskHost {
   }
 
   async _attach(store, routine = null) {
+    this._assertBuildLive();
     if (this._ensureResourceAdmission() && !this._coordinator.hasLease(store.taskId)) {
       throw new TaskHostError("memory_lease_required", "top-level task requires a memory lease before creating resources");
     }
@@ -1441,6 +1448,7 @@ class TaskHost {
   _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null, standalone = false, useImportedSessions = false, runScope = null, agentBrowserProfileBinding = null, onAgentBrowserProfileAttached = null, waitForRunLoop = true) {
     const scope = runScope ?? { mcpProviders: null, reviewFallback: "queue", plannerModel: null };
     this._assertOpen();
+    this._assertBuildLive();
     if (!resolvedProfile) throw new TaskHostError("profile_required", "new tasks must have a host-resolved profile before storage or admission");
     return this._trackAttachment(async () => {
       await this._ensureQueue();
@@ -2705,6 +2713,15 @@ class TaskHost {
 
   _assertOpen() {
     if (this._closeRequested) throw new TaskHostError("host_closed", "task host is closing or closed");
+  }
+
+  // A beta build past its expiry date (or whose expiry file is unreadable) runs no new work.
+  _assertBuildLive() {
+    const status = checkBuild(this._buildInfo, this._wallClock());
+    if (!status.expired) return;
+    throw new TaskHostError("build_expired", status.invalid
+      ? "This beta build's expiry information is unreadable, so it will not run tasks. Download a fresh build."
+      : "This beta build has expired. Download a newer build to run tasks.");
   }
 
   _trackAttachment(operation) {
