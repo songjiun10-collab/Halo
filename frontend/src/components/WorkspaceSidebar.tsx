@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Close, Plus } from './Icons'
 import type { TabActivity } from '../session/types'
 import type { TabLayout } from '../session/tab-layout'
+import { groupOf, type TabGroups } from '../session/tab-groups'
 import type { TaskSummary } from '../session/api'
 
 interface Props {
@@ -23,6 +24,15 @@ interface Props {
   /** Where the tabs live; vertical puts them first in this sidebar and removes the strip above the page. */
   tabLayout?: TabLayout
   onToggleTabLayout?: () => void
+  /** Tab groups; every group callback is optional so the sidebar still works without them. */
+  groups?: TabGroups
+  onCreateGroup?: (tabId: string) => void
+  onAddToGroup?: (groupId: string, tabId: string) => void
+  onRemoveFromGroup?: (tabId: string) => void
+  onUngroup?: (groupId: string) => void
+  onUngroupAll?: () => void
+  onToggleGroup?: (groupId: string) => void
+  onRenameGroup?: (groupId: string, name: string) => void
   /** Agents and Teams, listed after the tasks. */
   agents?: ReactNode
 }
@@ -85,7 +95,7 @@ function TaskButton({ task, active, onClick, child }: { task: TaskSummary; activ
   )
 }
 
-export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, tabs, activeTabId, onSelectTab, onOpenUrl, onNewTab, onCloseTab, tabLayout = 'horizontal', onToggleTabLayout, agents }: Props) {
+export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, tabs, activeTabId, onSelectTab, onOpenUrl, onNewTab, onCloseTab, tabLayout = 'horizontal', onToggleTabLayout, groups = [], onCreateGroup, onAddToGroup, onRemoveFromGroup, onUngroup, onUngroupAll, onToggleGroup, onRenameGroup, agents }: Props) {
   const [pins, setPins] = useStored<Shortcut[]>('halo.shortcuts', [])
   const [adding, setAdding] = useState(false)
   const shown = pins.filter((pin) => pin && typeof pin === 'object')
@@ -123,24 +133,66 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
   const list = (items: TaskSummary[], child?: boolean) => items.map((task) => (
     <TaskButton key={task.taskId} task={task} child={child} active={task.taskId === activeTaskId} onClick={() => onSelectTask(task.taskId)} />
   ))
+  const tabRow = (tab: Props['tabs'][number], inGroup?: boolean) => {
+    const selected = (!activeTaskId && tab.id === activeTabId) || undefined
+    const current = groupOf(groups, tab.id)
+    return (
+      <div key={tab.id} className={`hx-sidebar__tab${inGroup ? ' hx-sidebar__tab--grouped' : ''}`} data-selected={selected}>
+        <button type="button" className="hx-sidebar__item hx-sidebar__tab-main" data-selected={selected} aria-current={selected ? 'page' : undefined} title={tab.title} onClick={() => onSelectTab(tab.id)}>
+          <span className="hx-sidebar__fav" aria-hidden="true">{brandFor(hostOf(tab.url ?? "")) ? <BrandIcon host={hostOf(tab.url ?? "")} size={20} /> : tab.title.trim().slice(0, 1) || '?'}</span>
+          <span className="hx-sidebar__tab-title">{tab.title}</span>
+          {tab.activity ? <span className="hx-sidebar__tab-act" data-state={tab.activity} aria-hidden="true" /> : null}
+          {tab.activity ? <span className="hx-sr">, agent {tab.activity}</span> : null}
+        </button>
+        {onCreateGroup && onAddToGroup && onRemoveFromGroup ? (
+          <span className="hx-sidebar__tab-groupwrap" data-grouped={current ? true : undefined}>
+            <span aria-hidden="true">▤</span>
+            <select className="hx-sidebar__tab-group" aria-label={`Group for ${tab.title}`} title={current ? `Group: ${current.name}` : 'Add to group'} value={current?.id ?? ''}
+              onChange={(e) => {
+                const value = e.target.value
+                if (value === '') onRemoveFromGroup(tab.id)
+                else if (value === '__new') onCreateGroup(tab.id)
+                else onAddToGroup(value, tab.id)
+              }}>
+              <option value="">No group</option>
+              {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+              <option value="__new">New group…</option>
+            </select>
+          </span>
+        ) : null}
+        {tab.closable && onCloseTab ? (
+          <button type="button" className="hx-icbtn hx-icbtn--sm hx-sidebar__tab-close" aria-label={`Close ${tab.title}`} onClick={() => onCloseTab(tab.id)}><Close /></button>
+        ) : null}
+      </div>
+    )
+  }
+  const groupedIds = new Set(groups.flatMap((group) => group.tabIds))
+  const byTabId = new Map(tabs.map((tab) => [tab.id, tab]))
   const tabsSection = section('tabs', 'Tabs', (
     <>
       {onNewTab ? (
         <button type="button" className="hx-sidebar__item hx-sidebar__new" onClick={onNewTab}><Plus /><span>New Tab</span></button>
       ) : null}
-      {tabs.map((tab) => (
-        <div key={tab.id} className="hx-sidebar__tab" data-selected={(!activeTaskId && tab.id === activeTabId) || undefined}>
-          <button type="button" className="hx-sidebar__item hx-sidebar__tab-main" data-selected={(!activeTaskId && tab.id === activeTabId) || undefined} aria-current={!activeTaskId && tab.id === activeTabId ? 'page' : undefined} title={tab.title} onClick={() => onSelectTab(tab.id)}>
-            <span className="hx-sidebar__fav" aria-hidden="true">{brandFor(hostOf(tab.url ?? "")) ? <BrandIcon host={hostOf(tab.url ?? "")} size={20} /> : tab.title.trim().slice(0, 1) || '?'}</span>
-            <span className="hx-sidebar__tab-title">{tab.title}</span>
-            {tab.activity ? <span className="hx-sidebar__tab-act" data-state={tab.activity} aria-hidden="true" /> : null}
-            {tab.activity ? <span className="hx-sr">, agent {tab.activity}</span> : null}
-          </button>
-          {tab.closable && onCloseTab ? (
-            <button type="button" className="hx-icbtn hx-icbtn--sm hx-sidebar__tab-close" aria-label={`Close ${tab.title}`} onClick={() => onCloseTab(tab.id)}><Close /></button>
-          ) : null}
+      {tabs.filter((tab) => !groupedIds.has(tab.id)).map((tab) => tabRow(tab))}
+      {groups.map((group) => (
+        <div key={group.id} className="hx-sidebar__group" data-collapsed={group.collapsed || undefined}>
+          <div className="hx-sidebar__group-head">
+            <button type="button" className="hx-sidebar__item hx-sidebar__group-toggle" aria-expanded={!group.collapsed} onClick={() => onToggleGroup?.(group.id)} onDoubleClick={() => onRenameGroup && setEditing(group.id)}>
+              <span className="hx-sidebar__fav" aria-hidden="true">{group.collapsed ? '▸' : '▾'}</span>
+              {editing === group.id && onRenameGroup
+                ? <input autoFocus className="hx-sidebar__rename" aria-label="Group name" defaultValue={group.name} onClick={(e) => e.stopPropagation()}
+                    onBlur={(e) => { onRenameGroup(group.id, e.target.value); setEditing(null) }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur() }} />
+                : <span className="hx-sidebar__tab-title">{group.name}<small> · {group.tabIds.length}</small></span>}
+            </button>
+            {onUngroup ? <button type="button" className="hx-sidebar__add" aria-label={`Ungroup ${group.name}`} title="Ungroup (tabs stay open)" onClick={() => onUngroup(group.id)}>⤢</button> : null}
+          </div>
+          {group.collapsed ? null : group.tabIds.map((id) => byTabId.get(id)).filter((tab): tab is NonNullable<typeof tab> => !!tab).map((tab) => tabRow(tab, true))}
         </div>
       ))}
+      {groups.length > 1 && onUngroupAll ? (
+        <button type="button" className="hx-sidebar__item hx-sidebar__ungroup-all" onClick={onUngroupAll}><span>Ungroup all ({groups.length})</span></button>
+      ) : null}
     </>
   ), onToggleTabLayout ? (
     <button type="button" className="hx-sidebar__add" aria-label={tabLayout === 'vertical' ? 'Show tabs in a strip above the page' : 'Show tabs in this sidebar instead of a strip'} aria-pressed={tabLayout === 'vertical'} title={tabLayout === 'vertical' ? 'Vertical tabs: on' : 'Vertical tabs: off'} onClick={onToggleTabLayout}>⇅</button>

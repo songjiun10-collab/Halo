@@ -13,6 +13,7 @@ import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
 import { WorkspaceSidebar } from './components/WorkspaceSidebar'
 import { loadTabLayout, otherTabLayout, saveTabLayout, type TabLayout } from './session/tab-layout'
+import { addToGroup, createGroup, loadGroups, pruneGroups, removeFromGroup, renameGroup, saveGroups, toggleCollapsed, ungroup, ungroupAll, type TabGroups } from './session/tab-groups'
 import { SidebarAgents } from './agent/SidebarAgents'
 import { openAgentView, type AgentNavView } from './agent/agent-nav'
 import { usePresence } from './hooks/usePresence'
@@ -382,6 +383,17 @@ export default function App() {
 
   const tabsForDisplay = s.tabs.length ? s.tabs : [HOME_TAB]
 
+  // Tab groups live in the sidebar and are remembered per window; closed tabs drop out when read.
+  const [storedGroups, setStoredGroups] = useState<TabGroups>(() => loadGroups())
+  const tabIds = tabsForDisplay.map((t) => t.id)
+  const groups = pruneGroups(storedGroups, tabIds)
+  const updateGroups = (change: (current: TabGroups) => TabGroups) => {
+    const next = change(groups)
+    setStoredGroups(next)
+    saveGroups(next)
+  }
+  const newGroupId = () => `tg${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+
   return (
     <div className="hx-app" data-active-task-id={s.activeTaskId ?? undefined}>
       <a className="hx-skip" href="#hx-page" inert={!!approval}>Skip to page</a>
@@ -442,6 +454,14 @@ export default function App() {
             onCloseTab={(id) => void store.closeBrowserTab(id)}
             tabLayout={tabLayout}
             onToggleTabLayout={toggleTabLayout}
+            groups={groups}
+            onCreateGroup={(tabId) => updateGroups((g) => createGroup(g, tabId, newGroupId()))}
+            onAddToGroup={(groupId, tabId) => updateGroups((g) => addToGroup(g, groupId, tabId))}
+            onRemoveFromGroup={(tabId) => updateGroups((g) => removeFromGroup(g, tabId))}
+            onUngroup={(groupId) => updateGroups((g) => ungroup(g, groupId))}
+            onUngroupAll={() => updateGroups(() => ungroupAll())}
+            onToggleGroup={(groupId) => updateGroups((g) => toggleCollapsed(g, groupId))}
+            onRenameGroup={(groupId, name) => updateGroups((g) => renameGroup(g, groupId, name))}
             activeTabId={tab.id}
             onSelectTab={(id) => void store.selectBrowserTab(id)}
             onOpenUrl={(url) => void store.navigate({ type: 'navigate', url })}
