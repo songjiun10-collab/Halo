@@ -52,6 +52,14 @@ function isSecretField(element) {
   return SECRET_FIELD.test([element.name, element.placeholder, element.autocomplete].filter((s) => typeof s === "string").join(" "));
 }
 
+// True when the page shows Tier 3 material (a secret input, or a secret value in its text). A
+// screenshot cannot be redacted, so such a page is only ever shown to the planner as text.
+function hasSecretSurface(observation) {
+  if (!observation || typeof observation !== "object") return false;
+  if (containsTier3(observation.text)) return true;
+  return (observation.elements ?? []).some((el) => el && (isSecretField(el) || containsTier3(el.name) || containsTier3(el.value)));
+}
+
 // A copy of the observation with Tier 3 values removed.
 function applyPrivacyTiers(observation) {
   if (!observation || typeof observation !== "object") return observation;
@@ -95,4 +103,4 @@ function typingBlock({ text, element, userText }) {
   return null;
 }
 
-module.exports = { TIERS, TIER_POLICY, tierOf, applyPrivacyTiers, containsTier3, maskTier3, isSecretField, typingBlock, tier2In, rrnMatches };
+module.exports = { hasSecretSurface, TIERS, TIER_POLICY, tierOf, applyPrivacyTiers, containsTier3, maskTier3, isSecretField, typingBlock, tier2In, rrnMatches };

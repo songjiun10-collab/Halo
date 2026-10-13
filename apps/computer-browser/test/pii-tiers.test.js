@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { TIERS, TIER_POLICY, tierOf, applyPrivacyTiers, containsTier3, maskTier3, isSecretField, typingBlock, rrnMatches } = require("../main/harness/pii-tiers");
+const { hasSecretSurface, TIERS, TIER_POLICY, tierOf, applyPrivacyTiers, containsTier3, maskTier3, isSecretField, typingBlock, rrnMatches } = require("../main/harness/pii-tiers");
 
 test("Tier 3: card numbers and resident registration numbers are detected and fully hidden", () => {
   assert.equal(containsTier3("901231-1234567"), true);
@@ -52,4 +52,12 @@ test("the tier table is explicit and tierOf follows it", () => {
   assert.equal(tierOf("a@b.com"), 2);
   assert.equal(tierOf("안녕하세요"), 0);
   assert.throws(() => { TIER_POLICY[3].planner = "visible"; }, TypeError, "the table is frozen");
+});
+
+test("a page with a secret input or a secret value in its text counts as a secret surface", () => {
+  assert.equal(hasSecretSurface({ text: "hello", elements: [{ role: "textbox", name: "Search" }] }), false);
+  assert.equal(hasSecretSurface({ text: "hello", elements: [{ role: "textbox", name: "x", inputType: "password" }] }), true);
+  assert.equal(hasSecretSurface({ text: "Saved 4111 1111 1111 1111", elements: [] }), true);
+  assert.equal(hasSecretSurface({ text: "", elements: [{ role: "text", name: "901231-1234567" }] }), true);
+  assert.equal(hasSecretSurface(null), false);
 });

@@ -8,7 +8,7 @@ const { TaskStore } = require("../main/harness/task-store");
 const { TaskController } = require("../main/harness/task-controller");
 const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
 
-async function fixture(t, action, permissionMode = "interact", { computerUse = false, capabilityId = "computer_use", textMap = null } = {}) {
+async function fixture(t, action, permissionMode = "interact", { computerUse = false, capabilityId = "computer_use", textMap = null, secret = false } = {}) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-interaction-controller-"));
   const store = await TaskStore.create({ originalRequest: "update profile" }, { storageRoot });
   let turns = 0; const executed = []; let plannerOptions = null; let attachmentDisposed = false; let screenshotCalls = 0;
@@ -16,7 +16,8 @@ async function fixture(t, action, permissionMode = "interact", { computerUse = f
     observe: async () => ({ id: "obs", documentEpoch: 7, url: "https://page.test/", elements: [
       { elementId: "0", role: "textbox", name: "Title" },
       { elementId: "1", role: "button", name: "Submit", formAction: "https://submit.test/save", formMethod: "post" },
-      { elementId: "2", role: "textbox", name: "Title", inputType: "password" },
+      // A password field makes the page text-only for the planner, so it is only on the page when a test asks.
+      ...(secret || action?.elementId === "2" ? [{ elementId: "2", role: "textbox", name: "Title", inputType: "password" }] : []),
       { elementId: "3", role: "link", name: "Pricing", href: "https://example.test/pricing" },
       { elementId: "4", role: "button", name: "Delete" },
     ] }),
@@ -87,18 +88,15 @@ test("clicking a plain link is not queued for the human, but an effect-named but
   assert.equal(risky.executed.length, 0);
 });
 
-test("typing review shows target and exact input, and approval keeps the observation epoch", async t => {
+test("typing into a password field is the person's job: nothing is queued or executed, the task asks them", async t => {
   const action = { type: "type", elementId: "2", text: "New title" };
   const { controller, executed } = await fixture(t, action);
-  const [item] = controller.getSnapshot().approvalQueue;
-  assert.equal(controller.getSnapshot().state, "awaiting_approval");
-  assert.match(item.target, /Title/);
-  assert.match(item.target, /New title/);
+  const snap = controller.getSnapshot();
+  assert.equal(snap.state, "paused");
+  assert.equal(snap.pauseReason, "need_user");
+  assert.match(snap.needUserReason, /비밀 정보/);
+  assert.equal(snap.approvalQueue.length, 0);
   assert.equal(executed.length, 0);
-  await controller.approve(item.id);
-  assert.equal(executed.length, 1);
-  assert.deepEqual(executed[0].action, action);
-  assert.equal(executed[0].options.documentEpoch, 7);
 });
 
 test("a form review displays destination and method, and denial dispatches nothing", async t => {
@@ -204,4 +202,19 @@ test("a lost coordinate-input result pauses as execution_uncertain and is never 
   await assert.rejects(controller.resume(), { code: "confirmation_required" });
   assert.equal(executeCalls, 1);
   assert.equal(plannerCalls, 1);
+});
+
+test("a page showing a secret input is never screenshotted: the planner gets the text map only", async t => {
+  const run = await fixture(t, { type: "type", elementId: "0", text: "Updated" }, "interact", {
+    computerUse: true, secret: true, textMap: { text: "canvas", sparse: true, targets: [] },
+  });
+  assert.equal(run.screenshotCalls, 0, "no screenshot while a password field is on screen");
+  assert.equal(run.plannerOptions?.attachments?.length ?? 0, 0);
+});
+
+test("baseline: a sparse page without a secret still falls back to the image", async t => {
+  const run = await fixture(t, { type: "type", elementId: "0", text: "Updated" }, "interact", {
+    computerUse: true, textMap: { text: "canvas", sparse: true, targets: [] },
+  });
+  assert.ok(run.screenshotCalls > 0);
 });

@@ -29,7 +29,7 @@ const { createRecoveryPolicy, buildRecoveryFeedback, buildProposalFeedback } = r
 const { resolveTarget } = require("./screen-map");
 const { TaskBranchManager } = require("./task-branch-manager");
 const { classifyTarget, isPaymentControl } = require("./effect-classifier");
-const { applyPrivacyTiers, containsTier3, typingBlock } = require("./pii-tiers");
+const { applyPrivacyTiers, containsTier3, hasSecretSurface, maskTier3, typingBlock } = require("./pii-tiers");
 const payments = require("./payment-mandate");
 const { buildContext } = require("./context-builder");
 const { ContextRefCatalog } = require("./context-refs");
@@ -1972,6 +1972,8 @@ class TaskController {
         this._reusableObservation = null;
         if (this._stopHappenedSince(epoch)) break;
         // Tier 3 secrets (card, resident registration number, password, one-time code) never reach the planner or the journal.
+        // A screenshot cannot be redacted: a page showing a secret goes to the planner as text only.
+        this._secretOnScreen = hasSecretSurface(observation);
         observation = applyPrivacyTiers(observation);
         this._lastObservation = observation;
         this._recordNavigation(observation);
@@ -2099,7 +2101,8 @@ class TaskController {
           // observation is captured normally.
           const computerUseReady = hasComputerUseAdapter(this._store.taskProfile) && /^https?:/i.test(observation?.url ?? "");
           if (computerUseReady) {
-            if ((!this._plannerImageInput && typeof this._browser.captureTextObservation !== "function") ||
+            const imageInput = this._plannerImageInput && !this._secretOnScreen;
+            if ((!imageInput && typeof this._browser.captureTextObservation !== "function") ||
                 (typeof this._browser.captureTextObservation !== "function" && typeof this._browser.captureComputerUseObservation !== "function")) {
               await this._pauseWith("computer_use_unavailable");
               break;
@@ -2107,10 +2110,11 @@ class TaskController {
             try {
               const captureStartedAt = this._onTiming ? performance.now() : null;
               const capture = await capturePreferredObservation(this._browser, observation, {
-                taskId: this._goal.taskId, imageInput: this._plannerImageInput,
+                taskId: this._goal.taskId, imageInput,
                 lastActionType: this._lastActionType, lastActionStatus: this._lastActionStatus,
               });
               textCapture = capture.textCapture; visualCapture = capture.visualCapture;
+              if (typeof textCapture?.screenMap?.text === "string") textCapture = { ...textCapture, screenMap: { ...textCapture.screenMap, text: maskTier3(textCapture.screenMap.text) } };
               if (this._onTiming) { try { this._onTiming({ operation: "computer_use_capture", elapsedMs: performance.now() - captureStartedAt, route: capture.route, reason: capture.reason }); } catch {} }
               if (textCapture?.screenMap.sparse && this._visionAssist) {
                 // Best effort: a failed description leaves the plain map.
