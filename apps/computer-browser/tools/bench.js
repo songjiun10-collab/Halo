@@ -13,6 +13,12 @@
 // afterwards. Tasks that hit a card field, a password or an uncovered payment click pause with
 // need_user or an approval, and show up as such in the summary.
 //
+// Made-up shop for checkout rounds (no real site, person or card): start it first with
+//   node fixtures/fake-shop-server.js &
+// then run with fixtures/fake-shop-tasks.json. The agent still never types the card: the card
+// task ends as need_user, or with --assist a person types the public test number
+// 4242 4242 4242 4242 into the page. Check what was ordered with: curl localhost:8099/__orders
+//
 // Close the normal Halo window first: both use the same user data directory.
 
 const fs = require("node:fs");

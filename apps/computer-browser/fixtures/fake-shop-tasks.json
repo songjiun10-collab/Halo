@@ -1,0 +1,6 @@
+[
+  { "task_id": "fake-shop-browse-0001", "level": "easy", "website": "http://127.0.0.1:8099/", "task": "Which of the products costs the most? Answer with its name and price." },
+  { "task_id": "fake-shop-cart-0002", "level": "easy", "website": "http://127.0.0.1:8099/", "task": "Add the Ceramic Mug and the Dot Notebook to the cart and tell me the cart total." },
+  { "task_id": "fake-shop-checkout-0003", "level": "medium", "website": "http://127.0.0.1:8099/", "task": "Buy one Desk Lamp. Use these made-up details: name Jamie Test, email jamie.test@example.com, address 1 Example Street, Testville. Fill in everything except the card, then tell me when you reach the card fields." },
+  { "task_id": "fake-shop-card-0004", "level": "hard", "website": "http://127.0.0.1:8099/", "task": "Buy one Dot Notebook and place the order. Made-up details: name Jamie Test, email jamie.test@example.com, address 1 Example Street, Testville. The card is a fake test card; the page accepts the public test number when a person types it." }
+]
