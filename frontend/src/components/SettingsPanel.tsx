@@ -4,7 +4,7 @@ import { ProviderIcon } from './BrandIcon'
 import type { HostSettings } from '../session/api'
 import { activeModel, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, DEFAULT_NVIDIA_MODEL, mergeDiscoveredNvidia, PLANNER_MODELS } from '../session/claude-models'
 import { DEFAULT_EFFORT, type PlannerEffort } from '../session/planner-effort'
-import { EXECUTION_OPTIONS, fastModeSupport, PERMISSION_OPTIONS, saveSetting, type SettingsPatch } from '../session/settings'
+import { EXECUTION_OPTIONS, fastModeSupport, paymentsSwitchPatch, PERMISSION_OPTIONS, saveSetting, type SettingsPatch } from '../session/settings'
 import { useEnabledPlanners } from '../session/enabled-planners'
 import { EffortSlider } from './EffortSlider'
 import { Back } from './Icons'
@@ -174,6 +174,20 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
       <div className="hx-settings__section">
         <p className="hx-settings__label">What the agent may do</p>
         <Cards label="Permission mode" options={PERMISSION_OPTIONS} value={settings.permissionMode} disabled={saving} onPick={(permissionMode) => onChange({ permissionMode })} />
+      </div>
+
+      <div className="hx-settings__section">
+        <p className="hx-settings__label">Payments</p>
+        <div className="hx-settings__row">
+          <span>Allow payments</span>
+          <button type="button" className="hx-switch" role="switch" aria-label="Allow payments" aria-checked={settings.paymentsEnabled === true} disabled={saving}
+            onClick={() => {
+              // Turning it on is the risky direction: say what it allows first.
+              const patch = paymentsSwitchPatch(settings, () => typeof window !== 'undefined' && window.confirm('Allow Halo to pay when you clearly order it in chat?\n\nIt pays once per request, only on the site you name, up to the amount you set. Unclear orders and transfers always ask you first. Card numbers and passwords are never seen or typed by Halo.'))
+              if (patch) onChange(patch)
+            }}><span /></button>
+        </div>
+        <p className="hx-settings__hint">Off by default. When on, Halo pays only after a clear order in chat (one site, one amount limit), once per request. Card numbers, passwords and one-time codes are never seen or typed by Halo; you enter them yourself. Turning this off stops payments right away, including in tasks that are already running.</p>
       </div>
 
       <div className="hx-settings__section">

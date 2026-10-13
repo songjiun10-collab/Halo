@@ -92,6 +92,8 @@ export interface HostSettings {
   contextAwareness?: boolean
   /** Opt-in local, Luna-only strategy-learning journal. */
   strategyLearning?: boolean
+  /** Payments are opt-in: only true lets the host act on a clear chat order to pay. Unset is off. */
+  paymentsEnabled?: boolean
 }
 export interface HaloBrowserApi {
   readonly runtime?: 'chromium'

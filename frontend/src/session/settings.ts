@@ -25,6 +25,12 @@ export function fastModeSupport(settings: HostSettings | null): 'no_planner' | '
   return CLAUDE_MODELS.some((m) => m.id === model.id && m.family === 'opus') ? 'claude_opus' : 'claude_other'
 }
 
+/** What a click on the payments switch changes. Turning it off needs no question; turning it on must be confirmed. null leaves it as is. */
+export function paymentsSwitchPatch(settings: HostSettings, confirmOn: () => boolean): SettingsPatch | null {
+  if (settings.paymentsEnabled === true) return { paymentsEnabled: false }
+  return confirmOn() ? { paymentsEnabled: true } : null
+}
+
 /** One host settings change; null when there is no host or it refused. */
 export async function saveSetting(api: Pick<HaloBrowserApi, 'updateHostSettings'> | undefined, patch: SettingsPatch): Promise<HostSettings | null> {
   if (!api) return null

@@ -5,7 +5,7 @@
 
 ## 0. 지금 코드에서 가능한 것과 불가능한 것 (사실 확인 2026-10-13)
 - 결제는 사용자가 채팅으로 명확하게 시킨 요청에서만 위임장(mandate)이 생기고, 한 목표(goal)당 한 번만 결제된다. 루틴과 트리거는 위임장을 받지 못한다. (`main/harness/payment-mandate.js`, `task-controller.js`의 `_ensureMandate`)
-- **결제 킬 스위치가 있다.** 호스트 설정 `paymentsEnabled`가 `true`가 아니면 위임장을 만들지 않고, 이미 받은 위임장도 취소하며, 결제 클릭은 기존 사람 승인 게이트로 돌아간다(`host-settings.js`, `task-controller.js`). 설정을 끄면 실행 중인 작업에도 바로 적용된다. **값이 없으면 꺼짐이다(결제 기본 거부, 사용자가 명시적으로 켜야 결제된다).** 설정 UI는 아직 없고 `updateHostSettings({ paymentsEnabled: true|false })`로 바꾼다.
+- **결제 킬 스위치가 있다.** 호스트 설정 `paymentsEnabled`가 `true`가 아니면 위임장을 만들지 않고, 이미 받은 위임장도 취소하며, 결제 클릭은 기존 사람 승인 게이트로 돌아간다(`host-settings.js`, `task-controller.js`). 설정을 끄면 실행 중인 작업에도 바로 적용된다. **값이 없으면 꺼짐이다(결제 기본 거부, 사용자가 명시적으로 켜야 결제된다).** 설정 화면의 **Allow payments** 스위치로 켜고 끈다(켤 때만 확인 창). 코드에서는 `updateHostSettings({ paymentsEnabled: true|false })`.
 - 킬 스위치로 막지 못하는 경우(규칙 자체의 버그)는 문제 커밋을 `git revert`해서 새 빌드를 내보낸다.
 - 결제 직전까지만 하라는 요청("사지 마")과 송금/이체는 위임장이 생기지 않는다(항상 질문).
 

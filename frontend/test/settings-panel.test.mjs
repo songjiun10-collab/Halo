@@ -104,3 +104,25 @@ test('the toolbar opens settings and the app wires it as an overlay that hides t
   assert.match(shortcuts, /keys: 'Mod\+,'/)
   assert.match(shortcuts, /e\.code === 'Comma'/)
 })
+
+test('payments are off by default, shown as a switch, and a saved opt-in shows as on', () => {
+  const off = renderToStaticMarkup(React.createElement(SettingsView, { settings: base, saving: false, error: null, onChange: () => {} }))
+  assert.match(off, /role="switch"[^>]*aria-label="Allow payments"[^>]*aria-checked="false"/)
+  assert.match(off, /Off by default\. When on, Halo pays only after a clear order/)
+  const on = renderToStaticMarkup(React.createElement(SettingsView, { settings: { ...base, paymentsEnabled: true }, saving: false, error: null, onChange: () => {} }))
+  assert.match(on, /aria-label="Allow payments"[^>]*aria-checked="true"/)
+  const off2 = renderToStaticMarkup(React.createElement(SettingsView, { settings: { ...base, paymentsEnabled: false }, saving: false, error: null, onChange: () => {} }))
+  assert.match(off2, /aria-label="Allow payments"[^>]*aria-checked="false"/)
+})
+
+test('the payments switch asks before turning on, never before turning off, and a refusal changes nothing', () => {
+  const { paymentsSwitchPatch } = settingsLib
+  let asked = 0
+  assert.deepEqual(paymentsSwitchPatch(base, () => { asked += 1; return true }), { paymentsEnabled: true })
+  assert.equal(asked, 1, 'turning on is confirmed')
+  assert.equal(paymentsSwitchPatch(base, () => false), null, 'a refused confirmation leaves it off')
+  assert.equal(paymentsSwitchPatch({ ...base, paymentsEnabled: false }, () => false), null)
+  asked = 0
+  assert.deepEqual(paymentsSwitchPatch({ ...base, paymentsEnabled: true }, () => { asked += 1; return false }), { paymentsEnabled: false })
+  assert.equal(asked, 0, 'turning off needs no question')
+})
