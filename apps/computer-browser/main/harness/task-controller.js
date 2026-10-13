@@ -31,6 +31,7 @@ const { TaskBranchManager } = require("./task-branch-manager");
 const { classifyTarget, isPaymentControl } = require("./effect-classifier");
 const { applyPrivacyTiers, containsTier3, hasSecretSurface, maskTier3, typingBlock } = require("./pii-tiers");
 const payments = require("./payment-mandate");
+const research = require("./research-sources");
 const { buildContext } = require("./context-builder");
 const { ContextRefCatalog } = require("./context-refs");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
@@ -154,6 +155,8 @@ function hasMultiAgentCapability(taskProfile) {
 // Long-profile goal persistence: total finish proposals the host will reject
 // (criteria still unmet, all machine-verifiable) before pausing for a human.
 const GOAL_MAX_REJECTED_FINISHES = 5;
+// A research answer plus the host's own source list is longer than an ordinary reply.
+const RESEARCH_REASON_CAP = 2800;
 const NAV_VISITED_MAX = 32;
 // Consecutive scrolls on one page after which the task pauses as no_progress.
 const PLANNER_RETRYABLE_CODES = ["invalid_proposal", "invalid_proposal_json"];
@@ -356,6 +359,11 @@ class TaskController {
       recoveredRejected = count;
     }
     this._rejectedFinishes = recoveredRejected;
+    // Research tasks: the pages this host opened (the only sources an answer may cite) and how many
+    // answers were sent back. Both are rebuilt from the journal, so a restart cannot reset the loop.
+    this._researchLedger = null;
+    this._researchRejections = 0;
+    this._researchFeedback = null;
     // Generic MCP scope exists only when the trusted host supplies a broker
     // factory. Open calls (durable mcp_call_started without an outcome) are
     // recovered from the checkpoint plus the journal tail, like finish
@@ -1977,6 +1985,7 @@ class TaskController {
         observation = applyPrivacyTiers(observation);
         this._lastObservation = observation;
         this._recordNavigation(observation);
+        if (this._isResearchTask()) await this._recordResearchSource(observation);
 
         let customMemory = [];
         const memoryReads = startTurnMemoryReads({
@@ -2158,6 +2167,7 @@ class TaskController {
               mcp: { enabled: this._mcpAvailableToPlanner(),
                 actions: ["mcp_search", "mcp_describe", "mcp_propose"] },
               ...(this._harnessProfile === "long" ? { goalPersistence: this._goalPersistenceState() } : {}),
+              ...(this._isResearchTask() ? { research: this._researchState() } : {}),
               ...(childPlan ? { childPlan } : {}),
             },
             navigation: { visited: [...this._navigation.visited], frontier: [...this._navigation.frontier] },
@@ -2373,7 +2383,16 @@ class TaskController {
         if (validated.kind === "need_user") {
           // The planner's question is what the person needs to answer; keep it
           // (bounded) so the chat can show it instead of a bare "paused".
-          this._needUserReason = typeof validated.reason === "string" && validated.reason.trim() ? validated.reason.trim().slice(0, 600) : null;
+          let reasonText = typeof validated.reason === "string" ? validated.reason.trim() : "";
+          let reasonCap = 600;
+          if (reasonText && this._isResearchTask()) {
+            // A research answer reaches the person only after the host checked its sources.
+            const review = await this._reviewResearchAnswer(reasonText);
+            if (review.action === "retry") continue;
+            reasonText = review.text;
+            reasonCap = RESEARCH_REASON_CAP;
+          }
+          this._needUserReason = reasonText ? reasonText.slice(0, reasonCap) : null;
           try { console.warn(`[task-controller] planner asked for the user task=${this._goal?.taskId ?? "?"} reason=${JSON.stringify(this._needUserReason)}`); } catch {}
           await this._pauseWith("need_user");
           break;
@@ -2522,6 +2541,70 @@ class TaskController {
     }
     const userText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
     return typingBlock({ text: action.text, element, userText });
+  }
+
+  // Source-grounded research (capability "research"): the host, not the model, decides which sources
+  // an answer may cite. See research-sources.js.
+  _isResearchTask() {
+    return this._store.taskProfile?.capability?.id === "research";
+  }
+
+  async _hydrateResearchLedger() {
+    if (this._researchLedger) return this._researchLedger;
+    const ledger = new research.SourceLedger();
+    let rejections = 0;
+    for (const event of await this._store.getEvents()) {
+      if (event.type !== "note") continue;
+      if (event.payload?.kind === "research_source" && typeof event.payload.url === "string") ledger.add({ url: event.payload.url, title: event.payload.title, at: event.payload.at });
+      else if (event.payload?.kind === "research_answer_rejected") rejections += 1;
+    }
+    this._researchLedger = ledger;
+    this._researchRejections = Math.max(this._researchRejections, rejections);
+    return ledger;
+  }
+
+  // Only a page this host actually observed (a real page, not an error page) can become a source.
+  async _recordResearchSource(observation) {
+    const ledger = await this._hydrateResearchLedger();
+    const url = typeof observation?.url === "string" ? observation.url : "";
+    if (!/^https?:\/\//i.test(url) || (Number(observation?.httpStatus) >= 400)) return;
+    const title = typeof observation.title === "string" ? observation.title : "";
+    const at = Date.now();
+    if (!ledger.add({ url, title, at })) return;
+    const entry = ledger.find(url);
+    await this._store.append({ type: "note", payload: { kind: "research_source", url: entry.url, title: entry.title, at } });
+  }
+
+  // What the planner is told: which pages it may cite and why an earlier answer was sent back.
+  _researchState() {
+    const opened = this._researchLedger ? this._researchLedger.list().slice(-12).map((s) => ({ url: s.url.slice(0, 300), title: s.title.slice(0, 80) })) : [];
+    return {
+      requiredIndependentSites: research.MIN_DOMAINS,
+      openedSources: opened,
+      rejectedAnswers: this._researchRejections,
+      ...(this._researchFeedback ? { lastRejection: this._researchFeedback } : {}),
+    };
+  }
+
+  // Returns { action: "retry" } to send the answer back, or { action: "deliver", text } with the text to show.
+  // Answers that cite nothing and follow no browsing are plain questions to the person and pass untouched.
+  async _reviewResearchAnswer(answer) {
+    const ledger = await this._hydrateResearchLedger();
+    if (ledger.size === 0 && research.extractCitedUrls(answer).length === 0) return { action: "deliver", text: answer };
+    const check = research.checkAnswer(answer, ledger);
+    if (check.ok) {
+      await this._store.append({ type: "note", payload: { kind: "research_answer_checked", sources: check.verified.length, sites: check.independentSites } });
+      this._researchFeedback = null;
+      return { action: "deliver", text: answer + research.sourcesBlock(check.verified) };
+    }
+    if (this._researchRejections < research.MAX_REJECTIONS) {
+      this._researchRejections += 1;
+      this._researchFeedback = { reasons: check.reasons, unopenedUrls: check.unverified.slice(0, 5).map((u) => u.slice(0, 200)) };
+      await this._store.append({ type: "note", payload: { kind: "research_answer_rejected", reasons: check.reasons, unopened: check.unverified.length, sites: check.independentSites } });
+      return { action: "retry" };
+    }
+    await this._store.append({ type: "note", payload: { kind: "research_answer_unverified_delivered", reasons: check.reasons, unopened: check.unverified.length, sites: check.independentSites } });
+    return { action: "deliver", text: answer + research.sourcesBlock(check.verified) + research.unverifiedNotice(check) };
   }
 
   // The control a payment-like action would press, or null. Only the host's own
