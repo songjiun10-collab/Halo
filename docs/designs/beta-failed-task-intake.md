@@ -60,6 +60,10 @@ C + 안전 장치. 이유: 지금 가장 큰 구멍은 코드가 아니라 DM �
 
 **결제 안전 장치 (1월 초기값, 승인 때 조정 가능).**
 - 기본값은 **실제 결제 제외**: 결제 직전 단계까지 진행하고 멈춘다(테스트 결제 사이트는 끝까지).
+  - **멈춤을 코드가 강제하는 방법(모델과 무관).** 결제 허가증이 없으면 결제 버튼류(`Pay now`, `Place order`, `결제하기`, `주문하기` 등 이름 분류기)의 좌표 클릭은 호스트가 거부하고, DOM 클릭은 사람 승인 단계로 올라간다. 호스트가 결제인지 판정 못 한 버튼이나 폼 전송(`submit_form`)도 이미 사람 승인으로 간다.
+  - **베타 전 구현 필수**: 위 "승인으로 올림"을 **"결제 꺼짐 설정이면 거부"**로 바꾼다(승인 창에서 참가자가 실수로 눌러 결제하는 경로를 닫는다). 이는 아직 구현되지 않았다.
+  - **탐지의 한계**: 결제 판정은 버튼 이름 정규식(영어·한국어)이라 낯선 문구나 다른 언어는 놓칠 수 있다. 놓친 경우에도 판정 불가 버튼은 사람 승인으로 가므로 "자동 결제"는 일어나지 않는다. 다만 승인 창에서의 사람 판단이 마지막 방어선이다.
+  - **검증**: 지금까지는 가짜 상점에서만 확인했다. 3~5주차에 실제 체크아웃 페이지 최소 10곳에서 결제 버튼이 잡히는지, 결제 꺼짐에서 한 번도 결제가 안 나가는지 확인한다.
 - 실제 결제는 **참가자가 설정에서 직접 켜는 옵트인**일 때만 허용한다. 켜면 작업당 1회, 건당 상한 3만원(또는 $20), 본인 카드만. "확인 없이 즉시 결제"는 이 옵트인 참가자에게만 적용하는 실험이다.
 - **거절 목록**: 송금·이체, 타인 계정/세션 대리, 구독·정기결제, 도박·성인·불법 서비스, 계정·금융 정보 변경, 자격증명 공유.
 - 참가자 수: 처음 2~3명 알파(2주) 후 5~10명 베타. "핸들 확인"은 그 핸들이 내 DM에 직접 답했고 프로필 링크로 같은 사람임이 보이는 것으로 정의한다.
@@ -110,3 +114,91 @@ C + 안전 장치. 이유: 지금 가장 큰 구멍은 코드가 아니라 DM �
 - "에초에 그 결재 기능 하나 하려고 저 코드를 만들진 안았겠지?" — 제품을 한 기능으로 좁히려는 제안에 바로 반박했다. 범위를 좁히는 것과 비전을 잃는 것을 구분하려는 감각이다.
 - "이름 모름 에초에 레딧하고 쓰레드여서", "취미였고 3주차" — 증거가 약한 부분을 부풀리지 않고 그대로 말했다. 덕분에 설계가 실제 상태 위에 서 있다.
 - "1월에 제한적 공개 베타 약속" — 날짜와 형태를 이미 공개적으로 걸었다. 이 압박이 범위를 줄이는 장치가 될 수 있다.
+
+<!-- gstack:office-hours:concerns:start -->
+## Reviewer Concerns
+
+Disposition: COMPLETED
+
+Stop: PASS
+
+No blocking findings remain. The 6 open minor finding(s) below are recorded for the user, not fixed.
+
+### R3-1 — completeness (minor)
+
+**Problem**
+
+> The pre-beta must-implement change ('approval escalation' becomes 'deny when payment is off') is declared unimplemented, but the 11-week schedule has no slot for building it. Weeks 3-5 cover reproduction and real-site verification, and week 6 covers packaging, notice and runbook. The new verification item also depends on this change being in place.
+
+**Remedy**
+
+> Add the deny-when-payment-off implementation to the schedule (e.g. weeks 3-4, before the 10-site verification) and make it an explicit gate for alpha.
+
+### R3-2 — feasibility (minor)
+
+**Problem**
+
+> The claim that no automatic payment can occur rests on the statement that unclassified buttons and submit_form already route to human approval. The design does not say how coordinate clicks on an unclassified button are handled, and the claim is verified only against a fake shop. The 10-site check with zero payments is also a small sample for the 'never pays' conclusion, and the design does not say how it will test misses on unfamiliar wording.
+
+**Remedy**
+
+> State the handling of unclassified coordinate and DOM clicks explicitly, and include in the 3-5 week verification deliberately unfamiliar or non-English button labels, not only the sites where the regex is expected to match.
+
+### R3-3 — feasibility (minor)
+
+**Problem**
+
+> Persisting R2-2: the runbook still says the payment permit 'already' expires after 1 use and 60 minutes with no citation of implementation or tests (payment pipeline is verified only against a fake shop), and the beta build expiry has no duration.
+
+**Remedy**
+
+> Cite where the expiry is implemented and tested, or list it as a verification item; set an initial build expiry duration.
+
+### R3-4 — completeness (minor)
+
+**Problem**
+
+> Persisting R2-3 (from R1-8): no fallback eligibility for interested people without a failed task, no rule for handling personal data inside submitted task text, and the participation notice scope is not listed.
+
+**Remedy**
+
+> Add a short fallback eligibility rule and a data-handling note for submitted task content, and list them in the participation notice scope.
+
+### R3-5 — consistency (minor)
+
+**Problem**
+
+> Persisting R2-4: Approach C still says Halo runs the task 'under the same conditions' and yields a 'success-rate number', contradicting the participant-run execution model and the qualitative-only reporting rule.
+
+**Remedy**
+
+> Reword Approach C to match the execution model and the qualitative reporting rule.
+
+### R3-6 — completeness (minor)
+
+**Problem**
+
+> Persisting R2-5: incident detection relies on participants exporting and sending journals, with no routine check-in, so the zero-incident criterion is only as good as self-reporting.
+
+**Remedy**
+
+> Define a lightweight weekly check-in and state that zero incidents means none reported or found in shared journals.
+
+### Prior finding evidence
+
+**R2-2 → R3-3 (persisting)**
+
+> Runbook still says the permit 'already' expires after 1 use and 60 minutes without citing implementation or tests, and the build expiry still has no duration.
+
+**R2-3 → R3-4 (persisting)**
+
+> No fallback eligibility, no handling rule for submitted task content, and no notice scope list appear in the document.
+
+**R2-4 → R3-5 (persisting)**
+
+> Approach C text still says 'same conditions' and 'success-rate number'.
+
+**R2-5 → R3-6 (persisting)**
+
+> Detection still relies on participants exporting journals; no check-in prompt or definition of the zero-incident criterion is added.
+<!-- gstack:office-hours:concerns:end -->
