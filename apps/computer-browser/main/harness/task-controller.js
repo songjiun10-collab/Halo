@@ -29,7 +29,7 @@ const { createRecoveryPolicy, buildRecoveryFeedback, buildProposalFeedback } = r
 const { resolveTarget } = require("./screen-map");
 const { TaskBranchManager } = require("./task-branch-manager");
 const { classifyTarget, isPaymentControl } = require("./effect-classifier");
-const { blindObservation, containsCardNumber, isCardField } = require("./card-blind");
+const { applyPrivacyTiers, containsTier3, typingBlock } = require("./pii-tiers");
 const payments = require("./payment-mandate");
 const { buildContext } = require("./context-builder");
 const { ContextRefCatalog } = require("./context-refs");
@@ -1971,8 +1971,8 @@ class TaskController {
         }
         this._reusableObservation = null;
         if (this._stopHappenedSince(epoch)) break;
-        // The planner and the journal never see card data: numbers are masked, card field values hidden.
-        observation = blindObservation(observation);
+        // Tier 3 secrets (card, resident registration number, password, one-time code) never reach the planner or the journal.
+        observation = applyPrivacyTiers(observation);
         this._lastObservation = observation;
         this._recordNavigation(observation);
 
@@ -2481,9 +2481,9 @@ class TaskController {
     this._mandateGoalVersion = version;
     for (const old of this._mandates) old.revoked = true;
     const chatText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
-    if (containsCardNumber(chatText)) {
+    if (containsTier3(chatText)) {
       await this._store.append({ type: "note", payload: { kind: "card_in_chat" } });
-      this._needUserReason = "채팅에 카드 번호가 있는 것 같습니다. 카드 정보는 Halo에 알려 주지 말고 결제창에 직접 입력해 주세요. 이미 보낸 번호가 있다면 카드사에 재발급을 요청하는 것을 권장합니다.";
+      this._needUserReason = "채팅에 카드 번호나 주민등록번호 같은 민감한 정보가 있는 것 같습니다. 이런 정보는 Halo에 알려 주지 말고 화면에서 직접 입력해 주세요. 이미 보낸 정보가 있다면 카드 재발급 등 조치를 권장합니다.";
       await this._pauseWith("need_user");
       return "stop_loop";
     }
@@ -2506,19 +2506,18 @@ class TaskController {
     return "ok";
   }
 
-  // Typing into a card field, or typing something that is a card number, is never done by the agent.
-  _isCardInput(action) {
-    if (action.type !== "type" && action.type !== "type_at") return false;
-    if (containsCardNumber(action.text)) return true;
+  // Privacy tiers for typing: Tier 3 fields and values are the person's to type; a Tier 2 value
+  // (phone, email) is typed only if the user wrote it in this task's request.
+  _privacyBlock(action) {
+    if (action.type !== "type" && action.type !== "type_at") return null;
+    let element = null;
     if (action.type === "type") {
-      const element = this._lastObservation?.elements?.find((el) => el.elementId === action.elementId);
-      return isCardField(element);
+      element = this._lastObservation?.elements?.find((el) => el.elementId === action.elementId) ?? null;
+    } else if (this._screenTargets && this._screenTargets.observationId === action.observationId) {
+      element = resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y));
     }
-    if (this._screenTargets && this._screenTargets.observationId === action.observationId) {
-      const hit = resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y));
-      return isCardField(hit);
-    }
-    return false;
+    const userText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
+    return typingBlock({ text: action.text, element, userText });
   }
 
   // The control a payment-like action would press, or null. Only the host's own
@@ -2579,10 +2578,11 @@ class TaskController {
         return "stop_loop";
       }
 
-      if (this._isCardInput(action)) {
-        // Card details are typed by the person, never by the agent; nothing of the text is journaled.
-        await this._store.append({ type: "note", payload: { kind: "card_input_blocked", actionType: action.type } });
-        this._needUserReason = "카드 정보는 직접 입력해 주세요. 입력을 마치면 이어서 진행합니다.";
+      const privacy = this._privacyBlock(action);
+      if (privacy) {
+        // Secrets are typed by the person, never by the agent; nothing of the text is journaled.
+        await this._store.append({ type: "note", payload: { kind: privacy.tier === 3 ? "card_input_blocked" : "personal_input_blocked", tier: privacy.tier, actionType: action.type } });
+        this._needUserReason = privacy.reason;
         await this._pauseWith("need_user");
         return "stop_loop";
       }

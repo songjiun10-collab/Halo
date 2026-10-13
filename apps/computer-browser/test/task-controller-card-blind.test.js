@@ -67,3 +67,15 @@ test("a card number in the chat pauses the task before anything runs", async (t)
   assert.equal(r.controller.getSnapshot().pauseReason, "need_user");
   assert.match(r.controller.getSnapshot().needUserReason, /카드 번호/);
 });
+
+test("privacy tiers: an unrequested email is refused, a requested one is typed, a resident number in chat pauses", async (t) => {
+  const denied = await run(t, { request: "신청서 작성해줘", actions: [{ type: "type", elementId: "2", text: "boss@corp.com" }] });
+  assert.equal(denied.executed.length, 0);
+  assert.equal(denied.controller.getSnapshot().pauseReason, "need_user");
+  assert.match(denied.controller.getSnapshot().needUserReason, /이메일/);
+  const allowed = await run(t, { request: "boss@corp.com 으로 신청서 작성해줘", actions: [{ type: "type", elementId: "2", text: "boss@corp.com" }] });
+  assert.equal(allowed.executed.length, 1);
+  const chat = await run(t, { request: "주민번호 901231-1234567 로 가입해줘" });
+  assert.equal(chat.planned, 0);
+  assert.equal(chat.controller.getSnapshot().pauseReason, "need_user");
+});
