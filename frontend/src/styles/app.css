@@ -890,3 +890,16 @@ section.hx-chat .hx-chat__thread { flex: 1 1 auto; min-height: 120px; overflow-y
 .hx-chat__composer .hx-mpick { align-self: flex-start; max-width: 100%; }
 .hx-chat__composer .hx-mpick__toggle { height: 30px; width: auto; min-width: 0; padding-inline: 12px; border-radius: 999px; font-size: 12.5px; white-space: nowrap; }
 .hx-chat__composer .hx-mpick__toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Tabs in the sidebar (vertical tabs): a row with a close button that shows on hover, focus or when selected. */
+.hx-sidebar__tab { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.hx-sidebar__tab-main { flex: 1; min-width: 0; }
+.hx-sidebar__tab-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.hx-sidebar__tab-close { flex: none; opacity: 0; }
+.hx-sidebar__tab:hover .hx-sidebar__tab-close, .hx-sidebar__tab:focus-within .hx-sidebar__tab-close, .hx-sidebar__tab[data-selected] .hx-sidebar__tab-close { opacity: 1; }
+.hx-sidebar__tab-act { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--muted-foreground); }
+.hx-sidebar__tab-act[data-state="working"] { background: var(--brand); }
+.hx-sidebar__tab-act[data-state="waiting"] { background: var(--warning); }
+.hx-sidebar__tab-act[data-state="done"] { background: var(--success); }
+.hx-sidebar[data-open="false"] .hx-sidebar__tab-close, .hx-sidebar[data-open="false"] .hx-sidebar__tab-title { display: none; }
+@media (prefers-reduced-motion: no-preference) { .hx-sidebar__tab-close { transition: opacity var(--press) var(--ease-out); } }

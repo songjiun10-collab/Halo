@@ -1,7 +1,9 @@
 import { waitReasonLabel } from '../session/wait-reason'
 import { BrandIcon, brandFor } from './BrandIcon'
 import { useEffect, useState, type ReactNode } from 'react'
-import { Plus } from './Icons'
+import { Close, Plus } from './Icons'
+import type { TabActivity } from '../session/types'
+import type { TabLayout } from '../session/tab-layout'
 import type { TaskSummary } from '../session/api'
 
 interface Props {
@@ -12,11 +14,15 @@ interface Props {
   onNewTask: () => void
   onSelectTask: (taskId: string) => void
   /** Open browser tabs, listed under Tabs. */
-  tabs: { id: string; title: string; url?: string }[]
+  tabs: { id: string; title: string; url?: string; activity?: TabActivity; closable?: boolean }[]
   activeTabId: string
   onSelectTab: (tabId: string) => void
   onOpenUrl: (url: string) => void
   onNewTab?: () => void
+  onCloseTab?: (tabId: string) => void
+  /** Where the tabs live; vertical puts them first in this sidebar and removes the strip above the page. */
+  tabLayout?: TabLayout
+  onToggleTabLayout?: () => void
   /** Agents and Teams, listed after the tasks. */
   agents?: ReactNode
 }
@@ -79,7 +85,7 @@ function TaskButton({ task, active, onClick, child }: { task: TaskSummary; activ
   )
 }
 
-export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, tabs, activeTabId, onSelectTab, onOpenUrl, onNewTab, agents }: Props) {
+export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, tabs, activeTabId, onSelectTab, onOpenUrl, onNewTab, onCloseTab, tabLayout = 'horizontal', onToggleTabLayout, agents }: Props) {
   const [pins, setPins] = useStored<Shortcut[]>('halo.shortcuts', [])
   const [adding, setAdding] = useState(false)
   const shown = pins.filter((pin) => pin && typeof pin === 'object')
@@ -117,8 +123,31 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
   const list = (items: TaskSummary[], child?: boolean) => items.map((task) => (
     <TaskButton key={task.taskId} task={task} child={child} active={task.taskId === activeTaskId} onClick={() => onSelectTask(task.taskId)} />
   ))
+  const tabsSection = section('tabs', 'Tabs', (
+    <>
+      {onNewTab ? (
+        <button type="button" className="hx-sidebar__item hx-sidebar__new" onClick={onNewTab}><Plus /><span>New Tab</span></button>
+      ) : null}
+      {tabs.map((tab) => (
+        <div key={tab.id} className="hx-sidebar__tab" data-selected={(!activeTaskId && tab.id === activeTabId) || undefined}>
+          <button type="button" className="hx-sidebar__item hx-sidebar__tab-main" data-selected={(!activeTaskId && tab.id === activeTabId) || undefined} aria-current={!activeTaskId && tab.id === activeTabId ? 'page' : undefined} title={tab.title} onClick={() => onSelectTab(tab.id)}>
+            <span className="hx-sidebar__fav" aria-hidden="true">{brandFor(hostOf(tab.url ?? "")) ? <BrandIcon host={hostOf(tab.url ?? "")} size={20} /> : tab.title.trim().slice(0, 1) || '?'}</span>
+            <span className="hx-sidebar__tab-title">{tab.title}</span>
+            {tab.activity ? <span className="hx-sidebar__tab-act" data-state={tab.activity} aria-hidden="true" /> : null}
+            {tab.activity ? <span className="hx-sr">, agent {tab.activity}</span> : null}
+          </button>
+          {tab.closable && onCloseTab ? (
+            <button type="button" className="hx-icbtn hx-icbtn--sm hx-sidebar__tab-close" aria-label={`Close ${tab.title}`} onClick={() => onCloseTab(tab.id)}><Close /></button>
+          ) : null}
+        </div>
+      ))}
+    </>
+  ), onToggleTabLayout ? (
+    <button type="button" className="hx-sidebar__add" aria-label={tabLayout === 'vertical' ? 'Show tabs in a strip above the page' : 'Show tabs in this sidebar instead of a strip'} aria-pressed={tabLayout === 'vertical'} title={tabLayout === 'vertical' ? 'Vertical tabs: on' : 'Vertical tabs: off'} onClick={onToggleTabLayout}>⇅</button>
+  ) : undefined)
   return (
     <aside className="hx-sidebar" data-open={open} aria-label="Workspace" inert={inert}>
+      {tabLayout === 'vertical' ? tabsSection : null}
       {section('bookmarks', 'Bookmarks', (
         <>
           <div className="hx-scs" aria-label="Shortcuts">
@@ -174,18 +203,7 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
           ) : null}
         </>
       ), <button type="button" className="hx-sidebar__add" aria-label="New project folder" onClick={addProject}>+</button>)}
-      {section('tabs', 'Tabs', (
-        <>
-          {onNewTab ? (
-            <button type="button" className="hx-sidebar__item hx-sidebar__new" onClick={onNewTab}><Plus /><span>New Tab</span></button>
-          ) : null}
-          {tabs.map((tab) => (
-            <button type="button" key={tab.id} className="hx-sidebar__item" data-selected={(!activeTaskId && tab.id === activeTabId) || undefined} onClick={() => onSelectTab(tab.id)}>
-              <span className="hx-sidebar__fav" aria-hidden="true">{brandFor(hostOf(tab.url ?? "")) ? <BrandIcon host={hostOf(tab.url ?? "")} size={20} /> : tab.title.trim().slice(0, 1) || '?'}</span><span>{tab.title}</span>
-            </button>
-          ))}
-        </>
-      ))}
+      {tabLayout === 'horizontal' ? tabsSection : null}
       <div className="hx-sidebar__foot"><span>{tasks.length} saved {tasks.length === 1 ? 'task' : 'tasks'}</span></div>
     </aside>
   )

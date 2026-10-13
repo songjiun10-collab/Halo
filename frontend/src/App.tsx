@@ -12,6 +12,7 @@ import { TabStrip } from './components/TabStrip'
 import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
 import { WorkspaceSidebar } from './components/WorkspaceSidebar'
+import { loadTabLayout, otherTabLayout, saveTabLayout, type TabLayout } from './session/tab-layout'
 import { SidebarAgents } from './agent/SidebarAgents'
 import { openAgentView, type AgentNavView } from './agent/agent-nav'
 import { usePresence } from './hooks/usePresence'
@@ -46,6 +47,14 @@ export default function App() {
 
   const [activityOpen, setActivityOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Vertical tabs live in the sidebar, so choosing them also opens it; the strip above the page goes away.
+  const [tabLayout, setTabLayout] = useState<TabLayout>(() => loadTabLayout())
+  const toggleTabLayout = () => {
+    const next = otherTabLayout(tabLayout)
+    setTabLayout(next)
+    saveTabLayout(next)
+    if (next === 'vertical') setSidebarOpen(true)
+  }
   const [chatOpen, setChatOpen] = useState(false)
   /** ⌘/Ctrl + . keeps Halo's controls unfolded even when nothing needs you. */
   const [pinned, setPinned] = useState(false)
@@ -411,7 +420,7 @@ export default function App() {
             }
               halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
             />
-          <TabStrip
+          {tabLayout === 'horizontal' && <TabStrip
             tabs={tabsForDisplay}
             activeTabId={tab.id}
             canClose={(candidate) => !s.activeTaskId && tabsForDisplay.length > 1 && candidate.id !== 'home'}
@@ -419,7 +428,7 @@ export default function App() {
             onClose={(id) => void store.closeBrowserTab(id)}
             canCreate={!s.activeTaskId}
             onNew={() => { void store.newBrowserTab() }}
-          />
+          />}
         </header>
         <div className="hx-window-row hx-workspace">
           <WorkspaceSidebar
@@ -429,7 +438,10 @@ export default function App() {
             inert={overviewOpen || !!approval}
             onNewTask={onNewTask}
             onSelectTask={(taskId) => void store.selectTask(taskId)}
-            tabs={tabsForDisplay.map((t) => ({ id: t.id, title: tabTitle(t), url: currentUrl(t) }))}
+            tabs={tabsForDisplay.map((t) => ({ id: t.id, title: tabTitle(t), url: currentUrl(t), activity: t.claude, closable: !s.activeTaskId && tabsForDisplay.length > 1 && t.id !== 'home' }))}
+            onCloseTab={(id) => void store.closeBrowserTab(id)}
+            tabLayout={tabLayout}
+            onToggleTabLayout={toggleTabLayout}
             activeTabId={tab.id}
             onSelectTab={(id) => void store.selectBrowserTab(id)}
             onOpenUrl={(url) => void store.navigate({ type: 'navigate', url })}
