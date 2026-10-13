@@ -10,6 +10,7 @@
 //   halo-admin.js payments <dataRoot> on|off
 //   halo-admin.js settings <dataRoot> [field value ...]     show all settings, or change any of them
 //   halo-admin.js tasks    <dataRoot>                       every task: first/last event time, event count
+//   halo-admin.js test payment "<button label>" | mask "<text>" | tier "<text>"   (no data folder; changes nothing)
 //
 // "All permissions" here means every setting the host lets anyone change, through the same
 // validated store the app uses (a bad value is refused), and every change is appended to
@@ -26,6 +27,9 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 const readline = require("node:readline");
 const { HostSettingsStore } = require("../main/harness/host-settings");
+const { isPaymentControl, classifyTarget } = require("../main/harness/effect-classifier");
+const { maskCardNumbers } = require("../main/harness/card-blind");
+const { maskTier3, tierOf } = require("../main/harness/pii-tiers");
 const { readBuildInfo, checkBuild } = require("../main/harness/build-expiry");
 
 // Journal notes that say a safety rule acted. Anything else in a journal is not the operator's business here.
@@ -140,6 +144,19 @@ async function listTasks(dataRoot) {
   return rows.sort((a, b) => String(a.firstAt).localeCompare(String(b.firstAt)));
 }
 
+// Dry runs of the safety rules on text you type in. Nothing is read from or written to the app.
+function dryRun(kind, text) {
+  if (typeof text !== "string" || !text) throw new Error("test needs some text to try");
+  if (kind === "payment") {
+    const target = { role: "button", name: text, covered: false, disabled: false };
+    const verdict = classifyTarget(target, "click_at");
+    return { isPaymentButton: isPaymentControl(target), gateWhenPaymentsOff: `${verdict.gate} (${verdict.reason})` };
+  }
+  if (kind === "mask") return { masked: maskTier3(maskCardNumbers(text)) };
+  if (kind === "tier") return { tier: tierOf(text) };
+  throw new Error("test takes payment, mask or tier");
+}
+
 function flag(args, name) {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
@@ -147,6 +164,7 @@ function flag(args, name) {
 
 async function main(argv) {
   const [command, dataRoot, ...rest] = argv;
+  if (command === "test") { console.log(JSON.stringify(dryRun(dataRoot, rest.join(" ")), null, 2)); return 0; }
   if (!command || !dataRoot) { console.error("usage: halo-admin.js status|events|payments <dataRoot> ..."); return 2; }
   if (command === "status") { console.log(JSON.stringify(await status(dataRoot, rest[0]), null, 2)); return 0; }
   if (command === "events") {
@@ -178,4 +196,4 @@ async function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2)).then((code) => process.exit(code), (error) => { console.error(error.message); process.exit(1); });
 
-module.exports = { changeSettings, listTasks, collectEvents, status, setPayments, SAFETY_KINDS };
+module.exports = { dryRun, changeSettings, listTasks, collectEvents, status, setPayments, SAFETY_KINDS };

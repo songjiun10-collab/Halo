@@ -73,3 +73,16 @@ test("tasks lists every journal with first/last event and a count", async () => 
   const rows = await listTasks(root);
   assert.deepEqual(rows.map((r) => [r.taskId, r.events, r.lastAt]), [["a", 2, "2026-10-01T00:00:05Z"]]);
 });
+
+test("test runs the safety rules on typed text without touching any data", () => {
+  const { dryRun } = require("../tools/halo-admin");
+  assert.equal(dryRun("payment", "Place your order").isPaymentButton, true);
+  assert.equal(dryRun("payment", "Learn more").isPaymentButton, false);
+  const masked = dryRun("mask", "card 4111 1111 1111 1111 ok").masked;
+  assert.match(masked, /1111\]/);
+  assert.doesNotMatch(masked, /4111 1111/);
+  assert.equal(dryRun("tier", "hello").tier, 0);
+  assert.equal(dryRun("tier", "4111 1111 1111 1111").tier, 3);
+  assert.throws(() => dryRun("nope", "x"), /payment, mask or tier/);
+  assert.throws(() => dryRun("tier", ""), /some text/);
+});
