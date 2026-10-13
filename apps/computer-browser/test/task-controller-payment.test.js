@@ -9,7 +9,7 @@ const { TaskController } = require("../main/harness/task-controller");
 
 const PAY = { type: "click", elementId: "1" };
 
-async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }), controllerOptions = { paymentsEnabled: true } }) {
+async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }), controllerOptions = { paymentsEnabled: true }, formAction = "https://shop.example/pay" }) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-payment-controller-"));
   const store = await TaskStore.create({ originalRequest: request }, { storageRoot });
   const executed = [];
@@ -18,7 +18,7 @@ async function run(t, { request, actions = [PAY], total = "Total $12.50", approv
     supportsAction: () => true,
     observe: async () => ({ id: "obs", documentEpoch: 1, url: "https://shop.example/checkout", text: `Item $10.00\nShipping $2.50\n${total}`, elements: [
       { elementId: "0", role: "link", name: "Cart", href: "https://shop.example/cart" },
-      { elementId: "1", role: "button", name: "Place order", formAction: "https://shop.example/pay", formMethod: "post" },
+      { elementId: "1", role: "button", name: "Place order", formAction, formMethod: "post" },
     ] }),
     execute: async (action) => { executed.push(action); return { status: "ok" }; },
   };
@@ -138,4 +138,13 @@ test("payments are off by default: without an explicit opt-in a clear order gran
   const r = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", controllerOptions: {} });
   assert.equal(kinds(r).includes("mandate_granted"), false);
   assert.equal(r.executed.length, 0);
+});
+
+test("a payment button that submits to another site is not covered by this site's mandate", async (t) => {
+  const r = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", formAction: "https://evil.example/pay" });
+  assert.equal(r.executed.length, 0, "the cross-origin submit never runs");
+  assert.equal(kinds(r).includes("payment_authorized"), false);
+  const snap = r.controller.getSnapshot();
+  assert.equal(snap.pauseReason, "need_user");
+  assert.match(snap.needUserReason, /다른 사이트/);
 });

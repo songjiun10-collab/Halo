@@ -2547,8 +2547,8 @@ class TaskController {
     const target = this._paymentTarget(action);
     if (!target) return null;
     const observation = this._lastObservation;
-    let origin = null;
-    try { origin = new URL(observation?.url ?? "").origin; } catch { /* unreadable page url */ }
+    // Where the money goes: a payment button that submits to another site is judged by that site, not by the page it sits on.
+    const origin = actionTargetOrigin(action, observation);
     const request = { origin, amount: payments.findPayableAmount(target.name, observation) };
     const verdict = payments.decidePayment({ mandates: this._mandates, request, now: this._monotonicNow() });
     if (verdict.decision === "pay") {

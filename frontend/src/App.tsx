@@ -293,6 +293,9 @@ export default function App() {
   const chromium = window.haloBrowser?.runtime === 'chromium'
   const directDriving = chromium && s.directBrowser && !s.activeTaskId
   const [directFrame, setDirectFrame] = useState<string | null>(null)
+  // Read by a stream start that finishes late: if the live view has ended meanwhile, nobody is left to stop it.
+  const directDrivingRef = useRef(directDriving)
+  useEffect(() => { directDrivingRef.current = directDriving }, [directDriving])
   useEffect(() => {
     const api = window.haloBrowser
     if (!directDriving || !api?.captureSurface) { setDirectFrame(null); return }
@@ -310,7 +313,11 @@ export default function App() {
       })
       // One still first so the page never flashes empty, then the pushed frames take over.
       void api.captureSurface().then((frame) => { if (!stopped && frame) setDirectFrame((current) => current ?? frame) }).catch(() => {})
-      void api.startSurfaceStream().then((started) => { if (!stopped && !started) void tick() }).catch(() => { if (!stopped) void tick() })
+      void api.startSurfaceStream().then((started) => {
+        // A tab switch already replaced this stream; only a finished live view leaves a stream nobody will stop.
+        if (stopped) { if (started && !directDrivingRef.current) void api.stopSurfaceStream?.().catch(() => {}); return }
+        if (!started) void tick()
+      }).catch(() => { if (!stopped) void tick() })
     } else void tick()
     return () => {
       stopped = true; window.clearTimeout(id); unsubscribe?.()
