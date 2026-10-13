@@ -240,3 +240,17 @@ test("plannerEffortMode accepts only auto or fixed", async () => {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("paymentsEnabled is an optional boolean kill switch: unset keeps defaults, a non-boolean is rejected", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-settings-"));
+  try {
+    const settings = new HostSettingsStore({ storageRoot: root });
+    assert.equal((await settings.load()).paymentsEnabled, undefined);
+    await assert.rejects(settings.update({ paymentsEnabled: "no" }), { code: "invalid_payments_enabled" });
+    assert.equal((await settings.update({ paymentsEnabled: false })).paymentsEnabled, false);
+    assert.equal((await settings.load()).paymentsEnabled, false);
+    assert.equal((await settings.update({ paymentsEnabled: true })).paymentsEnabled, true);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

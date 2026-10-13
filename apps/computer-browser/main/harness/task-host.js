@@ -113,6 +113,7 @@ class TaskHost {
     plannerFast,
     plannerEscalation,
     plannerRouting,
+    paymentsEnabled,
     mcpProviders = [],
     memoryStore,
     activityJournal,
@@ -175,6 +176,7 @@ class TaskHost {
     this._plannerFast = plannerFast === true;
     this._plannerEscalation = plannerEscalation === true;
     this._plannerRouting = plannerRouting === true;
+    this._paymentsEnabled = paymentsEnabled !== false;
     this._mcpProviders = Array.isArray(mcpProviders) ? [...mcpProviders] : [];
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
@@ -528,6 +530,7 @@ class TaskHost {
       strategyGuidance,
       ...(this._activityJournal ? { activityRecall: async (query) => (await this._activityJournal.isEnabled()) ? this._activityJournal.store.recall(query) : [] } : {}),
       permissionMode: this._permissionMode,
+      paymentsEnabled: this._paymentsEnabled,
       plannerEffort: this._effortForProfile(taskProfile),
       adaptiveEffort: this._plannerEffortMode === "auto",
       reviewFallback: this._runScopes.get(store.taskId)?.reviewFallback ?? "queue",
@@ -2465,9 +2468,10 @@ class TaskHost {
     this._plannerFast = settings.plannerFast === true;
     this._plannerEscalation = settings.plannerEscalation === true;
     this._plannerRouting = settings.plannerRouting === true;
+    this._paymentsEnabled = settings.paymentsEnabled !== false;
     this._mcpProviders = [...settings.mcpProviders];
     for (const entry of this._active.values()) {
-      entry.controller.setPolicySettings({ ...settings, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
+      entry.controller.setPolicySettings({ ...settings, paymentsEnabled: settings.paymentsEnabled !== false, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
     }
     return settings;
   }

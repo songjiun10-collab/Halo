@@ -9,7 +9,7 @@ const { TaskController } = require("../main/harness/task-controller");
 
 const PAY = { type: "click", elementId: "1" };
 
-async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }) }) {
+async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }), controllerOptions = {} }) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-payment-controller-"));
   const store = await TaskStore.create({ originalRequest: request }, { storageRoot });
   const executed = [];
@@ -23,7 +23,7 @@ async function run(t, { request, actions = [PAY], total = "Total $12.50", approv
     execute: async (action) => { executed.push(action); return { status: "ok" }; },
   };
   const controller = new TaskController({
-    store, browser, permissionMode: "interact", approve: approver, hostVerifier: () => true,
+    store, browser, permissionMode: "interact", approve: approver, hostVerifier: () => true, ...controllerOptions,
     planner: { next: async (c) => {
       const base = { taskId: c.taskId, goalVersion: c.goalVersion, basedOnObservationId: c.observation.id, criterionIds: [] };
       planned += 1;
@@ -116,4 +116,20 @@ test("a resume without an answer does not ask again and does not pay", async (t)
   await r.controller.resume();
   assert.equal(r.executed.length, 0);
   assert.equal(r.notes.filter((n) => n.kind === "payment_question").length, 1);
+});
+
+test("kill switch: with payments off a clear order grants no mandate and records no payment", async (t) => {
+  const r = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", controllerOptions: { paymentsEnabled: false } });
+  assert.equal(kinds(r).includes("mandate_granted"), false);
+  assert.equal(kinds(r).includes("payment_authorized"), false);
+  assert.equal(kinds(r).includes("payment_question"), false, "off means the old gates decide, not a new question");
+  assert.equal(r.executed.length, 0, "the pay click never reaches the browser without a human");
+  assert.equal(r.controller.getSnapshot().approvalQueue.length, 1, "the existing human gate holds the click");
+});
+
+test("kill switch: turning payments off mid-task revokes a mandate that was already granted", async (t) => {
+  const on = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", actions: [{ type: "scroll", direction: "down" }] });
+  assert.ok(kinds(on).includes("mandate_granted"));
+  on.controller.setPolicySettings({ paymentsEnabled: false });
+  assert.ok(on.controller._mandates.every((m) => m.revoked === true));
 });

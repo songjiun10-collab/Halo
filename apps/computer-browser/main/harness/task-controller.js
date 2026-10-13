@@ -265,6 +265,7 @@ class TaskController {
     routineRunner,
     routineRun,
     batchReadOnlyActions = true,
+    paymentsEnabled = true,
     harnessProfile,
     makeMcpBroker,
     mcpEnabled,
@@ -304,6 +305,8 @@ class TaskController {
     this._planner = planner;
     this._routineRunner = routineRunner || null;
     this._batchReadOnlyActions = batchReadOnlyActions !== false;
+    // Kill switch: only an explicit false turns payments off for this controller.
+    this._paymentsEnabled = paymentsEnabled !== false;
     const checkpointedRoutineRun = store.lastCheckpoint?.payload?.routineRun;
     this._routineRun = checkpointedRoutineRun ? { ...checkpointedRoutineRun } : routineRun ? { ...routineRun } : null;
     if (this._routineRunner && (!this._routineRun ||
@@ -642,13 +645,18 @@ class TaskController {
     });
   }
 
-  setPolicySettings({ permissionMode, plannerEffort } = {}) {
+  setPolicySettings({ permissionMode, plannerEffort, paymentsEnabled } = {}) {
     const { PERMISSION_MODES } = require("./permission-policy");
     const allowedEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
     if (permissionMode !== undefined && !PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_permission_mode", "permissionMode is invalid");
     if (plannerEffort !== undefined && !allowedEfforts.includes(plannerEffort)) throw new TaskControllerError("invalid_planner_effort", "plannerEffort is invalid");
     if (permissionMode !== undefined) this._permissionMode = permissionMode;
     if (plannerEffort !== undefined) this._plannerEffort = plannerEffort;
+    if (paymentsEnabled !== undefined) {
+      this._paymentsEnabled = paymentsEnabled !== false;
+      // Turning payments off takes effect now: a mandate already granted dies with it.
+      if (!this._paymentsEnabled) for (const mandate of this._mandates) mandate.revoked = true;
+    }
     this._browser.setPermissionMode?.(this._permissionMode);
   }
 
@@ -2469,6 +2477,7 @@ class TaskController {
     if (this._mandateGoalVersion === version) return "ok";
     this._mandateGoalVersion = version;
     for (const old of this._mandates) old.revoked = true;
+    if (!this._paymentsEnabled) return "ok";
     if (this._routineRunner || this._goal.trigger) return "ok";
     const userText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
     const verdict = payments.mandateFromUserRequest(userText);
@@ -2506,6 +2515,7 @@ class TaskController {
   // pay: the user's order covers this payment; ask: pause with a question;
   // refuse/null: nobody ordered a payment, the existing gates apply unchanged.
   async _decidePayment(action) {
+    if (!this._paymentsEnabled) return null;
     const target = this._paymentTarget(action);
     if (!target) return null;
     const observation = this._lastObservation;

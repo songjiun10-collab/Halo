@@ -579,6 +579,7 @@ async function createHarnessHost(socketPath, hostWindow) {
     plannerModel: settings.plannerModel,
     plannerFast: settings.plannerFast,
     plannerEscalation: settings.plannerEscalation,
+    paymentsEnabled: settings.paymentsEnabled,
     plannerRouting: settings.plannerRouting,
     mcpProviders: settings.mcpProviders,
     makeMcpBroker: makeHarnessMcpBroker,

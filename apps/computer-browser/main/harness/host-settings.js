@@ -38,8 +38,8 @@ const SETTINGS_FIELDS = ["executionMode", "mcpProviders", "memoryPolicy", "permi
 // contextAwareness (opt-in, off when unset) keeps a local journal of pages the user read.
 // plannerRouting (opt-in, off when unset) picks a planner tier from the task duration profile.
 // plannerEscalation (opt-in, off when unset) lets a stuck task move up one model tier.
-const OPTIONAL_FIELDS = ["plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy"];
-const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy"];
+const OPTIONAL_FIELDS = ["plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "paymentsEnabled", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy"];
+const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "paymentsEnabled", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy"];
 const LEGACY_V1_FIELDS = "executionMode,permissionMode,plannerEffort,version";
 const LEGACY_V2_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,version";
 const LEGACY_V3_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,plannerProvider,version";
@@ -105,6 +105,11 @@ function validateSettings(value) {
   if (hasAwareness && typeof value.contextAwareness !== "boolean") {
     throw new HostSettingsError("invalid_context_awareness", "contextAwareness must be a boolean");
   }
+  // Payment kill switch: false makes the host refuse every payment mandate and approval. Unset keeps today's behavior.
+  const hasPaymentsEnabled = Object.prototype.hasOwnProperty.call(value, "paymentsEnabled");
+  if (hasPaymentsEnabled && typeof value.paymentsEnabled !== "boolean") {
+    throw new HostSettingsError("invalid_payments_enabled", "paymentsEnabled must be a boolean");
+  }
   const hasStrategyLearning = Object.prototype.hasOwnProperty.call(value, "strategyLearning");
   if (hasStrategyLearning && typeof value.strategyLearning !== "boolean") {
     throw new HostSettingsError("invalid_strategy_learning", "strategyLearning must be a boolean");
@@ -150,6 +155,7 @@ function validateSettings(value) {
     ...(hasRouting ? { plannerRouting: value.plannerRouting } : {}),
     ...(hasAwareness ? { contextAwareness: value.contextAwareness } : {}),
     ...(hasStrategyLearning ? { strategyLearning: value.strategyLearning } : {}),
+    ...(hasPaymentsEnabled ? { paymentsEnabled: value.paymentsEnabled } : {}),
     ...(hasEngine ? { browserEngine: value.browserEngine } : {}),
     ...(hasChromiumPath ? { chromiumPath: value.chromiumPath } : {}),
     ...(hasChromiumEndpoint ? { chromiumEndpoint: value.chromiumEndpoint } : {}),
