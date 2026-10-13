@@ -52,3 +52,24 @@ test("status counts safety events and reports build expiry from a build-info fil
   assert.deepEqual(s.safetyCounts, { payment_question: 2 });
   assert.equal(s.build.expired, true);
 });
+
+test("settings changes go through the validated store and leave an audit line", async () => {
+  const { changeSettings } = require("../tools/halo-admin");
+  const root = await dataRoot({});
+  const { changed } = await changeSettings(root, ["permissionMode", "interact", "paymentsEnabled", "true"]);
+  assert.deepEqual(changed.sort(), ["paymentsEnabled", "permissionMode"]);
+  assert.equal((await status(root)).permissionMode, "interact");
+  await assert.rejects(() => changeSettings(root, ["permissionMode", "god"]), /invalid|settings/i);
+  await assert.rejects(() => changeSettings(root, ["notAField", "1"]), /unknown/);
+  await assert.rejects(() => changeSettings(root, ["paymentsEnabled"]), /pairs/);
+  const audit = (await fs.readFile(path.join(root, "host-settings-admin-audit.jsonl"), "utf8")).trim().split("\n");
+  assert.equal(audit.length, 1, "refused changes leave no audit line");
+  assert.equal(JSON.parse(audit[0]).changed.permissionMode.to, "interact");
+});
+
+test("tasks lists every journal with first/last event and a count", async () => {
+  const { listTasks } = require("../tools/halo-admin");
+  const root = await dataRoot({ a: [note("a", "2026-10-01T00:00:00Z", { kind: "x" }), note("a", "2026-10-01T00:00:05Z", { kind: "y" })] });
+  const rows = await listTasks(root);
+  assert.deepEqual(rows.map((r) => [r.taskId, r.events, r.lastAt]), [["a", 2, "2026-10-01T00:00:05Z"]]);
+});

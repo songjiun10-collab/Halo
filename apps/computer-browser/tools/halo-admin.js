@@ -8,6 +8,13 @@
 //   halo-admin.js status   <dataRoot> [buildInfoFile]
 //   halo-admin.js events   <dataRoot> [--since YYYY-MM-DD] [--kind payment_authorized,...]
 //   halo-admin.js payments <dataRoot> on|off
+//   halo-admin.js settings <dataRoot> [field value ...]     show all settings, or change any of them
+//   halo-admin.js tasks    <dataRoot>                       every task: first/last event time, event count
+//
+// "All permissions" here means every setting the host lets anyone change, through the same
+// validated store the app uses (a bad value is refused), and every change is appended to
+// host-settings-admin-audit.jsonl. It does not bypass the safety rules: it cannot type secrets,
+// approve a payment, or edit a journal.
 //
 // Writing note: the running app keeps its settings in memory. `payments off` here changes the file,
 // which the app reads at its next start; to stop a running app right away use the Settings switch.
@@ -96,6 +103,43 @@ async function setPayments(dataRoot, value) {
   return { paymentsEnabled: next.paymentsEnabled === true };
 }
 
+// "true"/"false"/numbers/JSON arrays become real values; anything else stays text.
+function parseValue(text) {
+  try { return JSON.parse(text); } catch { return text; }
+}
+
+async function changeSettings(dataRoot, pairs) {
+  if (pairs.length === 0 || pairs.length % 2) throw new Error("settings takes field value pairs");
+  const patch = {};
+  for (let i = 0; i < pairs.length; i += 2) patch[pairs[i]] = parseValue(pairs[i + 1]);
+  const store = new HostSettingsStore({ storageRoot: dataRoot });
+  const before = await store.load();
+  const next = await store.update(patch, { actor: "halo-admin" });
+  const changed = Object.keys(patch).filter((key) => JSON.stringify(before[key]) !== JSON.stringify(next[key]));
+  await fsp.appendFile(path.join(dataRoot, "host-settings-admin-audit.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), actor: "halo-admin", changed: Object.fromEntries(changed.map((key) => [key, { from: before[key], to: next[key] }])) })}\n`, { mode: 0o600 });
+  return { changed, settings: next };
+}
+
+async function listTasks(dataRoot) {
+  const rows = [];
+  for (const dir of await taskDirs(dataRoot)) {
+    const journal = path.join(dir, "events.jsonl");
+    if (!fs.existsSync(journal)) continue;
+    let first = null, last = null, count = 0;
+    const lines = readline.createInterface({ input: fs.createReadStream(journal), crlfDelay: Infinity });
+    for await (const line of lines) {
+      if (line.length > 1_000_000) continue;
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      count += 1;
+      first ??= event.at;
+      last = { at: event.at, type: event.type };
+    }
+    rows.push({ taskId: path.basename(dir), firstAt: first, lastAt: last?.at ?? null, lastType: last?.type ?? null, events: count });
+  }
+  return rows.sort((a, b) => String(a.firstAt).localeCompare(String(b.firstAt)));
+}
+
 function flag(args, name) {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
@@ -117,10 +161,21 @@ async function main(argv) {
     console.log("Written to the settings file. A running app keeps its own copy: use the Settings switch to stop it now.");
     return 0;
   }
+  if (command === "settings") {
+    if (rest.length === 0) { console.log(JSON.stringify(await new HostSettingsStore({ storageRoot: dataRoot }).load(), null, 2)); return 0; }
+    const { changed } = await changeSettings(dataRoot, rest);
+    console.log(changed.length ? `changed: ${changed.join(", ")}` : "no change");
+    console.log("Written to the settings file. A running app keeps its own copy until it restarts.");
+    return 0;
+  }
+  if (command === "tasks") {
+    for (const r of await listTasks(dataRoot)) console.log(`${r.firstAt}  ${r.taskId}  ${r.events} events  last: ${r.lastType} @ ${r.lastAt}`);
+    return 0;
+  }
   console.error(`unknown command: ${command}`);
   return 2;
 }
 
 if (require.main === module) main(process.argv.slice(2)).then((code) => process.exit(code), (error) => { console.error(error.message); process.exit(1); });
 
-module.exports = { collectEvents, status, setPayments, SAFETY_KINDS };
+module.exports = { changeSettings, listTasks, collectEvents, status, setPayments, SAFETY_KINDS };
