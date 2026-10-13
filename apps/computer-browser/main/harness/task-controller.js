@@ -29,6 +29,7 @@ const { createRecoveryPolicy, buildRecoveryFeedback, buildProposalFeedback } = r
 const { resolveTarget } = require("./screen-map");
 const { TaskBranchManager } = require("./task-branch-manager");
 const { classifyTarget, isPaymentControl } = require("./effect-classifier");
+const { blindObservation, containsCardNumber, isCardField } = require("./card-blind");
 const payments = require("./payment-mandate");
 const { buildContext } = require("./context-builder");
 const { ContextRefCatalog } = require("./context-refs");
@@ -1970,6 +1971,8 @@ class TaskController {
         }
         this._reusableObservation = null;
         if (this._stopHappenedSince(epoch)) break;
+        // The planner and the journal never see card data: numbers are masked, card field values hidden.
+        observation = blindObservation(observation);
         this._lastObservation = observation;
         this._recordNavigation(observation);
 
@@ -2477,6 +2480,13 @@ class TaskController {
     if (this._mandateGoalVersion === version) return "ok";
     this._mandateGoalVersion = version;
     for (const old of this._mandates) old.revoked = true;
+    const chatText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
+    if (containsCardNumber(chatText)) {
+      await this._store.append({ type: "note", payload: { kind: "card_in_chat" } });
+      this._needUserReason = "채팅에 카드 번호가 있는 것 같습니다. 카드 정보는 Halo에 알려 주지 말고 결제창에 직접 입력해 주세요. 이미 보낸 번호가 있다면 카드사에 재발급을 요청하는 것을 권장합니다.";
+      await this._pauseWith("need_user");
+      return "stop_loop";
+    }
     if (!this._paymentsEnabled) return "ok";
     if (this._routineRunner || this._goal.trigger) return "ok";
     const userText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
@@ -2494,6 +2504,21 @@ class TaskController {
     await this._store.append({ type: "note", payload: { kind: "mandate_granted", mandateId: mandate.id, origin: mandate.origin, currency: mandate.currency, maxAmountMinor: mandate.maxAmountMinor, expiresAt: mandate.expiresAt } });
     this._mandates.push(mandate);
     return "ok";
+  }
+
+  // Typing into a card field, or typing something that is a card number, is never done by the agent.
+  _isCardInput(action) {
+    if (action.type !== "type" && action.type !== "type_at") return false;
+    if (containsCardNumber(action.text)) return true;
+    if (action.type === "type") {
+      const element = this._lastObservation?.elements?.find((el) => el.elementId === action.elementId);
+      return isCardField(element);
+    }
+    if (this._screenTargets && this._screenTargets.observationId === action.observationId) {
+      const hit = resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y));
+      return isCardField(hit);
+    }
+    return false;
   }
 
   // The control a payment-like action would press, or null. Only the host's own
@@ -2551,6 +2576,14 @@ class TaskController {
       const pressure = this._memoryMonitor.getPressureLevel();
       if (pressure === "pause" || pressure === "emergency") {
         await this._pauseForMemoryPressure(pressure);
+        return "stop_loop";
+      }
+
+      if (this._isCardInput(action)) {
+        // Card details are typed by the person, never by the agent; nothing of the text is journaled.
+        await this._store.append({ type: "note", payload: { kind: "card_input_blocked", actionType: action.type } });
+        this._needUserReason = "카드 정보는 직접 입력해 주세요. 입력을 마치면 이어서 진행합니다.";
+        await this._pauseWith("need_user");
         return "stop_loop";
       }
 

@@ -247,6 +247,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
             if (node.tagName === "INPUT") {
               const type = (node.getAttribute("type") || "text").toLowerCase();
               entry.inputType = type;
+              if ((node.getAttribute("autocomplete") || "").toLowerCase().startsWith("cc-")) entry.cardField = true;
               // Show what a text field currently holds so the planner can tell a typed query landed.
               if (["text", "search", "email", "url", "tel", "number"].includes(type) && typeof node.value === "string" && node.value) entry.value = clean(node.value, 120);
             }
