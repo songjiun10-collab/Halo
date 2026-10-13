@@ -160,19 +160,33 @@ function mandateFromUserRequest(text, { entryUrl = null } = {}) {
 }
 
 // The amount a payment button will charge, as the host can read it: a price in
-// the button's own label first, otherwise a price on a "total"-style line of the
-// page text. Exactly one distinct amount must come out of it; otherwise null.
-const TOTAL_LINE = /(?:total|amount due|order total|grand total|you pay|합계|총\s?(?:결제\s?)?금액|결제\s?금액|주문\s?금액|최종\s?결제)[^\n]{0,60}/giu;
+// the button's own label first, otherwise the price on a "total"-style line of the
+// page. `page` is the page text or an observation ({ text, elements }); a real
+// observation carries visible text mostly as separate elements, so both are read,
+// and a "Total" element followed by a lone price element counts too. Exactly one
+// distinct amount must come out of it; otherwise null.
+const TOTAL_WORD = /(?<![\p{L}])(?:total|amount due|order total|grand total|you pay|합계|총\s?(?:결제\s?)?금액|결제\s?금액|주문\s?금액|최종\s?결제)/iu;
+const TOTAL_LINE = new RegExp(`${TOTAL_WORD.source}[^\\n]{0,60}`, "giu");
+const TEXT_ROLES = new Set(["text", "heading", "paragraph", "cell", "listitem", "generic", "strong", "label", "status"]);
 
-function findPayableAmount(controlName, pageText) {
+function findPayableAmount(controlName, page) {
   const fromLabel = parsePageAmount(typeof controlName === "string" ? controlName : "");
   if (fromLabel) return fromLabel;
-  if (typeof pageText !== "string") return null;
+  const text = typeof page === "string" ? page : page && typeof page.text === "string" ? page.text : "";
+  const elements = page && Array.isArray(page.elements) ? page.elements.filter((el) => el && TEXT_ROLES.has(el.role) && typeof el.name === "string") : [];
   const amounts = new Map();
-  for (const line of pageText.matchAll(TOTAL_LINE)) {
-    const one = parsePageAmount(line[0]);
-    if (one) amounts.set(`${one.currency}:${one.amountMinor}`, one);
-  }
+  const take = (candidate) => { if (candidate) amounts.set(`${candidate.currency}:${candidate.amountMinor}`, candidate); };
+  for (const line of text.matchAll(TOTAL_LINE)) take(parsePageAmount(line[0]));
+  elements.forEach((el, i) => {
+    if (!TOTAL_WORD.test(el.name)) return;
+    const own = parsePageAmount(el.name);
+    if (own) { take(own); return; }
+    for (const next of elements.slice(i + 1, i + 3)) {
+      if (TOTAL_WORD.test(next.name)) break;
+      const one = parsePageAmount(next.name);
+      if (one) { take(one); break; }
+    }
+  });
   return amounts.size === 1 ? [...amounts.values()][0] : null;
 }
 

@@ -116,3 +116,12 @@ test("the payable amount comes from the button label or a single total line, nev
   assert.equal(findPayableAmount("Place order", "Total $12.50\nTotal $13.50"), null, "two different totals");
   assert.equal(findPayableAmount("Place order", null), null);
 });
+
+test("a real observation shows page text as elements: a total element, or a Total label followed by a lone price", () => {
+  const el = (name, role = "text") => ({ role, name });
+  assert.deepEqual(findPayableAmount("Place order", { text: "", elements: [el("Item $10.00"), el("Shipping $2.50"), el("Total $12.50"), el("Place order", "button")] }), { currency: "USD", amountMinor: 1250 });
+  assert.deepEqual(findPayableAmount("Place order", { text: "", elements: [el("Subtotal"), el("$10.00"), el("Total"), el("$12.50"), el("Place order", "button")] }), { currency: "USD", amountMinor: 1250 });
+  assert.equal(findPayableAmount("Place order", { text: "", elements: [el("Total"), el("Place order", "button")] }), null, "a button is not a price");
+  assert.equal(findPayableAmount("Place order", { text: "", elements: [el("Total $12.50"), el("Total $14.00")] }), null, "two different totals");
+  assert.equal(findPayableAmount("Place order", { text: "", elements: [el("Total $12.50", "button")] }), null, "controls are not page text");
+});

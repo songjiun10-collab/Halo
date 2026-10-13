@@ -2511,7 +2511,7 @@ class TaskController {
     const observation = this._lastObservation;
     let origin = null;
     try { origin = new URL(observation?.url ?? "").origin; } catch { /* unreadable page url */ }
-    const request = { origin, amount: payments.findPayableAmount(target.name, observation?.text) };
+    const request = { origin, amount: payments.findPayableAmount(target.name, observation) };
     const verdict = payments.decidePayment({ mandates: this._mandates, request, now: this._monotonicNow() });
     if (verdict.decision === "pay") {
       const m = verdict.mandate;

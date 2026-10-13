@@ -38,5 +38,11 @@
 
 - 사이트 이름만 말한 경우(예: "쿠팡")는 주소를 되묻는다. 이름→도메인 매핑은 없다.
 - 질문에 답하는 전용 UI(현재는 일반 수정 요청으로 답함)와 결제 완료 표시.
-- 실제 Electron과 테스트용 가짜 상점으로 하는 end-to-end 검증.
+- Electron 엔진에서의 end-to-end 검증(Chromium 엔진에서는 아래대로 확인함).
 - 카드 입력(`fillCredential`)과의 연결 검증.
+
+## 검증 (Chromium 엔진, 2026-10-13)
+
+`integration/payment-chromium-e2e.js`: 로컬 TLS 가짜 상점 + 실제 Chromium(CDP 엔진) + 실제 BrowserAdapter/TaskController, 플래너만 스크립트. 결과: 한도 안의 명확한 주문은 상점이 결제(POST)를 정확히 1번 받고, 한도를 넘는 총액은 질문으로 멈춰 상점이 결제를 받지 않으며, 결제 주문이 없는 요청은 사람 승인 대기로 남는다.
+
+이 검증에서 실제 페이지의 관찰 텍스트가 `text`가 아니라 `text` 역할 요소로 나온다는 것을 확인했고, 금액 읽기를 요소까지 보도록 고쳤다(`Subtotal`은 합계로 치지 않는다). root 컨테이너에서는 Chromium 래퍼 스크립트로 `--no-sandbox --ignore-certificate-errors`를 주었다(호스트 코드는 `--no-sandbox`를 금지한다).
