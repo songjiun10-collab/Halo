@@ -551,12 +551,22 @@ function extractProposalText(envelope) {
   return stripCodeFence(envelope.result);
 }
 
-function parseAndValidateProposal(proposalText) {
+// taskId, goalVersion and basedOnObservationId are host-known identifiers the model only echoes. A model that
+// omits them (Nemotron did on about 1 turn in 4 in the compare20 runs) would burn a whole repair call, so a MISSING
+// field is filled from the host's context; a present-but-wrong one is left alone and still rejected by the envelope
+// check or the controller. An omitted "kind" next to an actions array can only mean "actions".
+function parseAndValidateProposal(proposalText, identity) {
   let proposal;
   try {
     proposal = JSON.parse(proposalText);
   } catch {
     throw new ClaudeCodeBridgeError("invalid_proposal_json", "claude CLI result text is not valid JSON");
+  }
+  if (identity && proposal && typeof proposal === "object" && !Array.isArray(proposal)) {
+    if (proposal.taskId === undefined && typeof identity.taskId === "string") proposal.taskId = identity.taskId;
+    if (proposal.goalVersion === undefined && Number.isInteger(identity.goalVersion)) proposal.goalVersion = identity.goalVersion;
+    if (proposal.basedOnObservationId === undefined && typeof identity.observationId === "string") proposal.basedOnObservationId = identity.observationId;
+    if (proposal.kind === undefined && Array.isArray(proposal.actions)) proposal.kind = "actions";
   }
   try {
     contracts.validateProposalEnvelope(proposal);

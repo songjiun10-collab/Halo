@@ -116,3 +116,20 @@ test("Nemotron guidance tells the planner to put the answer in need_user instead
   assert.match(text, /answer itself/);
   assert.match(text, /never end it by asking the person to confirm/);
 });
+
+test("a proposal that omits only host-known identifiers is completed from the host's context; a wrong value is left alone", async () => {
+  const { NvidiaPlannerBridge } = require("../main/harness/providers/nvidia-planner-bridge");
+  const context = { taskId: proposal.taskId, goalVersion: 1, observation: { id: "obs-1" } };
+  const run = async (body, ctx = context) => {
+    const bridge = new NvidiaPlannerBridge({ apiKey: "test-only", fetchFn: async () => reply(JSON.stringify(body)) });
+    try { return await bridge.start(ctx); } finally { await bridge.close(); }
+  };
+  const bare = { criterionIds: [], actions: [{ type: "observe" }] };
+  assert.deepEqual(await run(bare), proposal, "taskId, goalVersion, basedOnObservationId and kind are filled");
+  assert.deepEqual(await run(bare, { goal: { taskId: proposal.taskId, goalVersion: 1 }, observation: { id: "obs-1" } }), proposal, "identity may come from context.goal");
+
+  assert.equal((await run({ ...bare, taskId: "22222222-2222-2222-2222-222222222222" })).taskId, "22222222-2222-2222-2222-222222222222", "a present but different taskId is not overwritten (the controller rejects a wrong one)");
+  assert.equal((await run({ ...bare, goalVersion: 9 })).goalVersion, 9, "a present goalVersion is left alone (the controller rejects a stale one)");
+  await assert.rejects(run({ criterionIds: [], kind: "finish" }, { taskId: proposal.taskId, goalVersion: 1 }), { code: "invalid_proposal" }, "no observation id known: nothing is invented");
+  await assert.rejects(run({ criterionIds: [] }), { code: "invalid_proposal" }, "no kind and no actions array stays invalid");
+});
