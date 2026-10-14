@@ -50,6 +50,11 @@ const SAFETY_DECLARATIONS = Object.freeze({
     payment: notApplicable("typing text does not press a payment control"),
     effect: applies("with a text screen map the target under the point is classified before typing"),
   }),
+  select_option: Object.freeze({
+    privacy: notApplicable("choosing a listed option types no free text"),
+    payment: notApplicable("choosing an option presses no control; any payment press is a later click"),
+    effect: notApplicable("option choices rely on the approval gate; Full mode skips that gate by definition"),
+  }),
   press_key: Object.freeze({
     privacy: notApplicable("a single key press carries no text value"),
     payment: notApplicable("Enter keeps the approval gate in computer-use modes; Full mode skips that gate by definition"),

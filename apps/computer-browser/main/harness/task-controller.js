@@ -73,10 +73,11 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
     const amount = action.amount !== undefined ? String(action.amount) : "?";
     return `${direction} ${amount}`;
   }
-  if (["click", "type", "submit_form"].includes(action.type)) {
+  if (["click", "type", "select_option", "submit_form"].includes(action.type)) {
     const element = lastObservation?.elements?.find((el) => el.elementId === action.elementId);
     if (!element) return `unknown element ${String(action.elementId).slice(0, 32)}`;
     const identity = `${element.role || "element"} ${JSON.stringify(element.name || "")} [${element.elementId}]`;
+    if (action.type === "select_option") return `${identity}; choose ${JSON.stringify(typeof action.label === "string" ? action.label.slice(0, 120) : "")}`;
     if (action.type === "type") return `${identity}; replace text with ${JSON.stringify(action.text)}`;
     const destination = element.formAction ? `${(element.formMethod || "get").toUpperCase()} ${element.formAction}` : element.href;
     return destination ? `${identity}; ${destination}` : identity;

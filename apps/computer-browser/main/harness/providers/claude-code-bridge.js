@@ -339,6 +339,7 @@ function buildPrompt(context, modelGuidance) {
     '  {"type": "find_text", "text": "<words to look for on the page, at most 200 characters>"}  (scrolls the first match to the middle of the view; fails with text_not_found if the page has none)',
     '  {"type": "observe"}',
     '  {"type": "click", "elementId": "<observed elementId>"}',
+    '  {"type": "select_option", "elementId": "<observed dropdown elementId>", "label": "<one of that element\'s options[].label, exactly as listed>"}',
     '  {"type": "type", "elementId": "<observed textbox elementId>", "text": "<replacement text, at most 4096 UTF-8 bytes>"}',
     '  {"type": "submit_form", "elementId": "<observed form or submit-button elementId>"}',
     "A blank page (about:blank) is only the starting point, not a blocker: when the request names a site or topic, propose a navigate to that site's address (its home page, or a search URL on it) instead of asking the person for a link.",

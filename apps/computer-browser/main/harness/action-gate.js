@@ -24,10 +24,10 @@ function actionTargetOrigin(action, lastObservation) {
     const element = lastObservation?.elements?.find((el) => el.elementId === action.elementId);
     return element && typeof element.href === "string" ? originOf(element.href) : null;
   }
-  if (["click", "type", "submit_form"].includes(action.type)) {
+  if (["click", "type", "select_option", "submit_form"].includes(action.type)) {
     const element = lastObservation?.elements?.find((el) => el.elementId === action.elementId);
     if (!element) return null;
-    const target = action.type === "type" ? lastObservation.url : element.formAction || element.href || lastObservation.url;
+    const target = action.type === "type" || action.type === "select_option" ? lastObservation.url : element.formAction || element.href || lastObservation.url;
     return typeof target === "string" ? originOf(target) : null;
   }
   return lastObservation && typeof lastObservation.url === "string" ? originOf(lastObservation.url) : null;

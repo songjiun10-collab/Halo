@@ -28,6 +28,20 @@ function page(options = {}) {
     set value(v) { this._value = v; }
   }
   class Textarea extends Element { get value() { return this._value || ""; } set value(v) { this._value = v; } }
+  class Select extends Element {
+    constructor(attrs, labels) {
+      super("select", attrs);
+      // Like a real single-choice dropdown, choosing one option clears the others.
+      const select = this;
+      this.options = labels.map((label) => ({
+        label, textContent: label, disabled: false, _on: false,
+        get selected() { return this._on; },
+        set selected(value) { if (value) for (const other of select.options) other._on = false; this._on = !!value; },
+      }));
+      this.options[0].selected = true;
+    }
+    get selectedOptions() { return this.options.filter((option) => option.selected); }
+  }
   class Form extends Element { requestSubmit(button) { events.push("submit"); this.submitter = button; } }
   const body = new Element("body");
   const button = new Element("button", { type: "button" }, "Save");
@@ -35,8 +49,10 @@ function page(options = {}) {
   const form = new Form("form", { "aria-label": "Profile", action: "/save", method: "post" });
   form.action = "https://example.test/save"; form.method = "post";
   const submit = new Element("button", { type: "submit" }, "Submit"); submit.form = form;
-  body.children = [button, input, form]; form.children = [submit]; form.childElementCount = 1;
-  const all = [body, button, input, form, submit];
+  const select = new Select({ "aria-label": "Country" }, ["Choose…", "Germany", "France", "Kosovo", "Kosovo"]);
+  select.options[3].label = "Kosovo"; select.options[4].label = "Kosovo";
+  body.children = [button, input, select, form]; form.children = [submit]; form.childElementCount = 1;
+  const all = [body, button, input, select, form, submit];
   for (const n of body.children) n.parentElement = body; submit.parentElement = form;
   const document = { body, documentElement: body, baseURI: "https://example.test/", title: "Test",
     getElementById: () => null,
@@ -44,7 +60,7 @@ function page(options = {}) {
   };
   const sandbox = vm.createContext({ document, NodeFilter: { SHOW_ELEMENT: 1 }, URL,
     getComputedStyle: () => ({ display: "block", visibility: "visible" }),
-    HTMLElement: Element, HTMLInputElement: Input, HTMLTextAreaElement: Textarea, HTMLFormElement: Form,
+    HTMLElement: Element, HTMLSelectElement: Select, HTMLInputElement: Input, HTMLTextAreaElement: Textarea, HTMLFormElement: Form,
     Event: class { constructor(type) { this.type = type; } },
     InputEvent: class { constructor(type) { this.type = type; } },
   });
@@ -53,7 +69,7 @@ function page(options = {}) {
   wc.executeJavaScriptInIsolatedWorld = async (_world, scripts) => vm.runInContext(scripts[0].code, sandbox);
   wc.executeJavaScript = async () => { throw new Error("interaction must use isolated world"); };
   const browser = new BrowserAdapter({ view: { webContents: wc }, permissionMode: "full", ...options });
-  return { browser, wc, events, button, input, form, submit, document, all };
+  return { browser, wc, events, button, input, select, form, submit, document, all };
 }
 
 async function actionFor(p, type, name, extra = {}) {
@@ -78,6 +94,46 @@ test("type uses a native setter and input/change events without evaluating user 
   assert.equal((await p.browser.execute(action, { documentEpoch })).status, "ok");
   assert.equal(p.input.value, text);
   assert.deepEqual(p.events, ["focus", "beforeinput", "input", "change"]);
+});
+
+test("a dropdown is observed with its options, and select_option picks one by its visible label", async () => {
+  const p = page();
+  const observation = await p.browser.observe();
+  const dropdown = observation.elements.find((e) => e.name === "Country");
+  assert.deepEqual([...dropdown.options].map((o) => o.label), ["Choose…", "Germany", "France", "Kosovo", "Kosovo"]);
+  assert.equal(dropdown.options[0].selected, true);
+  assert.equal(dropdown.value, "Choose…");
+  assert.equal(p.browser.supportsAction("select_option"), true);
+  const result = await p.browser.execute({ type: "select_option", elementId: dropdown.elementId, label: " france " }, { documentEpoch: observation.documentEpoch });
+  assert.equal(result.status, "ok");
+  assert.deepEqual([...p.select.selectedOptions].map((o) => o.label), ["France"]);
+  assert.deepEqual([...p.events], ["focus", "input", "change"]);
+});
+
+test("select_option reports option_not_found and option_ambiguous instead of guessing, and never touches a disabled option", async () => {
+  const p = page();
+  const observation = await p.browser.observe();
+  const id = observation.elements.find((e) => e.name === "Country").elementId;
+  const run = async (label) => { const fresh = await p.browser.observe(); return p.browser.execute({ type: "select_option", elementId: id, label }, { documentEpoch: fresh.documentEpoch }); };
+  assert.equal((await run("Atlantis")).errorCode, "option_not_found");
+  assert.equal((await run("Kosovo")).errorCode, "option_ambiguous");
+  p.select.options[1].disabled = true;
+  assert.equal((await run("Germany")).errorCode, "option_not_found");
+  assert.deepEqual([...p.select.selectedOptions].map((o) => o.label), ["Choose…"]);
+  assert.deepEqual([...p.events], []);
+});
+
+test("select_option only works on a native single-choice dropdown and takes a plain label", async () => {
+  const p = page();
+  const observation = await p.browser.observe();
+  const byName = (name) => observation.elements.find((e) => e.name === name).elementId;
+  const run = (action) => p.browser.execute(action, { documentEpoch: observation.documentEpoch });
+  assert.equal((await run({ type: "select_option", elementId: byName("Title"), label: "x" })).errorCode, "unsupported_input");
+  for (const label of ["", "  ", 5, null, "x".repeat(121)]) assert.equal((await run({ type: "select_option", elementId: byName("Country"), label })).errorCode, "invalid_action", JSON.stringify(label));
+  assert.equal((await run({ type: "select_option", elementId: byName("Country"), label: "Germany", value: "de" })).errorCode, "invalid_action", "no extra fields");
+  p.select.multiple = true;
+  const fresh = await p.browser.observe();
+  assert.equal((await p.browser.execute({ type: "select_option", elementId: fresh.elements.find((e) => e.name === "Country").elementId, label: "Germany" }, { documentEpoch: fresh.documentEpoch })).errorCode, "unsupported_input");
 });
 
 test("submit_form uses requestSubmit and preserves the observed submitter", async () => {

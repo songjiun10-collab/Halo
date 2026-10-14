@@ -253,7 +253,7 @@ function validateLimits(limits, label) {
     assertPositiveInteger(limits.maxPlannerCalls, `${label}.maxPlannerCalls`);
     assertPositiveInteger(limits.maxActiveMs, `${label}.maxActiveMs`);
 }
-const LOCK_ACTIONS = Object.freeze(["navigate", "follow_link", "click", "type", "click_at", "type_at", "press_key", "submit_form"]);
+const LOCK_ACTIONS = Object.freeze(["navigate", "follow_link", "click", "type", "select_option", "click_at", "type_at", "press_key", "submit_form"]);
 const MAX_LOCK_RULES = 8;
 const MAX_LOCK_ORIGINS = 20;
 const ORIGIN_RULE_ACTIONS = new Set(LOCK_ACTIONS);

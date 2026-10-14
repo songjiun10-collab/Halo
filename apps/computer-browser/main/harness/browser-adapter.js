@@ -64,7 +64,9 @@ function bareOrigin(value) {
   }
 }
 const UNSUPPORTED_ACTIONS = new Set(["download"]);
-const INTERACTION_ACTIONS = new Set(["click", "type", "submit_form"]);
+const MAX_SELECT_OPTIONS = 40;
+const MAX_OPTION_LABEL = 120;
+const INTERACTION_ACTIONS = new Set(["click", "type", "select_option", "submit_form"]);
 const MAX_FIND_TEXT = 200;
 const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find_text", "observe", "click_at", "type_at", "press_key", ...INTERACTION_ACTIONS]);
 
@@ -251,6 +253,18 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
               if ((node.getAttribute("autocomplete") || "").toLowerCase().startsWith("cc-")) entry.cardField = true;
               // Show what a text field currently holds so the planner can tell a typed query landed.
               if (["text", "search", "email", "url", "tel", "number"].includes(type) && typeof node.value === "string" && node.value) entry.value = clean(node.value, 120);
+            }
+            if (node.tagName === "SELECT") {
+              // A native dropdown shows its choices so the planner can pick one by its visible label.
+              entry.options = Array.from(node.options || []).slice(0, ${MAX_SELECT_OPTIONS}).map((option) => {
+                const choice = { label: clean(option.label || option.textContent || "", 60) };
+                if (option.selected) choice.selected = true;
+                if (option.disabled) choice.disabled = true;
+                return choice;
+              });
+              if ((node.options || []).length > ${MAX_SELECT_OPTIONS}) entry.optionCount = node.options.length;
+              const chosen = node.selectedOptions && node.selectedOptions[0];
+              if (chosen) entry.value = clean(chosen.label || chosen.textContent || "", 120);
             }
             if (node.disabled || node.getAttribute("disabled") !== null || node.getAttribute("aria-disabled") === "true") entry.disabled = true;
             if (node.required || node.getAttribute("required") !== null || node.getAttribute("aria-required") === "true") entry.required = true;
@@ -852,6 +866,7 @@ class BrowserAdapter {
         return this._followLink(action.elementId, { expectedOrigin });
       case "click":
       case "type":
+      case "select_option":
       case "submit_form":
         return this._interact(action, { signal, documentEpoch, expectedOrigin });
       case "click_at":
@@ -952,10 +967,11 @@ class BrowserAdapter {
   }
 
   async _interact(action, { signal, documentEpoch, expectedOrigin }) {
-    const keys = action.type === "type" ? ["type", "elementId", "text"] : ["type", "elementId"];
+    const keys = action.type === "type" ? ["type", "elementId", "text"] : action.type === "select_option" ? ["type", "elementId", "label"] : ["type", "elementId"];
     if (Object.keys(action).some(key => !keys.includes(key)) ||
         typeof action.elementId !== "string" || !/^(0|[1-9][0-9]*)$/.test(action.elementId) ||
-        (action.type === "type" && (typeof action.text !== "string" || Buffer.byteLength(action.text, "utf8") > MAX_INPUT_BYTES))) {
+        (action.type === "type" && (typeof action.text !== "string" || Buffer.byteLength(action.text, "utf8") > MAX_INPUT_BYTES)) ||
+        (action.type === "select_option" && (typeof action.label !== "string" || action.label.trim().length === 0 || action.label.length > MAX_OPTION_LABEL))) {
       return { status: "failed", errorCode: "invalid_action" };
     }
     const binding = this._interactionBinding;
@@ -965,7 +981,7 @@ class BrowserAdapter {
     }
     const entry = binding.elements[Number(action.elementId)];
     if (!entry) return { status: "failed", errorCode: "element_not_found" };
-    const targetUrl = action.type === "type" ? binding.url : entry.formAction || entry.href || binding.url;
+    const targetUrl = action.type === "type" || action.type === "select_option" ? binding.url : entry.formAction || entry.href || binding.url;
     const origin = bareOrigin(targetUrl);
     if (!origin || new URL(targetUrl).username || new URL(targetUrl).password) return { status: "failed", errorCode: "invalid_url" };
     if (expectedOrigin && (origin !== expectedOrigin || bareOrigin(binding.url) !== expectedOrigin)) return { status: "failed", errorCode: "widened_origin_mismatch" };
@@ -1006,6 +1022,19 @@ class BrowserAdapter {
             if (!valid()) return { status: "uncertain", errorCode: "target_changed_before_input" };
             setter.call(node, action.text);
             node.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: action.text }));
+            node.dispatchEvent(new Event("change", { bubbles: true }));
+          } else if (action.type === "select_option") {
+            // Native single-choice dropdowns only; the option is picked by its visible label, never by a value the page defines.
+            if (node.tagName !== "SELECT" || node.multiple) return failed("unsupported_input");
+            const wanted = action.label.replace(/\\s+/g, " ").trim().toLowerCase();
+            const labelOf = (option) => (option.label || option.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+            const choices = Array.from(node.options || []).filter((option) => !option.disabled && labelOf(option) === wanted);
+            if (choices.length === 0) return failed("option_not_found");
+            if (choices.length > 1) return failed("option_ambiguous");
+            started = true; node.focus();
+            if (!valid()) return { status: "uncertain", errorCode: "target_changed_during_focus" };
+            choices[0].selected = true;
+            node.dispatchEvent(new Event("input", { bubbles: true }));
             node.dispatchEvent(new Event("change", { bubbles: true }));
           } else if (action.type === "submit_form") {
             // Script-driven search boxes (e.g. GitHub) use role=form/search on a

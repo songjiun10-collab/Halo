@@ -30,8 +30,8 @@ Review notes already read: permission-policy, action-gate, session-vault, ipc an
 **Already covered in HALO, nothing to port:** loop detection. browser-use only nudges the model (repeats at 5/8/12, same page 5 times). HALO already pauses: identical action on an identical page (`noProgress`), repeated scroll (`SCROLL_STREAK_LIMIT`), same page or two pages bouncing (`PAGE_LOOP_*`), and a repeated deterministic failure (`repeatFailureLimit`). A finish with no evidence is rejected by the host, which does the job of its post-run judge.
 
 **Real gaps, in the order they would help a user:**
-1. Find text on the page and scroll to it (`find_text`, `search_page`): read-only, so it needs no payment or privacy check, but it must be declared in `action-safety.js` and added to both runtimes' adapters.
-2. List a dropdown's options before choosing (`dropdown_options`): avoids the `option_not_found` retries.
+1. DONE (find_text): find text on the page and scroll to it (`find_text`, `search_page`): read-only, so it needs no payment or privacy check, but it must be declared in `action-safety.js` and added to both runtimes' adapters.
+2. DONE (select_option, with the options listed in the observation): list a dropdown's options before choosing (`dropdown_options`). Native single-choice dropdowns only; custom role=listbox menus still go through clicks.
 3. Extract structured data from the page text with a separate model call (`extract`): the page text is untrusted, so the call must run with no tools.
 4. File upload (`upload_file`): needs a privacy declaration; only a file the person named in the request.
 Deliberately not ported: `evaluate` (runs model-written JavaScript in the page), which would bypass every host check.

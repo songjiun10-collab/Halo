@@ -35,6 +35,7 @@ const CRAFTED = {
   follow_link: { type: "follow_link", elementId: "more" },
   click: { type: "click", elementId: "pay" },
   type: { type: "type", elementId: "pw", text: "hunter2" },
+  select_option: { type: "select_option", elementId: "note", label: "Germany" },
   click_at: { type: "click_at", observationId: "obs1", x: 5, y: 5 },
   type_at: { type: "type_at", observationId: "obs1", x: 45, y: 5, text: "4111 1111 1111 1111" },
   press_key: { type: "press_key", observationId: "obs1", key: "Enter" },
