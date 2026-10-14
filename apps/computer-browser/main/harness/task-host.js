@@ -2409,8 +2409,12 @@ class TaskHost {
   async getHostSettings() {
     this._assertOpen();
     if (!this._settingsStore) throw new TaskHostError("settings_unavailable", "host settings are unavailable");
-    const settings = await this._settingsStore.load();
-    // Read-only notice for the settings screen; never stored, never accepted back by updateHostSettings.
+    return this._withBuildExpiry(await this._settingsStore.load());
+  }
+
+  // Read-only notice for the settings screen; never stored, never accepted back by updateHostSettings.
+  // Every method that returns settings to the UI uses this, so the notice survives a setting change.
+  _withBuildExpiry(settings) {
     const status = this._buildInfo ? checkBuild(this._buildInfo, this._wallClock()) : null;
     if (!status || (status.expiresAt === null && !status.invalid)) return settings;
     return { ...settings, buildExpiry: { expired: status.expired, daysLeft: status.daysLeft, expiresAt: status.expiresAt } };
@@ -2485,7 +2489,7 @@ class TaskHost {
     for (const entry of this._active.values()) {
       entry.controller.setPolicySettings({ ...settings, paymentsEnabled: settings.paymentsEnabled === true, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
     }
-    return settings;
+    return this._withBuildExpiry(settings);
   }
 
   async getStrategyLearningState() {

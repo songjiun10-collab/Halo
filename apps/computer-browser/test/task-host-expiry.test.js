@@ -72,3 +72,14 @@ test("settings carry a read-only build expiry notice only for a beta build", asy
   const settings = await beta.host.getHostSettings();
   assert.deepEqual(settings.buildExpiry, { expired: false, daysLeft: 3, expiresAt: day });
 });
+
+test("an update result carries the same read-only build expiry as a load, and a development build is unchanged", async () => {
+  const store = { load: async () => ({ version: 1, executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", plannerEffortMode: "auto", mcpProviders: [] }), update: async (patch) => ({ version: 1, executionMode: "sequential", permissionMode: "browse", plannerEffort: "medium", plannerEffortMode: "auto", mcpProviders: [], ...patch }) };
+  const beta = await makeHost({ settingsStore: store, buildInfo: { expiresAt: day, invalid: false }, wallClock: () => day - 3 * 86_400_000 + 1000 });
+  const updated = await beta.host.updateHostSettings({ permissionMode: "interact" });
+  assert.equal(updated.permissionMode, "interact");
+  assert.deepEqual(updated.buildExpiry, { expired: false, daysLeft: 3, expiresAt: day });
+
+  const dev = await makeHost({ settingsStore: store });
+  assert.equal("buildExpiry" in (await dev.host.updateHostSettings({ permissionMode: "interact" })), false);
+});
