@@ -166,6 +166,10 @@ const NAV_VISITED_MAX = 32;
 // Consecutive scrolls on one page after which the task pauses as no_progress.
 const PLANNER_RETRYABLE_CODES = ["invalid_proposal", "invalid_proposal_json"];
 const SCROLL_STREAK_LIMIT = 6;
+// A random delay in seconds between min and max, rounded to 5 decimal places.
+function clickDelaySeconds(min, max, roll) {
+  return Math.round((min + roll * (max - min)) * 1e5) / 1e5;
+}
 // Planner turns spent on one page (query and hash ignored) within the recent window.
 const PAGE_LOOP_WINDOW = 12;
 const VISITED_PAGES_KEPT = 500;
@@ -258,6 +262,10 @@ class TaskController {
     permissionMode = "browse",
     observeRetryDelayMs = OBSERVE_RETRY_DELAY_MS,
     navIntervalMs = SAME_SITE_NAV_INTERVAL_MS,
+    clickDelayMinSec = 0,
+    clickDelayMaxSec = 0,
+    random = Math.random,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     finishEvidenceRejections = 0,
     repeatFailureLimit = 0,
     maxRecoveries,
@@ -517,6 +525,14 @@ class TaskController {
     this._lastNavAt = new Map();
     this._captchaOrigins = new Set();
     this._onCaptchaPage = false;
+    // A click is sent after a random pause between min and max seconds, to 5 decimal places (0.23817 s), as a
+    // person's pointer does not land the instant the page changes. Off (0) unless the host sets it; the pause is
+    // also a brief settle time for page scripts.
+    const delayOk = (value) => Number.isFinite(value) && value >= 0 && value <= 5;
+    this._clickDelay = delayOk(clickDelayMinSec) && delayOk(clickDelayMaxSec) && clickDelayMaxSec >= clickDelayMinSec && clickDelayMaxSec > 0
+      ? { min: clickDelayMinSec, max: clickDelayMaxSec } : null;
+    this._random = typeof random === "function" ? random : Math.random;
+    this._sleep = typeof sleep === "function" ? sleep : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     this._navIntervalMs = Number.isFinite(navIntervalMs) ? navIntervalMs : SAME_SITE_NAV_INTERVAL_MS;
     // A finish with no recorded evidence for any criterion is sent back this many times before it is accepted
     // (measured in the compare20 runs: 10 of 15 Haiku finishes had no evidence observe, and all 3 plainly wrong ones were among them).
@@ -2984,11 +3000,23 @@ class TaskController {
     return true;
   }
 
+  // The random pause before a click. Runs before action_started, like navigation pacing, so a stop
+  // during the wait leaves no open action; returns false if a stop happened.
+  async _paceClick(action, epoch) {
+    if (!this._clickDelay || (action.type !== "click" && action.type !== "click_at")) return true;
+    const seconds = clickDelaySeconds(this._clickDelay.min, this._clickDelay.max, this._random());
+    await this._sleep(seconds * 1000);
+    return !this._stopHappenedSince(epoch);
+  }
+
   async _dispatchApproved(descriptor, action, epoch, { durable = true, widenedBy = null } = {}) {
     if (this._stopHappenedSince(epoch)) {
       return { status: "not_dispatched", actionId: null, action, descriptor };
     }
     if (!(await this._paceNavigation(action, epoch))) {
+      return { status: "not_dispatched", actionId: null, action, descriptor };
+    }
+    if (!(await this._paceClick(action, epoch))) {
       return { status: "not_dispatched", actionId: null, action, descriptor };
     }
     const actionId = randomUUID();

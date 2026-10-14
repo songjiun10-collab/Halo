@@ -2224,6 +2224,62 @@ test("an identical action that failed deterministically twice is not dispatched 
   await store.close();
 });
 
+function clickDelayRun({ store, action, clickDelayMinSec, clickDelayMaxSec, random, sleeps }) {
+  const executed = [];
+  let turn = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], ...(turn++ === 0 ? { kind: "actions", actions: [action] } : { kind: "finish", evidenceIds: [] }) }) },
+    browser: { observe: async () => ({ id: "obs", url: "https://example.test/", elements: [{ elementId: "1", role: "button", name: "Next" }] }), execute: async (done) => { executed.push(done); return { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    permissionMode: "interact",
+    clickDelayMinSec, clickDelayMaxSec, random,
+    sleep: async (ms) => { sleeps.push(ms); },
+  });
+  return { controller, executed };
+}
+
+test("a click waits a random 0.1 to 0.5 s, to 5 decimals, before it is sent; other actions are not delayed", async () => {
+  // [random roll, expected delay in seconds]; the delay is always a 5-decimal number of seconds.
+  for (const [roll, seconds] of [[0, 0.1], [0.5, 0.3], [0.999999, 0.5], [0.123456789, 0.14938], [0.7777777, 0.41111]]) {
+    const { store } = await makeStore({ originalRequest: "click", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+    const sleeps = [];
+    const { controller, executed } = clickDelayRun({ store, action: { type: "click", elementId: "1" }, clickDelayMinSec: 0.1, clickDelayMaxSec: 0.5, random: () => roll, sleeps });
+    await controller.start();
+    assert.equal(executed.some((a) => a.type === "click"), true);
+    assert.equal(sleeps.length, 1, `roll ${roll}`);
+    assert.ok(Math.abs(sleeps[0] - seconds * 1000) < 1e-6, `roll ${roll}: slept ${sleeps[0]} ms, wanted ${seconds * 1000}`);
+    await store.close();
+  }
+  const { store } = await makeStore({ originalRequest: "scroll", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const sleeps = [];
+  const { controller } = clickDelayRun({ store, action: { type: "scroll", direction: "down" }, clickDelayMinSec: 0.1, clickDelayMaxSec: 0.5, random: () => 0.5, sleeps });
+  await controller.start();
+  assert.deepEqual(sleeps, [], "a scroll is not a click");
+  await store.close();
+});
+
+test("click_at is delayed too, and the delay is off unless the host sets it", async () => {
+  const a = await makeStore({ originalRequest: "click_at", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const sleepsOn = [];
+  const on = clickDelayRun({ store: a.store, action: { type: "click", elementId: "1" }, clickDelayMinSec: 0.1, clickDelayMaxSec: 0.5, random: () => 0.25, sleeps: sleepsOn });
+  assert.equal(await on.controller._paceClick({ type: "click_at", observationId: "obs", x: 0.5, y: 0.5 }, on.controller._epoch), true);
+  assert.deepEqual(sleepsOn, [200]); // 0.1 + 0.25 * 0.4 = 0.2 s
+  assert.equal(await on.controller._paceClick({ type: "type", elementId: "1", text: "a" }, on.controller._epoch), true);
+  assert.deepEqual(sleepsOn, [200], "typing is not delayed");
+  await a.store.close();
+  const b = await makeStore({ originalRequest: "default", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const sleepsOff = [];
+  const off = clickDelayRun({ store: b.store, action: { type: "click", elementId: "1" }, sleeps: sleepsOff });
+  await off.controller.start();
+  assert.deepEqual(sleepsOff, [], "no delay by default");
+  await b.store.close();
+  assert.equal(new TaskController({ store: b.store, planner: {}, browser: {}, approve: allowApprove(), hostVerifier: () => false, clickDelayMinSec: 0.5, clickDelayMaxSec: 0.1 })._clickDelay, null, "a reversed range is ignored");
+});
+
 test("looking for the same text that is not on the page is not dispatched a third time", async () => {
   const { store } = await makeStore({ originalRequest: "find", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
   const { controller, executed } = repeatRun({ store, repeatFailureLimit: 2, errorCode: "text_not_found", action: { type: "find_text", text: "Add to cart" } });

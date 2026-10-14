@@ -62,6 +62,9 @@ const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/ha
 const { resolveTaskProfile } = require("../../shared/task-profile-router");
 const { clearSessionCookies, clearDisallowedSessionCookies } = require("./profile-import/session-injector");
 
+// Every click the product sends waits a random 0.1 to 0.5 s first (5 decimal places).
+const CLICK_DELAY_MIN_SEC = 0.1;
+const CLICK_DELAY_MAX_SEC = 0.5;
 const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone", "useImportedSessions", "mcpProviders", "reviewFallback", "plannerModel", "requestAuthor"]);
 const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
   planner_unavailable: "planner", planner_error: "planner", observation_error: "browser_observation",
@@ -536,6 +539,8 @@ class TaskHost {
       // failed twice with the same deterministic error is not run a third time.
       finishEvidenceRejections: 1,
       repeatFailureLimit: 2,
+      clickDelayMinSec: CLICK_DELAY_MIN_SEC,
+      clickDelayMaxSec: CLICK_DELAY_MAX_SEC,
       // Only the Codex route accepts a screenshot; every other planner uses
       // the text screen map for computer use.
       plannerImageInput: parentPin.plannerProvider === "codex_cli",
