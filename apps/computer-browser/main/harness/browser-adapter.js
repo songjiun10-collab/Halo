@@ -53,6 +53,7 @@ const MAX_INPUT_BYTES = 4096;
 const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
 const { evaluateLock } = require("../../shared/harness-contracts");
 const { validateCoordinateAction } = require("./computer-use-contract");
+const { runReflexLoop } = require("./reflex-loop");
 const { PAGE_SNAPSHOT_SOURCE, parseSnapshot, verifyEffect } = require("./effect-verifier");
 
 // The http(s) origin of a URL string, or null.
@@ -111,7 +112,35 @@ const MAX_OPTION_LABEL = 120;
 const SHOWN_OPTION_LABEL = 60;
 const INTERACTION_ACTIONS = new Set(["click", "type", "select_option", "submit_form"]);
 const MAX_FIND_TEXT = 200;
-const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find_text", "observe", "click_at", "type_at", "press_key", ...INTERACTION_ACTIONS]);
+const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find_text", "observe", "click_at", "type_at", "press_key", "play_loop", ...INTERACTION_ACTIONS]);
+
+// Runs in the host's isolated world on every pass of play_loop. For each lane it reads one pixel of the largest
+// canvas (the lane's point is in viewport fractions, like a click) and says whether it is within `tolerance` of the
+// lane's colour. null means the canvas cannot be read (none, WebGL, tainted): the loop then fails instead of guessing.
+function buildPlaySampleScript(lanes) {
+  const rules = lanes.map((lane) => ({ x: lane.x, y: lane.y, c: lane.color, t: lane.tolerance }));
+  return `(() => { /* __haloPlaySample */
+    const rules = ${JSON.stringify(rules)};
+    let canvas = null, area = 0;
+    for (const el of document.querySelectorAll("canvas")) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && r.width * r.height > area) { canvas = el; area = r.width * r.height; }
+    }
+    if (!canvas) return null;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    const box = canvas.getBoundingClientRect();
+    const sx = canvas.width / box.width, sy = canvas.height / box.height;
+    try {
+      return rules.map((rule) => {
+        const px = Math.floor((rule.x * window.innerWidth - box.left) * sx), py = Math.floor((rule.y * window.innerHeight - box.top) * sy);
+        if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return false;
+        const d = ctx.getImageData(px, py, 1, 1).data;
+        return Math.abs(d[0] - rule.c[0]) <= rule.t && Math.abs(d[1] - rule.c[1]) <= rule.t && Math.abs(d[2] - rule.c[2]) <= rule.t;
+      });
+    } catch { return null; }
+  })()`;
+}
 
 class BrowserAdapterError extends Error {
   constructor(code, message) {
@@ -765,6 +794,8 @@ class BrowserAdapter {
     if (binding) this._interactionBinding = { ...binding, epoch: observationEpoch, url: raw.url, elements: raw.elements };
     // Page dialogs the host answered since the last look (alert/confirm/prompt/beforeunload), so the planner knows.
     const dialogs = typeof wc.takeDialogNotices === "function" ? wc.takeDialogNotices() : [];
+    const playLoop = this._loopReport ?? null;
+    this._loopReport = null;
     const observation = {
       id: this._randomId(),
       documentEpoch: this._documentEpoch,
@@ -772,6 +803,8 @@ class BrowserAdapter {
       title: raw.title,
       text: raw.text,
       ...(dialogs.length > 0 ? { dialogs } : {}),
+      // What the last play_loop did (shown once): how long it ran, why it stopped, presses per key.
+      ...(playLoop ? { playLoop } : {}),
       // A modal dialog is open: only it (and what contains it) is listed, because the page behind it cannot be used.
       ...(raw.modalOpen === true ? { modalOpen: true } : {}),
       // Only error responses are surfaced, so ordinary observations stay unchanged.
@@ -989,6 +1022,7 @@ class BrowserAdapter {
       case "click_at":
       case "type_at":
       case "press_key":
+      case "play_loop":
         return this._coordinateAction(action, { signal, documentEpoch, expectedOrigin });
       case "scroll":
         return this._scroll(action.direction, action.amount);
@@ -1051,6 +1085,7 @@ class BrowserAdapter {
     if (typeof wc.sendInputEvent !== "function" || (normalized.type === "type_at" && typeof wc.insertText !== "function")) {
       return { status: "failed", errorCode: "unsupported_action" };
     }
+    if (normalized.type === "play_loop") return this._playLoop(normalized, binding, wc, signal);
 
     const x = normalized.type === "press_key" ? 0 : Math.floor(normalized.x * binding.viewport.width);
     const y = normalized.type === "press_key" ? 0 : Math.floor(normalized.y * binding.viewport.height);
@@ -1081,6 +1116,37 @@ class BrowserAdapter {
     } catch {
       return { status: "uncertain", errorCode: "coordinate_input_uncertain" };
     }
+  }
+
+  // The reflex loop (reflex-loop.js): the planner named lanes on the screen it saw; the host samples those points
+  // many times a second and presses each lane's key when its colour shows up. The approval covers this one run:
+  // the binding is consumed first, the page is watched for navigation, and the stop button ends it at once.
+  async _playLoop(action, binding, wc, signal) {
+    if (typeof wc.executeJavaScriptInIsolatedWorld !== "function") return { status: "failed", errorCode: "unsupported_action" };
+    this._visualBinding = null;
+    const epoch = this._documentEpoch;
+    const script = buildPlaySampleScript(action.lanes);
+    let navigated = false;
+    let passes = 0;
+    const sample = async () => {
+      // A look at the address every few passes costs nothing next to the pixel read.
+      if (passes++ % 4 === 0 && (this._documentEpoch !== epoch || bareOrigin(wc.getURL()) !== binding.origin)) { navigated = true; throw new Error("navigated"); }
+      const raw = await wc.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD_ID, [{ code: script }], false);
+      const value = Array.isArray(raw) && raw.length === 1 && Array.isArray(raw[0]) ? raw[0] : raw;
+      if (!Array.isArray(value)) throw new Error("canvas_unreadable");
+      return value.map(Boolean);
+    };
+    const press = async (key) => {
+      wc.sendInputEvent({ type: "keyDown", keyCode: key });
+      wc.sendInputEvent({ type: "keyUp", keyCode: key });
+    };
+    const outcome = await runReflexLoop({ lanes: action.lanes, seconds: action.seconds, sample, press, signal });
+    const stopped = navigated ? "navigated" : outcome.stopped;
+    this._loopReport = { stopped, total: outcome.total, seconds: Math.round(outcome.elapsedMs / 100) / 10, presses: action.lanes.map((l, i) => ({ key: l.key, count: outcome.presses[i] })) };
+    if (stopped === "aborted") return { status: "cancelled", errorCode: "aborted" };
+    if (stopped === "sampler_failed") return { status: "failed", errorCode: "canvas_unreadable" };
+    if (stopped === "press_failed") return { status: "uncertain", errorCode: "coordinate_input_uncertain" };
+    return { status: "ok" };
   }
 
   async _interact(action, { signal, documentEpoch, expectedOrigin }) {

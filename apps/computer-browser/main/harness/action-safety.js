@@ -60,6 +60,11 @@ const SAFETY_DECLARATIONS = Object.freeze({
     payment: notApplicable("Enter keeps the approval gate in computer-use modes; Full mode skips that gate by definition"),
     effect: notApplicable("a key press has no control under a point"),
   }),
+  play_loop: Object.freeze({
+    privacy: notApplicable("play_loop presses letters, digits and arrows only, one key per rule, and carries no text value"),
+    payment: notApplicable("Enter, Space and Tab cannot be in a rule (a focused Buy button needs one of them), so a run presses no control; it is bounded to 60 seconds, needs the person's approval outside Full mode, and stops if the page navigates"),
+    effect: notApplicable("the keys act on a game canvas the person asked to play; there is no control under a point to classify"),
+  }),
   submit_form: Object.freeze({
     privacy: notApplicable("submitting types no text"),
     payment: applies("a form submit on a payment control, or of a whole form that holds one, must be covered by an order or wait for the person"),

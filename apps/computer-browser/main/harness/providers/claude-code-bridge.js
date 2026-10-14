@@ -358,6 +358,13 @@ function buildPrompt(context, modelGuidance) {
         "type_at clicks the point, then replaces that field's whole content with text (it does not press Enter);",
         "submit on the next turn by clicking the visible submit button.",
       ] : [
+        '  {"type": "play_loop", "observationId": "<context.observation.id>", "seconds": <1..60>, "lanes": [{"x": <0..1>, "y": <0..1>, "key": "<a-z, 0-9, ArrowUp, ArrowDown, ArrowLeft or ArrowRight>", "color": [<r>, <g>, <b>], "tolerance": <1..255>}]}',
+        "play_loop is only for a game the person asked you to play that needs keys faster than a turn (a rhythm game). Start the song first with",
+        "ordinary clicks and keys, and use it once the lanes are visible. Each lane is one point on the line where a note must be hit (x,y as fractions of the",
+        "attached screenshot), the key to press, and the colour a note has when it is there. The host samples those points many times a second and presses the key",
+        "when the colour matches, for up to `seconds`, then stops; it also stops if the page changes. The next observation shows playLoop {stopped, total, presses}.",
+        "total 0 means the point or colour was wrong: look at a fresh screenshot and adjust. errorCode canvas_unreadable means this game cannot be played this way:",
+        "say so instead of retrying. The person approves each run. Enter, Space and Tab are never allowed in a rule.",
         "A screenshot is attached out-of-band for the exact computerUse binding in this observation.",
         "Coordinate x/y are normalized fractions of that screenshot's viewport; use only the attached image,",
         "copy observationId exactly, keep both coordinates in [0,1), and propose one coordinate action at a time.",

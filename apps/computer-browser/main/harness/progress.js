@@ -15,7 +15,7 @@
 
 const contracts = require("../../shared/harness-contracts");
 const { validateCoordinateAction } = require("./computer-use-contract");
-const COORDINATE_TYPES = new Set(["click_at", "type_at", "press_key"]);
+const COORDINATE_TYPES = new Set(["click_at", "type_at", "press_key", "play_loop"]);
 
 class ProgressError extends Error {
   constructor(code, message) {

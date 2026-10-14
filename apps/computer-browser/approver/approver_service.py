@@ -30,7 +30,7 @@ from halo.policy import decide  # noqa: E402
 from halo.safety_cases import Event, evaluate_trace  # noqa: E402
 
 VALID_ACTIONS = {"click", "type", "submit_form", "navigate", "download", "follow_link", "scroll", "observe",
-                 "find_text", "select_option", "click_at", "type_at", "press_key"}
+                 "find_text", "select_option", "click_at", "type_at", "press_key", "play_loop"}
 VALID_SOURCES = {"user_prompt", "page_content"}
 VALID_PROVENANCE = {"trusted", "untrusted"}
 
@@ -84,7 +84,7 @@ _ACTION_MAPPING = {
     "scroll": ("read", None),
     "observe": ("read", None),
     # 2026-10-14: the same drift as the 2026-09-27 note above. find_text only
-    # scrolls (like scroll); select_option, click_at, type_at and press_key are
+    # scrolls (like scroll); select_option, click_at, type_at, press_key and play_loop are
     # the same kind of page interaction as click/type and get their treatment.
     # Before this they fell outside VALID_ACTIONS and were denied on every
     # request. tests/test_computer_browser_approver.py now fails whenever the
@@ -94,6 +94,7 @@ _ACTION_MAPPING = {
     "click_at": ("read", None),
     "type_at": ("read", None),
     "press_key": ("read", None),
+    "play_loop": ("read", None),
     "submit_form": ("post_web", "external_write"),
     "download": ("download", None),
 }

@@ -93,6 +93,7 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
     return ` -> ${hit.role} ${JSON.stringify(hit.name)}${flags ? ` [${flags}]` : ""}`;
   };
   if (action.type === "press_key") return `${lastObservation?.id || action.observationId}; press ${action.key}`;
+  if (action.type === "play_loop") return `${lastObservation?.id || action.observationId}; play for up to ${action.seconds}s, pressing ${[...new Set(action.lanes.map((l) => l.key))].join(" ")} when its lane shows a note`;
   if (["click_at", "type_at"].includes(action.type)) {
     const point = `(${Math.round(Number(action.x) * 100)}%, ${Math.round(Number(action.y) * 100)}%)`;
     const where = landed(lastObservation);
@@ -2404,7 +2405,7 @@ class TaskController {
         }
 
         const coordinateActions = validated.kind === "actions"
-          ? validated.actions.filter((action) => action.type === "click_at" || action.type === "type_at" || action.type === "press_key")
+          ? validated.actions.filter((action) => action.type === "click_at" || action.type === "type_at" || action.type === "press_key" || action.type === "play_loop")
           : [];
         if (coordinateActions.length > 0 && (!hasComputerUseAdapter(this._store.taskProfile) ||
             coordinateActions.length !== 1 || validated.actions.length !== 1 ||

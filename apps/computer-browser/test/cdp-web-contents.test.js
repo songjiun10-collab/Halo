@@ -510,3 +510,73 @@ test("on a Chromium agent page a link, a script or a redirect cannot carry the a
   assert.equal(wc.getURL(), `${base}/start`, "the lock holds against a page's own link");
   await adapter.dispose();
 });
+
+test("play_loop plays a made-up rhythm game in a real Chromium: notes arrive faster than a planner turn, and the keys land in time", { skip: !CHROMIUM && "no Chromium binary", timeout: 120000 }, async (t) => {
+  // Four lanes, a note every 500 ms falling for 1.1 s to a line at 80% height. A key counts as a hit only when
+  // that lane's note is within 45 px of the line when it is pressed. A planner call alone cannot do this.
+  const LANE_X = [0.2, 0.4, 0.6, 0.8];
+  const KEYS = ["d", "f", "j", "k"];
+  const game = `<!doctype html><title>made-up rhythm game</title><style>html,body{margin:0;background:#101018;overflow:hidden}canvas{display:block;width:100vw;height:100vh}</style>
+<canvas id="c" width="1000" height="700"></canvas><script>
+const W = 1000, H = 700, LINE = H * 0.8, FALL = 1100, KEYS = ${JSON.stringify(KEYS)}, LANES = ${JSON.stringify(LANE_X)};
+const notes = Array.from({ length: 16 }, (_, i) => ({ lane: (i * 3 + (i >> 2)) % 4, at: 1000 + i * 500, hit: false, missed: false }));
+const state = window.__game = { hits: 0, misses: 0, falsePresses: 0, pressed: [] };
+const yOf = (n, now) => LINE + ((now - n.at) / FALL) * LINE;
+const ctx = document.getElementById("c").getContext("2d");
+const t0 = performance.now();
+addEventListener("keydown", (e) => {
+  const lane = KEYS.indexOf(e.key); if (lane < 0 || e.repeat) return;
+  const now = performance.now() - t0; state.pressed.push(e.key);
+  const note = notes.find((n) => n.lane === lane && !n.hit && !n.missed && Math.abs(yOf(n, now) - LINE) <= 45);
+  if (note) { note.hit = true; state.hits += 1; } else state.falsePresses += 1;
+});
+(function frame() {
+  const now = performance.now() - t0;
+  ctx.fillStyle = "#101018"; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, LINE - 2, W, 4);
+  for (const n of notes) {
+    const y = yOf(n, now);
+    if (!n.hit && !n.missed && y > LINE + 60) { n.missed = true; state.misses += 1; }
+    if (n.hit || y < -40 || y > H + 40) continue;
+    ctx.fillStyle = "rgb(255,40,40)"; ctx.fillRect(LANES[n.lane] * W - 40, y - 15, 80, 30);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>`;
+  const server = http.createServer((request, response) => { response.setHeader("content-type", "text/html; charset=utf-8"); response.end(game); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}/`;
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "halo-cdp-game-"));
+  const chrome = spawn(CHROMIUM, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []), "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+  let view;
+  t.after(async () => {
+    try { view?.closeConnection(); } catch { /* ignore */ }
+    await stopChromium(chrome);
+    await new Promise((resolve) => server.close(resolve));
+    removeProfile(profile);
+  });
+  const wsUrl = await new Promise((resolve, reject) => {
+    let buffer = "";
+    const timer = setTimeout(() => reject(new Error("Chromium did not report a DevTools endpoint")), 30000);
+    chrome.stderr.on("data", (chunk) => { buffer += chunk; const match = /DevTools listening on (ws:\/\/\S+)/.exec(buffer); if (match) { clearTimeout(timer); resolve(match[1]); } });
+    chrome.on("exit", () => reject(new Error("Chromium exited early")));
+  });
+  view = await openCdpView(wsUrl, { width: 1000, height: 700 });
+  const wc = view.webContents;
+  const adapter = new BrowserAdapter({ view, permissionMode: "interact" });
+  assert.equal((await adapter.execute({ type: "navigate", url: base })).status, "ok");
+  // The game starts when the page loads; the loop must be running before the first note reaches the line.
+  const observation = await adapter.observe();
+  adapter.authorizeVisualBinding({ observationId: observation.id, taskId: "22222222-2222-4222-8222-222222222222", agentId: null, documentEpoch: observation.documentEpoch, origin: new URL(base).origin, capturedAt: 1, viewport: { width: 1000, height: 700 }, digest: "0".repeat(64) });
+  const lanes = LANE_X.map((x, i) => ({ x, y: 0.8, key: KEYS[i], color: [255, 40, 40], tolerance: 50 }));
+  const result = await adapter.execute({ type: "play_loop", observationId: observation.id, seconds: 11, lanes }, { documentEpoch: observation.documentEpoch });
+  assert.equal(result.status, "ok", JSON.stringify(result));
+  const score = await wc.executeJavaScript("window.__game");
+  const report = (await adapter.observe()).playLoop;
+  t.diagnostic(`rhythm game: ${score.hits}/16 hit, ${score.misses} missed, ${score.falsePresses} false presses, ${report.total} presses in ${report.seconds}s`);
+  assert.ok(score.hits >= 14, `hit ${score.hits} of 16 notes (misses ${score.misses}, false presses ${score.falsePresses}, presses ${score.pressed.join("")})`);
+  assert.ok(score.falsePresses <= 2, `false presses ${score.falsePresses}`);
+  assert.equal(report.stopped, "time");
+  assert.ok(report.total >= 14 && report.total <= 20, `the host pressed ${report.total} times`);
+  await adapter.dispose();
+});

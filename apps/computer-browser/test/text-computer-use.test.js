@@ -382,3 +382,12 @@ test("recalled activity joins the memory entries the planner sees, and a failing
     assert.notEqual(controller.getSnapshot().pauseReason, "context_error");
   }
 });
+
+test("a play_loop proposal always waits for the person, with a plain description of what it will press", async (t) => {
+  const action = { type: "play_loop", seconds: 20, lanes: [{ x: 0.3, y: 0.8, key: "d", color: [255, 40, 40], tolerance: 60 }, { x: 0.5, y: 0.8, key: "f", color: [255, 40, 40], tolerance: 60 }] };
+  const { controller, executed } = await controllerFixture(t, { textMode: false, action });
+  const snapshot = controller.getSnapshot();
+  assert.equal(snapshot.state, "awaiting_approval");
+  assert.deepEqual(executed, [], "nothing runs before the person says yes");
+  assert.match(snapshot.approvalQueue[0].target, /play for up to 20s, pressing d f/);
+});

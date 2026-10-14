@@ -14,7 +14,14 @@ const COORDINATE_ACTION_KEYS = Object.freeze({
   click_at: ["type", "observationId", "x", "y"],
   type_at: ["type", "observationId", "x", "y", "text"],
   press_key: ["type", "observationId", "key"],
+  play_loop: ["type", "observationId", "seconds", "lanes"],
 });
+// play_loop (reflex-loop.js): letters, digits and arrows only. Enter, Space, Tab and the rest can activate whatever
+// control has focus (a Buy button), so a rule that presses keys for a minute never gets them.
+const PLAY_KEYS = Object.freeze([..."abcdefghijklmnopqrstuvwxyz0123456789", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+const MAX_PLAY_SECONDS = 60;
+const MAX_PLAY_LANES = 8;
+const LANE_KEYS = Object.freeze(["x", "y", "key", "color", "tolerance"]);
 
 class ComputerUseContractError extends Error {
   constructor(code, message) {
@@ -71,6 +78,19 @@ function validateCoordinateAction(action) {
   if (typeof action.observationId !== "string" || action.observationId.length < 1 || action.observationId.length > 128 || /[\u0000-\u001f\u007f]/.test(action.observationId)) invalid();
   if (action.type === "press_key") {
     if (!ALLOWED_KEYS.includes(action.key)) invalid();
+    return action;
+  }
+  if (action.type === "play_loop") {
+    if (typeof action.seconds !== "number" || !Number.isFinite(action.seconds) || action.seconds <= 0 || action.seconds > MAX_PLAY_SECONDS) invalid();
+    if (!Array.isArray(action.lanes) || action.lanes.length < 1 || action.lanes.length > MAX_PLAY_LANES) invalid();
+    for (const lane of action.lanes) {
+      if (!lane || typeof lane !== "object" || Array.isArray(lane) || Object.getPrototypeOf(lane) !== Object.prototype) invalid();
+      if (Object.keys(lane).length !== LANE_KEYS.length || LANE_KEYS.some((key) => !Object.hasOwn(lane, key))) invalid();
+      if (!Number.isFinite(lane.x) || !Number.isFinite(lane.y) || lane.x < 0 || lane.x >= 1 || lane.y < 0 || lane.y >= 1) invalid();
+      if (typeof lane.key !== "string" || !PLAY_KEYS.includes(lane.key)) invalid();
+      if (!Array.isArray(lane.color) || lane.color.length !== 3 || lane.color.some((c) => !Number.isInteger(c) || c < 0 || c > 255)) invalid();
+      if (!Number.isInteger(lane.tolerance) || lane.tolerance < 1 || lane.tolerance > 255) invalid();
+    }
     return action;
   }
   if (!Number.isFinite(action.x) || !Number.isFinite(action.y) || action.x < 0 || action.x >= 1 || action.y < 0 || action.y >= 1) invalid();
@@ -155,6 +175,8 @@ async function createScreenshotAttachment(input) {
 }
 
 module.exports = {
+  PLAY_KEYS,
+  MAX_PLAY_SECONDS,
   ALLOWED_KEYS,
   ComputerUseContractError,
   MAX_SCREENSHOT_BYTES,

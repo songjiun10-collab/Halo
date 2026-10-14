@@ -39,6 +39,7 @@ const CRAFTED = {
   click_at: { type: "click_at", observationId: "obs1", x: 5, y: 5 },
   type_at: { type: "type_at", observationId: "obs1", x: 45, y: 5, text: "4111 1111 1111 1111" },
   press_key: { type: "press_key", observationId: "obs1", key: "Enter" },
+  play_loop: { type: "play_loop", observationId: "obs1", seconds: 10, lanes: [{ x: 0.3, y: 0.8, key: "d", color: [255, 0, 0], tolerance: 60 }] },
   submit_form: { type: "submit_form", elementId: "pay" },
   download: { type: "download" },
 };
