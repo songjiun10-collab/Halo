@@ -12,6 +12,7 @@ const vite = await createServer({ configFile: path.join(root, 'vite.config.ts'),
 const { HaloChat } = await vite.ssrLoadModule('/src/components/HaloChat.tsx')
 const { HaloSheet } = await vite.ssrLoadModule('/src/components/HaloSheet.tsx')
 const { Toolbar } = await vite.ssrLoadModule('/src/components/Toolbar.tsx')
+const { FindBar } = await vite.ssrLoadModule('/src/components/FindBar.tsx')
 const { nonEmptyVerbatim } = await vite.ssrLoadModule('/src/session/composer.ts')
 test.after(() => vite.close())
 
@@ -99,4 +100,29 @@ test('the page stays visible as a snapshot while an overlay hides the native vie
   assert.match(app, /className="hx-snapshot"/)
   const css = await fs.readFile(path.join(root, 'src/styles/app.css'), 'utf8')
   assert.match(css, /\.hx-snapshot\s*\{[^}]*pointer-events:\s*none/, 'the still is not interactive')
+})
+
+const toolbarProps = (tab, extra = {}) => ({ tab, folded: false, locked: false, omniRef: null, onBack: noop, onForward: noop, onReload: noop, onShare: noop, onOverview: noop, onActivity: noop, onNavigate: noop, onSettings: noop, sidebarOpen: true, onToggleSidebar: noop, controller: null, halo: null, ...extra })
+
+test('while a page loads the toolbar offers Stop in place of Reload, and a zoomed page shows a reset chip', () => {
+  const tab = { id: 'page', history: ['https://example.com/'], index: 0, canGoBack: false, canGoForward: false }
+  const idle = renderToStaticMarkup(React.createElement(Toolbar, toolbarProps(tab, { onStop: noop, onZoomReset: noop })))
+  assert.match(idle, /aria-label="Reload"/)
+  assert.doesNotMatch(idle, /Stop loading/)
+  assert.doesNotMatch(idle, /hx-zoomchip/)
+  const loading = renderToStaticMarkup(React.createElement(Toolbar, toolbarProps({ ...tab, loading: true, zoom: 1.25 }, { onStop: noop, onZoomReset: noop })))
+  assert.match(loading, /aria-label="Stop loading"/)
+  assert.doesNotMatch(loading, /aria-label="Reload"/)
+  assert.match(loading, /hx-zoomchip/)
+  assert.match(loading, />125%</)
+})
+
+test('the find bar is a labelled search form with next, previous and close', () => {
+  const html = renderToStaticMarkup(React.createElement(FindBar, { onFind: async () => ({ found: true, count: 1 }), onClose: noop }))
+  assert.match(html, /role="search"/)
+  assert.match(html, /aria-label="Find in page"/)
+  assert.match(html, /aria-label="Next match"/)
+  assert.match(html, /aria-label="Previous match"/)
+  assert.match(html, /aria-label="Close find"/)
+  assert.match(html, /maxLength="200"/)
 })

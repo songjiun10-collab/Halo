@@ -923,3 +923,21 @@ section.hx-chat .hx-chat__thread { flex: 1 1 auto; min-height: 120px; overflow-y
 .hx-sidebar__tab-groupwrap:focus-within { outline: 2px solid var(--ring); outline-offset: 1px; }
 .hx-sidebar__ungroup-all { color: var(--muted-foreground); font-size: 12px; }
 .hx-sidebar[data-open="false"] .hx-sidebar__tab-groupwrap, .hx-sidebar[data-open="false"] .hx-sidebar__ungroup-all { display: none; }
+
+/* Zoom level chip beside Reload: only shown when the page is not at 100%. */
+.hx-zoomchip {
+  height: 26px; padding: 0 var(--space-sm); border-radius: var(--radius-sm); background: transparent;
+  color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); border: 1px solid var(--halo-glass-border); cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) { .hx-zoomchip:hover { background: var(--hover); color: var(--foreground); } }
+
+/* Find in page: its own row under the toolbar, inside the chrome, so the page below simply gets shorter
+   (the page is a native view that would cover anything drawn over it). */
+.hx-find {
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--space-xs);
+  padding: 6px var(--space-md); background: var(--halo-glass-chrome); border-bottom: 1px solid var(--halo-glass-border);
+}
+.hx-find__input { width: 220px; height: 28px; padding: 0 var(--space-sm); border-radius: var(--radius-sm); background: transparent; border: 1px solid var(--halo-glass-border); outline: none; color: var(--foreground); font: 400 13px/1 var(--font-mono); }
+.hx-find__input:focus { border-color: rgba(255, 255, 255, 0.18); }
+.hx-find__input::placeholder { color: var(--muted-foreground); }
+.hx-find__count { min-width: 72px; color: var(--muted-foreground); font: 400 12px/1 var(--font-mono); text-align: right; }

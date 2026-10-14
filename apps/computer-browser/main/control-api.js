@@ -27,6 +27,9 @@ const { requestDecision } = require("./approver-client");
 const URL_LIKE = /^https?:\/\//i;
 const MAX_PROMPT_LENGTH = 2000;
 const MAX_TIMELINE = 200;
+// Chrome's zoom steps.
+const ZOOM_LEVELS = Object.freeze([0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5]);
+const MAX_FIND_QUERY = 200;
 const MAX_QUEUE = 50;
 const MAX_METRICS = 500;
 // Pacing floor between agent-initiated (gated) actions ONLY -- never applied
@@ -170,7 +173,7 @@ class ControlApi {
 
   getSnapshot() {
     return {
-      page: { ...this._page },
+      page: { ...this._page, zoom: this._activeTab()?.zoom ?? 1 },
       tabs: this._tabs.map(({ id, title, url, view }) => ({ id, title, url, discarded: !view })),
       activeTabId: this._activeTabId,
       task: { ...this._task },
@@ -184,6 +187,62 @@ class ControlApi {
       })),
       timeline: this._timeline.map((item) => ({ ...item })),
     };
+  }
+
+  _activeTab() {
+    return this._tabs.find((tab) => tab.id === this._activeTabId) ?? null;
+  }
+
+  // Stops the page that is loading. With no page there is nothing to stop.
+  async stopLoading() {
+    if (this._view) this._view.webContents.stop?.();
+    return this.getSnapshot();
+  }
+
+  // Browser zoom for the active tab, in the usual steps. It is the tab's own (a new tab starts at 100%),
+  // and is applied again whenever the tab finishes loading a page, since a navigation resets it.
+  async zoom(action) {
+    if (!["in", "out", "reset"].includes(action)) throw new RangeError("zoom must be in, out or reset");
+    const tab = this._activeTab();
+    if (!tab) return this.getSnapshot();
+    const at = ZOOM_LEVELS.indexOf(tab.zoom ?? 1);
+    const index = action === "reset" ? ZOOM_LEVELS.indexOf(1)
+      : Math.max(0, Math.min(ZOOM_LEVELS.length - 1, (at === -1 ? ZOOM_LEVELS.indexOf(1) : at) + (action === "in" ? 1 : -1)));
+    tab.zoom = ZOOM_LEVELS[index];
+    this._applyZoom(tab);
+    this._emit();
+    return this.getSnapshot();
+  }
+
+  _applyZoom(tab) {
+    const wc = tab.view?.webContents;
+    if (!wc) return;
+    const factor = tab.zoom ?? 1;
+    if (typeof wc.setZoomFactor === "function") { try { wc.setZoomFactor(factor); return; } catch { /* fall through to the page itself */ } }
+    Promise.resolve(wc.executeJavaScript?.(`document.documentElement.style.zoom = ${JSON.stringify(String(factor))}`)).catch(() => {});
+  }
+
+  // Finds plain text on the active page (case-insensitive, wraps around), selecting and scrolling to the match.
+  // The text is one JSON string in the page script, so it can never end the string or run as code.
+  async findInPage(query, { backwards = false } = {}) {
+    if (typeof query !== "string" || query.trim().length === 0 || query.length > MAX_FIND_QUERY) throw new RangeError("find text must be 1 to 200 characters");
+    const wc = this._view && this._view.webContents;
+    if (!wc) return { found: false, count: 0 };
+    const text = JSON.stringify(query);
+    const script = `(() => { const q = ${text}; const found = window.find(q, false, ${backwards === true}, true, false, false, false);
+      let count = 0; const needle = q.toLowerCase(); const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node && count < 999; node = walker.nextNode()) { const value = (node.nodeValue || "").toLowerCase(); for (let at = value.indexOf(needle); at !== -1; at = value.indexOf(needle, at + needle.length)) count += 1; }
+      return { found: !!found, count }; })()`;
+    try {
+      const result = await wc.executeJavaScript(script, true);
+      return { found: result?.found === true, count: Number.isInteger(result?.count) ? result.count : 0 };
+    } catch { return { found: false, count: 0 }; }
+  }
+
+  async clearFind() {
+    const wc = this._view && this._view.webContents;
+    if (wc) await Promise.resolve(wc.executeJavaScript?.("getSelection().removeAllRanges()", true)).catch(() => {});
+    return true;
   }
 
   _pushTimeline(kind, message, status = "info") {
@@ -255,7 +314,7 @@ class ControlApi {
     wc.on("did-start-navigation", () => { if (this._view === view) this._syncPageState({ loadState: "loading" }); });
     wc.on("did-navigate", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url, loadState: "ready" }); });
     wc.on("did-navigate-in-page", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url }); });
-    wc.on("did-finish-load", () => { this._onPageVisit?.(wc); });
+    wc.on("did-finish-load", () => { this._onPageVisit?.(wc); if (tab.zoom && tab.zoom !== 1) this._applyZoom(tab); });
     wc.on("page-title-updated", (_e, title) => { tab.title = title; if (this._view === view) this._syncPageState({ title }); });
     wc.on("did-fail-load", (_e, code, description) => {
       if (this._view !== view) return;
@@ -274,7 +333,7 @@ class ControlApi {
   _createTab() {
     this._touchActiveTab();
     if (this._view) this._view.setVisible(false);
-    const tab = { id: randomUUID(), title: "New tab", url: "", view: null, lastActiveAt: this._now() };
+    const tab = { id: randomUUID(), title: "New tab", url: "", view: null, lastActiveAt: this._now(), zoom: 1 };
     const view = this._buildTabView(tab);
     this._tabs.push(tab);
     this._activeTabId = tab.id;

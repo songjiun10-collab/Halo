@@ -68,7 +68,7 @@ export interface JournalEvent {
 export interface BrowserViewport { x: number; y: number; width: number; height: number; visible: boolean }
 export interface BrowserAction { type: 'navigate' | 'back' | 'forward'; url?: string }
 export interface DirectBrowserSnapshot {
-  page: { url: string; title: string; canGoBack: boolean; canGoForward: boolean; hasPage?: boolean }
+  page: { url: string; title: string; canGoBack: boolean; canGoForward: boolean; hasPage?: boolean; loadState?: 'idle' | 'loading' | 'ready' | 'error'; zoom?: number }
   tabs: { id: string; url: string; title: string }[]
   activeTabId: string
   task: { id?: string | null; state?: string }
@@ -104,6 +104,11 @@ export interface HaloBrowserApi {
   goBack: () => Promise<DirectBrowserSnapshot>
   goForward: () => Promise<DirectBrowserSnapshot>
   reload: () => Promise<DirectBrowserSnapshot>
+  /** Optional: older hosts lack the next four. */
+  stopLoading?: () => Promise<DirectBrowserSnapshot>
+  zoom?: (action: 'in' | 'out' | 'reset') => Promise<DirectBrowserSnapshot>
+  findInPage?: (query: string, options?: { backwards?: boolean }) => Promise<{ found: boolean; count: number }>
+  clearFind?: () => Promise<boolean>
   newTab: () => Promise<DirectBrowserSnapshot>
   selectTab: (tabId: string) => Promise<DirectBrowserSnapshot>
   closeTab: (tabId: string) => Promise<DirectBrowserSnapshot>

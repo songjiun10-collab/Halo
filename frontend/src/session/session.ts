@@ -122,6 +122,8 @@ export class SessionStore {
       titles: { [tab.url || NEW_TAB_URL]: tab.title || tab.url },
       canGoBack: tab.id === snapshot.activeTabId && snapshot.page.canGoBack,
       canGoForward: tab.id === snapshot.activeTabId && snapshot.page.canGoForward,
+      loading: tab.id === snapshot.activeTabId && snapshot.page.loadState === 'loading',
+      zoom: tab.id === snapshot.activeTabId ? snapshot.page.zoom ?? 1 : 1,
     }))
     this.update({ directBrowser: visible, tabs, activeTabId: snapshot.activeTabId || tabs[0]?.id || '' })
   }
@@ -349,6 +351,25 @@ export class SessionStore {
     }
     return this.directTabCommand('reload', () => this.api!.reload())
   }
+
+  /** Stop the page that is loading. A task's own surface has no stop here: it is the task's to stop. */
+  stopPage = async () => {
+    // Not gated on the busy flag: a navigation holds it until the page loads, and Stop is for exactly that wait.
+    if (!this.api?.stopLoading || this.state.activeTaskId) return false
+    try {
+      const snapshot = await this.api.stopLoading()
+      if (!this.state.activeTaskId) this.applyDirectSnapshot(snapshot, !!snapshot.page?.hasPage)
+      return true
+    } catch (error) { this.failure(error); return false }
+  }
+  /** Browser zoom for the page in view; only for the person's own tabs. */
+  zoomPage = (action: 'in' | 'out' | 'reset') => (this.api?.zoom && !this.state.activeTaskId ? this.directTabCommand('zoom', () => this.api!.zoom!(action)) : Promise.resolve(false))
+  /** Find text on the page in view. Never throws: a page that cannot be searched finds nothing. */
+  findText = async (query: string, backwards = false): Promise<{ found: boolean; count: number }> => {
+    if (!this.api?.findInPage || this.state.activeTaskId || query.trim().length === 0) return { found: false, count: 0 }
+    try { return await this.api.findInPage(query.slice(0, 200), { backwards }) } catch { return { found: false, count: 0 } }
+  }
+  clearFind = async () => { try { await this.api?.clearFind?.() } catch { /* nothing to clear */ } }
 
   /** From a task view the tab strip's + leaves the task (it keeps running) rather than silently doing nothing. */
   newBrowserTab = () => {

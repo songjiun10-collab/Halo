@@ -12,6 +12,10 @@ export const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Alt+←', label: 'Back' },
   { keys: 'Alt+→', label: 'Forward' },
   { keys: 'Mod+R', label: 'Reload the page' },
+  { keys: 'Mod+F', label: 'Find in page' },
+  { keys: 'Mod+=', label: 'Zoom in' },
+  { keys: 'Mod+-', label: 'Zoom out' },
+  { keys: 'Mod+0', label: 'Reset zoom' },
   { keys: 'Mod+L', label: 'Focus the address field' },
   { keys: 'Mod+K', label: 'New task' },
   { keys: 'Mod+Shift+L', label: 'Toggle sidebar' },
@@ -33,6 +37,8 @@ interface Handlers {
   onBack: () => void
   onForward: () => void
   onReload: () => void
+  onFind: () => void
+  onZoom: (action: 'in' | 'out' | 'reset') => void
   onFocusOmni: () => void
   onTogglePin: () => void
   onToggleChat: () => void
@@ -78,6 +84,10 @@ export function useShortcuts(s: SessionState, approval: unknown, handlers: Handl
       if (e.code === 'KeyT' && !e.shiftKey) { e.preventDefault(); handlers.onNewTab(); return }
       if (e.code === 'KeyW' && !e.shiftKey) { e.preventDefault(); handlers.onCloseTab(tab.id); return }
       if (e.code === 'KeyR') { e.preventDefault(); handlers.onReload(); return }
+      if (e.code === 'KeyF' && !e.shiftKey) { e.preventDefault(); handlers.onFind(); return }
+      if ((e.code === 'Equal' || e.code === 'NumpadAdd') && !e.altKey) { e.preventDefault(); handlers.onZoom('in'); return }
+      if ((e.code === 'Minus' || e.code === 'NumpadSubtract') && !e.altKey) { e.preventDefault(); handlers.onZoom('out'); return }
+      if ((e.code === 'Digit0' || e.code === 'Numpad0') && !e.shiftKey) { e.preventDefault(); handlers.onZoom('reset'); return }
       if (e.code === 'KeyL' && !e.shiftKey) { e.preventDefault(); handlers.onFocusOmni(); return }
       if (e.code === 'KeyL' && e.shiftKey) { e.preventDefault(); handlers.onToggleSidebar(); return }
       if (e.code === 'KeyN' && !e.shiftKey) { e.preventDefault(); handlers.onNewWindow(); return }

@@ -4,6 +4,7 @@ import { ControllerChip } from './components/ControllerChip'
 import { HaloButton } from './components/HaloButton'
 import { HaloChat } from './components/HaloChat'
 import { HaloSheet } from './components/HaloSheet'
+import { FindBar } from './components/FindBar'
 import { Notice } from './components/Notice'
 import { SettingsPanel } from './components/SettingsPanel'
 import { ShortcutsHelp } from './components/ShortcutsHelp'
@@ -47,6 +48,8 @@ export default function App() {
   useEffect(() => store.connect(), [store])
 
   const [activityOpen, setActivityOpen] = useState(false)
+  // The tab whose find bar is open; the bar belongs to that tab and is gone when another is shown.
+  const [findFor, setFindFor] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // Vertical tabs live in the sidebar, so choosing them also opens it; the strip above the page goes away.
   const [tabLayout, setTabLayout] = useState<TabLayout>(() => loadTabLayout())
@@ -173,6 +176,8 @@ export default function App() {
     onBack: () => void store.navigate({ type: 'back' }),
     onForward: () => void store.navigate({ type: 'forward' }),
     onReload: () => void store.reloadPage(),
+    onFind: () => { if (!s.activeTaskId) setFindFor(tab.id) },
+    onZoom: (action: 'in' | 'out' | 'reset') => void store.zoomPage(action),
     onFocusOmni: () => omniRef.current?.focus(),
     onTogglePin: () => setPinned((p) => !p),
     onToggleChat: toggleChat,
@@ -417,6 +422,8 @@ export default function App() {
             onBack={() => void store.navigate({ type: 'back' })}
             onForward={() => void store.navigate({ type: 'forward' })}
             onReload={() => void store.reloadPage()}
+            onStop={() => void store.stopPage()}
+            onZoomReset={() => void store.zoomPage('reset')}
             onShare={onShare}
             onOverview={toggleOverview}
             onActivity={toggleActivity}
@@ -441,6 +448,12 @@ export default function App() {
             }
               halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
             />
+          {findFor === tab.id && !s.activeTaskId && (
+            <FindBar
+              onFind={(query, backwards) => store.findText(query, backwards)}
+              onClose={() => { setFindFor(null); void store.clearFind() }}
+            />
+          )}
           {tabLayout === 'horizontal' && <TabStrip
             tabs={tabsForDisplay}
             activeTabId={tab.id}

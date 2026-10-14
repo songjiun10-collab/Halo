@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode, type Ref } from 'r
 import { currentUrl } from '../session/session'
 import { addressTarget } from '../session/navigation'
 import type { Tab } from '../session/types'
-import { ActivityLog, Back, Forward, Reload, Lock, Share, Sidebar, Tabs, Gear } from './Icons'
+import { ActivityLog, Back, Forward, Reload, Stop, Lock, Share, Sidebar, Tabs, Gear } from './Icons'
 
 interface Props {
   tab: Tab
@@ -13,6 +13,10 @@ interface Props {
   onBack: () => void
   onForward: () => void
   onReload: () => void
+  /** Stop a page that is still loading (shown in place of Reload while it loads). */
+  onStop?: () => void
+  /** Reset a page that is not at 100%. */
+  onZoomReset?: () => void
   onShare: () => void
   onOverview: () => void
   onActivity: () => void
@@ -28,7 +32,7 @@ interface Props {
   halo: ReactNode
 }
 
-export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onReload, onShare, onOverview, onActivity, onNavigate, onAsk, onSettings, sidebarOpen, onToggleSidebar, controller, halo }: Props) {
+export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onReload, onStop, onZoomReset, onShare, onOverview, onActivity, onNavigate, onAsk, onSettings, sidebarOpen, onToggleSidebar, controller, halo }: Props) {
   const url = currentUrl(tab)
   const addressUrl = url.startsWith('halo://') || url === 'about:blank' ? '' : url
   const [address, setAddress] = useState(addressUrl)
@@ -50,7 +54,12 @@ export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onRel
         <button className="hx-icbtn" aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} aria-pressed={sidebarOpen} title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} onClick={onToggleSidebar}><Sidebar /></button>
         <button className="hx-icbtn" aria-label="Back" aria-keyshortcuts="Alt+ArrowLeft" disabled={locked || !tab.canGoBack} onClick={onBack}><Back /></button>
         <button className="hx-icbtn" aria-label="Forward" aria-keyshortcuts="Alt+ArrowRight" disabled={locked || !tab.canGoForward} onClick={onForward}><Forward /></button>
-        <button className="hx-icbtn" aria-label="Reload" aria-keyshortcuts="Control+R Meta+R" title="Reload" disabled={locked || !(url.startsWith('http://') || url.startsWith('https://'))} onClick={onReload}><Reload /></button>
+        {tab.loading && onStop
+          ? <button className="hx-icbtn" aria-label="Stop loading" title="Stop loading" onClick={onStop}><Stop /></button>
+          : <button className="hx-icbtn" aria-label="Reload" aria-keyshortcuts="Control+R Meta+R" title="Reload" disabled={locked || !(url.startsWith('http://') || url.startsWith('https://'))} onClick={onReload}><Reload /></button>}
+        {tab.zoom && tab.zoom !== 1 && onZoomReset
+          ? <button className="hx-zoomchip" aria-label={`Zoom ${Math.round(tab.zoom * 100)} percent, reset to 100 percent`} title="Reset zoom" onClick={onZoomReset}>{Math.round(tab.zoom * 100)}%</button>
+          : null}
       </div>
       <div className="hx-omni">
         {url.startsWith('https://') && <span className="hx-omni__lock" role="img" aria-label="Secure connection"><Lock /></span>}

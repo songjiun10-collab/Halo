@@ -97,6 +97,37 @@ test('reload calls the native reload on a direct page, and re-navigates a task p
   assert.equal(calls.filter((c) => c === 'reload').length, 1, 'a task view never reaches the human tab reload')
 })
 
+test('stop works while a navigation is still holding the busy flag, and zoom and find only touch the person\'s own tabs', async () => {
+  const calls = []
+  const direct = (extra = {}) => ({ page: { url: 'https://one.example/', title: '', canGoBack: false, canGoForward: false, hasPage: true, loadState: 'ready', zoom: 1, ...extra }, tabs: [{ id: 'one', url: 'https://one.example/', title: 'One' }], activeTabId: 'one', task: { state: 'idle' }, approvalQueue: [], timeline: [] })
+  let release
+  const slow = new Promise((resolve) => { release = resolve })
+  const { store } = harness({
+    getSnapshot: async () => direct(),
+    navigate: async () => { await slow; return direct() },
+    stopLoading: async () => { calls.push('stop'); return direct({ loadState: 'ready' }) },
+    zoom: async (action) => { calls.push(['zoom', action]); return direct({ zoom: action === 'in' ? 1.1 : 1 }) },
+    findInPage: async (query, options) => { calls.push(['find', query, options]); return { found: true, count: 2 } },
+    clearFind: async () => { calls.push('clear'); return true },
+  })
+  await settle()
+  const pending = store.navigate({ type: 'navigate', url: 'https://slow.example/' })
+  await settle()
+  assert.ok(store.getState().busy, 'the navigation holds the busy flag')
+  assert.equal(await store.stopPage(), true, 'Stop is not blocked by it')
+  release(); await pending
+  assert.equal(await store.zoomPage('in'), true)
+  assert.equal(store.getState().tabs[0].zoom, 1.1)
+  assert.deepEqual(await store.findText('  cart ', true), { found: true, count: 2 })
+  assert.deepEqual(await store.findText('   '), { found: false, count: 0 }, 'blank text is never sent')
+  await store.clearFind()
+  assert.deepEqual(calls, ['stop', ['zoom', 'in'], ['find', '  cart '.slice(0, 200), { backwards: true }], 'clear'])
+  await store.selectTask('task')
+  assert.equal(await store.stopPage(), false)
+  assert.equal(await store.zoomPage('out'), false)
+  assert.deepEqual(await store.findText('cart'), { found: false, count: 0 }, 'a task surface is not searched from here')
+})
+
 test('direct tab controls cannot cross into an active task-owned browser', async () => {
   const calls = []
   const { store } = harness({
