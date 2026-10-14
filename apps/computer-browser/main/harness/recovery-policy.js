@@ -66,6 +66,7 @@ function buildProposalFeedback(rawCode, current) {
         invalid_shape: "Include only fields required or allowed for the selected proposal kind.",
         invalid_field: "Use the required field types from the tool contract and current binding.",
         field_too_large: "Respect field size limits and current maxActions; split larger work into separate proposals.",
+        captcha_page: "This page is an anti-bot challenge that only the person can pass; do not act on it. Leave it: navigate to another source, or observe.",
         invalid_coordinate_action: "Use one bounded coordinate action with the current observation binding; do not mix coordinate actions in a batch.",
     };
     const code = typeof rawCode === "string" && Object.hasOwn(guidance, rawCode) ? rawCode : "invalid_proposal";

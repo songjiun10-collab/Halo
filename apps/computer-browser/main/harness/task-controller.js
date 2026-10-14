@@ -176,7 +176,7 @@ const VISITED_PAGES_KEPT = 500;
 // Minimum gap between page loads on the same site; keeps agent browsing polite and less likely to trip bot checks.
 const SAME_SITE_NAV_INTERVAL_MS = 1500;
 // Sites that may show a human check before the task is handed to the person.
-const CAPTCHA_SITES_TRIED = 2;
+const CAPTCHA_SITES_TRIED = 4;
 const PAGE_LOOP_LIMIT = 8;
 const ERROR_URLS_KEPT = 5;
 const OBSERVE_STALE_RETRIES = 2;
@@ -524,6 +524,8 @@ class TaskController {
     this._visitedPages = new Set();
     this._lastNavAt = new Map();
     this._captchaOrigins = new Set();
+    this._captchaNudges = 0;
+    this._captchaNudgePending = false;
     this._onCaptchaPage = false;
     // A click is sent after a random pause between min and max seconds, to 5 decimal places (0.23817 s), as a
     // person's pointer does not land the instant the page changes. Off (0) unless the host sets it; the pause is
@@ -2102,7 +2104,10 @@ class TaskController {
           if (looksLikeCaptcha(observation?.url, observation?.title)) {
             let origin = null;
             try { origin = new URL(observation.url).origin; } catch {}
-            if (origin === null || this._captchaOrigins.has(origin) || this._captchaOrigins.size >= CAPTCHA_SITES_TRIED) {
+            // Looking again at the page the planner was just told to leave is not a second block.
+            const lookingAgain = this._captchaNudgePending;
+            this._captchaNudgePending = false;
+            if (origin === null || (this._captchaOrigins.has(origin) && !lookingAgain) || (!this._captchaOrigins.has(origin) && this._captchaOrigins.size >= CAPTCHA_SITES_TRIED)) {
               await this._pauseWith("captcha");
               break;
             }
@@ -2379,6 +2384,15 @@ class TaskController {
             try { return !this._captchaOrigins.has(new URL(describeActionTarget(action, this._lastObservation)).origin); } catch { return false; }
           });
           if (!staysOut) {
+            // The planner is told once to leave the challenge page and use another source; only if it
+            // tries to act on the challenge again does the task wait for the person.
+            if (this._captchaNudges < 1) {
+              this._captchaNudges += 1;
+              this._captchaNudgePending = true;
+              this._proposalFeedbackCode = "captcha_page";
+              await this._store.append({ type: "note", payload: { kind: "captcha_page_nudge" } });
+              continue;
+            }
             await this._pauseWith("captcha");
             break;
           }
