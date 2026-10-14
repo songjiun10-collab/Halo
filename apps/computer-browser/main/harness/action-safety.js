@@ -52,7 +52,7 @@ const SAFETY_DECLARATIONS = Object.freeze({
   }),
   select_option: Object.freeze({
     privacy: notApplicable("choosing a listed option types no free text"),
-    payment: notApplicable("choosing an option presses no control; any payment press is a later click"),
+    payment: notApplicable("choosing an option presses no control; a page whose dropdown submits its form on change relies on the approval gate, and Full mode skips that gate by definition"),
     effect: notApplicable("option choices rely on the approval gate; Full mode skips that gate by definition"),
   }),
   press_key: Object.freeze({
