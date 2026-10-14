@@ -45,6 +45,29 @@ test("Chromium bridge admits only its authenticated local renderer, and preserve
   assert.equal((await fetch(`${origin}/../package.json`, { headers: { cookie } })).status, 404);
 });
 
+test("Chromium bridge carries a voice clip as base64 and keeps every other call at 64 KiB", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "halo-ui-"));
+  await fs.writeFile(path.join(root, "index.html"), "<html><body>Halo</body></html>");
+  const seen = [];
+  const bridge = createRendererBridge({ root, methods: ["navigate", "transcribeAudio"], layout: {}, invoke: async (channel, args) => { seen.push([channel, args]); return { ok: true }; } });
+  const { url, origin } = await bridge.start();
+  t.after(async () => { await bridge.close(); await fs.rm(root, { recursive: true }); });
+  const cookie = (await fetch(url, { redirect: "manual" })).headers.get("set-cookie").split(";")[0];
+  const script = await (await fetch(`${origin}/halo-bridge.js`, { headers: { cookie } })).text();
+  const capability = /const capability = "([a-f0-9]+)"/.exec(script)[1];
+  const send = (channel, args, header = channel) => fetch(`${origin}/rpc`, { method: "POST", headers: { cookie, origin, "content-type": "application/json", "x-halo-capability": capability, "x-halo-channel": header }, body: JSON.stringify({ channel, args }) });
+  const clip = Buffer.alloc(200_000, 7);
+  const ok = await send("halo:transcribeAudio", [{ __haloBase64: clip.toString("base64") }, { language: "ko" }]);
+  assert.equal(ok.status, 200);
+  const [, args] = seen.at(-1);
+  assert.ok(Buffer.isBuffer(args[0]) && args[0].equals(clip), "the host receives the clip's bytes, not a JSON object");
+  assert.deepEqual(args[1], { language: "ko" });
+  assert.equal((await send("halo:navigate", ["x".repeat(100_000)])).status, 413, "other calls keep the 64 KiB limit");
+  assert.equal((await send("halo:navigate", ["x".repeat(100_000)], "halo:transcribeAudio")).status, 413, "naming the audio channel in the header does not raise another call's limit");
+  assert.equal((await send("halo:transcribeAudio", [{ __haloBase64: Buffer.alloc(7 * 1024 * 1024).toString("base64") }])).status, 413, "even a voice clip has a ceiling");
+  assert.match(script, /__haloBase64/, "the browser shim encodes binary before sending");
+});
+
 test("Chromium encrypted storage authenticates data and never falls back to plaintext", () => {
   const key = Buffer.alloc(32, 7);
   const storage = createKeychainStorage({ readKey: () => key });

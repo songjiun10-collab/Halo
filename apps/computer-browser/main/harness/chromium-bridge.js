@@ -5,6 +5,9 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const MAX_BODY = 65_536;
+// One voice clip (120 s of 16 kHz mono WAV, base64) is the only call that may exceed MAX_BODY.
+const AUDIO_CHANNEL = "halo:transcribeAudio";
+const MAX_AUDIO_BODY = 6 * 1024 * 1024;
 const EVENTS = {
     onEvent: "halo:event", onTaskEvent: "halo:taskEvent", onAgentRosterEvent: "halo:agentRosterEvent",
     onRoomEvent: "halo:roomEvent", onBackgroundRuntimeEvent: "halo:backgroundRuntimeEvent", onSurfaceFrame: "halo:surfaceFrame",
@@ -30,8 +33,16 @@ function createRendererBridge(options) {
   const capability = ${JSON.stringify(capability)};
   const listeners = new Map();
   const api = { runtime: 'chromium', layout: Object.freeze(${JSON.stringify(options.layout)}) };
+  // JSON cannot carry binary: a voice clip travels as base64 and the host turns it back into bytes.
+  function encodeBinary(value) {
+    const view = value instanceof ArrayBuffer ? new Uint8Array(value) : ArrayBuffer.isView(value) ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength) : null;
+    if (!view) return value;
+    let text = ''; for (let i = 0; i < view.length; i += 0x8000) text += String.fromCharCode.apply(null, view.subarray(i, i + 0x8000));
+    return { __haloBase64: btoa(text) };
+  }
   async function invoke(channel, args) {
-    const response = await fetch('/rpc', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-halo-capability': capability }, body: JSON.stringify({ channel, args }) });
+    const wire = channel === ${JSON.stringify(AUDIO_CHANNEL)} ? args.map(encodeBinary) : args;
+    const response = await fetch('/rpc', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-halo-capability': capability, 'x-halo-channel': channel }, body: JSON.stringify({ channel, args: wire }) });
     if (!response.ok) throw new Error('Halo host request failed (' + response.status + ')');
     const body = await response.json();
     if (body.error) { const error = new Error(body.error.message); error.code = body.error.code; throw error; }
@@ -88,9 +99,11 @@ function createRendererBridge(options) {
             try {
                 const parts = [];
                 let size = 0;
+                // The channel is named in a header so the larger audio limit applies before the body is read; the body must agree.
+                const sizeLimit = req.headers["x-halo-channel"] === AUDIO_CHANNEL ? MAX_AUDIO_BODY : MAX_BODY;
                 for await (const chunk of req) {
                     size += chunk.length;
-                    if (size > MAX_BODY) {
+                    if (size > sizeLimit) {
                         res.writeHead(413);
                         res.end();
                         return;
@@ -111,6 +124,13 @@ function createRendererBridge(options) {
                     res.end();
                     return;
                 }
+                if (size > MAX_BODY && body.channel !== AUDIO_CHANNEL) {
+                    res.writeHead(413);
+                    res.end();
+                    return;
+                }
+                if (body.channel === AUDIO_CHANNEL)
+                    body.args = body.args.map((arg) => { const b64 = arg?.__haloBase64; return typeof b64 === "string" ? Buffer.from(b64, "base64") : arg; });
                 res.setHeader("Content-Type", "application/json");
                 try {
                     const result = await options.invoke(body.channel, body.args);
