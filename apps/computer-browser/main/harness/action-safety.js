@@ -1,0 +1,106 @@
+"use strict";
+
+// One place that answers, for any action the agent proposes, what the host's three safety checks say:
+//   privacy  - is the agent about to type a secret (card, password, code) or an unauthorized personal value?
+//   payment  - is the action a press on a payment control?
+//   effect   - does the control under the point move money or destroy an account (text screen map only)?
+// The dispatch loop calls inspectAction once per action and acts on the answer. Every action type in
+// permission-policy.js ACTIONS must be declared below for every check; test/action-safety.test.js fails
+// when a type is added without a declaration, and proves each declaration against the real check.
+// "applies" means the check is run for that type; "not-applicable" says why it is not. A reason that
+// says "relies on the approval gate" is a statement, not a guarantee: Full mode skips that gate.
+
+const { resolveTarget } = require("./screen-map");
+const { classifyTarget, isPaymentControl } = require("./effect-classifier");
+const { typingBlock } = require("./pii-tiers");
+
+const CHECKS = Object.freeze(["privacy", "payment", "effect"]);
+
+const applies = (reason) => Object.freeze({ applies: true, reason });
+const notApplicable = (reason) => Object.freeze({ applies: false, reason });
+const reads = (what) => Object.freeze({
+  privacy: notApplicable(`${what} types nothing`),
+  payment: notApplicable(`${what} presses nothing`),
+  effect: notApplicable(`${what} acts on no control`),
+});
+
+const SAFETY_DECLARATIONS = Object.freeze({
+  observe: Object.freeze(reads("observe")),
+  scroll: Object.freeze(reads("scroll")),
+  navigate: Object.freeze(reads("navigate (a payment needs a button press on the page it opens)")),
+  follow_link: Object.freeze(reads("follow_link (a link only navigates; the payment press happens on the destination page)")),
+  click: Object.freeze({
+    privacy: notApplicable("a click types no text"),
+    payment: applies("a click on a payment control must be covered by an order or wait for the person"),
+    effect: notApplicable("element clicks rely on the approval gate and isAutoDomAction; Full mode skips that gate by definition"),
+  }),
+  type: Object.freeze({
+    privacy: applies("typing a secret or an unrequested personal value is the person's to do"),
+    payment: notApplicable("typing text does not press a payment control"),
+    effect: notApplicable("typing into a field cannot move money by itself"),
+  }),
+  click_at: Object.freeze({
+    privacy: notApplicable("a click types no text"),
+    payment: applies("the control under the point can be a payment control"),
+    effect: applies("with a text screen map the control under the point is classified; money or account destruction is refused"),
+  }),
+  type_at: Object.freeze({
+    privacy: applies("typing at a point can hit a secret field or carry a secret value"),
+    payment: notApplicable("typing text does not press a payment control"),
+    effect: applies("with a text screen map the target under the point is classified before typing"),
+  }),
+  press_key: Object.freeze({
+    privacy: notApplicable("a single key press carries no text value"),
+    payment: notApplicable("Enter keeps the approval gate in computer-use modes; Full mode skips that gate by definition"),
+    effect: notApplicable("a key press has no control under a point"),
+  }),
+  submit_form: Object.freeze({
+    privacy: notApplicable("submitting types no text"),
+    payment: applies("a form submit on a payment control must be covered by an order or wait for the person"),
+    effect: notApplicable("form submits rely on the approval gate; Full mode skips that gate by definition"),
+  }),
+  download: Object.freeze(reads("download (unsupported, denied by the permission policy)")),
+});
+
+function screenHit(action, ctx) {
+  const maps = ctx.screenTargets;
+  if (!maps || maps.observationId !== action.observationId) return null;
+  return resolveTarget(maps.targets, Number(action.x), Number(action.y));
+}
+
+function privacyOf(action, ctx) {
+  if (action.type !== "type" && action.type !== "type_at") return null;
+  const element = action.type === "type"
+    ? (ctx.observation?.elements?.find((el) => el.elementId === action.elementId) ?? null)
+    : screenHit(action, ctx);
+  return typingBlock({ text: action.text, element, userText: ctx.userText });
+}
+
+function paymentTargetOf(action, ctx) {
+  if (action.type === "click_at" && ctx.computerUse) {
+    const hit = screenHit(action, ctx);
+    return isPaymentControl(hit) ? hit : null;
+  }
+  if (action.type === "click" || action.type === "submit_form") {
+    const element = ctx.observation?.elements?.find((el) => el.elementId === action.elementId);
+    if (!element || typeof element.name !== "string") return null;
+    const target = { role: element.role === "link" ? "link" : "button", name: element.name, covered: false, disabled: !!element.disabled };
+    return isPaymentControl(target) ? target : null;
+  }
+  return null;
+}
+
+function effectOf(action, ctx) {
+  if (action.type !== "click_at" && action.type !== "type_at") return null;
+  if (!ctx.screenTargets || ctx.screenTargets.observationId !== action.observationId || !ctx.computerUse) return null;
+  return classifyTarget(screenHit(action, ctx), action.type);
+}
+
+// ctx: { observation, screenTargets: { observationId, targets } | null, computerUse: boolean, userText: string }
+// An action type with no declaration comes back { undeclared: true } so the caller can fail closed.
+function inspectAction(action, ctx) {
+  if (!action || !Object.hasOwn(SAFETY_DECLARATIONS, action.type)) return { privacy: null, paymentTarget: null, effect: null, undeclared: true };
+  return { privacy: privacyOf(action, ctx), paymentTarget: paymentTargetOf(action, ctx), effect: effectOf(action, ctx) };
+}
+
+module.exports = { inspectAction, SAFETY_DECLARATIONS, CHECKS };

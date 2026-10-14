@@ -28,8 +28,9 @@ const { adaptiveEffort } = require("./planner-effort-policy");
 const { createRecoveryPolicy, buildRecoveryFeedback, buildProposalFeedback } = require("./recovery-policy");
 const { resolveTarget } = require("./screen-map");
 const { TaskBranchManager } = require("./task-branch-manager");
-const { classifyTarget, isPaymentControl } = require("./effect-classifier");
-const { applyPrivacyTiers, containsTier3, hasSecretSurface, maskTier3, typingBlock } = require("./pii-tiers");
+const { classifyTarget } = require("./effect-classifier");
+const { inspectAction } = require("./action-safety");
+const { applyPrivacyTiers, containsTier3, hasSecretSurface, maskTier3 } = require("./pii-tiers");
 const payments = require("./payment-mandate");
 const research = require("./research-sources");
 const { buildContext } = require("./context-builder");
@@ -2531,16 +2532,10 @@ class TaskController {
 
   // Privacy tiers for typing: Tier 3 fields and values are the person's to type; a Tier 2 value
   // (phone, email) is typed only if the user wrote it in this task's request.
-  _privacyBlock(action) {
-    if (action.type !== "type" && action.type !== "type_at") return null;
-    let element = null;
-    if (action.type === "type") {
-      element = this._lastObservation?.elements?.find((el) => el.elementId === action.elementId) ?? null;
-    } else if (this._screenTargets && this._screenTargets.observationId === action.observationId) {
-      element = resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y));
-    }
+  // What the host's safety checks (action-safety.js) need to know about the page right now.
+  _safetyContext() {
     const userText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
-    return typingBlock({ text: action.text, element, userText });
+    return { observation: this._lastObservation, screenTargets: this._screenTargets, computerUse: hasComputerUseAdapter(this._store.taskProfile), userText };
   }
 
   // Source-grounded research (capability "research"): the host, not the model, decides which sources
@@ -2609,25 +2604,10 @@ class TaskController {
 
   // The control a payment-like action would press, or null. Only the host's own
   // reads count: the screen map for coordinate clicks, the last observation for DOM clicks.
-  _paymentTarget(action) {
-    if (action.type === "click_at" && this._screenTargets && this._screenTargets.observationId === action.observationId && hasComputerUseAdapter(this._store.taskProfile)) {
-      const hit = resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y));
-      return isPaymentControl(hit) ? hit : null;
-    }
-    if (action.type === "click" || action.type === "submit_form") {
-      const element = this._lastObservation?.elements?.find((el) => el.elementId === action.elementId);
-      if (!element || typeof element.name !== "string") return null;
-      const target = { role: element.role === "link" ? "link" : "button", name: element.name, covered: false, disabled: !!element.disabled };
-      return isPaymentControl(target) ? target : null;
-    }
-    return null;
-  }
-
   // pay: the user's order covers this payment; ask: pause with a question;
   // refuse/null: nobody ordered a payment, the existing gates apply unchanged.
-  async _decidePayment(action) {
+  async _decidePayment(action, target) {
     if (!this._paymentsEnabled) return null;
-    const target = this._paymentTarget(action);
     if (!target) return null;
     const observation = this._lastObservation;
     // Where the money goes: a payment button that submits to another site is judged by that site, not by the page it sits on.
@@ -2665,7 +2645,14 @@ class TaskController {
         return "stop_loop";
       }
 
-      const privacy = this._privacyBlock(action);
+      // One pass over the host's safety checks for this action (action-safety.js). An action type nobody
+      // declared there is not run: fail closed rather than skip a check silently.
+      const safety = inspectAction(action, this._safetyContext());
+      if (safety.undeclared) {
+        await this._store.append({ type: "note", payload: { kind: "invalid_action", actionType: String(action?.type).slice(0, 40), errorCode: "action_safety_undeclared" } });
+        continue;
+      }
+      const privacy = safety.privacy;
       if (privacy) {
         // Secrets are typed by the person, never by the agent; nothing of the text is journaled.
         await this._store.append({ type: "note", payload: { kind: privacy.tier === 3 ? "card_input_blocked" : "personal_input_blocked", tier: privacy.tier, actionType: action.type } });
@@ -2692,24 +2679,20 @@ class TaskController {
       }
       // A payment button the user ordered in chat, within their cap and on their
       // site, is let through to the approver alone; an odd one asks the user.
-      const paymentVerdict = await this._decidePayment(action);
+      const paymentVerdict = await this._decidePayment(action, safety.paymentTarget);
       if (paymentVerdict?.decision === "ask") return "stop_loop";
       const paymentOk = paymentVerdict?.decision === "pay";
       // Text mode only (the control under the point is known): a click on a
       // control that moves money or destroys an account is refused whatever the
       // permission mode, lease or approver says. The planner sees the note.
-      if (this._screenTargets && this._screenTargets.observationId === action.observationId &&
-          (action.type === "click_at" || action.type === "type_at") && hasComputerUseAdapter(this._store.taskProfile)) {
-        const hit = resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y));
-        const verdict = classifyTarget(hit, action.type);
-        if (verdict.gate === "deny" && !paymentOk) {
-          await this._store.append({ type: "note", payload: { kind: "effect_denied", actionType: action.type, effect: verdict.effect, reason: verdict.reason } });
-          if (this._routineRunner) {
-            await this._denyRoutineStep({ decision: "deny", reasons: [verdict.reason] });
-            return "stop_loop";
-          }
-          continue;
+      const verdict = safety.effect;
+      if (verdict && verdict.gate === "deny" && !paymentOk) {
+        await this._store.append({ type: "note", payload: { kind: "effect_denied", actionType: action.type, effect: verdict.effect, reason: verdict.reason } });
+        if (this._routineRunner) {
+          await this._denyRoutineStep({ decision: "deny", reasons: [verdict.reason] });
+          return "stop_loop";
         }
+        continue;
       }
       // Computer use: coordinate clicks, typing and non-Enter keys run on the
       // approver's verdict alone. The mode, lock and one-use screen binding still
@@ -2719,7 +2702,7 @@ class TaskController {
       let policy = autoRun ? { ...gate.policy, approval: "approver" } : gate.policy;
       // Full mode skips approval for ordinary actions, but a payment click that no order covers
       // (payments off, no order, other site) goes back to the person instead of becoming a silent purchase.
-      if (policy.approval === "bypass" && !paymentOk && this._paymentTarget(action)) policy = { ...policy, approval: "human" };
+      if (policy.approval === "bypass" && !paymentOk && safety.paymentTarget) policy = { ...policy, approval: "human" };
       // Mode-denied actions may be widened by the user, but never for
       // unattended runs or for actions this browser cannot perform.
       const widen = !policy.allowed;
