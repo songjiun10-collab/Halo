@@ -27,4 +27,5 @@ J
 ELECTRON_VERSION="$(node -p "require('$ROOT/apps/computer-browser/node_modules/electron/package.json').version")"
 npx --yes @electron/packager "$STAGE" Halo --platform=darwin --arch=arm64 \
   --electron-version="$ELECTRON_VERSION" --out="$ROOT/release" --overwrite --no-asar \
-  --icon="$ROOT/apps/computer-browser/assets/icon.icns" 2>&1 | tail -5
+  --icon="$ROOT/apps/computer-browser/assets/icon.icns" \
+  --extend-info="$ROOT/apps/computer-browser/tools/mac-info-extra.plist" 2>&1 | tail -5
