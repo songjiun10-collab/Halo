@@ -106,6 +106,8 @@ function trimContainerNames(elements) {
 
 const MAX_SELECT_OPTIONS = 40;
 const MAX_OPTION_LABEL = 120;
+// The observation shows each dropdown option's label cut to this many characters.
+const SHOWN_OPTION_LABEL = 60;
 const INTERACTION_ACTIONS = new Set(["click", "type", "select_option", "submit_form"]);
 const MAX_FIND_TEXT = 200;
 const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find_text", "observe", "click_at", "type_at", "press_key", ...INTERACTION_ACTIONS]);
@@ -336,7 +338,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
             if (node.tagName === "SELECT") {
               // A native dropdown shows its choices so the planner can pick one by its visible label.
               entry.options = Array.from(node.options || []).slice(0, ${MAX_SELECT_OPTIONS}).map((option) => {
-                const choice = { label: clean(option.label || option.textContent || "", 60) };
+                const choice = { label: clean(option.label || option.textContent || "", ${SHOWN_OPTION_LABEL}) };
                 if (option.selected) choice.selected = true;
                 if (option.disabled) choice.disabled = true;
                 return choice;
@@ -1111,9 +1113,14 @@ class BrowserAdapter {
           } else if (action.type === "select_option") {
             // Native single-choice dropdowns only; the option is picked by its visible label, never by a value the page defines.
             if (node.tagName !== "SELECT" || node.multiple) return failed("unsupported_input");
+            // A label longer than the observation shows also matches by the shortened label the planner saw;
+            // two options that look the same once shortened are reported as ambiguous below, never guessed.
             const wanted = action.label.replace(/\\s+/g, " ").trim().toLowerCase();
-            const labelOf = (option) => (option.label || option.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
-            const choices = Array.from(node.options || []).filter((option) => !option.disabled && labelOf(option) === wanted);
+            const matches = (option) => {
+              const label = (option.label || option.textContent || "").replace(/\\s+/g, " ").trim();
+              return label.toLowerCase() === wanted || (label.length > ${SHOWN_OPTION_LABEL} && label.slice(0, ${SHOWN_OPTION_LABEL}).trim().toLowerCase() === wanted);
+            };
+            const choices = Array.from(node.options || []).filter((option) => !option.disabled && matches(option));
             if (choices.length === 0) return failed("option_not_found");
             if (choices.length > 1) return failed("option_ambiguous");
             started = true; node.focus();

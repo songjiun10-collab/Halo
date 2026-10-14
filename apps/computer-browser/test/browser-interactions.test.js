@@ -123,6 +123,25 @@ test("select_option reports option_not_found and option_ambiguous instead of gue
   assert.deepEqual([...p.events], []);
 });
 
+test("a long option can be picked by the shortened label the observation showed, but two that look the same are never guessed between", async () => {
+  const p = page();
+  const long = "Express delivery, next business day, signature required, includes insurance up to 500 EUR";
+  p.select.options[1].label = p.select.options[1].textContent = long;
+  const pick = async (label) => {
+    const fresh = await p.browser.observe();
+    const dropdown = fresh.elements.find((e) => e.name === "Country");
+    return { shown: dropdown.options[1].label, result: await p.browser.execute({ type: "select_option", elementId: dropdown.elementId, label }, { documentEpoch: fresh.documentEpoch }) };
+  };
+  const { shown } = await pick("Atlantis");
+  assert.ok(shown.length <= 60 && long.startsWith(shown.trim()), `the observation shows a shortened label: ${shown}`);
+  assert.equal((await pick(shown)).result.status, "ok", "(the bug) the label the planner saw was never found");
+  assert.deepEqual([...p.select.selectedOptions].map((o) => o.label), [long]);
+  assert.equal((await pick(long)).result.status, "ok", "the full label still works");
+  assert.equal((await pick("Express delivery")).result.errorCode, "option_not_found", "a short label never matches a longer option by its first words");
+  p.select.options[2].label = p.select.options[2].textContent = long.replace("500", "1000");
+  assert.equal((await pick(shown)).result.errorCode, "option_ambiguous");
+});
+
 test("select_option only works on a native single-choice dropdown and takes a plain label", async () => {
   const p = page();
   const observation = await p.browser.observe();
