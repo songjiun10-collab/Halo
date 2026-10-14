@@ -382,3 +382,51 @@ test("on the person's own tab a dialog waits for the person: it is reported, ans
   await wc.answerDialog(true, "Groceries");
   assert.equal(await typed, "Groceries");
 });
+
+test("only a modal a person can actually see hides the page; a closed drawer hides nothing; a modal inside a web component lists its buttons", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
+  const body = `<main><h1>Shop</h1><a href="/p/1">Product 1</a><button>Add to cart</button></main>`;
+  const pages = {
+    "/drawer": `${body}<div role="dialog" aria-modal="true" aria-label="Menu" style="position:fixed;top:0;left:0;width:300px;height:100vh;transform:translateX(-110%)"><a href="/a">Account</a></div>`,
+    "/faded": `${body}<div role="dialog" aria-modal="true" aria-label="Menu" style="position:fixed;top:0;left:0;width:300px;height:100vh;opacity:0;pointer-events:none"><a href="/a">Account</a></div>`,
+    "/open": `${body}<div role="dialog" aria-modal="true" aria-label="Sign up" style="position:fixed;inset:20% 30%;background:#fff"><button>Subscribe</button><button>No thanks</button></div>`,
+    "/shadow": `${body}<x-dialog aria-modal="true" role="dialog" aria-label="Cookies" style="position:fixed;inset:20% 30%;display:block;background:#fff"></x-dialog><script>customElements.define("x-dialog", class extends HTMLElement { connectedCallback() { this.attachShadow({ mode: "open" }).innerHTML = '<button>Accept all</button><button>Reject all</button>'; } });</script>`,
+  };
+  const server = http.createServer((request, response) => { response.setHeader("content-type", "text/html; charset=utf-8"); response.end(pages[request.url] ?? "<p>none</p>"); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "halo-cdp-modal2-"));
+  const chrome = spawn(CHROMIUM, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []), "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+  let view;
+  t.after(async () => {
+    try { view?.closeConnection(); } catch { /* ignore */ }
+    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  });
+  const wsUrl = await new Promise((resolve, reject) => {
+    let buffer = "";
+    const timer = setTimeout(() => reject(new Error("Chromium did not report a DevTools endpoint")), 30000);
+    chrome.stderr.on("data", (chunk) => { buffer += chunk; const match = /DevTools listening on (ws:\/\/\S+)/.exec(buffer); if (match) { clearTimeout(timer); resolve(match[1]); } });
+    chrome.on("exit", () => reject(new Error("Chromium exited early")));
+  });
+  view = await openCdpView(wsUrl, { width: 1000, height: 700 });
+  const adapter = new BrowserAdapter({ view });
+  const look = async (route) => {
+    assert.equal((await adapter.execute({ type: "navigate", url: `${base}${route}` })).status, "ok");
+    const observation = await adapter.observe();
+    return { modalOpen: observation.modalOpen === true, names: observation.elements.map((element) => element.name) };
+  };
+  for (const route of ["/drawer", "/faded"]) {
+    const seen = await look(route);
+    assert.equal(seen.modalOpen, false, `${route}: a closed drawer is not an open modal`);
+    assert.ok(seen.names.includes("Product 1") && seen.names.includes("Add to cart"), `${route}: the page stays listed`);
+  }
+  const open = await look("/open");
+  assert.equal(open.modalOpen, true);
+  assert.ok(open.names.includes("Subscribe") && !open.names.includes("Product 1"), "a visible aria-modal dialog still hides the page behind it");
+  const shadow = await look("/shadow");
+  assert.equal(shadow.modalOpen, true);
+  assert.ok(shadow.names.includes("Accept all") && shadow.names.includes("Reject all"), `the buttons inside the web component are listed: ${JSON.stringify(shadow.names)}`);
+  assert.ok(!shadow.names.includes("Product 1"));
+  await adapter.dispose();
+});

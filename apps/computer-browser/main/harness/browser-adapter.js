@@ -246,13 +246,42 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       form: formInfo(node), disabled: !!node.disabled || node.getAttribute("aria-disabled") === "true",
       readonly: !!node.readOnly || node.getAttribute("readonly") !== null,
     });
-    // A modal dialog (dialog.showModal() or aria-modal="true") makes the rest of the page inert for a person,
-    // so only the dialog and the elements that contain it are listed. A plain role="dialog" widget is not modal.
+    // A modal dialog makes the rest of the page unusable for a person, so only the dialog and the elements
+    // that contain it are listed. dialog.showModal() makes the page inert, so it always counts. aria-modal="true"
+    // is only a promise, and sites leave it on closed drawers that sit off screen or faded out, so it counts
+    // only while a person can see it on top of the page. A plain role="dialog" widget is not modal.
+    // insideOf crosses shadow roots, so a modal built as a web component keeps its own buttons.
+    const insideOf = (container, node) => {
+      for (let current = node; current; current = current.parentNode || (current.nodeType === 11 ? current.host : null)) {
+        if (current === container) return true;
+      }
+      return false;
+    };
+    const onTop = (candidate) => {
+      if (hidden(candidate)) return false;
+      for (let current = candidate; current && current.nodeType === 1; current = current.parentElement || current.getRootNode().host) {
+        if (Number(getComputedStyle(current).opacity) === 0) return false;
+      }
+      const box = candidate.getBoundingClientRect();
+      const width = window.innerWidth || document.documentElement.clientWidth;
+      const height = window.innerHeight || document.documentElement.clientHeight;
+      const left = Math.max(0, box.left), top = Math.max(0, box.top);
+      const right = Math.min(width, box.right), bottom = Math.min(height, box.bottom);
+      if (right - left < 2 || bottom - top < 2) return false;
+      const x = (left + right) / 2, y = (top + bottom) / 2;
+      let hit = document.elementFromPoint(x, y);
+      for (let depth = 0; hit && hit.shadowRoot && depth < 16; depth += 1) {
+        const inner = hit.shadowRoot.elementFromPoint(x, y);
+        if (!inner || inner === hit) break;
+        hit = inner;
+      }
+      return !!hit && insideOf(candidate, hit);
+    };
     let modal = null;
     try {
       for (const candidate of document.querySelectorAll('dialog[open], [aria-modal="true"]')) {
-        const isModal = candidate.getAttribute("aria-modal") === "true" || (candidate.tagName === "DIALOG" && candidate.matches(":modal"));
-        if (isModal && !hidden(candidate)) modal = candidate;
+        const native = candidate.tagName === "DIALOG" && candidate.matches(":modal");
+        if (native ? !hidden(candidate) : candidate.getAttribute("aria-modal") === "true" && onTop(candidate)) modal = candidate;
       }
     } catch { modal = null; }
     if (root) {
@@ -269,7 +298,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
           const ownText = (node.childElementCount === 0 && !hidden(node) && node.tagName !== "INPUT" && node.tagName !== "TEXTAREA" && node.tagName !== "SELECT" ? (node.innerText || node.textContent || "") : "").trim().slice(0, 200);
           const role = roleOf(node);
           const isTextNode = ["P", "LI", "LABEL", "DT", "DD", "FIGCAPTION"].includes(node.tagName);
-          const behindModal = modal !== null && !modal.contains(node) && !node.contains(modal);
+          const behindModal = modal !== null && !insideOf(modal, node) && !insideOf(node, modal);
           const shouldInclude = role && !behindModal && !hidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
           // Headings get a small reserve past the element cap: on long articles the
           // nav and table-of-contents links fill the cap before the first section title.

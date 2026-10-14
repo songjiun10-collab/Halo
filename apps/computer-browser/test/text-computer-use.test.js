@@ -62,7 +62,8 @@ function adapterWith({ boxes, url = "https://page.test/" }) {
     close() {},
     executeJavaScriptInIsolatedWorld: async (_world, scripts) => {
       const code = scripts[0].code;
-      if (code.includes("getBoundingClientRect")) return boxes;
+      // The observe script also measures boxes (to tell an open modal from a closed drawer); the geometry read is the one that does not walk the page.
+      if (code.includes("getBoundingClientRect") && !code.includes("createTreeWalker")) return boxes;
       return { url, title: "t", text: "", elements: ELEMENTS.map((e, index) => ({ index, ...e, parentIndex: null })) };
     },
   });

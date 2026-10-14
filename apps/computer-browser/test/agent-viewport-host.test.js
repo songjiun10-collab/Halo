@@ -444,7 +444,7 @@ test("image-mode capture also returns host-side screen targets for click classif
   views[0].getBounds = () => ({ x: 0, y: 0, width: AGENT_WIDTH, height: AGENT_HEIGHT });
   wc.getURL = () => "https://example.com/";
   wc.capturePage = async () => ({ toPNG: () => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), getSize: () => ({ width: AGENT_WIDTH, height: AGENT_HEIGHT }) });
-  wc.executeJavaScriptInIsolatedWorld = async (_world, scripts) => scripts[0].code.includes("getBoundingClientRect")
+  wc.executeJavaScriptInIsolatedWorld = async (_world, scripts) => scripts[0].code.includes("getBoundingClientRect") && !scripts[0].code.includes("createTreeWalker")
     ? [{ elementId: "0", x: 0.6, y: 0.2, w: 0.2, h: 0.1, covered: false }]
     : { url: "https://example.com/", title: "t", text: "", elements: [{ index: 0, role: "button", name: "Delete", parentIndex: null }] };
   const observation = await adapter.observe();
