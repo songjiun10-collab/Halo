@@ -54,7 +54,7 @@ jobs:
 
   browser-contracts:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: apps/computer-browser
@@ -73,5 +73,29 @@ jobs:
         run: npm run check:runtime
       - name: Typecheck runtime sources and consumers
         run: npm run typecheck
-      - name: Test shared contracts and runtime build
-        run: node --test test/harness-contracts.test.js test/task-profile-contracts.test.js test/harness-profile.test.js test/runtime-build.test.js test/runtime-contract-conformance.test.js test/runtime-harness-conformance.test.js test/generic-mcp-broker.test.js test/mcp-schema-validator.test.js test/message-port.test.js test/message-mailbox.test.js test/message-runtime-conformance.test.js
+      # Every test file runs except those listed with a reason in test/ci-excluded.json
+      # (they start the real Electron app, which this install does not download).
+      - name: Run the browser test suite
+        run: node tools/ci-tests.js
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Test
+        run: npm test
+      - name: Typecheck and build
+        run: npm run build

@@ -129,6 +129,8 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
         if (key === "dispose") return async () => { calls.connectorDisposed = (calls.connectorDisposed || 0) + 1; };
         return Reflect.get(target, key);
       } }) },
+    "./harness/build-expiry": { readBuildInfo: () => ({ expiresAt: null, invalid: false }) },
+    "./harness/voice-transcriber": { VoiceTranscriber: class { available() { return false; } } },
     "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } update(patch) { return Promise.resolve(patch); } } },
     "./harness/api-key-store": { ApiKeyStore: class { load() { return Promise.resolve(); } env() { return {}; } } },
     "./harness/local-memory-store": { LocalMemoryStore: class {} },
