@@ -136,6 +136,7 @@ class AgentService {
         ...(plan.mcpProviders ? { mcpProviders: plan.mcpProviders } : {}),
         ...(plan.model ? { plannerModel: plan.model } : {}),
         ...(unattended ? { reviewFallback: unattended.reviewFallback } : {}),
+        ...(hostContext?.requestAuthor === "model" ? { requestAuthor: "model" } : {}),
       },
       kind === "agent" && plan.persistentBrowser ? { agentId: ownerId } : undefined,
     );

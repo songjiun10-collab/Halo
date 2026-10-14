@@ -65,3 +65,34 @@ test("a task attached later starts with the host's current setting", async () =>
     assert.equal(host._active.get(taskId)?.controller._paymentsEnabled, enabled, `host ${enabled}`);
   }
 });
+
+test("a task started with requestAuthor model mints no mandate for its own purchase words, and the author survives a restart", async () => {
+  const { host, storageRoot } = await makeHost({ paymentsEnabled: true });
+  const order = "shop.example에서 $20 이하로 구매해줘";
+
+  const { taskId } = await host.createTask({ originalRequest: order }, { requestAuthor: "model" });
+  const events = async (id, root = storageRoot) => (await require("../main/harness/task-store").TaskStore.readEvents(id, { storageRoot: root }));
+  // The controller reads the request before its first planner call, so a finish_rejected note means the mandate step has run.
+  const settled = async (id, root) => { for (let i = 0; i < 400; i += 1) { if ((await events(id, root).catch(() => [])).some((e) => e.payload?.kind === "finish_rejected")) return; await new Promise((r) => setTimeout(r, 10)); } };
+  await settled(taskId);
+  const modelNotes = (await events(taskId)).filter((e) => e.type === "note").map((e) => e.payload.kind);
+  assert.ok(modelNotes.includes("request_author_selected"), "the author is journaled so a restart keeps it");
+  assert.equal(modelNotes.includes("mandate_granted"), false, "no mandate from model-written text");
+  assert.equal((await host._getRunScope(taskId, null).catch(() => null))?.requestAuthor ?? "model", "model");
+
+  // The host runs one task at a time and the first is still looping on its rejected finish, so the control runs on its own host.
+  const control = (await makeHost({ paymentsEnabled: true }));
+  const person = await control.host.createTask({ originalRequest: order });
+  await settled(person.taskId, control.storageRoot);
+  assert.ok((await events(person.taskId, control.storageRoot)).some((e) => e.payload?.kind === "mandate_granted"), "control: the person's own order still mints a mandate");
+
+  await assert.rejects(() => host.createTask({ originalRequest: "x" }, { requestAuthor: "robot" }), { code: "invalid_selector" });
+});
+
+test("a team room starts its tasks as model-written", async () => {
+  const { host } = await makeHost();
+  const calls = [];
+  host.startAgentTask = async (input, context) => { calls.push({ input, context }); return { taskId: "t" }; };
+  await host._rooms._startTask({ teamId: "team-1", request: "buy it", intentText: "please" });
+  assert.deepEqual(calls[0].context, { intentText: "please", requestAuthor: "model" });
+});

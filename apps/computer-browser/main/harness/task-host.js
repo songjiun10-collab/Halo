@@ -62,7 +62,7 @@ const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/ha
 const { resolveTaskProfile } = require("../../shared/task-profile-router");
 const { clearSessionCookies, clearDisallowedSessionCookies } = require("./profile-import/session-injector");
 
-const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone", "useImportedSessions", "mcpProviders", "reviewFallback", "plannerModel"]);
+const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone", "useImportedSessions", "mcpProviders", "reviewFallback", "plannerModel", "requestAuthor"]);
 const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
   planner_unavailable: "planner", planner_error: "planner", observation_error: "browser_observation",
   context_error: "context_build", no_progress: "action_progress", budget_exhausted: "budget",
@@ -242,7 +242,8 @@ class TaskHost {
       getTeam: (teamId) => this._agentStore.getTeam(teamId),
       getAgent: (agentId) => this._agentStore.getAgent(agentId),
       requestTurn: (turn) => this._requestRoomTurn(turn),
-      startTask: ({ teamId, request, intentText }) => this.startAgentTask({ teamId, request }, { intentText }),
+      // A room task's request is written by a member agent's planner, never typed by the person.
+      startTask: ({ teamId, request, intentText }) => this.startAgentTask({ teamId, request }, { intentText, requestAuthor: "model" }),
       getTaskState: async (taskId) => {
         await this._ensureQueue();
         return (await this._listTaskSummaries()).find((task) => task.taskId === taskId)?.state ?? null;
@@ -366,7 +367,7 @@ class TaskHost {
     if (this._runScopes.has(taskId)) return this._runScopes.get(taskId);
     const events = await store.getEvents();
     const note = (kind) => events.find((event) => event.type === "note" && event.payload?.kind === kind);
-    const scope = { mcpProviders: null, reviewFallback: "queue", plannerModel: null };
+    const scope = { mcpProviders: null, reviewFallback: "queue", plannerModel: null, requestAuthor: "person" };
     const mcp = note("mcp_scope_selected");
     if (mcp) {
       const providers = mcp.payload.providers;
@@ -386,6 +387,12 @@ class TaskHost {
     if (model) {
       if (!providerForModel(model.payload.model)) throw new TaskHostError("invalid_planner_model", "saved task planner model is invalid");
       scope.plannerModel = model.payload.model;
+    }
+    // Who wrote the task request. Absent means the person; only "model" is ever recorded, and it only restricts.
+    const author = note("request_author_selected");
+    if (author) {
+      if (author.payload.author !== "model") throw new TaskHostError("invalid_request_author", "saved task request author is invalid");
+      scope.requestAuthor = "model";
     }
     this._runScopes.set(taskId, scope);
     return scope;
@@ -545,6 +552,7 @@ class TaskHost {
       plannerEffort: this._effortForProfile(taskProfile),
       adaptiveEffort: this._plannerEffortMode === "auto",
       reviewFallback: this._runScopes.get(store.taskId)?.reviewFallback ?? "queue",
+      requestAuthor: this._runScopes.get(store.taskId)?.requestAuthor ?? "person",
       now: this._now,
       segmentRotationCalls: this._segmentRotationCalls,
       noProgressThreshold: this._noProgressThreshold,
@@ -1036,6 +1044,7 @@ class TaskHost {
       (Object.hasOwn(selectors, "mcpProviders") && (!Array.isArray(selectors.mcpProviders) ||
         selectors.mcpProviders.some((id) => !MCP_PROVIDER_IDS.includes(id)) || new Set(selectors.mcpProviders).size !== selectors.mcpProviders.length)) ||
       (Object.hasOwn(selectors, "reviewFallback") && selectors.reviewFallback !== "queue" && selectors.reviewFallback !== "deny") ||
+      (Object.hasOwn(selectors, "requestAuthor") && selectors.requestAuthor !== "person" && selectors.requestAuthor !== "model") ||
       (Object.hasOwn(selectors, "plannerModel") && !providerForModel(selectors.plannerModel))) {
       return Promise.reject(new TaskHostError("invalid_selector", "task profile selectors contain unknown fields"));
     }
@@ -1059,6 +1068,7 @@ class TaskHost {
       mcpProviders: Object.hasOwn(selectors, "mcpProviders") ? [...selectors.mcpProviders] : null,
       reviewFallback: selectors.reviewFallback ?? "queue",
       plannerModel: selectors.plannerModel ?? null,
+      requestAuthor: selectors.requestAuthor === "model" ? "model" : "person",
     };
     return this._createNewTask(stableGoalInput, null, null, resolvedProfile, selectors.standalone === true, selectors.useImportedSessions === true, runScope, agentBrowserProfileBinding, onAgentBrowserProfileAttached, waitForRunLoop);
   }
@@ -1531,6 +1541,7 @@ class TaskHost {
           if (scope.mcpProviders !== null) await taskStore.append({ type: "note", payload: { kind: "mcp_scope_selected", providers: [...scope.mcpProviders] } });
           if (scope.reviewFallback !== "queue") await taskStore.append({ type: "note", payload: { kind: "review_fallback_selected", mode: scope.reviewFallback } });
           if (scope.plannerModel) await taskStore.append({ type: "note", payload: { kind: "planner_model_selected", model: scope.plannerModel } });
+          if (scope.requestAuthor === "model") await taskStore.append({ type: "note", payload: { kind: "request_author_selected", author: "model" } });
           if (this._closeRequested) throw new TaskHostError("host_closed", "task host is closing or closed");
           if (binding) {
             await this._workGoalOrchestrator.recordContinuation(binding.goalId, binding.goalVersion, {

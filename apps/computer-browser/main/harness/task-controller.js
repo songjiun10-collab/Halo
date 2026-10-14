@@ -273,6 +273,7 @@ class TaskController {
     routineRun,
     batchReadOnlyActions = true,
     paymentsEnabled = false,
+    requestAuthor = "person",
     harnessProfile,
     makeMcpBroker,
     mcpEnabled,
@@ -313,6 +314,9 @@ class TaskController {
     this._routineRunner = routineRunner || null;
     this._batchReadOnlyActions = batchReadOnlyActions !== false;
     // Opt-in: payments stay refused unless the host explicitly passes true (fail closed).
+    if (requestAuthor !== "person" && requestAuthor !== "model") throw new TaskControllerError("invalid_config", "requestAuthor must be person or model");
+    // A request a model wrote (a team room's propose_task) is never the person's payment order.
+    this._requestAuthor = requestAuthor;
     this._paymentsEnabled = paymentsEnabled === true;
     const checkpointedRoutineRun = store.lastCheckpoint?.payload?.routineRun;
     this._routineRun = checkpointedRoutineRun ? { ...checkpointedRoutineRun } : routineRun ? { ...routineRun } : null;
@@ -2542,6 +2546,7 @@ class TaskController {
     }
     if (!this._paymentsEnabled) return "ok";
     if (this._routineRunner || this._goal.trigger) return "ok";
+    if (this._requestAuthor === "model") return "ok";
     const userText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
     const verdict = payments.mandateFromUserRequest(userText);
     if (verdict.kind === "none") return "ok";

@@ -185,3 +185,21 @@ test("an order already paid long ago in a long journal is not paid again after a
   assert.equal(r.executed.length, 0, "the payment click falls back to the human gate");
   assert.equal(r.controller.getSnapshot().approvalQueue.length, 1);
 });
+
+test("a request written by a model (team room propose_task) never becomes a payment order, even with payments on", async (t) => {
+  // The same words that pay at once when the person wrote them.
+  const person = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", controllerOptions: { paymentsEnabled: true, requestAuthor: "person" } });
+  assert.ok(kinds(person).includes("payment_authorized"), "control: the person's own order still pays");
+
+  const model = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", controllerOptions: { paymentsEnabled: true, requestAuthor: "model" } });
+  assert.equal(kinds(model).includes("mandate_granted"), false, "no mandate is minted from model-written text");
+  assert.equal(kinds(model).includes("payment_authorized"), false);
+  assert.equal(model.executed.length, 0, "the payment click is not run");
+  assert.equal(model.controller.getSnapshot().approvalQueue.length, 1, "it waits for the person, as with payments off");
+
+  // An absent author means the person (the chat path), so existing behavior is unchanged.
+  const unset = await run(t, { request: "shop.example에서 $20 이하로 구매해줘" });
+  assert.ok(kinds(unset).includes("payment_authorized"));
+
+  assert.throws(() => new (require("../main/harness/task-controller").TaskController)({ store: {}, browser: {}, planner: {}, requestAuthor: "robot" }), { code: "invalid_config" });
+});
