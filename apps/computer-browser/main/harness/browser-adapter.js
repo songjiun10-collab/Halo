@@ -65,7 +65,8 @@ function bareOrigin(value) {
 }
 const UNSUPPORTED_ACTIONS = new Set(["download"]);
 const INTERACTION_ACTIONS = new Set(["click", "type", "submit_form"]);
-const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "observe", "click_at", "type_at", "press_key", ...INTERACTION_ACTIONS]);
+const MAX_FIND_TEXT = 200;
+const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find_text", "observe", "click_at", "type_at", "press_key", ...INTERACTION_ACTIONS]);
 
 class BrowserAdapterError extends Error {
   constructor(code, message) {
@@ -859,6 +860,8 @@ class BrowserAdapter {
         return this._coordinateAction(action, { signal, documentEpoch, expectedOrigin });
       case "scroll":
         return this._scroll(action.direction, action.amount);
+      case "find_text":
+        return this._findText(action.text);
       case "observe":
         try {
           const observation = await this.observe({ signal });
@@ -1172,6 +1175,46 @@ class BrowserAdapter {
       return { status: "failed", errorCode: "element_not_found" };
     }
     return this._navigate(current.href, { expectedOrigin });
+  }
+
+  // Finds the first visible passage containing the text (case-insensitive, whitespace folded) and
+  // scrolls it to the middle of the view. The text reaches the page only as one JSON string literal.
+  async _findText(text) {
+    if (typeof text !== "string" || text.trim().length === 0 || text.length > MAX_FIND_TEXT) {
+      return { status: "failed", errorCode: "invalid_find_text" };
+    }
+    const wc = this._view.webContents;
+    await this._ensureReadyForScriptExecution(wc);
+    const script = `(() => { /* __haloFindText */
+      const needle = ${JSON.stringify(text)}.replace(/\\s+/g, " ").trim().toLowerCase();
+      const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+      let first = null, count = 0;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(parent.tagName)) continue;
+        if (!(node.nodeValue || "").replace(/\\s+/g, " ").toLowerCase().includes(needle)) continue;
+        const box = parent.getBoundingClientRect();
+        const style = getComputedStyle(parent);
+        if (box.width === 0 || box.height === 0 || style.visibility === "hidden" || style.display === "none") continue;
+        count += 1;
+        if (!first) first = parent;
+      }
+      if (first) first.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+      return { found: !!first, count };
+    })()`;
+    let timer;
+    try {
+      const found = await Promise.race([
+        wc.executeJavaScript(script, true),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("find_text timed out")), this._scrollTimeoutMs); }),
+      ]);
+      if (!found || found.found !== true) return { status: "failed", errorCode: "text_not_found" };
+      return { status: "ok", matchCount: Number.isInteger(found.count) ? found.count : 1 };
+    } catch (error) {
+      return { status: "failed", errorCode: "find_text_failed" };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async _scroll(direction, amount) {

@@ -65,6 +65,9 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
     if (element && typeof element.href === "string") return element.href;
     return typeof action.elementId === "string" ? `element ${action.elementId}` : null;
   }
+  if (action.type === "find_text") {
+    return typeof action.text === "string" ? JSON.stringify(action.text.slice(0, 80)) : null;
+  }
   if (action.type === "scroll") {
     const direction = typeof action.direction === "string" ? action.direction : "?";
     const amount = action.amount !== undefined ? String(action.amount) : "?";
@@ -3166,7 +3169,7 @@ class TaskController {
 }
 
 // Errors that repeat identically when the same action is run again (the page or target is what is wrong).
-const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable"]);
+const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found"]);
 const REPEAT_BLOCK_PAUSE = 3;
 // Same action, ignoring the per-observation/per-request ids that change every turn.
 function repeatActionKey(action) {

@@ -336,6 +336,7 @@ function buildPrompt(context, modelGuidance) {
     '  {"type": "navigate", "url": "<absolute http(s) URL>"}',
     '  {"type": "follow_link", "elementId": "<elementId from context.observation.elements>"}',
     '  {"type": "scroll", "direction": "up"|"down", "amount": <number, optional>}',
+    '  {"type": "find_text", "text": "<words to look for on the page, at most 200 characters>"}  (scrolls the first match to the middle of the view; fails with text_not_found if the page has none)',
     '  {"type": "observe"}',
     '  {"type": "click", "elementId": "<observed elementId>"}',
     '  {"type": "type", "elementId": "<observed textbox elementId>", "text": "<replacement text, at most 4096 UTF-8 bytes>"}',

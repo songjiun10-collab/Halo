@@ -30,6 +30,7 @@ const ctx = { observation, screenTargets: { observationId: "obs1", targets }, co
 const CRAFTED = {
   observe: { type: "observe" },
   scroll: { type: "scroll", direction: "down", amount: 3 },
+  find_text: { type: "find_text", text: "Add to cart" },
   navigate: { type: "navigate", url: "https://shop.example/checkout" },
   follow_link: { type: "follow_link", elementId: "more" },
   click: { type: "click", elementId: "pay" },

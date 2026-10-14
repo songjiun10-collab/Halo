@@ -2194,16 +2194,16 @@ test("a second evidence-free finish is accepted once the rejection budget is use
   await off.store.close();
 });
 
-function repeatRun({ store, repeatFailureLimit, errorCode = "navigation_error" }) {
+function repeatRun({ store, repeatFailureLimit, errorCode = "navigation_error", action = { type: "navigate", url: "https://example.test/dead" } }) {
   const executed = [];
   const contexts = [];
   const controller = new TaskController({
     store,
     planner: { next: async (context) => {
       contexts.push(context);
-      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "navigate", url: "https://example.test/dead" }] };
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [action] };
     } },
-    browser: { observe: async () => ({ id: "obs" }), execute: async (action) => { executed.push(action); return { status: "failed", errorCode }; } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async (done) => { executed.push(done); return { status: "failed", errorCode }; } },
     approve: allowApprove(),
     hostVerifier: () => false,
     harnessProfile: "middle",
@@ -2221,6 +2221,15 @@ test("an identical action that failed deterministically twice is not dispatched 
   assert.equal(snapshot.pauseReason, "no_progress");
   assert.equal(executed.length, 2, "only the first two attempts reach the browser");
   assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_blocked"), true);
+  await store.close();
+});
+
+test("looking for the same text that is not on the page is not dispatched a third time", async () => {
+  const { store } = await makeStore({ originalRequest: "find", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, executed } = repeatRun({ store, repeatFailureLimit: 2, errorCode: "text_not_found", action: { type: "find_text", text: "Add to cart" } });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(executed.length, 2);
   await store.close();
 });
 
