@@ -219,6 +219,38 @@ test("a planner that clicks on a CAPTCHA page is told once to leave it and the t
   assert.ok(feedback.includes("captcha_page"));
 });
 
+test("a challenge that clears by itself leaves no free pass: challenged again on that site, the task waits for the person", async () => {
+  const seen = [];
+  const executed = [];
+  let at = "https://a.test/x";
+  let observed = 0;
+  const planner = { next: async (context) => {
+    const { url, title } = context.observation;
+    seen.push(url);
+    if (title === "Just a moment...") return actions(context, url === "https://a.test/x" ? { type: "click", elementId: "e1" } : { type: "navigate", url: "https://b.test/z" });
+    if (url === "https://a.test/x") return actions(context, { type: "navigate", url: "https://a.test/y" });
+    return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "answer from b" };
+  } };
+  const browser = {
+    supportsAction: () => true,
+    observe: async () => {
+      observed += 1;
+      const id = `o${observed}`;
+      // a.test challenges, the planner is told to leave, the challenge then clears by itself,
+      // and the next page on a.test is challenged again.
+      if (at === "https://a.test/x") return observed === 1 ? { id, url: at, title: "Just a moment...", text: "", elements: [] } : { id, url: at, title: "A shop", text: "items", elements: [] };
+      if (at === "https://a.test/y") return { id, url: at, title: "Just a moment...", text: "", elements: [] };
+      return { id, url: at, title: "b", text: "ok", elements: [] };
+    },
+    execute: async (action) => { executed.push(action.type); if (action.type === "navigate") at = action.url; return { status: "ok" }; },
+  };
+  const { controller } = await make(planner, browser, { navIntervalMs: 0 });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "captcha", "(the bug) the earlier note to leave was still pending and let the repeat block through");
+  assert.deepEqual(executed, ["navigate"]);
+  assert.equal(seen.includes("https://a.test/y"), false, "the planner is not asked about the repeat challenge");
+});
+
 test("four different CAPTCHA sites in one task are routed around before it waits for the person; a fifth waits", async () => {
   const hosts = ["a", "b", "c", "d", "e"];
   let index = 0;

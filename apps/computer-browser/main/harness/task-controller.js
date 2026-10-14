@@ -2101,12 +2101,14 @@ class TaskController {
           // source (the challenged URL goes into errorUrls); a repeat, a third site, or any
           // action other than leaving the page hands the task to the person.
           this._onCaptchaPage = false;
+          // Looking again at the page the planner was just told to leave is not a second block.
+          // Only the very next observation counts: once a page without a challenge has been
+          // seen, a challenge on that site again is a repeat block.
+          const lookingAgain = this._captchaNudgePending;
+          this._captchaNudgePending = false;
           if (looksLikeCaptcha(observation?.url, observation?.title)) {
             let origin = null;
             try { origin = new URL(observation.url).origin; } catch {}
-            // Looking again at the page the planner was just told to leave is not a second block.
-            const lookingAgain = this._captchaNudgePending;
-            this._captchaNudgePending = false;
             if (origin === null || (this._captchaOrigins.has(origin) && !lookingAgain) || (!this._captchaOrigins.has(origin) && this._captchaOrigins.size >= CAPTCHA_SITES_TRIED)) {
               await this._pauseWith("captcha");
               break;
