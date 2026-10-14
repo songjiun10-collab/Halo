@@ -50,6 +50,8 @@ test("AgentViewportHost builds Chromium pages when the engine is on and Electron
   const host = new AgentViewportHost({ createWindow: forbidden, createView: forbidden, createPage: (partition) => engine.createPage(partition) });
   const first = host.ensure("task-a");
   const second = host.ensure("task-b");
+  // Agent pages stay out of private addresses unless the person named one; this test server is one.
+  for (const adapter of [first, second]) adapter.setPrivateNetworkAllowance([base]);
   const results = await Promise.all([first.execute({ type: "navigate", url: `${base}/a` }), second.execute({ type: "navigate", url: `${base}/b` })]);
   assert.deepEqual(results.map((r) => r.status), ["ok", "ok"]);
   assert.match((await first.observe()).url, /\/a$/);
@@ -62,6 +64,7 @@ test("AgentViewportHost builds Chromium pages when the engine is on and Electron
   await first._view.webContents.executeJavaScript("document.cookie = 'k=1; path=/'");
   await host.dispose("task-a");
   const again = host.ensure("task-a");
+  again.setPrivateNetworkAllowance([base]);
   await again.execute({ type: "navigate", url: `${base}/a` });
   assert.equal(await again._view.webContents.executeJavaScript("document.cookie"), "k=1");
   assert.equal(await second._view.webContents.executeJavaScript("document.cookie"), "", "a different partition is isolated");

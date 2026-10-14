@@ -23,6 +23,11 @@ const { resolveTaskProfile } = require("../../shared/task-profile-router");
 const { validateTaskProfileSelectedPayload } = require("../../shared/task-profile-contracts");
 const { MessageMailbox, MessageMailboxError } = require("./message-mailbox");
 const { TeamBoardStore, BOARD_KINDS, MAX_BOARD_TEXT_CHARS } = require("./team-board-store");
+const { isPrivateHost } = require("./private-network");
+
+function entersPrivateNetwork(url) {
+  try { return isPrivateHost(new URL(url).hostname); } catch { return true; }
+}
 
 // Team board (see readTeamBoard): newest entries a sibling's context and the
 // renderer's plan summary carry.
@@ -303,6 +308,11 @@ class ChildAgentCoordinator {
     // child inherits the lock (its controller hands it to the child browser).
     const parentLock = currentGoal.lock ?? null;
     for (const a of validated.assignments) {
+      // A child never goes into the person's own machine or network, even to an address the person
+      // named: its entry is the parent's (model-written) choice and it runs without the person watching.
+      if (entersPrivateNetwork(a.entryUrl)) {
+        throw new ChildAgentCoordinatorError("private_network_blocked", "a child agent cannot be sent to an address on the person's own computer or network");
+      }
       const verdict = contracts.evaluateLock(parentLock, { action: "navigate", targetOrigin: contracts.deriveOrigin(a.entryUrl) });
       if (!verdict.allowed) {
         throw new ChildAgentCoordinatorError("intent_lock_denied", `child entryUrl is denied by the parent's Intent Lock (${verdict.reason})`);
@@ -814,6 +824,9 @@ class ChildAgentCoordinator {
       // The trusted entry navigation below bypasses the adapter's lock (it is
       // the user path), so the child's own inherited lock is checked here,
       // which also covers plans reconstructed from the journal.
+      if (entersPrivateNetwork(entryUrl)) {
+        throw new ChildAgentCoordinatorError("private_network_blocked", "a child agent cannot be sent to an address on the person's own computer or network");
+      }
       const entryVerdict = contracts.evaluateLock(childStore.getGoal().lock ?? null, { action: "navigate", targetOrigin: contracts.deriveOrigin(entryUrl) });
       if (!entryVerdict.allowed) {
         throw new ChildAgentCoordinatorError("intent_lock_denied", `child entryUrl is denied by its Intent Lock (${entryVerdict.reason})`);

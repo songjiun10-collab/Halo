@@ -27,6 +27,7 @@ const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal, isQ
 const { adaptiveEffort } = require("./planner-effort-policy");
 const { createRecoveryPolicy, buildRecoveryFeedback, buildProposalFeedback } = require("./recovery-policy");
 const { resolveTarget } = require("./screen-map");
+const { privateOriginsNamedIn } = require("./private-network");
 const { TaskBranchManager } = require("./task-branch-manager");
 const { classifyTarget } = require("./effect-classifier");
 const { inspectAction } = require("./action-safety");
@@ -484,6 +485,7 @@ class TaskController {
     this._mandates = [];
     this._mandateGoalVersion = null;
     this._browser.setIntentLock?.(this._goal.lock ?? null);
+    this._browser.setPrivateNetworkAllowance?.(this._personNamedPrivateOrigins());
     this._epoch = 0;
     this._loopRunning = false;
     this._plannerAborter = null;
@@ -1321,6 +1323,7 @@ class TaskController {
     const nextGoal = await this._store.amendGoal(amendmentInput);
     this._goal = nextGoal;
     this._browser.setIntentLock?.(nextGoal.lock ?? null);
+    this._browser.setPrivateNetworkAllowance?.(this._personNamedPrivateOrigins());
     // The intent changed, so every lent permission is taken back.
     await this._revokeAllLeases("goal_amended", { durable: true });
     // A goal amendment invalidates any stale in-flight proposal/approval
@@ -2561,6 +2564,13 @@ class TaskController {
       }
     }
     return evidence;
+  }
+
+  // The addresses on the person's own machine or network that the person named in their own words:
+  // the agent's page may open only these (private-network.js). A request a model wrote names none.
+  _personNamedPrivateOrigins() {
+    const own = [...(this._requestAuthor === "person" ? [this._goal.originalRequest] : []), ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)];
+    return privateOriginsNamedIn(own.filter((text) => typeof text === "string").join("\n"));
   }
 
   // The user's chat request is the payment authorization. Read it once per goal

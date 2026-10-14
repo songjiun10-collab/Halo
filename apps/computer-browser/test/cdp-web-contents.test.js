@@ -430,3 +430,63 @@ test("only a modal a person can actually see hides the page; a closed drawer hid
   assert.ok(!shadow.names.includes("Product 1"));
   await adapter.dispose();
 });
+
+test("on a Chromium agent page a link, a script or a redirect cannot carry the agent somewhere it may not go", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
+  const { makeIntentLock } = require("../shared/harness-contracts");
+  let port;
+  const pages = {
+    "/start": () => `<title>start</title><a id="go" href="http://localhost:${port}/landed">go</a>`,
+    "/landed": () => "<title>landed</title><p>landed</p>",
+  };
+  const server = http.createServer((request, response) => {
+    if (request.url === "/redirect") { response.writeHead(302, { location: `http://localhost:${port}/landed` }); response.end(); return; }
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.end(pages[request.url]?.() ?? "<p>none</p>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  port = server.address().port;
+  const base = `http://127.0.0.1:${port}`;
+  const other = `http://localhost:${port}`;
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "halo-cdp-private-"));
+  const chrome = spawn(CHROMIUM, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []), "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+  let view;
+  t.after(async () => {
+    try { view?.closeConnection(); } catch { /* ignore */ }
+    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  });
+  const wsUrl = await new Promise((resolve, reject) => {
+    let buffer = "";
+    const timer = setTimeout(() => reject(new Error("Chromium did not report a DevTools endpoint")), 30000);
+    chrome.stderr.on("data", (chunk) => { buffer += chunk; const match = /DevTools listening on (ws:\/\/\S+)/.exec(buffer); if (match) { clearTimeout(timer); resolve(match[1]); } });
+    chrome.on("exit", () => reject(new Error("Chromium exited early")));
+  });
+  view = await openCdpView(wsUrl, { width: 1000, height: 700 });
+  const wc = view.webContents;
+  const adapter = new BrowserAdapter({ view, permissionMode: "full", blockPrivateNetwork: true });
+  adapter.setPrivateNetworkAllowance([base]); // the person named the test server, not localhost
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 800));
+
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/start` })).status, "ok");
+  await wc.executeJavaScript("document.getElementById('go').click()");
+  await settle();
+  assert.equal(wc.getURL(), `${base}/start`, "(the bug) a link on the page carried the agent to an address the person never named");
+  await wc.executeJavaScript(`location.href = ${JSON.stringify(`${other}/landed`)}`);
+  await settle();
+  assert.equal(wc.getURL(), `${base}/start`, "a script cannot either");
+  assert.notEqual((await adapter.execute({ type: "navigate", url: `${base}/redirect` })).status, "ok", "nor a redirect");
+  assert.notEqual(wc.getURL(), `${other}/landed`);
+
+  adapter.setPrivateNetworkAllowance([base, other]);
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/redirect` })).status, "ok", "once the person named it, the redirect lands");
+  assert.equal(wc.getURL(), `${other}/landed`, "and the load is reported done only once its page is there");
+
+  // The same events carry the Intent Lock: a link to an origin the lock leaves out is stopped too.
+  adapter.setIntentLock(makeIntentLock({ rules: [{ kind: "allow_origins", origins: [base] }] }));
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/start` })).status, "ok");
+  await wc.executeJavaScript("document.getElementById('go').click()");
+  await settle();
+  assert.equal(wc.getURL(), `${base}/start`, "the lock holds against a page's own link");
+  await adapter.dispose();
+});

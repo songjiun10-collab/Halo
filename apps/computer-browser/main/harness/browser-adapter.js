@@ -45,6 +45,7 @@ const MAX_TEXT_BYTES = 12 * 1024; // section 6: "text 12 KiB"
 // A PDF tab shows nothing to page scripts, so its text comes from the file.
 const MAX_PDF_TEXT_BYTES = 2 * MAX_TEXT_BYTES;
 const { extractPdfText, formatPdfObservationText, looksLikePdfUrl } = require("./pdf-text");
+const { isPrivateHost } = require("./private-network");
 const NAVIGATION_TIMEOUT_MS = 30000; // matches control-api.js's existing bound
 const { randomUUID } = require("node:crypto");
 const INTERACTION_WORLD_ID = 1001;
@@ -402,6 +403,7 @@ class BrowserAdapter {
     randomId,
     permissionMode = "browse",
     assignedOrigin,
+    blockPrivateNetwork = false,
   } = {}) {
     if (!view) throw new BrowserAdapterError("invalid_config", "view is required");
     this._view = view;
@@ -421,6 +423,11 @@ class BrowserAdapter {
     // could still carry the child to an origin the parent never assigned it.
     this._assignedOrigin = assignedOrigin || null;
     this._intentLock = null;
+    // Agent pages only (AgentViewportHost): a page on the person's own machine or network
+    // (localhost, a router, an intranet tool) is opened only when the person named it -- by the
+    // agent, by a link or script on the page, or by a redirect. See private-network.js.
+    this._blockPrivateNetwork = blockPrivateNetwork === true;
+    this._privateAllowance = new Set();
     // While a widened navigation runs, the origin the user granted it for:
     // a redirect elsewhere is refused (see rejectIfBlocked and _navigate).
     this._widenedPin = null;
@@ -489,6 +496,7 @@ class BrowserAdapter {
         event.preventDefault();
         return;
       }
+      if (this._privateNetworkBlocked(parsed)) { event.preventDefault(); return; }
       const origin = parsed.origin;
       if (this._assignedOrigin && origin !== this._assignedOrigin) { event.preventDefault(); return; }
       if (this._widenedPin && origin !== this._widenedPin.origin) { this._widenedPin.violated = true; event.preventDefault(); return; }
@@ -510,6 +518,25 @@ class BrowserAdapter {
 
   setIntentLock(lock) {
     this._intentLock = lock ?? null;
+  }
+
+  // The private origins the person's own words name (TaskController reads them from the request
+  // and the person's amendments). Replaced, not merged, so a new goal can take one back.
+  setPrivateNetworkAllowance(origins) {
+    const next = new Set();
+    for (const value of Array.isArray(origins) ? origins.slice(0, 32) : []) {
+      try {
+        const url = new URL(value);
+        if ((url.protocol === "http:" || url.protocol === "https:") && isPrivateHost(url.hostname)) next.add(url.origin);
+      } catch { /* not an origin */ }
+    }
+    this._privateAllowance = next;
+  }
+
+  _privateNetworkBlocked(parsed) {
+    if (!this._blockPrivateNetwork || !isPrivateHost(parsed.hostname) || this._privateAllowance.has(parsed.origin)) return false;
+    // An Intent Lock the person set that lists the origin is the same as naming it.
+    return !(this._intentLock?.rules ?? []).some((rule) => rule.kind === "allow_origins" && rule.origins.includes(parsed.origin));
   }
 
   supportsAction(type) {
@@ -1204,6 +1231,9 @@ class BrowserAdapter {
     }
     if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password) {
       return { status: "failed", errorCode: "invalid_url" };
+    }
+    if (enforceLock && this._privateNetworkBlocked(parsed)) {
+      return { status: "failed", errorCode: "private_network_blocked" };
     }
     if (enforceLock && !evaluateLock(this._intentLock, { action: "navigate", targetOrigin: parsed.origin }).allowed) {
       return { status: "failed", errorCode: "intent_lock_denied" };

@@ -45,6 +45,7 @@ async function main() {
       const visibleAdapter = new BrowserAdapter({ view: visibleView });
       visibleAdapters.push(visibleAdapter);
       const agentAdapter = host.ensure(taskId);
+      agentAdapter.setPrivateNetworkAllowance([url]); // the local fixture, as if the person had named it
       adapters.push(visibleAdapter, agentAdapter);
     }
     const navigations = await Promise.all([

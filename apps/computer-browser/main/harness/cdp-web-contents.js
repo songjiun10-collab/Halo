@@ -160,6 +160,8 @@ class CdpWebContents {
     title = "";
     mainFrameId = "";
     httpStatus = null;
+    // The main frame has started a load whose stop has not arrived yet.
+    loading = false;
     history = [];
     historyIndex = -1;
     worlds = new Map();
@@ -297,8 +299,24 @@ class CdpWebContents {
         }
         if (allowed && !isDocument && isBlockedUrl(url))
             allowed = false;
+        // Electron asks "will-navigate" and "will-redirect" before the main frame moves, and the adapter
+        // enforces the Intent Lock, a child's origin pin and the private-network block there; a page that
+        // navigates itself (a link, a script, a redirect) never passes through the adapter otherwise.
+        // Unlike Electron this also asks about loads the host started, which the adapter checked already.
+        // A prevented navigation is aborted, which leaves the current page in place as Electron does
+        // (any other failure would put Chromium's error page in its place).
+        let reason = "BlockedByClient";
+        if (allowed && isDocument && params.frameId === this.mainFrameId && /^https?:/i.test(url)) {
+            let prevented = false;
+            const event = { preventDefault: () => { prevented = true; } };
+            this.emit(typeof params.redirectedRequestId === "string" && params.redirectedRequestId !== "" ? "will-redirect" : "will-navigate", event, url);
+            if (prevented) {
+                allowed = false;
+                reason = "Aborted";
+            }
+        }
         const command = allowed ? "Fetch.continueRequest" : "Fetch.failRequest";
-        this.rawCmd(command, allowed ? { requestId: params.requestId } : { requestId: params.requestId, errorReason: "BlockedByClient" }).catch(() => undefined);
+        this.rawCmd(command, allowed ? { requestId: params.requestId } : { requestId: params.requestId, errorReason: reason }).catch(() => undefined);
     }
     isDestroyed() { return this.destroyed; }
     rawCmd(method, params = {}) {
@@ -379,13 +397,16 @@ class CdpWebContents {
                 break;
             case "Page.frameStoppedLoading":
                 if (params.frameId === this.mainFrameId) {
+                    this.loading = false;
                     this.emit("did-stop-loading");
                     this.emit("did-finish-load");
                 }
                 break;
             case "Page.frameStartedLoading":
-                if (params.frameId === this.mainFrameId)
+                if (params.frameId === this.mainFrameId) {
+                    this.loading = true;
                     this.emit("did-start-navigation", {}, this.url, false, true);
+                }
                 break;
             case "Page.javascriptDialogOpening":
                 this.onJavaScriptDialog(params);
@@ -468,6 +489,11 @@ class CdpWebContents {
         });
         const result = await this.rawCmd("Page.navigate", { url });
         if (result.errorText) {
+            // A load that started and then failed (a redirect the adapter stopped) still has its stop to come.
+            // Wait for it here, or the next navigation would take that late stop for its own and report done
+            // before its page has committed.
+            if (this.loading)
+                await Promise.race([stopped, new Promise((resolve) => setTimeout(resolve, 2000))]);
             this.emit("did-fail-load", {}, -1, String(result.errorText), url, true);
             throw new Error(`navigation_error: ${result.errorText}`);
         }

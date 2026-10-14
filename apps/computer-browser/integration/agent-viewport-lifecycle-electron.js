@@ -70,6 +70,8 @@ async function main() {
       visibleAdapter,
       disposeAgent: () => agentViewportHost.dispose(TASK_ID),
     });
+    // The local fixture, as if the person had named it: agent pages open private addresses only then.
+    browser.setPrivateNetworkAllowance([fixture.url]);
 
     // --- 1. Fixed 1440x900 viewport, independent of the visible window ---
     const navResult = await browser.execute({ type: "navigate", url: `${fixture.url}page2` });

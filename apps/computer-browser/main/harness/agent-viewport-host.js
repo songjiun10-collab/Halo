@@ -232,7 +232,7 @@ class AgentViewportHost {
     // Electron does not auto-show or auto-focus a show:false BrowserWindow
     // (verified by Codex's integration/agent-viewport-spike.js, read-only).
     const { host, view } = this._createHiddenViewPair(partition);
-    const adapter = new BrowserAdapter({ view });
+    const adapter = new BrowserAdapter({ view, blockPrivateNetwork: true });
     if (this._pool) wakeOnUse(adapter, view);
     this._pool?.register(`task:${taskId}`, view);
     this._hosts.set(taskId, { host, view, adapter, agentId });
@@ -365,7 +365,7 @@ class AgentViewportHost {
     // "isolated" (Task Branches) and "docker" get a throwaway partition: no cookies from the parent.
     const partition = execution === "docker" || execution === "isolated" ? childBrowserPartition(childId) : `halo-task-${parentTaskId}`;
     const { host, view } = this._createHiddenViewPair(partition);
-    const adapter = new BrowserAdapter({ view, assignedOrigin, permissionMode: "observe" });
+    const adapter = new BrowserAdapter({ view, assignedOrigin, permissionMode: "observe", blockPrivateNetwork: true });
     if (this._pool) wakeOnUse(adapter, view);
     this._pool?.register(`child:${childId}`, view);
     this._childHosts.set(childId, { host, view, adapter, parentTaskId, assignedOrigin, execution });
@@ -456,6 +456,8 @@ function makeDualSurfaceBrowser({ agentAdapter, visibleAdapter, disposeAgent, ca
     // enforces it on execute() and on page-initiated navigation, while the
     // user's visible surface (and its redirects) stays unlocked.
     setIntentLock: (lock) => agentAdapter.setIntentLock?.(lock),
+    // Likewise only the agent's page is kept out of the person's private network.
+    setPrivateNetworkAllowance: (origins) => agentAdapter.setPrivateNetworkAllowance?.(origins),
     // What execute() can really do is the agent adapter's answer. Unknown
     // (no supportsAction on it) stays undefined rather than a guess.
     supportsAction: (type) => (typeof agentAdapter.supportsAction === "function" ? agentAdapter.supportsAction(type) : undefined),
