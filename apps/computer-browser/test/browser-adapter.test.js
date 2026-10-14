@@ -453,6 +453,50 @@ test("execute(scroll) proceeds when documentEpoch matches the current document",
   assert.equal(scrolled, true);
 });
 
+// --- token cost: a container's name repeats its children's names, so only what the children do not already say is kept ---
+
+test("observe() keeps a container's own words but drops the child names it merely repeats", async () => {
+  const raw = {
+    url: "https://shop.example/", title: "Shop", text: "",
+    elements: [
+      { index: 0, role: "list", name: "Phone case $12.99 Add to cart Charger $20.00 Add to cart", parentIndex: null },
+      { index: 1, role: "listitem", name: "Phone case $12.99 Add to cart", parentIndex: 0 },
+      { index: 2, role: "link", name: "Phone case", parentIndex: 1, href: "https://shop.example/case" },
+      { index: 3, role: "button", name: "Add to cart", parentIndex: 1 },
+      { index: 4, role: "listitem", name: "Charger $20.00 Add to cart", parentIndex: 0 },
+      { index: 5, role: "link", name: "Charger", parentIndex: 4, href: "https://shop.example/charger" },
+      { index: 6, role: "button", name: "Add to cart", parentIndex: 4 },
+      { index: 7, role: "navigation", name: "Main menu", parentIndex: null },
+      { index: 8, role: "link", name: "Home", parentIndex: 7, href: "https://shop.example/" },
+    ],
+  };
+  const adapter = new BrowserAdapter({ view: makeFakeView({ executeJavaScript: async () => raw }) });
+  const { elements } = await adapter.observe();
+  const byId = Object.fromEntries(elements.map((e) => [e.elementId, e]));
+  assert.equal(byId["1"].name, "$12.99", "the price only the item says stays, on the item");
+  assert.equal(byId["4"].name, "$20.00");
+  assert.equal(byId["0"].name, "", "a list whose items already say everything keeps no name of its own");
+  assert.equal(byId["7"].name, "Main menu", "words no child repeats are kept");
+  for (const id of ["2", "3", "5", "6", "8"]) assert.ok(byId[id].name.length > 0, "interactive elements keep their names");
+  assert.equal(byId["3"].parentElementId, "1", "the structure that ties a button to its item is unchanged");
+  assert.equal(elements.length, 9, "no element is removed");
+});
+
+test("observe() never shortens the name of an interactive element or a heading, even when it has children", async () => {
+  const raw = {
+    url: "https://shop.example/", title: "Shop", text: "",
+    elements: [
+      { index: 0, role: "link", name: "Buy now Phone case", parentIndex: null, href: "https://shop.example/case" },
+      { index: 1, role: "heading", name: "Phone case sale", parentIndex: null, level: 2 },
+      { index: 2, role: "button", name: "Phone case", parentIndex: 0 },
+    ],
+  };
+  const adapter = new BrowserAdapter({ view: makeFakeView({ executeJavaScript: async () => raw }) });
+  const { elements } = await adapter.observe();
+  assert.equal(elements[0].name, "Buy now Phone case");
+  assert.equal(elements[1].name, "Phone case sale");
+});
+
 // --- find_text: the planner names text, the host finds it on the page and scrolls it into view ---
 
 test("execute(find_text) scrolls the first match into view and reports how many matched", async () => {

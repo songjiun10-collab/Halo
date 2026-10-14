@@ -64,6 +64,36 @@ function bareOrigin(value) {
   }
 }
 const UNSUPPORTED_ACTIONS = new Set(["download"]);
+// A container's accessible name is its text, which repeats the names of the elements inside it. Only these
+// structural roles are trimmed; an interactive element or a heading always keeps its whole name.
+const STRUCTURAL_ROLES = new Set([
+  "list", "listitem", "row", "rowgroup", "cell", "gridcell", "table", "grid", "group", "generic", "article", "region",
+  "section", "figure", "navigation", "banner", "main", "contentinfo", "complementary", "form", "toolbar", "menu", "menubar", "tablist",
+]);
+
+// Removes from each structural element's name the names of the elements directly inside it, so a product card
+// says its price once instead of repeating its link and button. No element is removed and parents are unchanged.
+function trimContainerNames(elements) {
+  const childNames = new Map();
+  for (const element of elements) {
+    if (element.parentElementId === null || element.parentElementId === undefined || typeof element.name !== "string" || element.name.length < 2) continue;
+    const list = childNames.get(element.parentElementId);
+    if (list) list.push(element.name); else childNames.set(element.parentElementId, [element.name]);
+  }
+  return elements.map((element) => {
+    if (!STRUCTURAL_ROLES.has(element.role) || typeof element.name !== "string" || element.name.length === 0) return element;
+    const inside = childNames.get(element.elementId);
+    if (!inside) return element;
+    let rest = element.name;
+    for (const child of [...inside].sort((x, y) => y.length - x.length)) {
+      const at = rest.indexOf(child);
+      if (at !== -1) rest = `${rest.slice(0, at)} ${rest.slice(at + child.length)}`;
+    }
+    rest = rest.replace(/\s+/g, " ").trim();
+    return rest === element.name ? element : { ...element, name: rest };
+  });
+}
+
 const MAX_SELECT_OPTIONS = 40;
 const MAX_OPTION_LABEL = 120;
 const INTERACTION_ACTIONS = new Set(["click", "type", "select_option", "submit_form"]);
@@ -662,14 +692,14 @@ class BrowserAdapter {
       ...(dialogs.length > 0 ? { dialogs } : {}),
       // Only error responses are surfaced, so ordinary observations stay unchanged.
       ...(this._lastHttpStatus >= 400 ? { httpStatus: this._lastHttpStatus } : {}),
-      elements: raw.elements.map((el, index) => {
+      elements: trimContainerNames(raw.elements.map((el, index) => {
         const { index: _index, parentIndex, ...entry } = el;
         return {
           ...entry,
           elementId: String(index),
           parentElementId: parentIndex === null || parentIndex === undefined ? null : String(parentIndex),
         };
-      }),
+      })),
       at: this._now(),
     };
     const pdfText = await this._readPdfTextIfEmpty(wc, raw);
