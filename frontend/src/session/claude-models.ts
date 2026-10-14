@@ -7,6 +7,7 @@ export interface PlannerModel { id: string; label: string; legacy: boolean; prov
 export const CLAUDE_MODELS: readonly ClaudeModel[] = [
   { id: 'claude-opus-5-5', label: 'Opus 5.5', family: 'opus', legacy: false },
   { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', family: 'sonnet', legacy: false },
+  { id: 'claude-haiku-5-5', label: 'Haiku 5.5', family: 'haiku', legacy: false },
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', family: 'haiku', legacy: false },
   { id: 'claude-fable-5-1', label: 'Fable 5.1', family: 'fable', legacy: false },
   { id: 'claude-opus-4-5-20251101', label: 'Opus 4.5', family: 'opus', legacy: true },
