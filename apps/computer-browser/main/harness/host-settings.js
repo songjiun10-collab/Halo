@@ -38,8 +38,8 @@ const SETTINGS_FIELDS = ["executionMode", "mcpProviders", "memoryPolicy", "permi
 // contextAwareness (opt-in, off when unset) keeps a local journal of pages the user read.
 // plannerRouting (opt-in, off when unset) picks a planner tier from the task duration profile.
 // plannerEscalation (opt-in, off when unset) lets a stuck task move up one model tier.
-const OPTIONAL_FIELDS = ["plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "paymentsEnabled", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy"];
-const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "paymentsEnabled", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy"];
+const OPTIONAL_FIELDS = ["plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "paymentsEnabled", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy", "assignmentSolver"];
+const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "paymentsEnabled", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy", "assignmentSolver"];
 const LEGACY_V1_FIELDS = "executionMode,permissionMode,plannerEffort,version";
 const LEGACY_V2_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,version";
 const LEGACY_V3_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,plannerProvider,version";
@@ -128,6 +128,11 @@ function validateSettings(value) {
   if (hasChromiumContextPolicy && value.chromiumContextPolicy !== "isolated" && value.chromiumContextPolicy !== "shared") {
     throw new HostSettingsError("invalid_chromium_context_policy", "chromiumContextPolicy must be isolated or shared");
   }
+  // Opt-in assignment solver (assignment-solver.js): greedy unless the person chooses rebalancer.
+  const hasAssignmentSolver = Object.prototype.hasOwnProperty.call(value, "assignmentSolver");
+  if (hasAssignmentSolver && value.assignmentSolver !== "greedy" && value.assignmentSolver !== "rebalancer") {
+    throw new HostSettingsError("invalid_assignment_solver", "assignmentSolver must be greedy or rebalancer");
+  }
   const hasChromiumEndpoint = Object.prototype.hasOwnProperty.call(value, "chromiumEndpoint");
   if (hasChromiumEndpoint && (typeof value.chromiumEndpoint !== "string" || value.chromiumEndpoint.length > 256 || !/^(https?|wss?):\/\//.test(value.chromiumEndpoint))) {
     throw new HostSettingsError("invalid_chromium_endpoint", "chromiumEndpoint must be an http(s) or ws(s) URL");
@@ -160,6 +165,7 @@ function validateSettings(value) {
     ...(hasChromiumPath ? { chromiumPath: value.chromiumPath } : {}),
     ...(hasChromiumEndpoint ? { chromiumEndpoint: value.chromiumEndpoint } : {}),
     ...(hasChromiumContextPolicy ? { chromiumContextPolicy: value.chromiumContextPolicy } : {}),
+    ...(hasAssignmentSolver ? { assignmentSolver: value.assignmentSolver } : {}),
   };
 }
 
