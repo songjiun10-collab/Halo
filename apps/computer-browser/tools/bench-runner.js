@@ -46,7 +46,14 @@ function waitForEnter(prompt) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function runTask(client, item, timeoutMs, assist = false) {
+// A person is asked at most this many times per task; a task that still needs input after that ends as paused/need_user.
+const ASSIST_LIMIT = 5;
+
+// io: injectable pieces for tests (sleep, the prompt to the person, the error log).
+async function runTask(client, item, timeoutMs, assist = false, io = {}) {
+  const nap = io.sleep ?? sleep;
+  const ask = io.ask ?? waitForEnter;
+  const log = io.log ?? ((message) => console.error(message));
   const started = Date.now();
   let humanWaitMs = 0;
   let assists = 0;
@@ -54,15 +61,17 @@ async function runTask(client, item, timeoutMs, assist = false) {
   const taskId = created.taskId;
   let snapshot = created.snapshot ?? {};
   while (Date.now() - started - humanWaitMs < timeoutMs) {
-    await sleep(3000);
+    await nap(3000);
     ({ snapshot } = await client.getTaskDetail(taskId));
     if (!snapshot) continue;
     if (assist && needsHumanInput(snapshot)) {
+      if (assists >= ASSIST_LIMIT) break;
       const asked = Date.now();
-      await waitForEnter(`\n[${item.task_id.slice(0, 8)}] Halo needs you to type this yourself. Do it in the page, then press Enter: `);
+      await ask(`\n[${item.task_id.slice(0, 8)}] Halo needs you to type this yourself. Do it in the page, then press Enter: `);
       humanWaitMs += Date.now() - asked;
-      assists += 1;
-      await client.resumeSavedTask(taskId).catch(() => {});
+      assists += 1; // counted before the resume, so a resume that keeps failing still reaches the limit
+      try { await client.resumeSavedTask(taskId); }
+      catch (error) { log(`[${item.task_id.slice(0, 8)}] resume after your input failed: ${error?.code || error?.message || "unknown"} (assist ${assists} of ${ASSIST_LIMIT})`); }
       continue;
     }
     if (SETTLED.has(snapshot.state)) break;
@@ -108,4 +117,4 @@ async function main() {
 
 if (require.main === module) main().catch((error) => { console.error(error); process.exit(1); });
 
-module.exports = { needsHumanInput };
+module.exports = { needsHumanInput, runTask, ASSIST_LIMIT };
