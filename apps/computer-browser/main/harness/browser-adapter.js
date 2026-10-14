@@ -1263,12 +1263,15 @@ class BrowserAdapter {
   }
 
   // Finds the first visible passage containing the text (case-insensitive, whitespace folded) and
-  // scrolls it to the middle of the view. The text reaches the page only as one JSON string literal.
+  // scrolls it to the middle of the view. It runs only in the host's isolated world: in the page's own
+  // world a page script could read the words (they can come from the person's request) or fake the
+  // result. Without an isolated world it finds nothing rather than fall back.
   async _findText(text) {
     if (typeof text !== "string" || text.trim().length === 0 || text.length > MAX_FIND_TEXT) {
       return { status: "failed", errorCode: "invalid_find_text" };
     }
     const wc = this._view.webContents;
+    if (typeof wc.executeJavaScriptInIsolatedWorld !== "function") return { status: "failed", errorCode: "find_text_failed" };
     await this._ensureReadyForScriptExecution(wc);
     const script = `(() => { /* __haloFindText */
       const needle = ${JSON.stringify(text)}.replace(/\\s+/g, " ").trim().toLowerCase();
@@ -1290,7 +1293,7 @@ class BrowserAdapter {
     let timer;
     try {
       const found = await Promise.race([
-        wc.executeJavaScript(script, true),
+        wc.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD_ID, [{ code: script }], true),
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("find_text timed out")), this._scrollTimeoutMs); }),
       ]);
       if (!found || found.found !== true) return { status: "failed", errorCode: "text_not_found" };

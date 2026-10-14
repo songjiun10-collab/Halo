@@ -30,6 +30,8 @@ const MAX_TIMELINE = 200;
 // Chrome's zoom steps.
 const ZOOM_LEVELS = Object.freeze([0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5]);
 const MAX_FIND_QUERY = 200;
+// The isolated world find-in-page runs in (any id but 0, the page's own world).
+const FIND_WORLD_ID = 1002;
 const MAX_QUEUE = 50;
 const MAX_METRICS = 500;
 // Pacing floor between agent-initiated (gated) actions ONLY -- never applied
@@ -223,25 +225,28 @@ class ControlApi {
   }
 
   // Finds plain text on the active page (case-insensitive, wraps around), selecting and scrolling to the match.
-  // The text is one JSON string in the page script, so it can never end the string or run as code.
+  // It runs in an isolated world, so the page's own scripts never see what the person searched for and
+  // cannot fake the result; the text is one JSON string there, so it can never end the string or run as code.
   async findInPage(query, { backwards = false } = {}) {
     if (typeof query !== "string" || query.trim().length === 0 || query.length > MAX_FIND_QUERY) throw new RangeError("find text must be 1 to 200 characters");
     const wc = this._view && this._view.webContents;
-    if (!wc) return { found: false, count: 0 };
+    if (!wc || typeof wc.executeJavaScriptInIsolatedWorld !== "function") return { found: false, count: 0 };
     const text = JSON.stringify(query);
     const script = `(() => { const q = ${text}; const found = window.find(q, false, ${backwards === true}, true, false, false, false);
       let count = 0; const needle = q.toLowerCase(); const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode(); node && count < 999; node = walker.nextNode()) { const value = (node.nodeValue || "").toLowerCase(); for (let at = value.indexOf(needle); at !== -1; at = value.indexOf(needle, at + needle.length)) count += 1; }
       return { found: !!found, count }; })()`;
     try {
-      const result = await wc.executeJavaScript(script, true);
+      const result = await wc.executeJavaScriptInIsolatedWorld(FIND_WORLD_ID, [{ code: script }], true);
       return { found: result?.found === true, count: Number.isInteger(result?.count) ? result.count : 0 };
     } catch { return { found: false, count: 0 }; }
   }
 
   async clearFind() {
     const wc = this._view && this._view.webContents;
-    if (wc) await Promise.resolve(wc.executeJavaScript?.("getSelection().removeAllRanges()", true)).catch(() => {});
+    if (wc && typeof wc.executeJavaScriptInIsolatedWorld === "function") {
+      await Promise.resolve(wc.executeJavaScriptInIsolatedWorld(FIND_WORLD_ID, [{ code: "getSelection().removeAllRanges()" }], true)).catch(() => {});
+    }
     return true;
   }
 

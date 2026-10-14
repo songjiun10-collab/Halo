@@ -1284,12 +1284,14 @@ test("a page that finishes loading gets the tab's zoom again", async () => {
   assert.ok(scripts.some((code) => code.includes("1.1")), "zoom is reapplied after a navigation");
 });
 
-test("findInPage searches the active page for plain text, steps forward and backward, and clears", async () => {
+test("findInPage searches the active page for plain text in an isolated world, steps forward and backward, and clears", async () => {
   const api = pageApi();
   await api.navigate("https://one.example");
   const wc = fakeViews.at(-1).webContents;
   const scripts = [];
-  wc.executeJavaScript = (code) => { scripts.push(code); return Promise.resolve({ found: true, count: 3 }); };
+  const mainWorld = [];
+  wc.executeJavaScript = (code) => { mainWorld.push(code); return Promise.resolve(null); };
+  wc.executeJavaScriptInIsolatedWorld = (worldId, list) => { assert.notEqual(worldId, 0, "never the page's own world"); scripts.push(list[0].code); return Promise.resolve({ found: true, count: 3 }); };
   assert.deepEqual(await api.findInPage("Add to cart"), { found: true, count: 3 });
   assert.ok(scripts[0].includes(JSON.stringify("Add to cart")), "the text is one JSON string in the script");
   await api.findInPage("Add to cart", { backwards: true });
@@ -1300,6 +1302,10 @@ test("findInPage searches the active page for plain text, steps forward and back
   for (const bad of ["", "   ", 5, null, "x".repeat(201)]) await assert.rejects(() => api.findInPage(bad), RangeError, JSON.stringify(bad));
   await api.clearFind();
   assert.ok(scripts.at(-1).includes("removeAllRanges"));
-  wc.executeJavaScript = () => Promise.reject(new Error("page gone"));
+  assert.equal(mainWorld.length, 0, "nothing the person searched for reaches the page's own scripts");
+  wc.executeJavaScriptInIsolatedWorld = () => Promise.reject(new Error("page gone"));
   assert.deepEqual(await api.findInPage("x"), { found: false, count: 0 }, "a page that cannot run scripts finds nothing instead of throwing");
+  delete wc.executeJavaScriptInIsolatedWorld;
+  assert.deepEqual(await api.findInPage("x"), { found: false, count: 0 }, "no isolated world: nothing is searched rather than fall back to the page's world");
+  assert.equal(mainWorld.length, 0);
 });
