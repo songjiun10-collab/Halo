@@ -119,3 +119,18 @@ test("sources and the rejection count come back from the journal, so a restart c
   assert.match(r.controller.getSnapshot().needUserReason, /\[Not verified by Halo: it cites 1 page Halo never opened/);
   assert.deepEqual(r.seen[0].openedSources.map((s) => s.url), [A, B], "the first turn already knows the restored sources");
 });
+
+test("sources and rejections recorded after the first 200 journal events are restored too", async (t) => {
+  const r = await run(t, {
+    script: [say(`New claim (${C}).`)],
+    before: async (store) => {
+      for (let i = 0; i < 260; i += 1) await store.append({ type: "note", payload: { kind: "filler", i } });
+      await store.append({ type: "note", payload: { kind: "research_source", url: A, title: "A report", at: 1 } });
+      await store.append({ type: "note", payload: { kind: "research_source", url: B, title: "An analysis", at: 2 } });
+      await store.append({ type: "note", payload: { kind: "research_answer_rejected", reasons: ["unverified_source"], unopened: 1, sites: 2 } });
+      await store.append({ type: "note", payload: { kind: "research_answer_rejected", reasons: ["unverified_source"], unopened: 1, sites: 2 } });
+    },
+  });
+  assert.equal(r.planned, 1, "the late rejections still count");
+  assert.deepEqual(r.seen[0].openedSources.map((s) => s.url), [A, B], "the late sources are known on the first turn");
+});

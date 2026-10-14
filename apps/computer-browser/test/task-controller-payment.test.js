@@ -9,9 +9,10 @@ const { TaskController } = require("../main/harness/task-controller");
 
 const PAY = { type: "click", elementId: "1" };
 
-async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }), controllerOptions = { paymentsEnabled: true }, formAction = "https://shop.example/pay" }) {
+async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }), controllerOptions = { paymentsEnabled: true }, formAction = "https://shop.example/pay", seed }) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-payment-controller-"));
   const store = await TaskStore.create({ originalRequest: request }, { storageRoot });
+  if (seed) await seed(store);
   const executed = [];
   let planned = 0;
   const browser = {
@@ -169,4 +170,18 @@ test("Full mode skips approval for ordinary actions but a payment click without 
   const ordered = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", controllerOptions: { permissionMode: "full", paymentsEnabled: true } });
   assert.equal(ordered.executed.length, 1);
   assert.ok(kinds(ordered).includes("payment_authorized"));
+});
+
+test("an order already paid long ago in a long journal is not paid again after a restart", async (t) => {
+  const r = await run(t, {
+    request: "shop.example에서 $20 이하로 구매해줘",
+    seed: async (store) => {
+      // The payment note sits past the first 200-event page the store returns by default.
+      for (let i = 0; i < 260; i += 1) await store.append({ type: "note", payload: { kind: "filler", i } });
+      await store.append({ type: "note", payload: { kind: "payment_authorized", mandateId: "earlier", origin: "https://shop.example", currency: "USD", amountMinor: 1250, maxAmountMinor: 2000, control: "Place order" } });
+    },
+  });
+  assert.equal(kinds(r).includes("mandate_granted"), false, "no second mandate for an order that already paid");
+  assert.equal(r.executed.length, 0, "the payment click falls back to the human gate");
+  assert.equal(r.controller.getSnapshot().approvalQueue.length, 1);
 });

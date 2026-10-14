@@ -2521,7 +2521,7 @@ class TaskController {
       await this._pauseWith("need_user");
       return "stop_loop";
     }
-    const paid = (await this._store.getEvents()).some((e) => e.type === "note" && e.payload?.kind === "payment_authorized" && e.goalVersion === version);
+    const paid = (await this._store.getAllEvents()).some((e) => e.type === "note" && e.payload?.kind === "payment_authorized" && e.goalVersion === version);
     if (paid) return "ok";
     const mandate = payments.createMandate({ id: randomUUID(), taskId: this._goal.taskId, origin: verdict.origin, currency: verdict.currency, maxAmountMinor: verdict.maxAmountMinor, now: this._monotonicNow(), wallNow: Date.now() });
     await this._store.append({ type: "note", payload: { kind: "mandate_granted", mandateId: mandate.id, origin: mandate.origin, currency: mandate.currency, maxAmountMinor: mandate.maxAmountMinor, expiresAt: mandate.expiresAt } });
@@ -2553,7 +2553,7 @@ class TaskController {
     if (this._researchLedger) return this._researchLedger;
     const ledger = new research.SourceLedger();
     let rejections = 0;
-    for (const event of await this._store.getEvents()) {
+    for (const event of await this._store.getAllEvents()) {
       if (event.type !== "note") continue;
       if (event.payload?.kind === "research_source" && typeof event.payload.url === "string") ledger.add({ url: event.payload.url, title: event.payload.title, at: event.payload.at });
       else if (event.payload?.kind === "research_answer_rejected") rejections += 1;

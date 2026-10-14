@@ -15,18 +15,10 @@ class MessageMailboxError extends Error {
         this.code = code;
     }
 }
-// Journal pages are bounded by TaskStore. Scan all pages rather than relying
-// on its recent-events window: an idempotency key lives as long as the journal.
-async function readJournal(store) {
-    const events = [];
-    let since = 0;
-    for (;;) {
-        const page = await store.getEvents({ since });
-        if (page.length === 0)
-            return events;
-        events.push(...page);
-        since = page[page.length - 1].seq;
-    }
+// Journal pages are bounded by TaskStore; getAllEvents pages through them all. An idempotency key
+// lives as long as the journal, so this never relies on the store's recent-events window.
+function readJournal(store) {
+    return store.getAllEvents();
 }
 function canonical(value) {
     if (Array.isArray(value))

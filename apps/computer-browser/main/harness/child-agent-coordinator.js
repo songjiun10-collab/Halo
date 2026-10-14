@@ -47,17 +47,6 @@ class ChildAgentCoordinatorError extends Error {
   }
 }
 
-async function readAllEvents(store) {
-  const events = [];
-  let since = 0;
-  for (;;) {
-    const page = await store.getEvents({ since });
-    if (page.length === 0) return events;
-    events.push(...page);
-    since = page[page.length - 1].seq;
-  }
-}
-
 // Task 4: a child has exactly ONE hidden WebContentsView (no separate
 // visible surface, unlike a top-level task) plus its own planner worker
 // subtree. No real measurement exists yet for this shape -- Task 7's
@@ -1287,7 +1276,7 @@ class ChildAgentCoordinator {
     if (!parentStore) {
       throw new ChildAgentCoordinatorError("task_unavailable", `task store unavailable for ${parentTaskId}`);
     }
-    const events = await readAllEvents(parentStore);
+    const events = await parentStore.getAllEvents();
     const nowMs = typeof this._now === "function" ? this._now() : Date.now();
     const windowStart = nowMs - contracts.STEER_RATE_WINDOW_MS;
     const recentSteers = events.filter(
