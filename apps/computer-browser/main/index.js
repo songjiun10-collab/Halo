@@ -3,6 +3,9 @@
 const desktopRuntime = require("./desktop-runtime");
 const { app, BrowserWindow, WebContentsView, dialog, nativeTheme } = desktopRuntime;
 
+// A stray rejection or exception is logged instead of ending the host and every task in it (see process-guard.js).
+require("./process-guard").installProcessGuard();
+
 // Opt-in: folds the GPU process into the browser process, about 60 MB less with a few
 // surfaces open. Off by default because a GPU crash then takes the whole app down.
 if (process.env.HALO_IN_PROCESS_GPU === "1") app.commandLine.appendSwitch("in-process-gpu");

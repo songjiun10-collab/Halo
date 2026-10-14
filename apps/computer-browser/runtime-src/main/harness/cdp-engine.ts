@@ -17,7 +17,7 @@ const pageModule = require("./cdp-web-contents") as {
 };
 const { CdpSession } = require("./chromium-session") as { CdpSession: new (provider: () => Promise<{ transport: CdpTransportLike; contextId: string }>) => any };
 
-interface CdpTransportLike { send(method: string, params?: Record<string, unknown>): Promise<any>; close(): void }
+interface CdpTransportLike { send(method: string, params?: Record<string, unknown>): Promise<any>; close(): void; onEvent?(handler: (method: string) => void): () => void }
 interface EngineSettings { browserEngine?: string; chromiumPath?: string; chromiumEndpoint?: string; chromiumContextPolicy?: string }
 interface Connection { transport: CdpTransportLike; close(): Promise<void> }
 interface Generation {
@@ -130,7 +130,10 @@ class CdpEngine {
         const browser = await hostModule.acquireCdpBrowser(chromiumEndpoint ? { endpoint: chromiumEndpoint } : { ...(chromiumPath ? { executablePath: chromiumPath } : {}), ...sharingFlags(chromiumContextPolicy) });
         try {
           const transport = await pageModule.connectCdpTransport(browser.wsUrl);
-          return { transport, close: async () => { try { transport.close(); } finally { await browser.close(); } } };
+          const connection = { transport, close: async () => { try { transport.close(); } finally { await browser.close(); } } };
+          // Chromium was killed or crashed: forget this browser so the next page starts a fresh one.
+          transport.onEvent?.((method) => { if (method === "Halo.transportClosed") this.browserLost(generation, attempt, connection); });
+          return connection;
         } catch (error) {
           // Preserve the attach error even if cleanup itself fails.
           await browser.close().catch(() => undefined);
@@ -142,6 +145,17 @@ class CdpEngine {
       generation.connection = attempt;
     }
     return generation.connection;
+  }
+
+  // The browser behind a generation is gone. Without this every later page would reuse the dead
+  // connection (and the dead browser's context ids) until the app restarted. Pages already open on it
+  // are dead too; they report that themselves.
+  private browserLost(generation: Generation, attempt: Promise<Connection>, connection: Connection): void {
+    void connection.close().catch(() => undefined);
+    if (generation.closed || generation.connection !== attempt) return;
+    generation.connection = null;
+    generation.contexts.clear();
+    generation.persistent.clear();
   }
 
   // Returns a WebContentsView-shaped page, or null when the Electron engine is selected.

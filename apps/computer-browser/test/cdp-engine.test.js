@@ -134,3 +134,58 @@ test("a real Chromium page survives policy changes and its session stays on the 
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(await next.webContents.executeJavaScript("document.title"), "Survivor", "reclaiming the retired browser must not affect the new one");
 });
+
+test("when the shared Chromium dies, the next page starts a fresh one instead of reusing the dead connection", async () => {
+  const hostModule = require("../main/harness/cdp-browser-host");
+  const pageModule = require("../main/harness/cdp-web-contents");
+  const original = { acquire: hostModule.acquireCdpBrowser, connect: pageModule.connectCdpTransport, view: pageModule.createCdpView };
+  const launches = [];
+  hostModule.acquireCdpBrowser = async () => {
+    const launch = { wsUrl: `ws://browser-${launches.length + 1}`, closed: 0, close: async () => { launch.closed += 1; } };
+    launches.push(launch);
+    return launch;
+  };
+  pageModule.connectCdpTransport = async (url) => {
+    const handlers = new Set();
+    const sent = [];
+    return {
+      url, sent,
+      send: async (method) => { sent.push(method); return method === "Target.createBrowserContext" ? { browserContextId: `ctx-of-${url}` } : {}; },
+      onEvent: (handler) => { handlers.add(handler); return () => handlers.delete(handler); },
+      emit: (method) => { for (const handler of [...handlers]) handler(method, {}); },
+      close() {},
+    };
+  };
+  const pages = [];
+  pageModule.createCdpView = (provider, options) => {
+    const page = { provider, options, webContents: { once() {}, isDestroyed: () => false } };
+    pages.push(page);
+    return page;
+  };
+  const engine = new CdpEngine();
+  try {
+    engine.configure({ browserEngine: "chromium", chromiumPath: "/usr/bin/chromium" });
+    const first = engine.createPage("halo-task-a");
+    const firstTransport = await first.provider();
+    assert.equal(await first.options.sharedContext(firstTransport), "ctx-of-ws://browser-1");
+    assert.equal(launches.length, 1);
+
+    // Chromium is killed: the socket closes.
+    firstTransport.emit("Halo.transportClosed");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(launches[0].closed, 1, "the dead browser's handle is released");
+
+    const second = engine.createPage("halo-task-b");
+    const secondTransport = await second.provider();
+    assert.equal(launches.length, 2, "(the bug) a new page reused the dead connection forever");
+    assert.notEqual(secondTransport, firstTransport);
+    assert.equal(await second.options.sharedContext(secondTransport), "ctx-of-ws://browser-2");
+    // The same partition gets a new context on the new browser, not the dead one's id.
+    const again = engine.createPage("halo-task-a");
+    assert.equal(await again.options.sharedContext(await again.provider()), "ctx-of-ws://browser-2");
+  } finally {
+    await engine.release().catch(() => undefined);
+    Object.assign(hostModule, { acquireCdpBrowser: original.acquire });
+    Object.assign(pageModule, { connectCdpTransport: original.connect, createCdpView: original.view });
+  }
+});

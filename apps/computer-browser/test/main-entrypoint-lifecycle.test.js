@@ -81,6 +81,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
     "./control-api": { ControlApi: class { onChange() { return () => {}; } } },
     "./ipc": (...args) => calls.ipc.push(args),
     "./page-theme": { applyPageTheme: (options) => { calls.pageTheme = options; } },
+    "./process-guard": { installProcessGuard: () => { calls.processGuard = (calls.processGuard || 0) + 1; } },
     "../shared/layout-constants": { HEADER_HEIGHT: 1, FOOTER_HEIGHT: 1, SIDE_PANEL_WIDTH: 1, MOBILE_BREAKPOINT: 1 },
     "./approver-client": { requestDecision() {} },
     "./harness/task-host": { TaskHost: FakeTaskHost },
@@ -446,5 +447,13 @@ test("the entrypoint applies the page theme before the app is ready", async (t) 
   const { calls } = loadEntrypoint({ serviceMode: false, userData });
   assert.ok(calls.pageTheme, "applied synchronously at load, not after whenReady");
   assert.ok(calls.pageTheme.nativeTheme && calls.pageTheme.app);
+  await flushStartup();
+});
+
+test("the entrypoint installs the process guard at load, so a stray rejection cannot end the host", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-guard-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { calls } = loadEntrypoint({ serviceMode: false, userData });
+  assert.equal(calls.processGuard, 1);
   await flushStartup();
 });
