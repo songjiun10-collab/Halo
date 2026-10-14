@@ -238,3 +238,55 @@ test("a CDP page pushes live JPEG frames while it paints, and stops on request",
   await assert.rejects(view.webContents.startScreencast({ maxWidth: 0, quality: 60 }, () => {}), /invalid_capture_options/);
   await adapter.dispose();
 });
+
+test("a JavaScript dialog cannot freeze the page: alert and beforeunload are accepted, confirm and prompt are cancelled, and the planner is told", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "text/html");
+    if (request.url === "/leave") response.end("<title>left</title>LEFT-OK");
+    else response.end('<title>dlg</title><h1>Dialog page</h1><script>window.addEventListener("beforeunload", (e) => { e.preventDefault(); e.returnValue = "stay?"; })</script>');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "halo-cdp-dialog-"));
+  // Chromium refuses to start as root without --no-sandbox (a CI container or sandbox); a normal user needs neither.
+  const chrome = spawn(CHROMIUM, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []), "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+  let view;
+  t.after(async () => {
+    try { view?.closeConnection(); } catch { /* ignore */ }
+    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  });
+  const wsUrl = await new Promise((resolve, reject) => {
+    let buffer = "";
+    const timer = setTimeout(() => reject(new Error("Chromium did not report a DevTools endpoint")), 30000);
+    chrome.stderr.on("data", (chunk) => {
+      buffer += chunk;
+      const match = /DevTools listening on (ws:\/\/\S+)/.exec(buffer);
+      if (match) { clearTimeout(timer); resolve(match[1]); }
+    });
+    chrome.on("exit", () => reject(new Error("Chromium exited early")));
+  });
+  view = await openCdpView(wsUrl, { width: 900, height: 600 });
+  const adapter = new BrowserAdapter({ view });
+  const wc = view.webContents;
+  const within = (ms, work) => Promise.race([work, new Promise((_, reject) => setTimeout(() => reject(new Error(`hung more than ${ms} ms`)), ms))]);
+
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/` })).status, "ok");
+  // Each of these used to leave the evaluation, and every later command, waiting forever.
+  assert.equal(await within(5000, wc.executeJavaScript(`alert("hello"); "after-alert"`)), "after-alert");
+  assert.equal(await within(5000, wc.executeJavaScript(`confirm("Delete everything?")`)), false, "a confirm is cancelled, never agreed to for the person");
+  assert.equal(await within(5000, wc.executeJavaScript(`prompt("Your password?", "x")`)), null, "a prompt is cancelled, nothing is typed into it");
+  assert.equal(await within(5000, wc.executeJavaScript("1 + 1")), 2, "the page still answers");
+
+  const observation = await within(5000, adapter.observe());
+  assert.deepEqual(observation.dialogs.map((d) => [d.type, d.outcome]), [["alert", "accepted"], ["confirm", "dismissed"], ["prompt", "dismissed"]]);
+  assert.equal(observation.dialogs[1].message, "Delete everything?");
+  assert.equal((await within(5000, adapter.observe())).dialogs, undefined, "a dialog is reported once");
+
+  // Leaving a page that asks "stay?" is what the navigation meant; it must not block.
+  await wc.executeJavaScript("document.body.click()", true);
+  assert.equal((await within(10000, adapter.execute({ type: "navigate", url: `${base}/leave` }))).status, "ok");
+  assert.match((await within(5000, adapter.observe())).text, /LEFT-OK/);
+  await adapter.dispose();
+});

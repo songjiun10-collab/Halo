@@ -25,6 +25,8 @@ interface CdpPageOptions { url?: string; width?: number; height?: number; comman
 const { isBlockedUrl } = require("./agent-request-filter") as { isBlockedUrl: (url: string) => boolean };
 const DENIED_PERMISSIONS = ["geolocation", "notifications", "camera", "microphone", "midi", "clipboard-read", "clipboard-write", "screen-wake-lock", "persistent-storage", "background-sync", "idle-detection", "window-management", "local-fonts", "display-capture"];
 interface HistoryEntry { id: number; url: string }
+const MAX_DIALOG_MESSAGE = 200;
+const MAX_DIALOG_NOTICES = 5;
 
 const DEFAULT_WIDTH = 1280;
 const DEFAULT_HEIGHT = 800;
@@ -154,6 +156,7 @@ class CdpWebContents {
   private history: HistoryEntry[] = [];
   private historyIndex = -1;
   private readonly worlds = new Map<number, number>();
+  private readonly dialogNotices: Array<{ type: string; message: string; outcome: string }> = [];
   private destroyed = false;
   private sessionId = "";
   private screencast: ((jpegBase64: string) => void) | null = null;
@@ -230,6 +233,22 @@ class CdpWebContents {
     await browser.send("Browser.setDownloadBehavior", { behavior: "deny", ...scope }).catch(() => undefined);
     await Promise.all(DENIED_PERMISSIONS.map((name) => browser.send("Browser.setPermission", { permission: { name }, setting: "denied", ...scope }).catch(() => undefined)));
     await this.rawCmd("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+  }
+  // A page that opens alert/confirm/prompt/beforeunload stops answering until someone responds, so the
+  // host always responds. alert and beforeunload are accepted (nothing is being agreed to). confirm and
+  // prompt are cancelled: an agent must never say "yes" or type an answer to a page for the person.
+  // Each one is kept as a short notice the planner reads in its next observation.
+  private onJavaScriptDialog(params: Json): void {
+    const type = String(params.type ?? "alert");
+    const accept = type === "alert" || type === "beforeunload";
+    this.dialogNotices.push({ type, message: String(params.message ?? "").slice(0, MAX_DIALOG_MESSAGE), outcome: accept ? "accepted" : "dismissed" });
+    if (this.dialogNotices.length > MAX_DIALOG_NOTICES) this.dialogNotices.shift();
+    this.rawCmd("Page.handleJavaScriptDialog", { accept }).catch(() => undefined);
+    this.emit("javascript-dialog", { type, accepted: accept });
+  }
+  /** Dialogs the host answered since the last call; reading them clears them. */
+  takeDialogNotices(): Array<{ type: string; message: string; outcome: string }> {
+    return this.dialogNotices.splice(0);
   }
   private onRequestPaused(params: Json): void {
     const url = String(params.request?.url ?? "");
@@ -308,6 +327,9 @@ class CdpWebContents {
         break;
       case "Page.frameStartedLoading":
         if (params.frameId === this.mainFrameId) this.emit("did-start-navigation", {}, this.url, false, true);
+        break;
+      case "Page.javascriptDialogOpening":
+        this.onJavaScriptDialog(params);
         break;
       case "Page.domContentEventFired":
         this.emit("dom-ready");

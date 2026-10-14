@@ -651,12 +651,15 @@ class BrowserAdapter {
     }
     if (observationEpoch !== this._documentEpoch) throw new BrowserAdapterError("stale_document", "page navigated during observation");
     if (binding) this._interactionBinding = { ...binding, epoch: observationEpoch, url: raw.url, elements: raw.elements };
+    // Page dialogs the host answered since the last look (alert/confirm/prompt/beforeunload), so the planner knows.
+    const dialogs = typeof wc.takeDialogNotices === "function" ? wc.takeDialogNotices() : [];
     const observation = {
       id: this._randomId(),
       documentEpoch: this._documentEpoch,
       url: raw.url,
       title: raw.title,
       text: raw.text,
+      ...(dialogs.length > 0 ? { dialogs } : {}),
       // Only error responses are surfaced, so ordinary observations stay unchanged.
       ...(this._lastHttpStatus >= 400 ? { httpStatus: this._lastHttpStatus } : {}),
       elements: raw.elements.map((el, index) => {
