@@ -6,6 +6,8 @@
 // Chromium they brought themselves (cdp-browser-host.ts), one isolated
 // browser context per Agent partition, all over one shared connection.
 const hostModule = require("./cdp-browser-host");
+// The partition of the person's own browsing tabs (chromium-desktop.ts uses it when a view names none).
+const PERSON_PARTITION = "halo-direct";
 const pageModule = require("./cdp-web-contents");
 const { CdpSession } = require("./chromium-session");
 const SAVE_INTERVAL_MS = 30000;
@@ -149,6 +151,9 @@ class CdpEngine {
         try {
             const view = pageModule.createCdpView(provider, {
                 isolated: true,
+                // A dialog on the person's own tab is the person's to answer; every agent page answers its own at
+                // once, so a dialog can never freeze a task (cdp-web-contents.ts onJavaScriptDialog).
+                dialogs: partition === PERSON_PARTITION ? "ask" : "answer",
                 session: this.sessionForGeneration(partition, generation),
                 sharedContext: (transport) => this.contextFor(generation, key, transport),
             });
@@ -235,4 +240,4 @@ class CdpEngine {
         }
     }
 }
-module.exports = { CdpEngine };
+module.exports = { CdpEngine, PERSON_PARTITION };

@@ -941,3 +941,15 @@ section.hx-chat .hx-chat__thread { flex: 1 1 auto; min-height: 120px; overflow-y
 .hx-find__input:focus { border-color: rgba(255, 255, 255, 0.18); }
 .hx-find__input::placeholder { color: var(--muted-foreground); }
 .hx-find__count { min-width: 72px; color: var(--muted-foreground); font: 400 12px/1 var(--font-mono); text-align: right; }
+
+/* A page dialog on the person's tab: its own row in the chrome, like find (the page is a native view below). */
+.hx-pagedialog {
+  display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap;
+  padding: 8px var(--space-md); background: var(--halo-glass-chrome); border-bottom: 1px solid var(--halo-glass-border);
+}
+.hx-pagedialog__text { flex: 1; min-width: 0; margin: 0; color: var(--foreground); font-size: 13px; line-height: 1.4; }
+.hx-pagedialog__site { font-weight: 600; }
+.hx-pagedialog__says { color: var(--muted-foreground); }
+.hx-pagedialog__message { display: block; max-height: 4.2em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hx-pagedialog__input { width: 240px; height: 28px; padding: 0 var(--space-sm); border-radius: var(--radius-sm); background: transparent; border: 1px solid var(--halo-glass-border); color: var(--foreground); font: 400 13px/1 var(--font-mono); }
+.hx-pagedialog__actions { display: flex; gap: var(--space-xs); }

@@ -342,3 +342,43 @@ test("an open modal dialog is what the planner sees: the inert page behind it is
   assert.ok(names(after).includes("Open chat") || names(after).includes("Product 0"), "a non-modal role=dialog (a chat widget) never hides the page");
   await adapter.dispose();
 });
+
+test("on the person's own tab a dialog waits for the person: it is reported, answered once, and the page carries on", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
+  const server = http.createServer((request, response) => { response.setHeader("content-type", "text/html"); response.end("<title>ask</title><p>page</p>"); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "halo-cdp-ask-"));
+  const chrome = spawn(CHROMIUM, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []), "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+  let view;
+  t.after(async () => {
+    try { view?.closeConnection(); } catch { /* ignore */ }
+    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  });
+  const wsUrl = await new Promise((resolve, reject) => {
+    let buffer = "";
+    const timer = setTimeout(() => reject(new Error("Chromium did not report a DevTools endpoint")), 30000);
+    chrome.stderr.on("data", (chunk) => { buffer += chunk; const match = /DevTools listening on (ws:\/\/\S+)/.exec(buffer); if (match) { clearTimeout(timer); resolve(match[1]); } });
+    chrome.on("exit", () => reject(new Error("Chromium exited early")));
+  });
+  view = await openCdpView(wsUrl, { width: 900, height: 600, dialogs: "ask" });
+  const wc = view.webContents;
+  const opened = [];
+  wc.on("javascript-dialog-opening", (info) => opened.push(info));
+  await wc.loadURL(`${base}/`);
+
+  const answer = wc.executeJavaScript(`confirm("Delete this draft?")`);
+  for (let i = 0; i < 100 && opened.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(opened.map((d) => [d.type, d.message]), [["confirm", "Delete this draft?"]], "the person is asked");
+  assert.deepEqual(wc.takeDialogNotices(), [], "nothing was answered for the person");
+  assert.equal(await wc.answerDialog(true), true);
+  assert.equal(await answer, true, "the person's OK reaches the page");
+  assert.equal(await wc.answerDialog(true), false, "a dialog is answered only once");
+
+  const typed = wc.executeJavaScript(`prompt("Name for the list?", "x")`);
+  for (let i = 0; i < 100 && opened.length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(opened[1].defaultPrompt, "x");
+  await wc.answerDialog(true, "Groceries");
+  assert.equal(await typed, "Groceries");
+});

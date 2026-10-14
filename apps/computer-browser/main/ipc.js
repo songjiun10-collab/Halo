@@ -12,7 +12,7 @@ const registries = new WeakMap();
 // whatever ControlApi's own method signature validates.
 const LEGACY_METHODS = [
   "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask", "takeOverTask",
-  "goBack", "goForward", "reload", "stopLoading", "zoom", "findInPage", "clearFind", "newTab", "selectTab", "closeTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
+  "goBack", "goForward", "reload", "stopLoading", "zoom", "findInPage", "clearFind", "answerDialog", "newTab", "selectTab", "closeTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
 ];
 
 // New long-horizon harness channels (design doc section 8), each mapped to

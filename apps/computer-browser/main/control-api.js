@@ -30,6 +30,9 @@ const MAX_TIMELINE = 200;
 // Chrome's zoom steps.
 const ZOOM_LEVELS = Object.freeze([0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5]);
 const MAX_FIND_QUERY = 200;
+const DIALOG_TYPES = new Set(["alert", "confirm", "prompt", "beforeunload"]);
+const MAX_DIALOG_TEXT = 500;
+const MAX_PROMPT_ANSWER = 2000;
 // The isolated world find-in-page runs in (any id but 0, the page's own world).
 const FIND_WORLD_ID = 1002;
 const MAX_QUEUE = 50;
@@ -175,7 +178,7 @@ class ControlApi {
 
   getSnapshot() {
     return {
-      page: { ...this._page, zoom: this._activeTab()?.zoom ?? 1 },
+      page: { ...this._page, zoom: this._activeTab()?.zoom ?? 1, dialog: this._activeTab()?.dialog ?? null },
       tabs: this._tabs.map(({ id, title, url, view }) => ({ id, title, url, discarded: !view })),
       activeTabId: this._activeTabId,
       task: { ...this._task },
@@ -240,6 +243,21 @@ class ControlApi {
       const result = await wc.executeJavaScriptInIsolatedWorld(FIND_WORLD_ID, [{ code: script }], true);
       return { found: result?.found === true, count: Number.isInteger(result?.count) ? result.count : 0 };
     } catch { return { found: false, count: 0 }; }
+  }
+
+  // The person's answer to the dialog waiting on the tab in front: OK/Leave (true) or Cancel/Stay (false), and
+  // for a prompt the text to give the page. A dialog is answered once.
+  async answerDialog(accept, promptText) {
+    if (typeof accept !== "boolean") throw new TypeError("accept must be true or false");
+    if (promptText !== undefined && (typeof promptText !== "string" || promptText.length > MAX_PROMPT_ANSWER)) {
+      throw new RangeError(`the answer must be text of at most ${MAX_PROMPT_ANSWER} characters`);
+    }
+    const tab = this._activeTab();
+    if (!tab?.dialog || !tab.view) throw new Error("there is no dialog waiting on this tab");
+    tab.dialog = null;
+    await tab.view.webContents.answerDialog?.(accept, promptText);
+    this._emit();
+    return this.getSnapshot();
   }
 
   async clearFind() {
@@ -320,6 +338,25 @@ class ControlApi {
     wc.on("did-navigate", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url, loadState: "ready" }); });
     wc.on("did-navigate-in-page", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url }); });
     wc.on("did-finish-load", () => { this._onPageVisit?.(wc); if (tab.zoom && tab.zoom !== 1) this._applyZoom(tab); });
+    // A page dialog (alert/confirm/prompt/leave-page) waits for the person (Chromium runtime; Electron shows its
+    // own). The site shown with it is the host's reading of the tab's address, never the page's words.
+    wc.on("javascript-dialog-opening", (info) => {
+      const type = DIALOG_TYPES.has(info?.type) ? info.type : "alert";
+      let origin = "";
+      try { origin = new URL(tab.url).origin; } catch { origin = ""; }
+      tab.dialog = {
+        type,
+        message: typeof info?.message === "string" ? info.message.slice(0, MAX_DIALOG_TEXT) : "",
+        defaultPrompt: typeof info?.defaultPrompt === "string" ? info.defaultPrompt.slice(0, MAX_DIALOG_TEXT) : "",
+        origin,
+      };
+      if (this._view === view) this._emit();
+    });
+    wc.on("javascript-dialog-closed", () => {
+      if (!tab.dialog) return;
+      tab.dialog = null;
+      if (this._view === view) this._emit();
+    });
     wc.on("page-title-updated", (_e, title) => { tab.title = title; if (this._view === view) this._syncPageState({ title }); });
     wc.on("did-fail-load", (_e, code, description) => {
       if (this._view !== view) return;

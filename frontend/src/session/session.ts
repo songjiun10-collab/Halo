@@ -124,6 +124,7 @@ export class SessionStore {
       canGoForward: tab.id === snapshot.activeTabId && snapshot.page.canGoForward,
       loading: tab.id === snapshot.activeTabId && snapshot.page.loadState === 'loading',
       zoom: tab.id === snapshot.activeTabId ? snapshot.page.zoom ?? 1 : 1,
+      dialog: tab.id === snapshot.activeTabId ? snapshot.page.dialog ?? null : null,
     }))
     this.update({ directBrowser: visible, tabs, activeTabId: snapshot.activeTabId || tabs[0]?.id || '' })
   }
@@ -370,6 +371,15 @@ export class SessionStore {
     try { return await this.api.findInPage(query.slice(0, 200), { backwards }) } catch { return { found: false, count: 0 } }
   }
   clearFind = async () => { try { await this.api?.clearFind?.() } catch { /* nothing to clear */ } }
+  /** The person's answer to a page dialog. Not gated on the busy flag: the dialog is what a navigation may be waiting on. */
+  answerDialog = async (accept: boolean, text?: string) => {
+    if (!this.api?.answerDialog || this.state.activeTaskId) return false
+    try {
+      const snapshot = await this.api.answerDialog(accept, text)
+      if (!this.state.activeTaskId) this.applyDirectSnapshot(snapshot, !!snapshot.page?.hasPage)
+      return true
+    } catch (error) { this.failure(error); return false }
+  }
 
   /** From a task view the tab strip's + leaves the task (it keeps running) rather than silently doing nothing. */
   newBrowserTab = () => {

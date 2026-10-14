@@ -9,6 +9,8 @@
 const hostModule = require("./cdp-browser-host") as {
   acquireCdpBrowser(options: { endpoint?: string; executablePath?: string; extraFlags?: readonly string[] }): Promise<{ wsUrl: string; close(): Promise<void> }>;
 };
+// The partition of the person's own browsing tabs (chromium-desktop.ts uses it when a view names none).
+const PERSON_PARTITION = "halo-direct";
 const pageModule = require("./cdp-web-contents") as {
   connectCdpTransport(url: string): Promise<CdpTransportLike>;
   createCdpView(provider: () => Promise<CdpTransportLike>, options: Record<string, unknown>): unknown;
@@ -163,6 +165,9 @@ class CdpEngine {
     try {
       const view = pageModule.createCdpView(provider, {
         isolated: true,
+        // A dialog on the person's own tab is the person's to answer; every agent page answers its own at
+        // once, so a dialog can never freeze a task (cdp-web-contents.ts onJavaScriptDialog).
+        dialogs: partition === PERSON_PARTITION ? "ask" : "answer",
         session: this.sessionForGeneration(partition, generation),
         sharedContext: (transport: CdpTransportLike) => this.contextFor(generation, key, transport),
       }) as { webContents: { once(name: string, listener: () => void): unknown; isDestroyed?(): boolean } };
@@ -235,4 +240,4 @@ class CdpEngine {
   }
 }
 
-export = { CdpEngine };
+export = { CdpEngine, PERSON_PARTITION };

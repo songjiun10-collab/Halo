@@ -5,6 +5,7 @@ import { HaloButton } from './components/HaloButton'
 import { HaloChat } from './components/HaloChat'
 import { HaloSheet } from './components/HaloSheet'
 import { FindBar } from './components/FindBar'
+import { PageDialog } from './components/PageDialog'
 import { Notice } from './components/Notice'
 import { SettingsPanel } from './components/SettingsPanel'
 import { ShortcutsHelp } from './components/ShortcutsHelp'
@@ -448,6 +449,13 @@ export default function App() {
             }
               halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
             />
+          {tab.dialog && !s.activeTaskId && (
+            <PageDialog
+              key={`${tab.id}:${tab.dialog.type}:${tab.dialog.message}`}
+              dialog={tab.dialog}
+              onAnswer={(accept, text) => void store.answerDialog(accept, text)}
+            />
+          )}
           {findFor === tab.id && !s.activeTaskId && (
             <FindBar
               onFind={(query, backwards) => store.findText(query, backwards)}

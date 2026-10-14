@@ -20,13 +20,15 @@ interface CdpTransport {
   onEvent(handler: (method: string, params: Json, sessionId?: string) => void): () => void;
   close(): void;
 }
-interface CdpPageOptions { url?: string; width?: number; height?: number; commandTimeoutMs?: number; isolated?: boolean; hardened?: boolean; session?: any; sharedContext?: (transport: CdpTransport) => Promise<string> }
+interface CdpPageOptions { dialogs?: "answer" | "ask"; url?: string; width?: number; height?: number; commandTimeoutMs?: number; isolated?: boolean; hardened?: boolean; session?: any; sharedContext?: (transport: CdpTransport) => Promise<string> }
 // Same ad/tracker list the Electron agent session uses, so both engines refuse the same hosts.
 const { isBlockedUrl } = require("./agent-request-filter") as { isBlockedUrl: (url: string) => boolean };
 const DENIED_PERMISSIONS = ["geolocation", "notifications", "camera", "microphone", "midi", "clipboard-read", "clipboard-write", "screen-wake-lock", "persistent-storage", "background-sync", "idle-detection", "window-management", "local-fonts", "display-capture"];
 interface HistoryEntry { id: number; url: string }
 const MAX_DIALOG_MESSAGE = 200;
 const MAX_DIALOG_NOTICES = 5;
+const MAX_PERSON_DIALOG_TEXT = 500;
+const MAX_PROMPT_ANSWER = 2000;
 
 const DEFAULT_WIDTH = 1280;
 const DEFAULT_HEIGHT = 800;
@@ -157,6 +159,7 @@ class CdpWebContents {
   private historyIndex = -1;
   private readonly worlds = new Map<number, number>();
   private readonly dialogNotices: Array<{ type: string; message: string; outcome: string }> = [];
+  private pendingDialog: { type: string; message: string; defaultPrompt: string } | null = null;
   private destroyed = false;
   private sessionId = "";
   private screencast: ((jpegBase64: string) => void) | null = null;
@@ -234,17 +237,39 @@ class CdpWebContents {
     await Promise.all(DENIED_PERMISSIONS.map((name) => browser.send("Browser.setPermission", { permission: { name }, setting: "denied", ...scope }).catch(() => undefined)));
     await this.rawCmd("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
   }
-  // A page that opens alert/confirm/prompt/beforeunload stops answering until someone responds, so the
-  // host always responds. alert and beforeunload are accepted (nothing is being agreed to). confirm and
-  // prompt are cancelled: an agent must never say "yes" or type an answer to a page for the person.
-  // Each one is kept as a short notice the planner reads in its next observation.
+  // A page that opens alert/confirm/prompt/beforeunload stops answering until someone responds.
+  // On an agent's page (dialogs "answer", the default) the host responds at once: alert and beforeunload are
+  // accepted (nothing is being agreed to); confirm and prompt are cancelled, since an agent must never say
+  // "yes" or type an answer to a page for the person. Each one is a short notice the planner reads in its next
+  // observation. On the person's own tab (dialogs "ask") the dialog waits for the person: it is reported with
+  // "javascript-dialog-opening" and answered once through answerDialog().
   private onJavaScriptDialog(params: Json): void {
     const type = String(params.type ?? "alert");
+    if (this.options.dialogs === "ask") {
+      this.pendingDialog = {
+        type,
+        message: String(params.message ?? "").slice(0, MAX_PERSON_DIALOG_TEXT),
+        defaultPrompt: String(params.defaultPrompt ?? "").slice(0, MAX_PERSON_DIALOG_TEXT),
+      };
+      this.emit("javascript-dialog-opening", { ...this.pendingDialog });
+      return;
+    }
     const accept = type === "alert" || type === "beforeunload";
     this.dialogNotices.push({ type, message: String(params.message ?? "").slice(0, MAX_DIALOG_MESSAGE), outcome: accept ? "accepted" : "dismissed" });
     if (this.dialogNotices.length > MAX_DIALOG_NOTICES) this.dialogNotices.shift();
     this.rawCmd("Page.handleJavaScriptDialog", { accept }).catch(() => undefined);
     this.emit("javascript-dialog", { type, accepted: accept });
+  }
+  /** The person's answer to the dialog waiting on this tab; false when none is waiting (it is answered once). */
+  async answerDialog(accept: boolean, promptText?: string): Promise<boolean> {
+    const dialog = this.pendingDialog;
+    if (!dialog) return false;
+    this.pendingDialog = null;
+    const params: Json = { accept: accept === true };
+    if (dialog.type === "prompt" && accept === true && typeof promptText === "string") params.promptText = promptText.slice(0, MAX_PROMPT_ANSWER);
+    await this.rawCmd("Page.handleJavaScriptDialog", params).catch(() => undefined);
+    this.emit("javascript-dialog-closed");
+    return true;
   }
   /** Dialogs the host answered since the last call; reading them clears them. */
   takeDialogNotices(): Array<{ type: string; message: string; outcome: string }> {
@@ -330,6 +355,10 @@ class CdpWebContents {
         break;
       case "Page.javascriptDialogOpening":
         this.onJavaScriptDialog(params);
+        break;
+      case "Page.javascriptDialogClosed":
+        // Closed some other way (the page navigated away): nothing is waiting for the person any more.
+        if (this.pendingDialog) { this.pendingDialog = null; this.emit("javascript-dialog-closed"); }
         break;
       case "Page.domContentEventFired":
         this.emit("dom-ready");

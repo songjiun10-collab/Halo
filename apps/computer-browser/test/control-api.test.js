@@ -1309,3 +1309,40 @@ test("findInPage searches the active page for plain text in an isolated world, s
   assert.deepEqual(await api.findInPage("x"), { found: false, count: 0 }, "no isolated world: nothing is searched rather than fall back to the page's world");
   assert.equal(mainWorld.length, 0);
 });
+
+test("a dialog on the person's tab is shown with its site and answered once by the person", async () => {
+  const api = pageApi();
+  await api.navigate("https://shop.example/cart");
+  const wc = fakeViews.at(-1).webContents;
+  const answers = [];
+  wc.answerDialog = async (accept, text) => { answers.push([accept, text]); return true; };
+  const emitted = [];
+  api.onUpdate?.((s) => emitted.push(s));
+  wc.emit("javascript-dialog-opening", { type: "confirm", message: "Delete this item?", defaultPrompt: "" });
+  const shown = api.getSnapshot().page.dialog;
+  assert.deepEqual(shown, { type: "confirm", message: "Delete this item?", defaultPrompt: "", origin: "https://shop.example" }, "the site that asks is the host's own reading of the tab, not the page's words");
+  await assert.rejects(() => api.answerDialog("yes"), TypeError, "accept must be a boolean");
+  await assert.rejects(() => api.answerDialog(true, "x".repeat(2001)), RangeError);
+  const after = await api.answerDialog(true);
+  assert.deepEqual(answers, [[true, undefined]]);
+  assert.equal(after.page.dialog, null, "answered once, then gone");
+  await assert.rejects(() => api.answerDialog(false), /no dialog/);
+  wc.emit("javascript-dialog-opening", { type: "prompt", message: "List name?", defaultPrompt: "x" });
+  await api.answerDialog(true, "Groceries");
+  assert.deepEqual(answers.at(-1), [true, "Groceries"]);
+  wc.emit("javascript-dialog-opening", { type: "alert", message: "Saved" });
+  wc.emit("javascript-dialog-closed");
+  assert.equal(api.getSnapshot().page.dialog, null, "a dialog that closed some other way (navigation) is cleared");
+});
+
+test("a dialog on a tab in the background belongs to that tab and shows when the person returns to it", async () => {
+  const api = pageApi();
+  await api.navigate("https://one.example");
+  const firstWc = fakeViews.at(-1).webContents;
+  const firstId = api.getSnapshot().activeTabId;
+  await api.newTab();
+  firstWc.emit("javascript-dialog-opening", { type: "alert", message: "Session expired" });
+  assert.equal(api.getSnapshot().page.dialog, null, "the tab in front has no dialog");
+  await api.selectTab(firstId);
+  assert.equal(api.getSnapshot().page.dialog.message, "Session expired");
+});

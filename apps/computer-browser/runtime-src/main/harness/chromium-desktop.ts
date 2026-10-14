@@ -5,7 +5,7 @@ import os = require("node:os");
 import childProcess = require("node:child_process");
 import util = require("node:util");
 
-const { CdpEngine } = require("./cdp-engine");
+const { CdpEngine, PERSON_PARTITION } = require("./cdp-engine");
 const { acquireCdpBrowser, findChromium, isHeadlessShell } = require("./cdp-browser-host");
 const { connectCdpTransport } = require("./cdp-web-contents");
 const { createRendererBridge } = require("./chromium-bridge");
@@ -19,7 +19,7 @@ const handlers = new Map<string, Handler>();
 const windows = new Set<BrowserWindow>();
 const engines = new CdpEngine();
 engines.configure({ browserEngine: "chromium", chromiumPath: process.env.HALO_CHROMIUM });
-const sessions = { fromPartition: (partition = "halo-direct") => engines.sessionFor(partition) };
+const sessions = { fromPartition: (partition = PERSON_PARTITION) => engines.sessionFor(partition) };
 let uiBrowser: Promise<{ transport: any; browser: any }> | null = null;
 let quitting = false;
 const startedAt = Date.now();
@@ -94,7 +94,7 @@ class WebContentsView {
   readonly webContents: any;
   private readonly page: any;
   constructor(options: Json = {}) {
-    this.page = engines.createPage(options.webPreferences?.partition ?? "halo-direct");
+    this.page = engines.createPage(options.webPreferences?.partition ?? PERSON_PARTITION);
     if (!this.page) throw new Error("chromium_page_unavailable");
     this.webContents = this.page.webContents;
   }

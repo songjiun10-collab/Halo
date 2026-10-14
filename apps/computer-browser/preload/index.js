@@ -23,7 +23,7 @@ function readLayoutFromArgv() {
 // ones only meant for main<->main coordination.
 const METHODS = [
   "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask", "takeOverTask",
-  "goBack", "goForward", "reload", "stopLoading", "zoom", "findInPage", "clearFind", "newTab", "selectTab", "closeTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
+  "goBack", "goForward", "reload", "stopLoading", "zoom", "findInPage", "clearFind", "answerDialog", "newTab", "selectTab", "closeTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
 ];
 
 // Long-horizon harness channels (main/harness/task-host.js via main/ipc.js).

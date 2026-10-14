@@ -128,6 +128,28 @@ test('stop works while a navigation is still holding the busy flag, and zoom and
   assert.deepEqual(await store.findText('cart'), { found: false, count: 0 }, 'a task surface is not searched from here')
 })
 
+test('a dialog on the person\'s tab is answered through the host even while a navigation holds the busy flag', async () => {
+  const calls = []
+  const page = (dialog) => ({ page: { url: 'https://shop.example/', title: '', canGoBack: false, canGoForward: false, hasPage: true, dialog }, tabs: [{ id: 'one', url: 'https://shop.example/', title: 'Shop' }], activeTabId: 'one', task: { state: 'idle' }, approvalQueue: [], timeline: [] })
+  let release
+  const slow = new Promise((resolve) => { release = resolve })
+  const { store } = harness({
+    getSnapshot: async () => page({ type: 'confirm', message: 'Delete?', defaultPrompt: '', origin: 'https://shop.example' }),
+    navigate: async () => { await slow; return page(null) },
+    answerDialog: async (accept, text) => { calls.push([accept, text]); return page(null) },
+  })
+  await settle()
+  assert.equal(store.getState().tabs[0].dialog.message, 'Delete?')
+  const pending = store.navigate({ type: 'navigate', url: 'https://shop.example/next' })
+  await settle()
+  assert.equal(await store.answerDialog(false), true)
+  assert.deepEqual(calls, [[false, undefined]])
+  assert.equal(store.getState().tabs[0].dialog, null)
+  release(); await pending
+  await store.selectTask('task')
+  assert.equal(await store.answerDialog(true), false, 'a task surface answers its own dialogs')
+})
+
 test('direct tab controls cannot cross into an active task-owned browser', async () => {
   const calls = []
   const { store } = harness({
