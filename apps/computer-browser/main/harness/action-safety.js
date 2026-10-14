@@ -62,7 +62,7 @@ const SAFETY_DECLARATIONS = Object.freeze({
   }),
   submit_form: Object.freeze({
     privacy: notApplicable("submitting types no text"),
-    payment: applies("a form submit on a payment control must be covered by an order or wait for the person"),
+    payment: applies("a form submit on a payment control, or of a whole form that holds one, must be covered by an order or wait for the person"),
     effect: notApplicable("form submits rely on the approval gate; Full mode skips that gate by definition"),
   }),
   download: Object.freeze(reads("download (unsupported, denied by the permission policy)")),
@@ -88,12 +88,38 @@ function paymentTargetOf(action, ctx) {
     return isPaymentControl(hit) ? hit : null;
   }
   if (action.type === "click" || action.type === "submit_form") {
-    const element = ctx.observation?.elements?.find((el) => el.elementId === action.elementId);
+    const elements = Array.isArray(ctx.observation?.elements) ? ctx.observation.elements : [];
+    const element = elements.find((el) => el.elementId === action.elementId);
     if (!element || typeof element.name !== "string") return null;
-    const target = { role: element.role === "link" ? "link" : "button", name: element.name, covered: false, disabled: !!element.disabled };
-    return isPaymentControl(target) ? target : null;
+    const own = asControl(element);
+    if (isPaymentControl(own)) return own;
+    // Submitting a whole form sends what its own payment button would, whatever the form is called:
+    // look at the buttons inside it and the ones that submit to the same place. A submit through one
+    // particular non-payment button (Apply coupon) stays that button's.
+    if (action.type !== "submit_form" || element.role === "button" || element.role === "link") return null;
+    const byId = new Map(elements.map((el) => [el.elementId, el]));
+    const inside = (candidate) => {
+      let id = candidate.parentElementId;
+      for (let depth = 0; id !== null && id !== undefined && depth < 64; depth += 1) {
+        if (id === element.elementId) return true;
+        id = byId.get(id)?.parentElementId;
+      }
+      return false;
+    };
+    const sameTarget = (candidate) => typeof element.formAction === "string" && element.formAction !== "" && candidate.formAction === element.formAction;
+    for (const candidate of elements) {
+      if (candidate === element || (candidate.role !== "button" && candidate.role !== "link") || typeof candidate.name !== "string") continue;
+      if (!inside(candidate) && !sameTarget(candidate)) continue;
+      const target = asControl(candidate);
+      if (isPaymentControl(target)) return target;
+    }
+    return null;
   }
   return null;
+}
+
+function asControl(element) {
+  return { role: element.role === "link" ? "link" : "button", name: element.name, covered: false, disabled: !!element.disabled };
 }
 
 function effectOf(action, ctx) {

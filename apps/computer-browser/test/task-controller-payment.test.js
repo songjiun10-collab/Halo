@@ -9,7 +9,7 @@ const { TaskController } = require("../main/harness/task-controller");
 
 const PAY = { type: "click", elementId: "1" };
 
-async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }), controllerOptions = { paymentsEnabled: true }, formAction = "https://shop.example/pay", seed }) {
+async function run(t, { request, actions = [PAY], total = "Total $12.50", approver = async () => ({ decision: "allow", reasons: [] }), controllerOptions = { paymentsEnabled: true }, formAction = "https://shop.example/pay", seed, extraElements = [] }) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-payment-controller-"));
   const store = await TaskStore.create({ originalRequest: request }, { storageRoot });
   if (seed) await seed(store);
@@ -20,6 +20,7 @@ async function run(t, { request, actions = [PAY], total = "Total $12.50", approv
     observe: async () => ({ id: "obs", documentEpoch: 1, url: "https://shop.example/checkout", text: `Item $10.00\nShipping $2.50\n${total}`, elements: [
       { elementId: "0", role: "link", name: "Cart", href: "https://shop.example/cart" },
       { elementId: "1", role: "button", name: "Place order", formAction, formMethod: "post" },
+      ...extraElements,
     ] }),
     execute: async (action) => { executed.push(action); return { status: "ok" }; },
   };
@@ -170,6 +171,19 @@ test("Full mode skips approval for ordinary actions but a payment click without 
   const ordered = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", controllerOptions: { permissionMode: "full", paymentsEnabled: true } });
   assert.equal(ordered.executed.length, 1);
   assert.ok(kinds(ordered).includes("payment_authorized"));
+});
+
+test("Full mode: submitting the whole checkout form is the same payment as clicking its button", async (t) => {
+  const form = { elementId: "2", role: "form", name: "Checkout", formAction: "https://shop.example/pay", formMethod: "post" };
+  const submitForm = [{ type: "submit_form", elementId: "2" }];
+  // Payments off: the form submit must not become a silent purchase either.
+  const off = await run(t, { request: "shop.example 둘러봐줘", actions: submitForm, extraElements: [form], controllerOptions: { permissionMode: "full" } });
+  assert.equal(off.executed.length, 0, "the form was not submitted");
+  assert.equal(off.controller.getSnapshot().approvalQueue.length, 1, "it waits for the person");
+  // A covering order pays through the form submit, and the single-use order is spent.
+  const ordered = await run(t, { request: "shop.example에서 $20 이하로 구매해줘", actions: submitForm, extraElements: [form], controllerOptions: { permissionMode: "full", paymentsEnabled: true } });
+  assert.equal(ordered.executed.length, 1);
+  assert.ok(kinds(ordered).includes("payment_authorized"), "the order is checked and used up, not skipped");
 });
 
 test("an order already paid long ago in a long journal is not paid again after a restart", async (t) => {

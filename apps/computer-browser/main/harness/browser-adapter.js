@@ -64,12 +64,22 @@ function bareOrigin(value) {
   }
 }
 const UNSUPPORTED_ACTIONS = new Set(["download"]);
-// A container's accessible name is its text, which repeats the names of the elements inside it. Only these
-// structural roles are trimmed; an interactive element or a heading always keeps its whole name.
+// A container's accessible name is its text, which repeats the names of the elements inside it. Only roles
+// whose name is that text are trimmed. Forms and landmarks are named by a label a person wrote (aria-label,
+// aria-labelledby), and the payment check reads a form's name, so they, interactive elements and headings
+// always keep their whole names.
 const STRUCTURAL_ROLES = new Set([
-  "list", "listitem", "row", "rowgroup", "cell", "gridcell", "table", "grid", "group", "generic", "article", "region",
-  "section", "figure", "navigation", "banner", "main", "contentinfo", "complementary", "form", "toolbar", "menu", "menubar", "tablist",
+  "list", "listitem", "row", "rowgroup", "cell", "gridcell", "table", "grid", "group", "generic", "article", "section", "figure",
 ]);
+
+// Index of `part` in `text` as whole words (whitespace or the ends on both sides), or -1.
+function wholeWordIndex(text, part) {
+  for (let at = text.indexOf(part); at !== -1; at = text.indexOf(part, at + 1)) {
+    const end = at + part.length;
+    if ((at === 0 || /\s/.test(text[at - 1])) && (end === text.length || /\s/.test(text[end]))) return at;
+  }
+  return -1;
+}
 
 // Removes from each structural element's name the names of the elements directly inside it, so a product card
 // says its price once instead of repeating its link and button. No element is removed and parents are unchanged.
@@ -86,7 +96,7 @@ function trimContainerNames(elements) {
     if (!inside) return element;
     let rest = element.name;
     for (const child of [...inside].sort((x, y) => y.length - x.length)) {
-      const at = rest.indexOf(child);
+      const at = wholeWordIndex(rest, child);
       if (at !== -1) rest = `${rest.slice(0, at)} ${rest.slice(at + child.length)}`;
     }
     rest = rest.replace(/\s+/g, " ").trim();

@@ -482,6 +482,40 @@ test("observe() keeps a container's own words but drops the child names it merel
   assert.equal(elements.length, 9, "no element is removed");
 });
 
+test("observe() never trims a label a person wrote (forms, landmarks), so a checkout form named by its own heading keeps its name", async () => {
+  const raw = {
+    url: "https://shop.example/", title: "Shop", text: "",
+    elements: [
+      { index: 0, role: "form", name: "Place order", parentIndex: null, formAction: "https://shop.example/order", formMethod: "post" },
+      { index: 1, role: "heading", name: "Place order", parentIndex: 0, level: 2 },
+      { index: 2, role: "button", name: "Place order", parentIndex: 0, formAction: "https://shop.example/order", formMethod: "post" },
+      { index: 3, role: "navigation", name: "Account", parentIndex: null },
+      { index: 4, role: "link", name: "Account", parentIndex: 3, href: "https://shop.example/account" },
+    ],
+  };
+  const adapter = new BrowserAdapter({ view: makeFakeView({ executeJavaScript: async () => raw }) });
+  const { elements } = await adapter.observe();
+  assert.equal(elements[0].name, "Place order", "the payment check reads this name");
+  assert.equal(elements[3].name, "Account");
+});
+
+test("observe() removes a repeated child name only as whole words, never from inside another word", async () => {
+  const raw = {
+    url: "https://shop.example/", title: "Shop", text: "",
+    elements: [
+      { index: 0, role: "listitem", name: "Visit the Cartier boutique Cart", parentIndex: null },
+      { index: 1, role: "button", name: "Cart", parentIndex: 0 },
+      { index: 2, role: "listitem", name: "Carton of milk $3.20 Add", parentIndex: null },
+      { index: 3, role: "link", name: "Carton of milk", parentIndex: 2, href: "https://shop.example/milk" },
+      { index: 4, role: "button", name: "Add", parentIndex: 2 },
+    ],
+  };
+  const adapter = new BrowserAdapter({ view: makeFakeView({ executeJavaScript: async () => raw }) });
+  const { elements } = await adapter.observe();
+  assert.equal(elements[0].name, "Visit the Cartier boutique", "Cartier stays whole; the trailing Cart is the button's");
+  assert.equal(elements[2].name, "$3.20");
+});
+
 test("observe() never shortens the name of an interactive element or a heading, even when it has children", async () => {
   const raw = {
     url: "https://shop.example/", title: "Shop", text: "",

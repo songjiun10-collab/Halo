@@ -92,3 +92,24 @@ test("an action type that is not declared is treated as unchecked and reported, 
   assert.equal(out.undeclared, true, "the dispatch loop can refuse or ask for an undeclared type");
   assert.equal(inspectAction({ type: "observe" }, ctx).undeclared, undefined);
 });
+
+test("submitting a whole form that holds a payment button is a payment, whatever the form itself is called", () => {
+  const checkout = {
+    id: "obs2", url: "https://shop.example/checkout", documentEpoch: 1,
+    elements: [
+      { elementId: "0", role: "form", name: "Checkout", formAction: "https://shop.example/order", formMethod: "post", parentElementId: null },
+      { elementId: "1", role: "text", name: "Total $480.00", parentElementId: "0" },
+      { elementId: "2", role: "group", name: "", parentElementId: "0" },
+      { elementId: "3", role: "button", name: "Place order", formAction: "https://shop.example/order", formMethod: "post", parentElementId: "2" },
+      { elementId: "4", role: "form", name: "Search", formAction: "https://shop.example/search", formMethod: "get", parentElementId: null },
+      { elementId: "5", role: "button", name: "Search", formAction: "https://shop.example/search", formMethod: "get", parentElementId: "4" },
+      // A payment button outside its form (<button form="...">) still submits that form.
+      { elementId: "6", role: "form", name: "", formAction: "https://shop.example/pay", formMethod: "post", parentElementId: null },
+      { elementId: "7", role: "button", name: "Pay now", formAction: "https://shop.example/pay", formMethod: "post", parentElementId: null },
+    ],
+  };
+  const c = { observation: checkout, screenTargets: null, computerUse: false, userText: "" };
+  assert.equal(inspectAction({ type: "submit_form", elementId: "0" }, c).paymentTarget?.name, "Place order", "a nested payment button makes the form a payment");
+  assert.equal(inspectAction({ type: "submit_form", elementId: "6" }, c).paymentTarget?.name, "Pay now", "a payment button that submits to the same place counts too");
+  assert.equal(inspectAction({ type: "submit_form", elementId: "4" }, c).paymentTarget, null, "a search form is not a payment");
+});
