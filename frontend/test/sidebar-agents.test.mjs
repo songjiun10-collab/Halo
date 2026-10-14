@@ -11,7 +11,8 @@ import { createServer } from 'vite'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const vite = await createServer({ configFile: path.join(root, 'vite.config.ts'), root, server: { middlewareMode: true, hmr: false }, appType: 'custom' })
-const { sidebarRows, SidebarAgentsView, SIDEBAR_MAX } = await vite.ssrLoadModule('/src/agent/SidebarAgents.tsx')
+const { SidebarAgentsView, SIDEBAR_MAX } = await vite.ssrLoadModule('/src/agent/SidebarAgents.tsx')
+const { sidebarRows } = await vite.ssrLoadModule('/src/agent/sidebar-rows.tsx')
 const nav = await vite.ssrLoadModule('/src/agent/agent-nav.ts')
 test.after(() => vite.close())
 

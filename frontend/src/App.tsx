@@ -78,8 +78,10 @@ export default function App() {
   const [dismissedNotice, setDismissedNotice] = useState<number | null>(null)
 
   // Surface a real backend failure once, as a toast, then clear it so it doesn't repeat.
+  const [errorSeen, setErrorSeen] = useState<string | null>(null)
+  if (s.error && s.error !== errorSeen) { setErrorSeen(s.error); setToast(s.error) }
   useEffect(() => {
-    if (s.error) { setToast(s.error); store.clearError() }
+    if (s.error) store.clearError()
   }, [s.error, store])
 
   // A Halo block needs no answer: show it for NOTICE_MS (even as the agent keeps working), then it lives in Activity.
@@ -152,9 +154,9 @@ export default function App() {
   const [leaseNow, setLeaseNow] = useState(() => Date.now())
   useEffect(() => {
     if (!leases.length) return
-    setLeaseNow(Date.now())
+    const first = window.setTimeout(() => setLeaseNow(Date.now()), 0)
     const timer = window.setInterval(() => setLeaseNow(Date.now()), 30_000)
-    return () => window.clearInterval(timer)
+    return () => { window.clearTimeout(first); window.clearInterval(timer) }
   }, [leases.length])
   const onSendMessage = useCallback((text: string, lock?: IntentLockInput) => { void store.sendMessage(text, lock) }, [store])
   const onNewTask = useCallback(() => { store.newTask(); openChat() }, [store, openChat])
@@ -188,7 +190,7 @@ export default function App() {
     onToggleHelp: toggleHelp,
     onToggleSidebar: () => setSidebarOpen((open) => !open),
     onToggleSettings: toggleSettings,
-  }), [store, onNewTask, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp, toggleSettings, tab.id])
+  }), [store, onNewTask, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp, toggleSettings, tab.id, s.activeTaskId])
   useShortcuts(s, approval, shortcutHandlers)
 
   // Safari-style swipe: the page you leave slides off in the swipe's direction. The native view
@@ -258,40 +260,42 @@ export default function App() {
   const settingsShown = usePresence(settingsOpen ? true : null)
 
   // The agent works in a hidden page. While it does, its page is mirrored here as a live still.
-  const [agentFrame, setAgentFrame] = useState<string | null>(null)
+  const [agentFrameOf, setAgentFrameOf] = useState<{ taskId: string; src: string | null } | null>(null)
   const agentWorking = s.control === 'claude' && !!s.activeTaskId
+  const agentFrame = agentWorking && agentFrameOf?.taskId === s.activeTaskId ? agentFrameOf.src : null
   useEffect(() => {
     const api = window.haloBrowser
     const taskId = s.activeTaskId
-    if (!agentWorking || !taskId || typeof api?.captureAgentFrame !== 'function') { setAgentFrame(null); return }
+    if (!agentWorking || !taskId || typeof api?.captureAgentFrame !== 'function') return
     let stopped = false
     const tick = async () => {
       const frame = await api.captureAgentFrame!(taskId).catch(() => null)
-      if (!stopped) setAgentFrame(frame)
+      if (!stopped) setAgentFrameOf({ taskId, src: frame })
       if (!stopped) id = window.setTimeout(() => void tick(), 250)
     }
     let id: number | undefined
     void tick()
-    return () => { stopped = true; window.clearTimeout(id); setAgentFrame(null) }
+    return () => { stopped = true; window.clearTimeout(id) }
   }, [agentWorking, s.activeTaskId])
 
   // When you take over from a UI attached to the background service, the task's page lives in
   // that other process: it arrives as stills here and your input goes back to it.
-  const [userFrame, setUserFrame] = useState<string | null>(null)
+  const [userFrameOf, setUserFrameOf] = useState<{ taskId: string; src: string | null } | null>(null)
   const userDriving = s.control === 'you' && !!s.activeTaskId
+  const userFrame = userDriving && userFrameOf?.taskId === s.activeTaskId ? userFrameOf.src : null
   useEffect(() => {
     const api = window.haloBrowser
     const taskId = s.activeTaskId
-    if (!userDriving || !taskId || typeof api?.captureTaskFrame !== 'function') { setUserFrame(null); return }
+    if (!userDriving || !taskId || typeof api?.captureTaskFrame !== 'function') return
     let stopped = false
     const tick = async () => {
       const frame = await api.captureTaskFrame!(taskId).catch(() => null)
-      if (!stopped) setUserFrame(frame)
+      if (!stopped) setUserFrameOf({ taskId, src: frame })
       if (!stopped) id = window.setTimeout(() => void tick(), 120)
     }
     let id: number | undefined
     void tick()
-    return () => { stopped = true; window.clearTimeout(id); setUserFrame(null) }
+    return () => { stopped = true; window.clearTimeout(id) }
   }, [userDriving, s.activeTaskId])
   const sendInput = (input: TaskInput) => {
     const api = window.haloBrowser
@@ -299,27 +303,31 @@ export default function App() {
   }
   const chromium = window.haloBrowser?.runtime === 'chromium'
   const directDriving = chromium && s.directBrowser && !s.activeTaskId
-  const [directFrame, setDirectFrame] = useState<string | null>(null)
+  const [directFrameOf, setDirectFrameOf] = useState<{ tabId: string; src: string | null } | null>(null)
+  const directFrame = directDriving && directFrameOf?.tabId === (s.activeTabId ?? '') ? directFrameOf.src : null
   // Read by a stream start that finishes late: if the live view has ended meanwhile, nobody is left to stop it.
   const directDrivingRef = useRef(directDriving)
   useEffect(() => { directDrivingRef.current = directDriving }, [directDriving])
   useEffect(() => {
     const api = window.haloBrowser
-    if (!directDriving || !api?.captureSurface) { setDirectFrame(null); return }
+    if (!directDriving || !api?.captureSurface) return
+    const tabId = s.activeTabId ?? ''
     let stopped = false
     let id: number | undefined
     // Polling is the fallback for engines that cannot stream.
     const tick = async () => {
       const frame = await api.captureSurface!().catch(() => null)
-      if (!stopped) { setDirectFrame(frame); id = window.setTimeout(() => void tick(), 120) }
+      if (!stopped) { setDirectFrameOf({ tabId, src: frame }); id = window.setTimeout(() => void tick(), 120) }
     }
     let unsubscribe: (() => void) | undefined
     if (typeof api.startSurfaceStream === 'function' && typeof api.onSurfaceFrame === 'function') {
       unsubscribe = api.onSurfaceFrame((payload) => {
-        if (!stopped && typeof payload?.frame === 'string' && payload.frame.startsWith('data:image/jpeg;base64,')) setDirectFrame(payload.frame)
+        if (!stopped && typeof payload?.frame === 'string' && payload.frame.startsWith('data:image/jpeg;base64,')) setDirectFrameOf({ tabId, src: payload.frame })
       })
       // One still first so the page never flashes empty, then the pushed frames take over.
-      void api.captureSurface().then((frame) => { if (!stopped && frame) setDirectFrame((current) => current ?? frame) }).catch(() => {})
+      void api.captureSurface().then((frame) => {
+        if (!stopped && frame) setDirectFrameOf((current) => current?.tabId === tabId && current.src ? current : { tabId, src: frame })
+      }).catch(() => {})
       void api.startSurfaceStream().then((started) => {
         // A tab switch already replaced this stream; only a finished live view leaves a stream nobody will stop.
         if (stopped) { if (started && !directDrivingRef.current) void api.stopSurfaceStream?.().catch(() => {}); return }
@@ -328,7 +336,6 @@ export default function App() {
     } else void tick()
     return () => {
       stopped = true; window.clearTimeout(id); unsubscribe?.()
-      setDirectFrame(null)
     }
   }, [directDriving, s.activeTabId])
   // A tab switch restarts the stream in place (the host replaces the old one); stop only when the live view ends.
@@ -341,11 +348,11 @@ export default function App() {
     !overviewOpen && !helpOpen && !settingsOpen && !noticeShown.item && !toastShown.item && !swipeDir && (chromium || (!agentFrame && !userFrame))
   // A native view draws above the DOM, so overlays hide it. A still of the page stays in the
   // slot meanwhile: taken while the page is still on screen, then the view is hidden.
-  const [snapshot, setSnapshot] = useState<string | null>(null)
+  const [snapshotOf, setSnapshotOf] = useState<{ taskId: string | null; src: string | null }>({ taskId: null, src: null })
+  const snapshot = snapshotOf.taskId === (s.activeTaskId ?? null) ? snapshotOf.src : null
   const surfaceShown = useRef(false)
   const visibleNow = useRef(nativeSurfaceVisible)
-  visibleNow.current = nativeSurfaceVisible
-  useEffect(() => setSnapshot(null), [s.activeTaskId])
+  useLayoutEffect(() => { visibleNow.current = nativeSurfaceVisible })
   useLayoutEffect(() => {
     const api = window.haloBrowser
     if (!api) return
@@ -370,11 +377,11 @@ export default function App() {
     if (nativeSurfaceVisible) {
       surfaceShown.current = true
       // Drop the still only once the live page is back on top of it.
-      sync(() => setSnapshot(null))
+      sync(() => setSnapshotOf({ taskId: s.activeTaskId ?? null, src: null }))
     } else if (surfaceShown.current) {
       surfaceShown.current = false
       void captureSnapshot(api).then((url) => {
-        if (!visibleNow.current) setSnapshot(url)
+        if (!visibleNow.current) setSnapshotOf({ taskId: s.activeTaskId ?? null, src: url })
         sync()
       })
     } else {

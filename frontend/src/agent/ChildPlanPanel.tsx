@@ -1,6 +1,7 @@
 import type { ChildAgentStatus, ChildBoardKind, ChildPlanSummary } from '../session/child-agents'
 import type { AgentRecord, Avatar as AvatarT } from './agent-api'
-import { Avatar, modelBrand, OrchestratorMark } from './AgentUi'
+import { Avatar, OrchestratorMark } from './AgentUi'
+import { modelBrand } from './agent-visuals'
 
 const LBL: Record<ChildAgentStatus, string> = { queued: 'Queued', running: 'Running', waiting_for_review: 'Needs review', paused: 'Paused', completed: 'Done', failed: 'Failed', uncertain: 'Uncertain', stopped: 'Stopped' }
 /** Children missing from the agent roster render as a neutral gray character. */

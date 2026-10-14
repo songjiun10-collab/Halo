@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { errText, errorCopy, getRoomApi, setPinned, startTask, type AgentApi, type AgentRecord, type OwnerRef, type TeamRecord } from './agent-api'
-import { Avatar, ConvoList, Ic, modelBrand, type AgentBrand } from './AgentUi'
+import { Avatar, ConvoList, Ic, type AgentBrand } from './AgentUi'
+import { modelBrand } from './agent-visuals'
 import { McpScope, PersistentBrowserSetting, ScheduleSection } from './AgentSettings'
 import { TeamRoom } from './Room'
 import type { UiConversation } from './normalize'

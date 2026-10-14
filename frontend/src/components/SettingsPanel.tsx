@@ -207,7 +207,14 @@ function StrategyLearningReview() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const refresh = async () => { try { setState(await window.haloBrowser?.getStrategyLearningState?.() ?? null) } catch { setMessage('Local strategy-learning store is unavailable.') } }
-  useEffect(() => { void refresh() }, [])
+  useEffect(() => {
+    let current = true
+    void (async () => {
+      try { const next = await window.haloBrowser?.getStrategyLearningState?.(); if (current) setState(next ?? null) }
+      catch { if (current) setMessage('Local strategy-learning store is unavailable.') }
+    })()
+    return () => { current = false }
+  }, [])
   const call = async (fn: () => Promise<unknown>, success: string) => {
     setBusy(true); setMessage('')
     try { await fn(); setMessage(success); await refresh() } catch { setMessage('Action failed; no policy change was applied.') } finally { setBusy(false) }
@@ -253,6 +260,7 @@ export function SettingsPanel({ leaving, onClose }: Props) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [, setModelsVersion] = useState(0)
+  const loaded = settings !== null
   const ref = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   useEffect(() => { closeRef.current = onClose }, [onClose])
@@ -272,14 +280,18 @@ export function SettingsPanel({ leaving, onClose }: Props) {
       if (mounted.current) setModelsVersion((v) => v + 1)
     } catch { /* keep the built-in list */ }
   }
-  useEffect(() => { void refreshModels() }, [])
+  useEffect(() => {
+    let current = true
+    void (async () => { const result = await window.haloBrowser?.refreshPlannerModels?.().catch(() => null); if (current && result) { mergeDiscoveredNvidia(result.nvidia); setModelsVersion((v) => v + 1) } })()
+    return () => { current = false }
+  }, [])
   useEffect(() => {
     if (leaving) return
     ref.current?.querySelector<HTMLElement>('[role=dialog]')?.focus()
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeRef.current() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [leaving, settings === null])
+  }, [leaving, loaded])
 
   const change = async (patch: SettingsPatch) => {
     if (!settings || saving) return

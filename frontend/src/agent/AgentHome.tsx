@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
 import { LIM, errText, getAgentApi, listConversations, markRead, type AgentApi, type AgentRecord, type OwnerRef, type RosterStatus, type TeamRecord } from './agent-api'
 import { rosterDot, toUi, type UiConversation } from './normalize'
-import { AgentCharacter, AgentDeskCredit, Avatar, ConvoList, Ic, modelBrand, Stack } from './AgentUi'
+import { AgentCharacter, AgentDeskCredit, Avatar, ConvoList, Ic, Stack } from './AgentUi'
+import { modelBrand } from './agent-visuals'
+import { activeAgentCount } from './agent-counts'
 import { AgentForm, TeamForm } from './AgentForms'
 import { AgentDetail } from './AgentDetail'
 import { BackgroundRuntimePanel } from './BackgroundRuntimePanel'
@@ -11,7 +13,6 @@ import { activeModel } from '../session/claude-models'
 import type { AgentBrand } from './AgentUi'
 
 export type HomeMode = 'task' | 'agent'
-export const activeAgentCount = (agents: AgentRecord[]) => agents.filter((agent) => !agent.archived).length
 /** Task/Agent switch for the new-task home (Design System-6 glass toggle: tap or drag the thumb). Renders nothing while the preload lacks the roster API. */
 export function ModeSwitch({ mode, onChange }: { mode: HomeMode; onChange: (m: HomeMode) => void }) {
   const ref = useRef<HTMLDivElement>(null), dragging = useRef(false)
@@ -66,6 +67,8 @@ function AgentHub({ api, onOpenTask }: { api: AgentApi; onOpenTask: (taskId: str
       setConvos(rows.flat().sort((p, q) => +new Date(q.createdAt) - +new Date(p.createdAt))); setError(null)
     } catch (e) { setError(errText(e)) } finally { setLoaded(true) }
   }, [api])
+  // The roster fetch sets state only after it resolves; the rule cannot see past the await.
+  // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => api.onAgentRosterEvent(() => { void refresh() }), [api, refresh])
   // Linked-task transitions reach the UI only as task events, never as roster

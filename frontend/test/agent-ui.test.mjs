@@ -15,7 +15,8 @@ const { ChildPlanPanel } = await vite.ssrLoadModule('/src/agent/ChildPlanPanel.t
 const { RuntimeStatus } = await vite.ssrLoadModule('/src/agent/BackgroundRuntimePanel.tsx')
 const { ScheduleEditor, PersistentBrowserSetting } = await vite.ssrLoadModule('/src/agent/AgentSettings.tsx')
 const room = await vite.ssrLoadModule('/src/agent/Room.tsx')
-const { AgentCharacter, AgentDeskCredit, modelBrand } = await vite.ssrLoadModule('/src/agent/AgentUi.tsx')
+const { AgentCharacter, AgentDeskCredit } = await vite.ssrLoadModule('/src/agent/AgentUi.tsx')
+const { modelBrand, SHAPES } = await vite.ssrLoadModule('/src/agent/agent-visuals.ts')
 const BO = '33333333-3333-4333-8333-333333333333'
 test.after(() => vite.close())
 
@@ -308,7 +309,7 @@ test('Design System-6: the mode switch is the draggable glass toggle with its th
 
 test('Design System-6: avatars are faced characters on an 80x80 canvas, and the plan is headed by the orchestrator mark', async () => {
   const ui = await vite.ssrLoadModule('/src/agent/AgentUi.tsx')
-  for (const shape of ui.SHAPES) {
+  for (const shape of SHAPES) {
     const html = renderToStaticMarkup(React.createElement(ui.Shape, { shape, color: 'blue', size: 40 }))
     assert.match(html, /viewBox="0 0 80 80"/, shape)
     assert.match(html, /ff8fa3/, `${shape} has blush cheeks`)

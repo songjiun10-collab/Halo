@@ -8,7 +8,7 @@ import { createServer } from 'vite'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const vite = await createServer({ configFile: path.join(root, 'vite.config.ts'), root, server: { middlewareMode: true, hmr: false }, appType: 'custom' })
-const { activeAgentCount } = await vite.ssrLoadModule('/src/agent/AgentHome.tsx')
+const { activeAgentCount } = await vite.ssrLoadModule('/src/agent/agent-counts.ts')
 const { AgentForm } = await vite.ssrLoadModule('/src/agent/AgentForms.tsx')
 test.after(() => vite.close())
 

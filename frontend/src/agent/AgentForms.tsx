@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { AGENT_EFFORTS, LIM, agentInput, errText, type AgentApi, type AgentEffort, type AgentCapability, type AgentRecord, type Avatar as AvatarT, type TeamRecord } from './agent-api'
-import { Avatar, Field, Ic, modelBrand, SHAPES, COLORS, Shape, Stack, type AgentBrand } from './AgentUi'
+import { Avatar, Field, Ic, Shape, Stack, type AgentBrand } from './AgentUi'
+import { COLORS, SHAPES, modelBrand } from './agent-visuals'
 import { PLANNER_MODELS } from '../session/claude-models'
 
 function AvatarPicker({ value, onChange }: { value: AvatarT; onChange: (a: AvatarT) => void }) {

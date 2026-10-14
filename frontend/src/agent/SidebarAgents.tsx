@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getAgentApi, getRoomApi, type AgentRecord, type AgentRoster, type OwnerKind, type OwnerRef, type RoomSummary } from './agent-api'
-import { Avatar, modelBrand, type AgentBrand } from './AgentUi'
+import { Avatar, type AgentBrand } from './AgentUi'
+import { modelBrand } from './agent-visuals'
+import { sidebarRows } from './sidebar-rows'
 
 /**
  * Agents and Teams under the workspace sidebar's task list. A row only opens the
@@ -13,27 +15,7 @@ export interface SidebarRow { kind: OwnerKind; id: string; name: string; avatar:
 export interface SidebarRows { agents: SidebarRow[]; teams: SidebarRow[] }
 
 /** `speakers` maps a room id to the member id whose turn it is in a live round. */
-export function sidebarRows(roster: AgentRoster, rooms: RoomSummary[], speakers: Record<string, string | null>): SidebarRows {
-  const agentById = new Map(roster.agents.map((a) => [a.id, a]))
-  const order = <T extends { archived: boolean; pinned: boolean }>(list: T[]) =>
-    [...list].sort((p, q) => Number(p.archived) - Number(q.archived) || Number(q.pinned) - Number(p.pinned))
-  const state = (archived: boolean, busy: boolean): SidebarState => archived ? 'archived' : busy ? 'working' : 'idle'
-  return {
-    agents: order(roster.agents).map((a) => ({
-      kind: 'agent', id: a.id, name: a.name, avatar: a.avatar, brand: modelBrand(a.model), state: state(a.archived, a.status.running > 0),
-      unread: a.status.hasUnread, replying: null, members: [],
-    })),
-    teams: order(roster.teams).map((t) => {
-      const room = rooms.find((r) => r.teamId === t.id)
-      const speaker = room && room.active ? speakers[room.roomId] ?? null : null
-      return {
-        kind: 'team', id: t.id, name: t.name, avatar: t.avatar, state: state(t.archived, t.status.running > 0 || !!room?.active),
-        unread: t.status.hasUnread, replying: speaker ? agentById.get(speaker)?.name ?? null : null,
-        members: t.memberAgentIds.map((id) => agentById.get(id)).filter((a): a is AgentRoster['agents'][number] => !!a),
-      }
-    }),
-  }
-}
+interface ViewProps { rows: SidebarRows; loaded: boolean; onOpen: (owner: OwnerRef) => void; onSeeAll: () => void; onNew: () => void }
 
 function Row({ row, onOpen }: { row: SidebarRow; onOpen: () => void }) {
   return (
@@ -48,8 +30,6 @@ function Row({ row, onOpen }: { row: SidebarRow; onOpen: () => void }) {
     </button>
   )
 }
-
-interface ViewProps { rows: SidebarRows; loaded: boolean; onOpen: (owner: OwnerRef) => void; onSeeAll: () => void; onNew: () => void }
 
 export function SidebarAgentsView({ rows, loaded, onOpen, onSeeAll, onNew }: ViewProps) {
   const [folded, setFolded] = useState<OwnerKind[]>([])
@@ -82,6 +62,8 @@ export function SidebarAgents({ onOpen, onSeeAll, onNew }: { onOpen: (owner: Own
   }, [api, roomApi])
   useEffect(() => {
     if (!api) return undefined
+    // The fetch sets state only after it resolves; the rule cannot see past the await.
+    // oxlint-disable-next-line react/set-state-in-effect
     void load()
     const offRoster = api.onAgentRosterEvent(() => { void load() })
     const offRoom = roomApi?.onRoomEvent((event) => {

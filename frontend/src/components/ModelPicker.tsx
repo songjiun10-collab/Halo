@@ -36,7 +36,10 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
 
   // The popover opens upward: keep it below the Task/Agent switch at the top
   // of the home area instead of letting that clip its first rows.
-  useEffect(() => { if (!open) setView(active ? 'effort' : 'models') }, [open, active])
+  const closedView = active ? 'effort' : 'models'
+  const [closedSynced, setClosedSynced] = useState<string | null>(null)
+  if (open && closedSynced !== null) setClosedSynced(null)
+  if (!open && closedSynced !== closedView) { setClosedSynced(closedView); setView(closedView) }
 
   useLayoutEffect(() => {
     if (!open || !ref.current) return

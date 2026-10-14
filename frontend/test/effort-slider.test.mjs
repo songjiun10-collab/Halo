@@ -78,7 +78,7 @@ test('only Ultra sparkles: lower levels have no stars in either style', () => {
 })
 
 test('a drag position snaps to the nearest level only on release', async () => {
-  const { effortAtFraction } = await vite.ssrLoadModule('/src/components/EffortSlider.tsx')
+  const { effortAtFraction } = await vite.ssrLoadModule('/src/session/effort-fraction.ts')
   assert.equal(effortAtFraction(0), 'low')
   assert.equal(effortAtFraction(0.09), 'low')
   assert.equal(effortAtFraction(0.11), 'medium')

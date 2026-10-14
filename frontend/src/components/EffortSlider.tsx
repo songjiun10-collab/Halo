@@ -1,15 +1,12 @@
 import { useRef, useState, type PointerEvent } from 'react'
 import { effortLabel, PLANNER_EFFORTS, type PlannerEffort } from '../session/planner-effort'
+import { clampFraction, effortAtFraction, effortLast } from '../session/effort-fraction'
+const LAST = effortLast
+const clamp = clampFraction
 
 // Fixed sparkle positions for the Ultra track (percent of width/height).
 const STARS = [[8, 30], [15, 70], [24, 40], [33, 78], [41, 22], [49, 60], [56, 35], [63, 72], [71, 28], [78, 55], [86, 75], [92, 38]]
-const LAST = PLANNER_EFFORTS.length - 1
-const clamp = (f: number) => Math.min(1, Math.max(0, f))
 
-/** The level nearest a position along the track (0 = start, 1 = end). */
-export function effortAtFraction(fraction: number): PlannerEffort {
-  return PLANNER_EFFORTS[Math.round(clamp(fraction) * LAST)]
-}
 
 interface Props {
   value: PlannerEffort

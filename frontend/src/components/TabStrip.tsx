@@ -3,7 +3,8 @@ import { tabTitle } from '../session/pages'
 import { getDomain } from 'tldts'
 import { AGENT, currentUrl, host } from '../session/session'
 import type { Tab, TabActivity } from '../session/types'
-import { BrandIcon, brandFor } from './BrandIcon'
+import { BrandIcon } from './BrandIcon'
+import { brandFor } from './brand-for'
 import { Check, Close, Pause, Plus } from './Icons'
 
 interface Props {

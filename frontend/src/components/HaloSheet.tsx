@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AGENT } from '../session/session'
 import type { Approval } from '../session/types'
 import { HaloMark } from './Logo'
+import { lendSummary } from '../session/approval-view'
 
 interface Props {
   approval: Approval
@@ -16,9 +17,6 @@ interface Props {
 
 const host = (origin: string) => { try { return new URL(origin).host } catch { return origin } }
 /** Identity of the pending decision: derive() rebuilds the object each update, so state resets key on this, not the object. */
-export const approvalKey = (a: { taskId: string; id: string }) => `${a.taskId}:${a.id}`
-export const lendSummary = (offer: { action: string; origin: string }, t: { minutes: number; uses: number }) =>
-  `${offer.action} · ${host(offer.origin)} · ${t.minutes} min · ${t.uses} ${t.uses === 1 ? 'use' : 'uses'}`
 
 /**
  * Halo's interruption: a permission sheet dropped from the address bar, the one
@@ -29,7 +27,10 @@ export function HaloSheet({ approval, leaving, onApprove, onDeny, onTakeOver, on
   // Focus the question, never the approve button: a stray Enter must not approve.
   const [lending, setLending] = useState(false)
   const [terms, setTerms] = useState({ minutes: 10, uses: 3 })
-  useEffect(() => { ref.current?.focus(); setLending(false); setTerms({ minutes: 10, uses: 3 }) }, [approval.id, approval.taskId])
+  const approvalNow = `${approval.taskId}:${approval.id}`
+  const [formFor, setFormFor] = useState(approvalNow)
+  if (formFor !== approvalNow) { setFormFor(approvalNow); setLending(false); setTerms({ minutes: 10, uses: 3 }) }
+  useEffect(() => { ref.current?.focus() }, [approval.id, approval.taskId])
   const offer = approval.leaseOffer
   return (
     <section className="hx-sheet" data-approval-id={approval.id} data-leaving={leaving || undefined} inert={leaving} role="alertdialog" aria-modal="true" aria-labelledby="hx-sheet-title" aria-describedby="hx-sheet-request">

@@ -1,5 +1,6 @@
 import { waitReasonLabel } from '../session/wait-reason'
-import { BrandIcon, brandFor } from './BrandIcon'
+import { BrandIcon } from './BrandIcon'
+import { brandFor } from './brand-for'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Close, Plus } from './Icons'
 import type { TabActivity } from '../session/types'

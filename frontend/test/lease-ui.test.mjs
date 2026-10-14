@@ -9,9 +9,12 @@ import { createServer } from 'vite'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const vite = await createServer({ configFile: path.join(root, 'vite.config.ts'), root, server: { middlewareMode: true, hmr: false }, appType: 'custom' })
-const { HaloSheet, lendSummary, approvalKey } = await vite.ssrLoadModule('/src/components/HaloSheet.tsx')
-const { LeaseChip, leaseLabel } = await vite.ssrLoadModule('/src/components/LeaseChip.tsx')
-const { LockChips, lockFromChips } = await vite.ssrLoadModule('/src/components/LockChips.tsx')
+const { HaloSheet } = await vite.ssrLoadModule('/src/components/HaloSheet.tsx')
+const { lendSummary, approvalKey } = await vite.ssrLoadModule('/src/session/approval-view.ts')
+const { LeaseChip } = await vite.ssrLoadModule('/src/components/LeaseChip.tsx')
+const { leaseLabel } = await vite.ssrLoadModule('/src/session/lease-label.ts')
+const { LockChips } = await vite.ssrLoadModule('/src/components/LockChips.tsx')
+const { lockFromChips } = await vite.ssrLoadModule('/src/session/lock-chips.ts')
 test.after(() => vite.close())
 const noop = () => {}
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode, type Ref } from 'react'
+import { useState, type FormEvent, type ReactNode, type Ref } from 'react'
 import { currentUrl } from '../session/session'
 import { addressTarget } from '../session/navigation'
 import type { Tab } from '../session/types'
@@ -36,7 +36,8 @@ export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onRel
   const url = currentUrl(tab)
   const addressUrl = url.startsWith('halo://') || url === 'about:blank' ? '' : url
   const [address, setAddress] = useState(addressUrl)
-  useEffect(() => setAddress(addressUrl), [addressUrl])
+  const [addressFrom, setAddressFrom] = useState(addressUrl)
+  if (addressFrom !== addressUrl) { setAddressFrom(addressUrl); setAddress(addressUrl) }
   const [ask, setAsk] = useState(false)
   const submitAddress = (event: FormEvent) => {
     event.preventDefault()
