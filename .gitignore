@@ -11,3 +11,6 @@ release/
 
 # Written by the beta packaging step (tools/set-build-expiry.js); a development checkout has none.
 apps/computer-browser/build-info.json
+
+# Built frontend (vite writes it; `npm start` and tools/package-mac.sh build it).
+apps/computer-browser/renderer/dist/
