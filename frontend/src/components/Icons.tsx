@@ -5,6 +5,7 @@ const Icon = ({ children }: { children: ReactNode }) => (
   <svg className="hx-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{children}</svg>
 )
 
+export const Reload = () => <Icon><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v5h-5" /></Icon>
 export const Back = () => <Icon><path d="M20 12H4M10 6l-6 6 6 6" /></Icon>
 export const Forward = () => <Icon><path d="M4 12h16M14 6l6 6-6 6" /></Icon>
 export const Lock = () => <Icon><rect x="5" y="10" width="14" height="10" rx="1.5" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></Icon>

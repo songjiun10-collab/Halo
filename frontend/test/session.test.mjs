@@ -78,6 +78,25 @@ test('direct browser tab buttons call the native tab API and replace the live ta
   assert.deepEqual(store.getState().tabs.map((tab) => tab.id), ['one'])
 })
 
+test('reload calls the native reload on a direct page, and re-navigates a task page that has no reload call', async () => {
+  const calls = []
+  const direct = { page: { url: 'https://one.example/', title: '', canGoBack: false, canGoForward: false, hasPage: true }, tabs: [{ id: 'one', url: 'https://one.example/', title: 'One' }], activeTabId: 'one', task: { state: 'idle' }, approvalQueue: [], timeline: [] }
+  const { store } = harness({
+    getSnapshot: async () => direct,
+    reload: async () => { calls.push('reload'); return direct },
+    taskBrowserAction: async (id, action) => { calls.push(['task', action]); return browser('https://example.com/') },
+    getTaskDetail: async (id) => ({ taskId: id, goal: goal(id), snapshot: snapshot('paused'), active: true }),
+  })
+  await settle()
+  assert.equal(await store.reloadPage(), true)
+  assert.deepEqual(calls, ['reload'])
+  await store.selectTask('task')
+  await settle()
+  assert.equal(await store.reloadPage(), true, 'a paused task surface can be reloaded, as it can go back')
+  assert.deepEqual(calls.at(-1), ['task', { type: 'navigate', url: 'https://example.com/' }])
+  assert.equal(calls.filter((c) => c === 'reload').length, 1, 'a task view never reaches the human tab reload')
+})
+
 test('direct tab controls cannot cross into an active task-owned browser', async () => {
   const calls = []
   const { store } = harness({

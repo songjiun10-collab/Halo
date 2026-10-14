@@ -11,6 +11,7 @@ export const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Mod+Shift+[', label: 'Previous tab' },
   { keys: 'Alt+←', label: 'Back' },
   { keys: 'Alt+→', label: 'Forward' },
+  { keys: 'Mod+R', label: 'Reload the page' },
   { keys: 'Mod+L', label: 'Focus the address field' },
   { keys: 'Mod+K', label: 'New task' },
   { keys: 'Mod+Shift+L', label: 'Toggle sidebar' },
@@ -31,6 +32,7 @@ interface Handlers {
   onSelectTab: (id: string) => void
   onBack: () => void
   onForward: () => void
+  onReload: () => void
   onFocusOmni: () => void
   onTogglePin: () => void
   onToggleChat: () => void
@@ -62,6 +64,7 @@ export function useShortcuts(s: SessionState, approval: unknown, handlers: Handl
         return
       }
       if (!mod && e.shiftKey && e.code === 'Slash') { e.preventDefault(); handlers.onToggleHelp(); return }
+      if (!mod && !e.shiftKey && !e.altKey && e.code === 'F5') { e.preventDefault(); handlers.onReload(); return }
       if (e.altKey && e.code === 'ArrowLeft') { e.preventDefault(); handlers.onBack(); return }
       if (e.altKey && e.code === 'ArrowRight') { e.preventDefault(); handlers.onForward(); return }
       if (!mod) return
@@ -74,6 +77,7 @@ export function useShortcuts(s: SessionState, approval: unknown, handlers: Handl
 
       if (e.code === 'KeyT' && !e.shiftKey) { e.preventDefault(); handlers.onNewTab(); return }
       if (e.code === 'KeyW' && !e.shiftKey) { e.preventDefault(); handlers.onCloseTab(tab.id); return }
+      if (e.code === 'KeyR') { e.preventDefault(); handlers.onReload(); return }
       if (e.code === 'KeyL' && !e.shiftKey) { e.preventDefault(); handlers.onFocusOmni(); return }
       if (e.code === 'KeyL' && e.shiftKey) { e.preventDefault(); handlers.onToggleSidebar(); return }
       if (e.code === 'KeyN' && !e.shiftKey) { e.preventDefault(); handlers.onNewWindow(); return }

@@ -172,6 +172,7 @@ export default function App() {
     onSelectTab: (id: string) => void store.selectBrowserTab(id),
     onBack: () => void store.navigate({ type: 'back' }),
     onForward: () => void store.navigate({ type: 'forward' }),
+    onReload: () => void store.reloadPage(),
     onFocusOmni: () => omniRef.current?.focus(),
     onTogglePin: () => setPinned((p) => !p),
     onToggleChat: toggleChat,
@@ -415,6 +416,7 @@ export default function App() {
             omniRef={omniRef}
             onBack={() => void store.navigate({ type: 'back' })}
             onForward={() => void store.navigate({ type: 'forward' })}
+            onReload={() => void store.reloadPage()}
             onShare={onShare}
             onOverview={toggleOverview}
             onActivity={toggleActivity}

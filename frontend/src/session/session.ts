@@ -339,6 +339,17 @@ export class SessionStore {
     finally { if (selection === this.selection && token === this.commandToken) this.update({ busy: null }) }
   }
 
+  /** Reload the page in view. A task's own surface has no reload call, so it navigates to its current address again. */
+  reloadPage = () => {
+    if (!this.api) return Promise.resolve(false)
+    if (this.state.activeTaskId) {
+      const tab = this.state.tabs.find((t) => t.id === this.state.activeTabId) ?? this.state.tabs[0]
+      const url = tab ? currentUrl(tab) : ''
+      return /^https?:\/\//.test(url) ? this.navigate({ type: 'navigate', url }) : Promise.resolve(false)
+    }
+    return this.directTabCommand('reload', () => this.api!.reload())
+  }
+
   /** From a task view the tab strip's + leaves the task (it keeps running) rather than silently doing nothing. */
   newBrowserTab = () => {
     if (this.state.activeTaskId) this.newTask()
