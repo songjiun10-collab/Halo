@@ -14,10 +14,11 @@
 3. Planner identity fill (missing taskId/goalVersion/basedOnObservationId taken from host context) and the answer grounding check.
 4. The rest (real-Chromium tests, find/zoom, team comms, session vault), one group at a time.
 Leave out: `web/oxyism-homepage.tar.gz`, the `web/oxyism-site` submodule link, and the navigation jitter (it exists to look less robotic to bot detection). Planner prompt text there caps `need_user` text at 2000 chars while develop's research verifier uses 2800; pick one. Deleting the old branch needs its own explicit confirmation after the port is verified (a delete attempt was refused by the sandbox on 2026-10-13).
+Evidence: the branch's fixes came from running the real app and benchmarks (the compare20 runs named in its commit messages, e.g. 10 of 15 Haiku finishes had no evidence; 16 identical failing navigates), so the stabilizers in step 2 and 3 are measured fixes, not guesses; that is why this is P1. The runs measured task success, not safety, so the safety gaps listed above still need the declaration test.
 Review notes already read: permission-policy, action-gate, session-vault, ipc and task-controller changes; not yet read: cdp-*, child-agent-coordinator, comms-guard, team-budgets, human-handoff, frontend components.
 
 **Effort:** XL
-**Priority:** P2
+**Priority:** P1
 **Depends on:** Review task T3 (action-safety module)
 
 ## Completed
