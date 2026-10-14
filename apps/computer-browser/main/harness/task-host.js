@@ -525,6 +525,10 @@ class TaskHost {
       browser,
       releaseViewsOnReview: this._releaseViewsOnReview,
       harnessProfile,
+      // Measured in the compare20 runs: a finish with no recorded evidence is sent back once, and an action that
+      // failed twice with the same deterministic error is not run a third time.
+      finishEvidenceRejections: 1,
+      repeatFailureLimit: 2,
       // Only the Codex route accepts a screenshot; every other planner uses
       // the text screen map for computer use.
       plannerImageInput: parentPin.plannerProvider === "codex_cli",

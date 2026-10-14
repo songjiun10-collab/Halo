@@ -10,7 +10,7 @@
 
 **Context:** Found in the whole-browser eng review (develop eng-review file, 2026-10-14, decision D9 A). Order matters:
 1. The action-safety module and action-type declaration test (review task T3) land first. Every ported action type then declares its privacy, payment and effect handling or fails the suite; `hw_step` enters only through that module.
-2. Stabilizers: repeat-failure limit (`repeatFailureLimit`), rejecting a finish with no recorded evidence (`finishEvidenceRejections`), a click on an already-selected target counts as success.
+2. Stabilizers: repeat-failure limit (`repeatFailureLimit`) and rejecting a finish with no recorded evidence (`finishEvidenceRejections`) are DONE on develop (both on by default in TaskHost; a routine's scripted finish is exempt). Still open: a click on an already-selected target counts as success (it lives in Halowright, which arrives with hw_step).
 3. Planner identity fill (missing taskId/goalVersion/basedOnObservationId taken from host context) and the answer grounding check.
 4. The rest (real-Chromium tests, find/zoom, team comms, session vault), one group at a time.
 Leave out: `web/oxyism-homepage.tar.gz`, the `web/oxyism-site` submodule link, and the navigation jitter (it exists to look less robotic to bot detection). Planner prompt text there caps `need_user` text at 2000 chars while develop's research verifier uses 2800; pick one. Deleting the old branch needs its own explicit confirmation after the port is verified (a delete attempt was refused by the sandbox on 2026-10-13).

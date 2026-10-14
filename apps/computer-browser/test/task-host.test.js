@@ -3006,8 +3006,9 @@ test("a Multi-agent task's planner is told it may split work, a plain task's is 
     for (let i = 0; i < 100 && seen.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     return seen;
   };
-  assert.deepEqual(await seenFor({ requestedCapabilityProfile: "multi_agent" }), [{ enabled: true, maxAgents: 8, executionModes: ["host"], active: null }]);
-  assert.deepEqual(await seenFor({}), [undefined]);
+  // Only the first planner turn matters here: a finish without evidence is sent back once, which adds a second turn.
+  assert.deepEqual((await seenFor({ requestedCapabilityProfile: "multi_agent" }))[0], { enabled: true, maxAgents: 8, executionModes: ["host"], active: null });
+  assert.equal((await seenFor({}))[0], undefined);
 });
 
 test("a new planner pins the plannerModel chosen when it is created, and omits it while unset", async () => {

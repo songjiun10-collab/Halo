@@ -254,6 +254,8 @@ class TaskController {
     permissionMode = "browse",
     observeRetryDelayMs = OBSERVE_RETRY_DELAY_MS,
     navIntervalMs = SAME_SITE_NAV_INTERVAL_MS,
+    finishEvidenceRejections = 0,
+    repeatFailureLimit = 0,
     maxRecoveries,
     plannerImageInput = true,
     visionAssist = null,
@@ -508,6 +510,17 @@ class TaskController {
     this._captchaOrigins = new Set();
     this._onCaptchaPage = false;
     this._navIntervalMs = Number.isFinite(navIntervalMs) ? navIntervalMs : SAME_SITE_NAV_INTERVAL_MS;
+    // A finish with no recorded evidence for any criterion is sent back this many times before it is accepted
+    // (measured in the compare20 runs: 10 of 15 Haiku finishes had no evidence observe, and all 3 plainly wrong ones were among them).
+    this._finishEvidenceBudget = Number.isInteger(finishEvidenceRejections) && finishEvidenceRejections >= 0 ? finishEvidenceRejections : 0;
+    this._finishEvidenceRejections = 0;
+    this._finishFeedback = null;
+    // An identical action that already failed this many times with a deterministic error is not dispatched again
+    // (compare20: 16 identical failing navigates, 12 identical failing selects). 0 = off.
+    this._repeatFailureLimit = Number.isInteger(repeatFailureLimit) && repeatFailureLimit >= 0 ? repeatFailureLimit : 0;
+    this._repeatFailures = new Map();
+    this._repeatBlocked = 0;
+    this._repeatFeedback = null;
     this._needUserReason = null;
     this._maxRecoveries = maxRecoveries;
     this._proposalFeedbackCode = null;
@@ -1075,6 +1088,7 @@ class TaskController {
 
   async _pauseWith(reason) {
     this._leaveActive();
+    this._finishFeedback = null;
     this._task = { state: "paused", pauseReason: reason };
     // Pause reasons otherwise live only in the latest checkpoint; keep each one
     // in the journal so "why does it keep pausing" can be answered afterwards.
@@ -2165,6 +2179,8 @@ class TaskController {
               ...(this._lastActionNote ? { lastAction: this._lastActionNote } : {}),
               ...(this._scrollStreak.count >= 3 ? { scrollStreak: this._scrollStreak.count } : {}),
               ...(this._errorUrls.length > 0 ? { errorUrls: [...this._errorUrls] } : {}),
+              ...(this._finishFeedback ? { finishFeedback: { ...this._finishFeedback } } : {}),
+              ...(this._repeatFeedback ? { repeatFailureFeedback: { ...this._repeatFeedback } } : {}),
               mcp: { enabled: this._mcpAvailableToPlanner(),
                 actions: ["mcp_search", "mcp_describe", "mcp_propose"] },
               ...(this._harnessProfile === "long" ? { goalPersistence: this._goalPersistenceState() } : {}),
@@ -2255,6 +2271,8 @@ class TaskController {
           if (this._pendingMcpObservation) this._pendingMcpObservation = null;
           this._pendingContextRead = null;
           this._loopHint = false;
+          this._finishFeedback = null;
+          this._repeatFeedback = null;
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -2367,6 +2385,17 @@ class TaskController {
               break;
             }
             continue; // the goal is not met: keep working, the planner is told why via context.progress.goalPersistence
+          }
+          // A routine's finish is scripted by the routine, not proposed by a planner, so there is no one to send it back to.
+          if (!this._routineRunner && !completion.complete && this._criteriaStatus.size === 0 && this._finishEvidenceRejections < this._finishEvidenceBudget) {
+            this._finishEvidenceRejections += 1;
+            this._finishFeedback = {
+              authority: "host_finish_not_permission",
+              reason: "no_evidence_recorded",
+              guidance: "finish needs evidence: no criterion has a recorded observation yet. Check that the CURRENT page shows exactly what the goal asks for (the requested item, value or state, not just a related page, a search box or a landing page). If it does, propose one observe with that criterionId, then finish. If it does not, keep working toward it.",
+            };
+            await this._store.append({ type: "note", payload: { kind: "finish_rejected", reason: "no_evidence_recorded", rejections: this._finishEvidenceRejections } });
+            continue;
           }
           this._leaveActive();
           if (completion.complete) {
@@ -2651,6 +2680,20 @@ class TaskController {
       if (safety.undeclared) {
         await this._store.append({ type: "note", payload: { kind: "invalid_action", actionType: String(action?.type).slice(0, 40), errorCode: "action_safety_undeclared" } });
         continue;
+      }
+      if (this._repeatFailureLimit > 0 && (this._repeatFailures.get(repeatActionKey(action)) ?? 0) >= this._repeatFailureLimit) {
+        this._repeatBlocked += 1;
+        this._repeatFeedback = {
+          note: "repeat_blocked",
+          actionType: action.type,
+          guidance: "This exact action already failed repeatedly with the same error and was not run again. Change the target, the approach or the page, or report need_user.",
+        };
+        await this._store.append({ type: "note", payload: { kind: "repeat_blocked", actionType: action.type, blocked: this._repeatBlocked } });
+        if (this._repeatBlocked >= REPEAT_BLOCK_PAUSE) {
+          await this._pauseWith("no_progress");
+          return "stop_loop";
+        }
+        return "continue";
       }
       const privacy = safety.privacy;
       if (privacy) {
@@ -3011,6 +3054,15 @@ class TaskController {
       ? result.observation
       : null;
 
+    if (this._repeatFailureLimit > 0 && result.action) {
+      const repeatKey = repeatActionKey(result.action);
+      if (result.status === "failed" && DETERMINISTIC_FAILURES.has(result.errorCode)) {
+        this._repeatFailures.set(repeatKey, (this._repeatFailures.get(repeatKey) ?? 0) + 1);
+      } else if (result.status === "ok") {
+        this._repeatFailures.delete(repeatKey);
+      }
+    }
+
     // Scrolling the same page again and again is a loop even when each scroll
     // reveals slightly different text (so the identical-observation key below
     // never repeats): pause instead of burning the whole time budget on it.
@@ -3106,6 +3158,15 @@ class TaskController {
       }
     }
   }
+}
+
+// Errors that repeat identically when the same action is run again (the page or target is what is wrong).
+const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable"]);
+const REPEAT_BLOCK_PAUSE = 3;
+// Same action, ignoring the per-observation/per-request ids that change every turn.
+function repeatActionKey(action) {
+  const { observationId, requestId, id, actionId, ...rest } = action ?? {};
+  return JSON.stringify(rest, Object.keys(rest).sort());
 }
 
 module.exports = { TaskController, TaskControllerError };
