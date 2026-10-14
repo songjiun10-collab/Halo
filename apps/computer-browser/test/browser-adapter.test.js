@@ -82,6 +82,31 @@ test("credential autofill is origin-bound, fills only a unique login pair, and n
   assert.deepEqual(await browser.fillCredential({ username: "a", password: "p", origin: "http://accounts.example" }), { status: "failed", errorCode: "credential_origin_mismatch" });
 });
 
+test("credential autofill checks the origin again inside the page, so a page that replaced the login page gets nothing", async () => {
+  const filled = [];
+  class HTMLInputElement {}
+  Object.defineProperty(HTMLInputElement.prototype, "value", { get() { return ""; }, set(value) { filled.push(value); } });
+  const field = (type, name) => Object.assign(Object.create(HTMLInputElement.prototype), {
+    type, name, id: name, autocomplete: "", disabled: false, getBoundingClientRect: () => ({ width: 120, height: 24 }), dispatchEvent: () => true,
+  });
+  const inputs = [field("email", "email"), field("password", "password")];
+  let documentOrigin = "https://evil.example";
+  const browser = new BrowserAdapter({ view: makeFakeView({
+    // The host still reports the login page: the navigation commits between that check and the fill.
+    getURL: () => "https://accounts.example/login",
+    executeJavaScript: async (script) => vm.runInContext(script, vm.createContext({
+      location: { origin: documentOrigin }, HTMLInputElement, document: { querySelectorAll: () => inputs },
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }), Event: class { constructor(type) { this.type = type; } },
+    })),
+  }) });
+  const fill = async () => ({ ...(await browser.fillCredential({ username: "alice@example.com", password: "supersecret", origin: "https://accounts.example" })) });
+  assert.deepEqual(await fill(), { status: "failed", errorCode: "credential_origin_mismatch" });
+  assert.deepEqual(filled, [], "(the bug) the secret went into the page that replaced the login page");
+  documentOrigin = "https://accounts.example";
+  assert.deepEqual(await fill(), { status: "ok", usernameFilled: true, passwordFilled: true });
+  assert.deepEqual(filled, ["alice@example.com", "supersecret"]);
+});
+
 test("BrowserAdapter repeats the current permission boundary for direct execute calls", async () => {
   let navigations = 0;
   const browser = new BrowserAdapter({ view: makeFakeView({ loadURL: async () => { navigations += 1; } }) });

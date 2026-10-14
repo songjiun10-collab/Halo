@@ -590,7 +590,9 @@ class BrowserAdapter {
   // Main-process-only autofill primitive. The only page script performs a
   // bounded visible-field lookup and value/input/change events; it never
   // clicks submit, calls requestSubmit(), or returns either secret. The
-  // origin is checked immediately before entering the page's main world.
+  // origin is checked before entering the page's main world, and again by the
+  // script itself before it touches a field: a navigation can commit between
+  // the two, and location cannot be faked by the page.
   async fillCredential({ username, password, origin } = {}) {
     if (this._disposed) return { status: "failed", errorCode: "disposed" };
     if (typeof username !== "string" || typeof password !== "string" || !password || typeof origin !== "string") {
@@ -609,6 +611,7 @@ class BrowserAdapter {
     }
     const payload = JSON.stringify({ username, password }).replace(/</g, "\\u003c");
     const script = `(() => {
+      if (location.origin !== ${JSON.stringify(expected.origin)}) return { status: "failed", errorCode: "credential_origin_mismatch" };
       const secret = ${payload};
       const visible = (element) => {
         const style = getComputedStyle(element);
