@@ -13,6 +13,26 @@ const { BrowserAdapter } = require("../main/harness/browser-adapter");
 const { openCdpView, createCdpView, connectCdpTransport, modifierMask, keyInfo, pngSize } = require("../main/harness/cdp-web-contents");
 const { acquireCdpBrowser } = require("../main/harness/cdp-browser-host");
 
+// A profile Chromium is still writing to can refuse removal for a moment. Failing the test over a temp
+// directory would hide the result; the OS cleans /tmp anyway.
+function removeProfile(dir) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); return; }
+    catch { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200); }
+  }
+}
+
+// Chromium writes its profile while it shuts down: ask nicely, then force it, and only return once the
+// process is gone, so removing the profile directory afterwards cannot race it.
+function stopChromium(chrome) {
+  if (chrome.exitCode !== null || chrome.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    const forced = setTimeout(() => chrome.kill("SIGKILL"), 5000);
+    chrome.once("exit", () => { clearTimeout(forced); resolve(); });
+    chrome.kill("SIGTERM");
+  });
+}
+
 const CANDIDATES = [
   process.env.HALO_CHROMIUM,
   path.join(os.homedir(), "chromium/src/out/Trial/Chromium.app/Contents/MacOS/Chromium"),
@@ -45,9 +65,9 @@ test("BrowserAdapter observes, clicks and navigates a real Chromium page over CD
   let view;
   t.after(async () => {
     try { view?.closeConnection(); } catch { /* ignore */ }
-    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await stopChromium(chrome);
     await new Promise((resolve) => server.close(resolve));
-    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    removeProfile(profile);
   });
   const wsUrl = await new Promise((resolve, reject) => {
     let buffer = "";
@@ -115,9 +135,9 @@ test("several agents share one Chromium with isolated pages, storage and epochs"
   let transport;
   t.after(async () => {
     try { transport?.close(); } catch { /* ignore */ }
-    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await stopChromium(chrome);
     await new Promise((resolve) => server.close(resolve));
-    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    removeProfile(profile);
   });
   const wsUrl = await new Promise((resolve, reject) => {
     let buffer = "";
@@ -253,9 +273,9 @@ test("a JavaScript dialog cannot freeze the page: alert and beforeunload are acc
   let view;
   t.after(async () => {
     try { view?.closeConnection(); } catch { /* ignore */ }
-    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await stopChromium(chrome);
     await new Promise((resolve) => server.close(resolve));
-    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    removeProfile(profile);
   });
   const wsUrl = await new Promise((resolve, reject) => {
     let buffer = "";
@@ -304,9 +324,9 @@ test("an open modal dialog is what the planner sees: the inert page behind it is
   let view;
   t.after(async () => {
     try { view?.closeConnection(); } catch { /* ignore */ }
-    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await stopChromium(chrome);
     await new Promise((resolve) => server.close(resolve));
-    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    removeProfile(profile);
   });
   const wsUrl = await new Promise((resolve, reject) => {
     let buffer = "";
@@ -352,9 +372,9 @@ test("on the person's own tab a dialog waits for the person: it is reported, ans
   let view;
   t.after(async () => {
     try { view?.closeConnection(); } catch { /* ignore */ }
-    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await stopChromium(chrome);
     await new Promise((resolve) => server.close(resolve));
-    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    removeProfile(profile);
   });
   const wsUrl = await new Promise((resolve, reject) => {
     let buffer = "";
@@ -399,9 +419,9 @@ test("only a modal a person can actually see hides the page; a closed drawer hid
   let view;
   t.after(async () => {
     try { view?.closeConnection(); } catch { /* ignore */ }
-    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await stopChromium(chrome);
     await new Promise((resolve) => server.close(resolve));
-    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    removeProfile(profile);
   });
   const wsUrl = await new Promise((resolve, reject) => {
     let buffer = "";
@@ -452,9 +472,9 @@ test("on a Chromium agent page a link, a script or a redirect cannot carry the a
   let view;
   t.after(async () => {
     try { view?.closeConnection(); } catch { /* ignore */ }
-    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await stopChromium(chrome);
     await new Promise((resolve) => server.close(resolve));
-    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    removeProfile(profile);
   });
   const wsUrl = await new Promise((resolve, reject) => {
     let buffer = "";
