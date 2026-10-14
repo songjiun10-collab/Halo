@@ -189,3 +189,28 @@ def test_serve_forever_rejects_oversized_frame_without_crashing(private_socket_p
     raw.sendall((70000).to_bytes(4, "big") + b"x")
     raw.close()
     server.join(timeout=5)
+
+
+# 2026-10-14: the same gap again. find_text and select_option (and the older
+# click_at/type_at/press_key) were added to the harness but not here, so the real
+# approver denied them unconditionally ("unknown action") while every JS test used a
+# fake approver. They get navigate's evaluated treatment, and the test below fails
+# the moment the harness's action list and this vocabulary drift apart again.
+@pytest.mark.parametrize("action", ["find_text", "select_option", "click_at", "type_at", "press_key"])
+def test_later_harness_action_types_get_the_same_evaluated_treatment_as_navigate(action):
+    for source, self_provenance in (("user_prompt", "trusted"), ("page_content", "untrusted"), ("page_content", "trusted")):
+        got = svc.evaluate(_request(action=action, source=source, self_provenance=self_provenance))
+        nav = svc.evaluate(_request(action="navigate", source=source, self_provenance=self_provenance))
+        assert got["decision"] == nav["decision"], (action, source, self_provenance, got)
+
+
+def test_every_harness_action_type_is_in_the_approver_vocabulary():
+    import re
+
+    policy = (Path(__file__).resolve().parents[1] / "apps/computer-browser/main/harness/permission-policy.js").read_text()
+    block = re.search(r"const ACTIONS = Object\.freeze\(\[(.*?)\]\)", policy, re.S)
+    assert block, "permission-policy.js ACTIONS list not found"
+    harness_actions = set(re.findall(r'"([a-z_]+)"', block.group(1)))
+    assert harness_actions, "no action types parsed"
+    missing = harness_actions - svc.VALID_ACTIONS
+    assert not missing, f"harness action types the approver would deny as unknown: {sorted(missing)}"

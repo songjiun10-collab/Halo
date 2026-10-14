@@ -29,7 +29,8 @@ from experiments.e007_dual_agent_provenance_gate.channel import UnixSocketChanne
 from halo.policy import decide  # noqa: E402
 from halo.safety_cases import Event, evaluate_trace  # noqa: E402
 
-VALID_ACTIONS = {"click", "type", "submit_form", "navigate", "download", "follow_link", "scroll", "observe"}
+VALID_ACTIONS = {"click", "type", "submit_form", "navigate", "download", "follow_link", "scroll", "observe",
+                 "find_text", "select_option", "click_at", "type_at", "press_key"}
 VALID_SOURCES = {"user_prompt", "page_content"}
 VALID_PROVENANCE = {"trusted", "untrusted"}
 
@@ -82,6 +83,17 @@ _ACTION_MAPPING = {
     "follow_link": ("read", None),
     "scroll": ("read", None),
     "observe": ("read", None),
+    # 2026-10-14: the same drift as the 2026-09-27 note above. find_text only
+    # scrolls (like scroll); select_option, click_at, type_at and press_key are
+    # the same kind of page interaction as click/type and get their treatment.
+    # Before this they fell outside VALID_ACTIONS and were denied on every
+    # request. tests/test_computer_browser_approver.py now fails whenever the
+    # harness's ACTIONS list and this table drift apart.
+    "find_text": ("read", None),
+    "select_option": ("read", None),
+    "click_at": ("read", None),
+    "type_at": ("read", None),
+    "press_key": ("read", None),
     "submit_form": ("post_web", "external_write"),
     "download": ("download", None),
 }
