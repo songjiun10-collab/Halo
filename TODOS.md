@@ -22,3 +22,16 @@ Review notes already read: permission-policy, action-gate, session-vault, ipc an
 **Depends on:** Review task T3 (action-safety module)
 
 ## Completed
+
+### What browser-use has that HALO does not (read 2026-10-14, MIT, ideas only, no code copied)
+
+**Compared:** `browser_use/agent/views.py` (ActionLoopDetector), `agent/judge.py`, `tools/service.py` (action list).
+
+**Already covered in HALO, nothing to port:** loop detection. browser-use only nudges the model (repeats at 5/8/12, same page 5 times). HALO already pauses: identical action on an identical page (`noProgress`), repeated scroll (`SCROLL_STREAK_LIMIT`), same page or two pages bouncing (`PAGE_LOOP_*`), and a repeated deterministic failure (`repeatFailureLimit`). A finish with no evidence is rejected by the host, which does the job of its post-run judge.
+
+**Real gaps, in the order they would help a user:**
+1. Find text on the page and scroll to it (`find_text`, `search_page`): read-only, so it needs no payment or privacy check, but it must be declared in `action-safety.js` and added to both runtimes' adapters.
+2. List a dropdown's options before choosing (`dropdown_options`): avoids the `option_not_found` retries.
+3. Extract structured data from the page text with a separate model call (`extract`): the page text is untrusted, so the call must run with no tools.
+4. File upload (`upload_file`): needs a privacy declaration; only a file the person named in the request.
+Deliberately not ported: `evaluate` (runs model-written JavaScript in the page), which would bypass every host check.
