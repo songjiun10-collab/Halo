@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import type { TaskInput } from '../session/api'
+import { leaveToHalo } from '../hooks/useShortcuts'
 
 /** Input reaches the page only through the host's ownership check. */
 export function RemotePageFrame({ frame, onInput }: { frame: string; onInput: (input: TaskInput) => void }) {
@@ -32,6 +33,7 @@ export function RemotePageFrame({ frame, onInput }: { frame: string; onInput: (i
       onKeyDown={(event) => {
         if (composing.current || event.nativeEvent.isComposing || event.key === 'Process' || event.key === 'Dead') return
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v') return
+        if (leaveToHalo(event.nativeEvent)) return // Find, reload, zoom, tabs: HALO's own shortcuts are never sent to the page.
         if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) return
         if (event.key.length > 16) return
         event.preventDefault(); event.stopPropagation(); onInput({ type: 'keyDown', key: event.key, modifiers: modifiers(event) })
