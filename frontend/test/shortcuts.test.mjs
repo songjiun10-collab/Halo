@@ -11,7 +11,7 @@ const press = (code, keys = {}) => ({ code, metaKey: false, ctrlKey: false, altK
 test('with the page focused, HALO shortcuts stay with HALO and every other key goes to the page', () => {
   const halo = [['KeyF', { ctrlKey: true }], ['KeyR', { metaKey: true }], ['KeyT', { ctrlKey: true }], ['KeyW', { metaKey: true }],
     ['Equal', { ctrlKey: true }], ['Minus', { metaKey: true }], ['Digit0', { ctrlKey: true }], ['KeyL', { metaKey: true }],
-    ['Digit3', { ctrlKey: true }], ['KeyK', { metaKey: true }], ['F5', {}]]
+    ['Digit3', { ctrlKey: true }], ['KeyK', { metaKey: true }], ['F5', {}], ['Slash', { metaKey: true }], ['Slash', { ctrlKey: true }]]
   for (const [code, keys] of halo) assert.equal(leaveToHalo(press(code, keys)), true, `${code} ${JSON.stringify(keys)}`)
   // Editing keys belong to the page. Alt+arrow moves by word in a Mac text field, so it is never taken from the page.
   const page = [['KeyC', { ctrlKey: true }], ['KeyA', { metaKey: true }], ['KeyZ', { ctrlKey: true }], ['KeyV', { metaKey: true }],
@@ -27,10 +27,13 @@ test('the page frame lets HALO shortcuts through before it claims a key for the 
   assert.ok(keyDown.indexOf('leaveToHalo(') < keyDown.indexOf('stopPropagation'), '(the bug) Mod+F, Mod+R and the rest never reached HALO while the page had focus')
 })
 
-test('typing a question mark in a text field types it instead of opening the shortcut list', () => {
-  assert.equal(shortcutFor(press('Slash', { shiftKey: true, target: { tagName: 'BODY' } }))?.action, 'help')
-  for (const target of [{ tagName: 'INPUT' }, { tagName: 'TEXTAREA' }, { tagName: 'DIV', isContentEditable: true }]) {
+test('a question mark is only typing; the shortcut list opens with Mod+/, even from a text field', () => {
+  // A single printable key must not be a shortcut (WCAG 2.1.4): Shift+/ types "?" everywhere.
+  for (const target of [{ tagName: 'BODY' }, { tagName: 'INPUT' }, { tagName: 'TEXTAREA' }, { tagName: 'DIV', isContentEditable: true }]) {
     assert.equal(shortcutFor(press('Slash', { shiftKey: true, target })), null, target.tagName)
+  }
+  for (const keys of [{ metaKey: true }, { ctrlKey: true }]) {
+    assert.equal(shortcutFor(press('Slash', { ...keys, target: { tagName: 'INPUT' } }))?.action, 'help', JSON.stringify(keys))
   }
 })
 

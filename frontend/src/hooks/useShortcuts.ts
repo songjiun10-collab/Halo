@@ -26,7 +26,7 @@ export const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Mod+,', label: 'Settings' },
   { keys: 'Mod+Shift+S', label: 'Share' },
   { keys: 'Esc', label: 'Close the open Halo surface' },
-  { keys: 'Shift+/', label: 'This list' },
+  { keys: 'Mod+/', label: 'This list' },
 ]
 
 interface Handlers {
@@ -60,12 +60,6 @@ export type ShortcutAction =
 /** `needsTab`: does nothing (and leaves the key alone) while there is no tab. `position`: Mod+1–9, 9 is the last tab. */
 export interface Shortcut { action: ShortcutAction; needsTab: boolean; position?: number }
 
-/** A text field, where a printable key is typing, never a shortcut. */
-function typingIn(target: EventTarget | null | undefined): boolean {
-  const element = target as { tagName?: unknown; isContentEditable?: unknown } | null | undefined
-  return !!element && (element.isContentEditable === true || element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT')
-}
-
 /**
  * Which HALO shortcut a key press is, or null. Keyed off `e.code` (the physical key), not
  * `e.key`, so Shift-combinations (Mod+Shift+.) work the same regardless of the character
@@ -76,7 +70,7 @@ export function shortcutFor(e: KeyPress): Shortcut | null {
   const anywhere = (action: ShortcutAction): Shortcut => ({ action, needsTab: false })
   const onTab = (action: ShortcutAction): Shortcut => ({ action, needsTab: true })
   if (mod && e.code === 'Period') return anywhere(e.shiftKey ? 'toggleChat' : 'togglePin')
-  if (!mod && e.shiftKey && e.code === 'Slash') return typingIn(e.target) ? null : anywhere('help')
+  if (mod && !e.shiftKey && !e.altKey && e.code === 'Slash') return anywhere('help')
   if (!mod && !e.shiftKey && !e.altKey && e.code === 'F5') return anywhere('reload')
   if (e.altKey && e.code === 'ArrowLeft') return anywhere('back')
   if (e.altKey && e.code === 'ArrowRight') return anywhere('forward')

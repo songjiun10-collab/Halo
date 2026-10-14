@@ -13,7 +13,7 @@ const keyLabel = (part: string) =>
       : part === 'Shift' ? (isMac ? '⇧' : 'Shift')
         : part
 
-/** The full shortcut table, opened with Shift+/ or the toolbar's own list. */
+/** The full shortcut table, opened with Mod+/ or the toolbar's own list. */
 export function ShortcutsHelp({ leaving, onClose }: Props) {
   const ref = useRef<HTMLElement>(null)
   const closeRef = useRef(onClose)
