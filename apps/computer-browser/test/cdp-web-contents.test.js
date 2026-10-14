@@ -290,3 +290,55 @@ test("a JavaScript dialog cannot freeze the page: alert and beforeunload are acc
   assert.match((await within(5000, adapter.observe())).text, /LEFT-OK/);
   await adapter.dispose();
 });
+
+test("an open modal dialog is what the planner sees: the inert page behind it is left out and its own buttons are never cut off", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
+  const items = Array.from({ length: 60 }, (_, i) => `<li><a href="/p/${i}">Product ${i}</a> <button>Add ${i}</button></li>`).join("");
+  const page = `<title>shop</title><nav><a href="/">Home</a></nav><main><h1>Shop</h1><ul>${items}</ul></main>
+    <dialog id="d" aria-label="Cookie settings"><h2>Cookies</h2><button>Accept all</button><button>Reject all</button></dialog>
+    <div id="chat" role="dialog" aria-label="Chat"><button>Open chat</button></div>`;
+  const server = http.createServer((request, response) => { response.setHeader("content-type", "text/html; charset=utf-8"); response.end(page); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "halo-cdp-modal-"));
+  const chrome = spawn(CHROMIUM, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []), "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+  let view;
+  t.after(async () => {
+    try { view?.closeConnection(); } catch { /* ignore */ }
+    await new Promise((resolve) => { chrome.once("exit", resolve); chrome.kill("SIGTERM"); setTimeout(resolve, 5000); });
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  });
+  const wsUrl = await new Promise((resolve, reject) => {
+    let buffer = "";
+    const timer = setTimeout(() => reject(new Error("Chromium did not report a DevTools endpoint")), 30000);
+    chrome.stderr.on("data", (chunk) => { buffer += chunk; const match = /DevTools listening on (ws:\/\/\S+)/.exec(buffer); if (match) { clearTimeout(timer); resolve(match[1]); } });
+    chrome.on("exit", () => reject(new Error("Chromium exited early")));
+  });
+  view = await openCdpView(wsUrl, { width: 1000, height: 700 });
+  const adapter = new BrowserAdapter({ view, permissionMode: "full" });
+  const wc = view.webContents;
+  const names = (observation) => observation.elements.map((element) => element.name);
+
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/` })).status, "ok");
+  const before = await adapter.observe();
+  assert.equal(before.modalOpen, undefined);
+  assert.ok(names(before).includes("Product 0"), "without a modal the page is listed");
+  // The page is long, so the element cap is reached before the dialog at the end of the document.
+  assert.equal(names(before).includes("Accept all"), false, "(the bug) the dialog's own buttons fall past the element cap");
+
+  await wc.executeJavaScript("document.getElementById('d').showModal()");
+  const during = await adapter.observe();
+  assert.equal(during.modalOpen, true);
+  assert.deepEqual(names(during).filter((name) => /^(Accept all|Reject all)$/.test(name)), ["Accept all", "Reject all"], "the dialog's buttons are listed");
+  assert.equal(names(during).some((name) => /^Product \d+$/.test(name) || /^Add \d+$/.test(name)), false, "the page behind the modal is left out");
+  assert.ok(during.elements.length < 10, `only the dialog remains (${during.elements.length} elements)`);
+  const accept = during.elements.find((element) => element.name === "Accept all");
+  assert.equal((await adapter.execute({ type: "click", elementId: accept.elementId }, { documentEpoch: during.documentEpoch })).status, "ok", "the dialog can still be clicked");
+
+  await wc.executeJavaScript("document.getElementById('d').close()");
+  const after = await adapter.observe();
+  assert.equal(after.modalOpen, undefined, "closing it brings the page back");
+  assert.ok(names(after).includes("Product 0"));
+  assert.ok(names(after).includes("Open chat") || names(after).includes("Product 0"), "a non-modal role=dialog (a chat widget) never hides the page");
+  await adapter.dispose();
+});

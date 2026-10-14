@@ -236,6 +236,15 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       form: formInfo(node), disabled: !!node.disabled || node.getAttribute("aria-disabled") === "true",
       readonly: !!node.readOnly || node.getAttribute("readonly") !== null,
     });
+    // A modal dialog (dialog.showModal() or aria-modal="true") makes the rest of the page inert for a person,
+    // so only the dialog and the elements that contain it are listed. A plain role="dialog" widget is not modal.
+    let modal = null;
+    try {
+      for (const candidate of document.querySelectorAll('dialog[open], [aria-modal="true"]')) {
+        const isModal = candidate.getAttribute("aria-modal") === "true" || (candidate.tagName === "DIALOG" && candidate.matches(":modal"));
+        if (isModal && !hidden(candidate)) modal = candidate;
+      }
+    } catch { modal = null; }
     if (root) {
       // Open shadow roots (web components such as MDN's compat table) are
       // queued and walked after the light DOM, under the same visit cap.
@@ -250,7 +259,8 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
           const ownText = (node.childElementCount === 0 && !hidden(node) && node.tagName !== "INPUT" && node.tagName !== "TEXTAREA" && node.tagName !== "SELECT" ? (node.innerText || node.textContent || "") : "").trim().slice(0, 200);
           const role = roleOf(node);
           const isTextNode = ["P", "LI", "LABEL", "DT", "DD", "FIGCAPTION"].includes(node.tagName);
-          const shouldInclude = role && !hidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
+          const behindModal = modal !== null && !modal.contains(node) && !node.contains(modal);
+          const shouldInclude = role && !behindModal && !hidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
           // Headings get a small reserve past the element cap: on long articles the
           // nav and table-of-contents links fill the cap before the first section title.
           const withinCap = elements.length < ${maxElements} || (/^H[1-6]$/.test(node.tagName) && elements.length < ${maxElements} + ${HEADING_RESERVE});
@@ -333,6 +343,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       title: document.title || "",
       text: textParts.join(" ").slice(0, ${maxTextBytes}),
       elements,
+      ...(modal ? { modalOpen: true } : {}),
     };
   })()`;
 }
@@ -690,6 +701,8 @@ class BrowserAdapter {
       title: raw.title,
       text: raw.text,
       ...(dialogs.length > 0 ? { dialogs } : {}),
+      // A modal dialog is open: only it (and what contains it) is listed, because the page behind it cannot be used.
+      ...(raw.modalOpen === true ? { modalOpen: true } : {}),
       // Only error responses are surfaced, so ordinary observations stay unchanged.
       ...(this._lastHttpStatus >= 400 ? { httpStatus: this._lastHttpStatus } : {}),
       elements: trimContainerNames(raw.elements.map((el, index) => {
