@@ -57,6 +57,8 @@
     "runtime-src/main/harness/halowright.ts",
     "runtime-src/main/harness/frame-capture.ts",
     "runtime-src/main/harness/computer-use-observation.ts",
-    "runtime-src/main/harness/turn-memory-preparation.ts"
+    "runtime-src/main/harness/turn-memory-preparation.ts",
+    "runtime-src/main/harness/private-network.ts",
+    "runtime-src/main/harness/card-blind.ts"
   ]
 }
