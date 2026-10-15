@@ -6,12 +6,13 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
-const PROTOCOLS: [&str; 5] = [
+const PROTOCOLS: [&str; 6] = [
     "cached_verdict",
     "use_time_revalidation",
     "fixed_window_revalidation",
     "adaptive_cached",
     "progressive_refresh",
+    "observation_bounded_revalidation",
 ];
 
 /// Run one trajectory. Undefined class rates are JSON null (CSV NaN).
@@ -27,6 +28,8 @@ pub fn execute(config: &Value) -> Result<Value, String> {
     // onto the state's own oscillation period at high volatility, and
     // silently overrode an explicit freshness_window of 0. See the Python
     // reference's adaptive_window() for the full rationale.
+    let obs_lag = support::integer(config, "observation_lag", 0, false)?;
+    let max_obs_age = support::integer(config, "max_observation_age", 0, false)?;
     let adaptive_window = (window as f64 * (1.0 - volatility)).round_ties_even() as u64;
     let mut rng = StdRng::seed_from_u64(seed);
     let mut sensitive: Vec<bool> = (0..n).map(|_| rng.gen::<f64>() < 0.30).collect();
@@ -36,6 +39,7 @@ pub fn execute(config: &Value) -> Result<Value, String> {
         (0..n).map(|i| !is_write[i] || (!s[i] && w[i])).collect()
     };
     let checked = policy(&sensitive, &writable);
+    let mut history = vec![(sensitive.clone(), writable.clone())];
     let mut fixed = checked.clone();
     let mut progressive = checked.clone();
     let mut fixed_last_check = 0;
@@ -49,6 +53,7 @@ pub fn execute(config: &Value) -> Result<Value, String> {
         for state in &mut writable {
             *state ^= rng.gen::<f64>() < volatility;
         }
+        history.push((sensitive.clone(), writable.clone()));
         // A cached verdict remains valid when its age equals the bound.
         if step - fixed_last_check > window {
             fixed = policy(&sensitive, &writable);
@@ -62,6 +67,13 @@ pub fn execute(config: &Value) -> Result<Value, String> {
         }
     }
     let at_use = policy(&sensitive, &writable);
+    // Evidence older than the bound fails closed (BLOCK).
+    let observed: Vec<bool> = if obs_lag > max_obs_age {
+        vec![false; n]
+    } else {
+        let (os, ow) = &history[delay.saturating_sub(obs_lag) as usize];
+        policy(os, ow)
+    };
     let adaptive: Vec<bool> = (0..n)
         .map(|i| {
             if is_write[i] || volatility > 0.05 {
@@ -77,7 +89,7 @@ pub fn execute(config: &Value) -> Result<Value, String> {
     for (name, decisions) in
         PROTOCOLS
             .into_iter()
-            .zip([&checked, &at_use, &fixed, &adaptive, &progressive])
+            .zip([&checked, &at_use, &fixed, &adaptive, &progressive, &observed])
     {
         let mut unsafe_allowed = 0;
         let mut safe_blocked = 0;
@@ -432,6 +444,20 @@ mod tests {
     }
 
     #[test]
+    fn observation_bounded_matches_oracle_when_fresh_and_fails_closed_when_stale() {
+        let fresh = execute(&json!({"seed": 3, "delay_steps": 8, "volatility": 0.02, "n": 5000})).unwrap();
+        assert_eq!(
+            fresh["results"]["observation_bounded_revalidation"],
+            fresh["results"]["use_time_revalidation"]
+        );
+        let stale = execute(&json!({"seed": 3, "delay_steps": 8, "volatility": 0.02, "n": 5000,
+            "observation_lag": 3, "max_observation_age": 2})).unwrap();
+        let r = &stale["results"]["observation_bounded_revalidation"];
+        assert_eq!(r["containment_failure_rate"], 0.0);
+        assert_eq!(r["false_block_rate"], 1.0);
+    }
+
+    #[test]
     fn zero_delay_never_expires_or_revalidates() {
         let out =
             execute(&json!({"seed": 0, "delay_steps": 0, "volatility": 0.05, "n": 2000})).unwrap();
@@ -547,7 +573,7 @@ mod tests {
         )
         .unwrap();
         let mut results = csv::Reader::from_path(dir.path().join("results.csv")).unwrap();
-        assert_eq!(results.records().count(), 10);
+        assert_eq!(results.records().count(), 12);
         let mut summary = csv::Reader::from_path(dir.path().join("summary.csv")).unwrap();
         let ci = summary
             .headers()
