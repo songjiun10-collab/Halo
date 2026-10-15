@@ -4,9 +4,25 @@ Status: idea, not scheduled. Out of scope for the January beta.
 
 ## Decision
 
-OS-wide computer use is never enabled on the user's own machine. It may be
-offered only as an opt-in mode that runs inside a disposable remote VM
+Default: OS-wide computer use runs only inside a disposable remote VM
 (for example a user-owned Oracle Cloud Always Free instance).
+
+Local mode (on the user's own machine) is allowed only behind the
+authenticated unlock described below. Authentication proves the human
+consented; it does not make the actions safe, so it is one layer, not the
+whole defence.
+
+## Local mode: authenticated unlock
+
+- Per-session OS-level authentication (Touch ID / device passcode), re-asked
+  on expiry. A saved "remember me" never unlocks it.
+- Time-boxed session with a visible indicator and one-key kill switch.
+- Scoped to an explicit app/window allowlist chosen at unlock; everything else
+  (password managers, banking, messengers, terminals, system settings) denied.
+- Each irreversible or external-effect action still goes to the human, as in
+  the browser mode.
+- Local audit log of every action and the observation it was bound to.
+- Fail closed if auth, scope, or observation binding cannot be verified.
 
 ## Unlock condition
 
