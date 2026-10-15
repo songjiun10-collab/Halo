@@ -41,6 +41,9 @@
 const MAX_NODES_VISITED = 3000;
 const MAX_ELEMENTS = 100; // section 6: "100개 element"
 const HEADING_RESERVE = 40; // extra headings kept after MAX_ELEMENTS is reached
+// On a scrolled page the last VIEWPORT_RESERVE slots of the cap go to what is on screen, so scrolling changes what the planner
+// sees and a link far below the first MAX_ELEMENTS elements can be reached. An unscrolled page keeps plain document order.
+const VIEWPORT_RESERVE = 40;
 const MAX_TEXT_BYTES = 12 * 1024; // section 6: "text 12 KiB"
 // A PDF tab shows nothing to page scripts, so its text comes from the file.
 const MAX_PDF_TEXT_BYTES = 2 * MAX_TEXT_BYTES;
@@ -309,6 +312,14 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       }
       return !!hit && insideOf(candidate, hit);
     };
+    // A page whose scroll position cannot be read counts as unscrolled: plain document order, as before.
+    const scrolled = (() => { try { return (window.scrollY || (document.scrollingElement && document.scrollingElement.scrollTop) || 0) > 0; } catch { return false; } })();
+    const onScreen = (candidate) => {
+      const box = candidate.getBoundingClientRect();
+      const width = window.innerWidth || document.documentElement.clientWidth;
+      const height = window.innerHeight || document.documentElement.clientHeight;
+      return box.bottom > 0 && box.top < height && box.right > 0 && box.left < width;
+    };
     let modal = null;
     try {
       for (const candidate of document.querySelectorAll('dialog[open], [aria-modal="true"]')) {
@@ -334,7 +345,10 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
           const shouldInclude = role && !behindModal && !hidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
           // Headings get a small reserve past the element cap: on long articles the
           // nav and table-of-contents links fill the cap before the first section title.
-          const withinCap = elements.length < ${maxElements} || (/^H[1-6]$/.test(node.tagName) && elements.length < ${maxElements} + ${HEADING_RESERVE});
+          const withinCap = !shouldInclude ? false
+            : scrolled
+              ? (elements.length < ${maxElements} - ${VIEWPORT_RESERVE} || (elements.length < ${maxElements} && onScreen(node)) || (/^H[1-6]$/.test(node.tagName) && elements.length < ${maxElements} + ${HEADING_RESERVE}))
+              : (elements.length < ${maxElements} || (/^H[1-6]$/.test(node.tagName) && elements.length < ${maxElements} + ${HEADING_RESERVE}));
           const name = shouldInclude && withinCap ? nameOf(node, role) : "";
           // A visible leaf represented by its accessible name does not also
           // consume the free-text channel. This avoids sending button/link/

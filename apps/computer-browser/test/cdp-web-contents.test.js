@@ -580,3 +580,53 @@ addEventListener("keydown", (e) => {
   assert.ok(report.total >= 14 && report.total <= 20, `the host pressed ${report.total} times`);
   await adapter.dispose();
 });
+
+test("after the page is scrolled, the observation lists what is on screen, so a link far below the first 100 elements becomes reachable", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
+  // 160 links fill the 100-element cap long before "Next" at the bottom (the bug: scrolling never changed what the planner saw).
+  const links = Array.from({ length: 160 }, (_, i) => `<p style="margin:0;height:40px"><a href="/x/${i}">Link ${i}</a></p>`).join("");
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "text/html");
+    response.end(`<title>long</title><h1>Long page</h1>${links}<a href="/next" id="n">Next</a>`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "halo-cdp-"));
+  const chrome = spawn(CHROMIUM, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []), "--disable-gpu", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+  let view;
+  t.after(async () => {
+    try { view?.closeConnection(); } catch { /* ignore */ }
+    await stopChromium(chrome);
+    await new Promise((resolve) => server.close(resolve));
+    removeProfile(profile);
+  });
+  const wsUrl = await new Promise((resolve, reject) => {
+    let buffer = "";
+    const timer = setTimeout(() => reject(new Error("Chromium did not report a DevTools endpoint")), 30000);
+    chrome.stderr.on("data", (chunk) => {
+      buffer += chunk;
+      const match = /DevTools listening on (ws:\/\/\S+)/.exec(buffer);
+      if (match) { clearTimeout(timer); resolve(match[1]); }
+    });
+    chrome.on("exit", () => reject(new Error("Chromium exited early")));
+  });
+  view = await openCdpView(wsUrl, { width: 900, height: 600 });
+  const adapter = new BrowserAdapter({ view });
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/` })).status, "ok");
+
+  const top = await adapter.observe();
+  assert.ok(top.elements.some((e) => e.name === "Link 0"), "the top of the page is listed");
+  assert.equal(top.elements.some((e) => e.name === "Next"), false, "unscrolled, the 100-element cap behaves as before");
+  assert.ok(top.elements.length <= 140, "the cap holds");
+
+  await view.webContents.executeJavaScript("window.scrollTo(0, document.body.scrollHeight)");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const bottom = await adapter.observe();
+  assert.ok(bottom.elements.some((e) => e.name === "Next"), "(the bug) the link at the bottom never reached the planner");
+  assert.ok(bottom.elements.length <= 140, "the cap still holds after scrolling");
+  assert.notDeepEqual(bottom.elements.map((e) => e.name), top.elements.map((e) => e.name), "scrolling changes what is observed");
+  assert.ok(bottom.elements.some((e) => e.name === "Link 0"), "the start of the page stays listed");
+  const next = bottom.elements.find((e) => e.name === "Next");
+  const followed = await adapter.execute({ type: "follow_link", elementId: next.elementId }, { documentEpoch: bottom.documentEpoch });
+  assert.equal(followed.status, "ok", "the newly reachable link can be followed");
+  await adapter.dispose();
+});
