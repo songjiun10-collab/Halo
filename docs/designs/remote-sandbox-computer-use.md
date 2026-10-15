@@ -24,6 +24,20 @@ whole defence.
 - Local audit log of every action and the observation it was bound to.
 - Fail closed if auth, scope, or observation binding cannot be verified.
 
+## Kill switch (required, both modes)
+
+A mode without a working kill switch must not ship.
+
+- One global hotkey plus an always-visible button; works even if the app UI
+  or the planner is hung.
+- Enforced by the host, not the model: it revokes the capability lease, drops
+  queued actions, and cancels in-flight input before returning.
+- After a kill the mode is locked and needs a fresh authenticated unlock.
+- Remote mode: also stops the stream and destroys or snapshot-resets the VM.
+- Triggered automatically on auth expiry, scope violation, observation-binding
+  failure, or loss of the host heartbeat (fail closed).
+- Tested: a test must show no action is dispatched after a kill.
+
 ## Unlock condition
 
 Connecting a cloud account is not enough. The host unlocks the mode only after
