@@ -24,6 +24,8 @@ How fast does containment degrade when an approval is correct at check time but 
 - `use_time_revalidation`: re-check against use-time state; perfect oracle control in this synthetic model
 - `fixed_window_revalidation`: reuse a cached verdict while its age is at most two steps; refresh when the next use would exceed that bound. The refreshed verdict can become stale again before final use.
 
+- `observation_bounded_revalidation` (proposed in issue #22): revalidate at use time against an observation taken `observation_lag` steps earlier. If the observation is older than `max_observation_age` the decision fails closed (BLOCK); otherwise the policy is evaluated on the observed state. This separates "verdict too old" from "evidence used to refresh the verdict is itself stale". Defaults (`observation_lag=0`) reduce to the use-time oracle; the committed sweep does not vary these parameters yet.
+
 ## Main result at 2% volatility
 
 | Delay | Cached failure | Fixed-window failure | Use-time revalidation |
@@ -39,4 +41,4 @@ At delay 8 and 2% volatility, **9.678% of check-time approvals had expired befor
 
 ## Scope
 
-This is a synthetic policy/state experiment. Use-time revalidation is perfect by construction here, so its zero failure rate is a control, not an empirical claim about real enforcement systems. The fixed-window baseline isolates the cost of bounded staleness; it does not model imperfect state observation, policy-evaluation errors, revalidation latency, or concurrent commits.
+This is a synthetic policy/state experiment. Use-time revalidation is perfect by construction here, so its zero failure rate is a control, not an empirical claim about real enforcement systems. The fixed-window baseline isolates the cost of bounded staleness; imperfect state observation is modelled only by the optional `observation_bounded_revalidation` protocol (a fixed lag, not a noisy sensor); it does not model policy-evaluation errors, revalidation latency, or concurrent commits.
