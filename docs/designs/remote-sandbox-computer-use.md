@@ -68,6 +68,12 @@ If any check fails or cannot be made, fail closed and keep the mode locked.
 ## Open questions (unverified)
 
 - Oracle account age and identity requirements; credit card requirement.
-- Current Always Free limits, capacity availability, and idle reclamation policy.
+- Always Free limits as shown on oracle.com (founder's phone screenshots, 2026-10-16, Korean page; not fetched by us):
+  - Two AMD VMs, each 1/8 OCPU and 1 GB memory. Too small to run Chromium; do not plan on them.
+  - Arm Ampere A1: 4 cores and 24 GB memory in total (3,000 OCPU-hours and 18,000 GB-hours per month), usable as one VM or up to four. 4 OCPU x 750 h and 24 GB x 750 h are exactly one always-on VM, so that is the realistic sandbox: one A1 VM, or several that share the same allowance.
+  - Block volumes: 2, 200 GB total. Object storage 10 GB, archive 10 GB.
+  - A separate 30-day trial gives US$300 in credits.
+  - Consequence: the sandbox runs on arm64 Linux. Electron and Chromium ship arm64 Linux builds, but HALO has not been run there; that is untested.
+- Still unverified: capacity availability in the chosen region, idle reclamation policy, and the exact unit of the A1 allowance if the memo ever needs more than one always-on instance.
 - Whether per-user cloud onboarding is acceptable friction.
 - Whether a hosted, HALO-run sandbox is a better product than user-owned cloud.
