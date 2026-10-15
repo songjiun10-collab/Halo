@@ -583,7 +583,8 @@ addEventListener("keydown", (e) => {
 
 test("after the page is scrolled, the observation lists what is on screen, so a link far below the first 100 elements becomes reachable", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
   // 160 links fill the 100-element cap long before "Next" at the bottom (the bug: scrolling never changed what the planner saw).
-  const links = Array.from({ length: 160 }, (_, i) => `<p style="margin:0;height:40px"><a href="/x/${i}">Link ${i}</a></p>`).join("");
+  // Each link has its own heading, as on real list pages: headings have their own reserve and must not use up the room for the screen.
+  const links = Array.from({ length: 160 }, (_, i) => `<h3 style="margin:0;height:20px">Section ${i}</h3><p style="margin:0;height:40px"><a href="/x/${i}">Link ${i}</a></p>`).join("");
   const server = http.createServer((request, response) => {
     response.setHeader("content-type", "text/html");
     response.end(`<title>long</title><h1>Long page</h1>${links}<a href="/next" id="n">Next</a>`);

@@ -314,6 +314,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
     };
     // A page whose scroll position cannot be read counts as unscrolled: plain document order, as before.
     const scrolled = (() => { try { return (window.scrollY || (document.scrollingElement && document.scrollingElement.scrollTop) || 0) > 0; } catch { return false; } })();
+    let viewportAdmitted = 0;
     const onScreen = (candidate) => {
       const box = candidate.getBoundingClientRect();
       const width = window.innerWidth || document.documentElement.clientWidth;
@@ -345,9 +346,12 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
           const shouldInclude = role && !behindModal && !hidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
           // Headings get a small reserve past the element cap: on long articles the
           // nav and table-of-contents links fill the cap before the first section title.
+          // Scrolled: the first (cap - reserve) elements in document order, then up to VIEWPORT_RESERVE that are on screen
+          // (headings too: off-screen headings do not get their reserve, or they would fill the room before the screen).
+          const viaScreen = scrolled && shouldInclude && elements.length >= ${maxElements} - ${VIEWPORT_RESERVE} && viewportAdmitted < ${VIEWPORT_RESERVE} && onScreen(node);
           const withinCap = !shouldInclude ? false
             : scrolled
-              ? (elements.length < ${maxElements} - ${VIEWPORT_RESERVE} || (elements.length < ${maxElements} && onScreen(node)) || (/^H[1-6]$/.test(node.tagName) && elements.length < ${maxElements} + ${HEADING_RESERVE}))
+              ? (elements.length < ${maxElements} - ${VIEWPORT_RESERVE} || viaScreen)
               : (elements.length < ${maxElements} || (/^H[1-6]$/.test(node.tagName) && elements.length < ${maxElements} + ${HEADING_RESERVE}));
           const name = shouldInclude && withinCap ? nameOf(node, role) : "";
           // A visible leaf represented by its accessible name does not also
@@ -362,6 +366,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
             }
           }
           if (shouldInclude && withinCap) {
+            if (viaScreen) viewportAdmitted += 1;
             const index = elements.length;
             let parent = node.parentElement;
             while (parent && !included.has(parent)) parent = parent.parentElement;
