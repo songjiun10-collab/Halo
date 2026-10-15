@@ -21,7 +21,7 @@ uses three fixed compiler cohorts, `tsconfig.runtime.json` (`runtime-src/shared`
 `main/harness/`), and `tsconfig.runtime-integration.json` (`runtime-src/integration`
 to `integration/`) for the benchmark-only approval latency helper. Each emits
 CommonJS JS only into its own private temporary directory before the tool checks
-or explicitly publishes the nineteen approved outputs (eighteen production modules
+or explicitly publishes the twenty-one approved outputs (twenty production modules
 and one benchmark helper).
 
 From this directory:
@@ -37,7 +37,7 @@ npm run build            # check generated files, then build frontend
 Only `build:runtime` writes generated JavaScript. It compiles first, validates the
 exact output set of each cohort, rejects symlinked input/output paths, uses a private
 exclusive writer lock, and replaces each file using a sibling temporary file.
-The nineteen replacements are individually atomic, not a single atomic transaction.
+The twenty-one replacements are individually atomic, not a single atomic transaction.
 If interrupted, `check:runtime` reports stale files; rerun the explicit build to
 repair them. A leftover lock after a crash is not deleted automatically: inspect
 the named lock and remove it manually only after confirming no publisher is active.
