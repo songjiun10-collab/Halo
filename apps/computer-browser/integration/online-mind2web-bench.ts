@@ -140,7 +140,12 @@ async function main() {
   const dataset = process.argv[2];
   if (!dataset || !path.isAbsolute(dataset)) throw new Error("absolute_dataset_path_required");
   const bytes = await fs.readFile(dataset);
-  if (nodeCrypto.createHash("sha256").update(bytes).digest("hex") !== EXPECTED_SHA) throw new Error("dataset_revision_mismatch");
+  // The official dataset is access-gated. HALO_BENCH_UNOFFICIAL_TASKS=1 accepts a task list rebuilt from
+  // public sources (ids, task text, start site, level) and records that in the manifest; scores from it
+  // are not leaderboard-comparable.
+  const unofficial = process.env.HALO_BENCH_UNOFFICIAL_TASKS === "1";
+  const digest = nodeCrypto.createHash("sha256").update(bytes).digest("hex");
+  if (!unofficial && digest !== EXPECTED_SHA) throw new Error("dataset_revision_mismatch");
   const profile = resolveProfile(process.env);
   const model = process.env.HALO_BENCH_MODEL || "claude-haiku-5-5";
   const limit = process.env.HALO_BENCH_LIMIT ? Number(process.env.HALO_BENCH_LIMIT) : undefined;
@@ -148,7 +153,7 @@ async function main() {
   const resume = process.env.HALO_BENCH_RESUME;
   const output = resume ?? await fs.mkdtemp(path.join(os.homedir(), "Downloads", "halo-mind2web-bench-"));
   await fs.mkdir(output, { recursive: true, mode: 0o700 });
-  const manifest = { schemaVersion: 1, datasetSha256: EXPECTED_SHA, taskCount: tasks.length, model, benchProfile: profile.name, safetyDisabled: profile.safetyDisabled,
+  const manifest = { schemaVersion: 1, datasetSha256: digest, datasetSource: unofficial ? "unofficial_rebuilt_task_list" : "official", taskCount: tasks.length, model, benchProfile: profile.name, safetyDisabled: profile.safetyDisabled,
     concurrency: 1, limits: LIMITS, viewport: { width: 1440, height: 900 }, graded: false,
     note: "ungraded; blocked_by_captcha tasks are reported separately, never bypassed", output };
   await fs.writeFile(path.join(output, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
