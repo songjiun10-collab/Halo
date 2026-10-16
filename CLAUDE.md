@@ -21,3 +21,11 @@ Key routing rules:
 - Save progress → invoke /context-save
 - Resume context → invoke /context-restore
 - Author a backlog-ready spec/issue → invoke /spec
+
+## Working with the founder
+Terse, Korean, approves with "ㄱ"/"ㄱㄱ". Wants direct, honest assessment, not flattery.
+- Challenge your own claims before stating them. Say "public docs don't describe X", never "competitor lacks X".
+- Benchmarks: always report over the full task set. Count CAPTCHA-blocked tasks as failures in their own column. Name the judge model and what it saw.
+- Do not build or wire CAPTCHA solvers or bot-defense bypasses, including for benchmarks.
+- Run the full test suite before merging (not before every push). Electron tests are abandoned and expected to fail as root.
+- If the goal or purpose of a request is not stated, infer it from the last few turns; ask only when a wrong guess is costly.
