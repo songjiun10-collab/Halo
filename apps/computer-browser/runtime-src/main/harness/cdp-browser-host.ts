@@ -25,6 +25,7 @@ interface CdpBrowserOptions {
   desktop?: boolean;
   appUrl?: string;
   profilePath?: string;
+  benchProfile?: boolean;   // lets a headless benchmark reuse a dedicated profile; same directory checks as the desktop
 }
 interface CdpBrowserHandle { wsUrl: string; launched: boolean; close(): Promise<void> }
 
@@ -124,7 +125,7 @@ async function launchBrowser(executablePath: string, options: CdpBrowserOptions)
   if (!path.isAbsolute(executablePath) || !fs.existsSync(executablePath)) {
     throw new CdpBrowserError("executable_missing", "executablePath must be an existing absolute path");
   }
-  if (options.profilePath && !options.desktop) throw new CdpBrowserError("invalid_profile", "only the desktop may use a persistent profile");
+  if (options.profilePath && !options.desktop && !options.benchProfile) throw new CdpBrowserError("invalid_profile", "only the desktop may use a persistent profile");
   const profile = options.profilePath ?? fs.mkdtempSync(path.join(os.tmpdir(), "halo-byo-"));
   if (options.profilePath) {
     if (!path.isAbsolute(profile)) throw new CdpBrowserError("invalid_profile", "desktop profile must be absolute");

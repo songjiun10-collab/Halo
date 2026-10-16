@@ -122,7 +122,7 @@ async function launchBrowser(executablePath, options) {
     if (!path.isAbsolute(executablePath) || !fs.existsSync(executablePath)) {
         throw new CdpBrowserError("executable_missing", "executablePath must be an existing absolute path");
     }
-    if (options.profilePath && !options.desktop)
+    if (options.profilePath && !options.desktop && !options.benchProfile)
         throw new CdpBrowserError("invalid_profile", "only the desktop may use a persistent profile");
     const profile = options.profilePath ?? fs.mkdtempSync(path.join(os.tmpdir(), "halo-byo-"));
     if (options.profilePath) {

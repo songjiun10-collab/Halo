@@ -8,7 +8,7 @@
 // and CAPTCHA / access-block pages are NOT bypassed: the host's own CAPTCHA handling is unchanged and
 // such tasks are labelled blocked_by_captcha so they can be reported separately.
 //
-// Run: [HALO_BENCH_OPEN_UNSAFE=1] HALO_BENCH_MODEL=claude-haiku-5-5 node integration/online-mind2web-bench.ts /abs/Online_Mind2Web.json
+// Run: [HALO_BENCH_PROFILE=/abs/private/demo-profile] [HALO_BENCH_OPEN_UNSAFE=1] HALO_BENCH_MODEL=claude-haiku-5-5 node integration/online-mind2web-bench.ts /abs/Online_Mind2Web.json
 //   HALO_BENCH_LIMIT=N      only the first N tasks (default: all)
 //   HALO_BENCH_RESUME=<dir> continue an earlier output directory, skipping finished tasks
 const fs = require("node:fs/promises");
@@ -72,7 +72,9 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
   const started = benchClock.now();
   const worker = plannerWorker(model);
   try {
-    launched = await acquireCdpBrowser({ headless: true });
+    const benchProfile = process.env.HALO_BENCH_PROFILE;
+    // A dedicated demo profile (no personal accounts). The host still requires an absolute, owned, 0700 directory.
+    launched = await acquireCdpBrowser(benchProfile ? { headless: true, benchProfile: true, profilePath: benchProfile } : { headless: true });
     view = await openCdpView(launched.wsUrl, { width: 1440, height: 900 });
     browser = new BrowserAdapter({ view, navigationTimeoutMs: 20000 });
     const execute = browser.execute.bind(browser);
