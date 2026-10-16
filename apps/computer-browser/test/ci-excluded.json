@@ -1,0 +1,9 @@
+{
+  "agent-viewport-memory-integration.test.js": "starts the real Electron app; the CI install skips lifecycle scripts, so there is no Electron binary or display",
+  "backend-controls-integration.test.js": "starts the real Electron app; the CI install skips lifecycle scripts, so there is no Electron binary or display",
+  "browser-navigation-integration.test.js": "starts the real Electron app; the CI install skips lifecycle scripts, so there is no Electron binary or display",
+  "long-horizon-integration.test.js": "starts the real Electron app; the CI install skips lifecycle scripts, so there is no Electron binary or display",
+  "parallel-browser-memory-integration.test.js": "starts the real Electron app; the CI install skips lifecycle scripts, so there is no Electron binary or display",
+  "repeat-journey-verification.test.js": "starts the real Electron app; the CI install skips lifecycle scripts, so there is no Electron binary or display",
+  "routine-vs-planner-benchmark.test.js": "benchmark that ran longer than 15 minutes of wall time in the sandbox before it was stopped; not a unit test"
+}

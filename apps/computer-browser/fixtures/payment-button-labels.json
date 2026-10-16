@@ -1,0 +1,445 @@
+{
+  "note": "Button and link labels seen on real checkout flows, with the answer a payment detector should give. payment=true means pressing it commits money (the final step). Ambiguous steps that only move toward checkout are payment=false on purpose: they are not covered by a payment mandate.",
+  "labels": [
+    {
+      "label": "Pay now",
+      "payment": true
+    },
+    {
+      "label": "Pay $12.50",
+      "payment": true
+    },
+    {
+      "label": "Pay 12.50",
+      "payment": true
+    },
+    {
+      "label": "Pay $1,249.00",
+      "payment": true
+    },
+    {
+      "label": "Place order",
+      "payment": true
+    },
+    {
+      "label": "Place your order",
+      "payment": true
+    },
+    {
+      "label": "Place Order",
+      "payment": true
+    },
+    {
+      "label": "Complete order",
+      "payment": true
+    },
+    {
+      "label": "Complete purchase",
+      "payment": true
+    },
+    {
+      "label": "Complete payment",
+      "payment": true
+    },
+    {
+      "label": "Confirm order",
+      "payment": true
+    },
+    {
+      "label": "Confirm and pay",
+      "payment": true
+    },
+    {
+      "label": "Confirm payment",
+      "payment": true
+    },
+    {
+      "label": "Confirm purchase",
+      "payment": true
+    },
+    {
+      "label": "Submit payment",
+      "payment": true
+    },
+    {
+      "label": "Submit order",
+      "payment": true
+    },
+    {
+      "label": "Buy now",
+      "payment": true
+    },
+    {
+      "label": "Purchase",
+      "payment": true
+    },
+    {
+      "label": "결제하기",
+      "payment": true
+    },
+    {
+      "label": "결제 확인",
+      "payment": true
+    },
+    {
+      "label": "주문하기",
+      "payment": true
+    },
+    {
+      "label": "구매하기",
+      "payment": true
+    },
+    {
+      "label": "바로 구매",
+      "payment": true
+    },
+    {
+      "label": "바로 구매하기",
+      "payment": true
+    },
+    {
+      "label": "지금 구매하기",
+      "payment": true
+    },
+    {
+      "label": "카드로 결제하기",
+      "payment": true
+    },
+    {
+      "label": "12,500원 결제하기",
+      "payment": true
+    },
+    {
+      "label": "12,500원 결제",
+      "payment": true
+    },
+    {
+      "label": "결제 진행",
+      "payment": true
+    },
+    {
+      "label": "주문 완료하기",
+      "payment": true
+    },
+    {
+      "label": "注文を確定する",
+      "payment": true
+    },
+    {
+      "label": "ご注文を確定する",
+      "payment": true
+    },
+    {
+      "label": "今すぐ購入",
+      "payment": true
+    },
+    {
+      "label": "今すぐ支払う",
+      "payment": true
+    },
+    {
+      "label": "Add to cart",
+      "payment": false
+    },
+    {
+      "label": "Add to bag",
+      "payment": false
+    },
+    {
+      "label": "Add to basket",
+      "payment": false
+    },
+    {
+      "label": "View cart",
+      "payment": false
+    },
+    {
+      "label": "Continue shopping",
+      "payment": false
+    },
+    {
+      "label": "Proceed to checkout",
+      "payment": false
+    },
+    {
+      "label": "Checkout",
+      "payment": false
+    },
+    {
+      "label": "Secure checkout",
+      "payment": false
+    },
+    {
+      "label": "Apply coupon",
+      "payment": false
+    },
+    {
+      "label": "Apply",
+      "payment": false
+    },
+    {
+      "label": "Save card",
+      "payment": false
+    },
+    {
+      "label": "Add payment method",
+      "payment": false
+    },
+    {
+      "label": "Edit payment method",
+      "payment": false
+    },
+    {
+      "label": "Payment methods",
+      "payment": false
+    },
+    {
+      "label": "Payment history",
+      "payment": false
+    },
+    {
+      "label": "Payment settings",
+      "payment": false
+    },
+    {
+      "label": "Pay later",
+      "payment": false
+    },
+    {
+      "label": "Purchase history",
+      "payment": false
+    },
+    {
+      "label": "Purchases",
+      "payment": false
+    },
+    {
+      "label": "Order history",
+      "payment": false
+    },
+    {
+      "label": "Track order",
+      "payment": false
+    },
+    {
+      "label": "View order",
+      "payment": false
+    },
+    {
+      "label": "Cancel order",
+      "payment": false
+    },
+    {
+      "label": "Return item",
+      "payment": false
+    },
+    {
+      "label": "Sign in",
+      "payment": false
+    },
+    {
+      "label": "Search",
+      "payment": false
+    },
+    {
+      "label": "Subscribe",
+      "payment": false
+    },
+    {
+      "label": "Pay attention",
+      "payment": false
+    },
+    {
+      "label": "Transfer funds",
+      "payment": false
+    },
+    {
+      "label": "Withdraw",
+      "payment": false
+    },
+    {
+      "label": "Delete account",
+      "payment": false
+    },
+    {
+      "label": "장바구니 담기",
+      "payment": false
+    },
+    {
+      "label": "장바구니 보기",
+      "payment": false
+    },
+    {
+      "label": "계속 쇼핑하기",
+      "payment": false
+    },
+    {
+      "label": "쿠폰 적용",
+      "payment": false
+    },
+    {
+      "label": "결제 수단 추가",
+      "payment": false
+    },
+    {
+      "label": "결제 수단 변경",
+      "payment": false
+    },
+    {
+      "label": "결제 내역",
+      "payment": false
+    },
+    {
+      "label": "결제 설정",
+      "payment": false
+    },
+    {
+      "label": "주문 내역",
+      "payment": false
+    },
+    {
+      "label": "주문 조회",
+      "payment": false
+    },
+    {
+      "label": "주문 취소",
+      "payment": false
+    },
+    {
+      "label": "구매 내역",
+      "payment": false
+    },
+    {
+      "label": "구매 후기",
+      "payment": false
+    },
+    {
+      "label": "구매 확정",
+      "payment": false
+    },
+    {
+      "label": "로그인",
+      "payment": false
+    },
+    {
+      "label": "검색",
+      "payment": false
+    },
+    {
+      "label": "송금하기",
+      "payment": false
+    },
+    {
+      "label": "이체",
+      "payment": false
+    },
+    {
+      "label": "회원 탈퇴",
+      "payment": false
+    },
+    {
+      "label": "カートに入れる",
+      "payment": false
+    },
+    {
+      "label": "カートを見る",
+      "payment": false
+    },
+    {
+      "label": "注文履歴",
+      "payment": false
+    },
+    {
+      "label": "ログイン",
+      "payment": false
+    },
+    {
+      "label": "Confirm email",
+      "payment": false
+    },
+    {
+      "label": "Confirm password",
+      "payment": false
+    },
+    {
+      "label": "Complete profile",
+      "payment": false
+    },
+    {
+      "label": "Complete your profile",
+      "payment": false
+    },
+    {
+      "label": "Complete registration",
+      "payment": false
+    },
+    {
+      "label": "Submit review",
+      "payment": false
+    },
+    {
+      "label": "Submit feedback",
+      "payment": false
+    },
+    {
+      "label": "Submit order feedback",
+      "payment": false
+    },
+    {
+      "label": "Order feedback",
+      "payment": false
+    },
+    {
+      "label": "Purchase orders",
+      "payment": false
+    },
+    {
+      "label": "Confirm address",
+      "payment": false
+    },
+    {
+      "label": "Confirm shipping address",
+      "payment": false
+    },
+    {
+      "label": "주문 완료",
+      "payment": false
+    },
+    {
+      "label": "결제 완료",
+      "payment": false
+    },
+    {
+      "label": "결제 진행 상황",
+      "payment": false
+    },
+    {
+      "label": "결제 요청 내역",
+      "payment": false
+    },
+    {
+      "label": "주문 확인",
+      "payment": false
+    },
+    {
+      "label": "주문 상세 보기",
+      "payment": false
+    },
+    {
+      "label": "注文を確認する",
+      "payment": false
+    },
+    {
+      "label": "ご注文内容を確認",
+      "payment": false
+    },
+    {
+      "label": "お支払い方法を変更",
+      "payment": false
+    },
+    {
+      "label": "購入履歴",
+      "payment": false
+    }
+  ]
+}

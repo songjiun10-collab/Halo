@@ -11,7 +11,8 @@ import { createServer } from 'vite'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const vite = await createServer({ configFile: path.join(root, 'vite.config.ts'), root, server: { middlewareMode: true, hmr: false }, appType: 'custom' })
-const { sidebarRows, SidebarAgentsView, SIDEBAR_MAX } = await vite.ssrLoadModule('/src/agent/SidebarAgents.tsx')
+const { SidebarAgentsView, SIDEBAR_MAX } = await vite.ssrLoadModule('/src/agent/SidebarAgents.tsx')
+const { sidebarRows } = await vite.ssrLoadModule('/src/agent/sidebar-rows.tsx')
 const nav = await vite.ssrLoadModule('/src/agent/agent-nav.ts')
 test.after(() => vite.close())
 
@@ -81,12 +82,16 @@ test('the home screen opens in Agent mode when the sidebar asked for an agent vi
   assert.equal(nav.homeModeFor('agent'), 'agent')
 })
 
-test('the workspace sidebar places the agents block after the task list', async () => {
+test('the workspace sidebar orders Bookmarks, Agents, Chats, Tabs as in the Design System-7 mock', async () => {
   const { WorkspaceSidebar } = await vite.ssrLoadModule('/src/components/WorkspaceSidebar.tsx')
   const html = renderToStaticMarkup(React.createElement(WorkspaceSidebar, {
     tasks: [], activeTaskId: null, open: true, onNewTask: noop, onSelectTask: noop,
+    tabs: [{ id: 'home', title: 'New tab' }], activeTabId: 'home', onSelectTab: noop, onOpenUrl: noop,
     agents: React.createElement('p', { id: 'agents-slot' }, 'slot'),
   }))
-  assert.ok(html.indexOf('Recent tasks') < html.indexOf('agents-slot'))
-  assert.ok(html.indexOf('agents-slot') < html.indexOf('hx-sidebar__foot'))
+  const at = (text) => html.indexOf(text)
+  assert.ok(at('Bookmarks') >= 0 && at('Bookmarks') < at('agents-slot'))
+  assert.ok(at('agents-slot') < at('Chats'))
+  assert.ok(at('Chats') < at('>Tabs<'))
+  assert.ok(at('>Tabs<') < at('hx-sidebar__foot'))
 })

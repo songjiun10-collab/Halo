@@ -120,3 +120,16 @@ test("ultra is a host effort level; Claude has no ultra, so the bridge runs it a
   assert.deepEqual(args.slice(-2), ["--effort", "max"]);
   await bridge.close();
 });
+
+test("Haiku 5.5 is an allowed planner model: ultralight tier, no extended thinking, its own prompt guidance", () => {
+  const { isClaudeModel } = require("../main/harness/providers/claude-models");
+  const { tierOf } = require("../main/harness/model-tiers");
+  const { getModelPromptGuidance } = require("../main/harness/providers/model-prompt-guidance");
+  const { ClaudeCodeBridge } = require("../main/harness/providers/claude-code-bridge");
+  assert.equal(isClaudeModel("claude-haiku-5-5"), true);
+  assert.equal(tierOf("claude-haiku-5-5"), 5);
+  assert.match(getModelPromptGuidance("claude", "claude-haiku-5-5", "medium"), /Haiku 5\.5/);
+  const bridge = new ClaudeCodeBridge({ model: "claude-haiku-5-5" });
+  assert.equal(bridge._noThinking, true, "a Haiku skips extended thinking for a one-action proposal");
+  assert.ok(bridge._cliArgs.includes("claude-haiku-5-5"));
+});

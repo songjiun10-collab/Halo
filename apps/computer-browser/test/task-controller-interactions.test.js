@@ -8,18 +8,26 @@ const { TaskStore } = require("../main/harness/task-store");
 const { TaskController } = require("../main/harness/task-controller");
 const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
 
-async function fixture(t, action, permissionMode = "interact", { computerUse = false, capabilityId = "computer_use" } = {}) {
+async function fixture(t, action, permissionMode = "interact", { computerUse = false, capabilityId = "computer_use", textMap = null, secret = false } = {}) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-interaction-controller-"));
   const store = await TaskStore.create({ originalRequest: "update profile" }, { storageRoot });
-  let turns = 0; const executed = []; let plannerOptions = null; let attachmentDisposed = false;
+  let turns = 0; const executed = []; let plannerOptions = null; let attachmentDisposed = false; let screenshotCalls = 0;
   const browser = { supportsAction: () => true,
     observe: async () => ({ id: "obs", documentEpoch: 7, url: "https://page.test/", elements: [
       { elementId: "0", role: "textbox", name: "Title" },
       { elementId: "1", role: "button", name: "Submit", formAction: "https://submit.test/save", formMethod: "post" },
+      // A password field makes the page text-only for the planner, so it is only on the page when a test asks.
+      ...(secret || action?.elementId === "2" ? [{ elementId: "2", role: "textbox", name: "Title", inputType: "password" }] : []),
+      { elementId: "3", role: "link", name: "Pricing", href: "https://example.test/pricing" },
+      { elementId: "4", role: "button", name: "Delete" },
     ] }),
-    ...(computerUse ? { captureComputerUseObservation: async (observation) => ({
+    ...(computerUse ? { captureComputerUseObservation: async (observation) => { screenshotCalls++; return ({
       binding: { observationId: observation.id, taskId: store.taskId, agentId: "22222222-2222-4222-8222-222222222222", documentEpoch: observation.documentEpoch, origin: "https://page.test", capturedAt: 1, viewport: { width: 1440, height: 900 }, digest: "a".repeat(64) },
       attachment: { id: "attachment-1", path: "/private/fake.png", dispose: async () => { attachmentDisposed = true; } },
+    }); } } : {}),
+    ...(textMap ? { captureTextObservation: async observation => ({
+      binding: { observationId: observation.id, taskId: store.taskId, agentId: null, documentEpoch: observation.documentEpoch, origin: "https://page.test", capturedAt: 1, viewport: { width: 1440, height: 900 }, digest: "a".repeat(64) },
+      screenMap: textMap,
     }) } : {}),
     execute: async (a, options) => { executed.push({ action: a, options }); return { status: "ok" }; },
   };
@@ -44,21 +52,51 @@ async function fixture(t, action, permissionMode = "interact", { computerUse = f
       { capabilityId: "computer_use", adapterId: "codex-subscription-image", adapterVersion: 1 },
     ] } };
   t.after(async () => { await controller.stop(); await store.close(); await fs.rm(storageRoot, { recursive: true, force: true }); });
-  await controller.start(); return { controller, executed, store, get plannerOptions() { return plannerOptions; }, get attachmentDisposed() { return attachmentDisposed; } };
+  await controller.start(); return { controller, executed, store, get screenshotCalls() { return screenshotCalls; }, get plannerOptions() { return plannerOptions; }, get attachmentDisposed() { return attachmentDisposed; } };
 }
 
-test("typing review shows target and exact input, and approval keeps the observation epoch", async t => {
+test("image-capable computer use uses a rich backend DOM map without taking screenshots", async t => {
+  const run = await fixture(t, { type: "type", elementId: "0", text: "Updated" }, "interact", {
+    computerUse: true, textMap: { text: 'textbox "Title" at 0.5,0.5', sparse: false, targets: [] },
+  });
+  assert.equal(run.executed.length, 1);
+  assert.equal(run.screenshotCalls, 0);
+  assert.equal(run.plannerOptions?.attachments?.length ?? 0, 0);
+});
+
+test("sparse backend DOM maps retain the image fallback", async t => {
+  const run = await fixture(t, { type: "type", elementId: "0", text: "Updated" }, "interact", {
+    computerUse: true, textMap: { text: "canvas", sparse: true, targets: [] },
+  });
+  assert.equal(run.executed.length, 1);
+  assert.ok(run.screenshotCalls > 0);
+});
+
+test("typing into an ordinary text field runs on the approver's verdict without a human gate", async t => {
   const action = { type: "type", elementId: "0", text: "New title" };
   const { controller, executed } = await fixture(t, action);
-  const [item] = controller.getSnapshot().approvalQueue;
-  assert.equal(controller.getSnapshot().state, "awaiting_approval");
-  assert.match(item.target, /Title/);
-  assert.match(item.target, /New title/);
-  assert.equal(executed.length, 0);
-  await controller.approve(item.id);
+  assert.equal(controller.getSnapshot().approvalQueue.length, 0);
   assert.equal(executed.length, 1);
-  assert.deepEqual(executed[0].action, action);
-  assert.equal(executed[0].options.documentEpoch, 7);
+});
+
+test("clicking a plain link is not queued for the human, but an effect-named button still is", async t => {
+  const link = await fixture(t, { type: "click", elementId: "3" });
+  assert.equal(link.controller.getSnapshot().approvalQueue.length, 0);
+  assert.equal(link.executed.length, 1);
+  const risky = await fixture(t, { type: "click", elementId: "4" });
+  assert.equal(risky.controller.getSnapshot().approvalQueue.length, 1);
+  assert.equal(risky.executed.length, 0);
+});
+
+test("typing into a password field is the person's job: nothing is queued or executed, the task asks them", async t => {
+  const action = { type: "type", elementId: "2", text: "New title" };
+  const { controller, executed } = await fixture(t, action);
+  const snap = controller.getSnapshot();
+  assert.equal(snap.state, "paused");
+  assert.equal(snap.pauseReason, "need_user");
+  assert.match(snap.needUserReason, /비밀 정보/);
+  assert.equal(snap.approvalQueue.length, 0);
+  assert.equal(executed.length, 0);
 });
 
 test("a form review displays destination and method, and denial dispatches nothing", async t => {
@@ -164,4 +202,19 @@ test("a lost coordinate-input result pauses as execution_uncertain and is never 
   await assert.rejects(controller.resume(), { code: "confirmation_required" });
   assert.equal(executeCalls, 1);
   assert.equal(plannerCalls, 1);
+});
+
+test("a page showing a secret input is never screenshotted: the planner gets the text map only", async t => {
+  const run = await fixture(t, { type: "type", elementId: "0", text: "Updated" }, "interact", {
+    computerUse: true, secret: true, textMap: { text: "canvas", sparse: true, targets: [] },
+  });
+  assert.equal(run.screenshotCalls, 0, "no screenshot while a password field is on screen");
+  assert.equal(run.plannerOptions?.attachments?.length ?? 0, 0);
+});
+
+test("baseline: a sparse page without a secret still falls back to the image", async t => {
+  const run = await fixture(t, { type: "type", elementId: "0", text: "Updated" }, "interact", {
+    computerUse: true, textMap: { text: "canvas", sparse: true, targets: [] },
+  });
+  assert.ok(run.screenshotCalls > 0);
 });

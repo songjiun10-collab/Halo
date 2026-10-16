@@ -298,10 +298,11 @@ async function main() {
     await settingsStore.update({ permissionMode: "observe" });
     host = makeHost(storageRoot, { memoryStore, settingsStore, credentialVault, permissionMode: "observe" });
 
-    const started = await host.createTask({ originalRequest: "Exercise local browser backend controls" });
+    // The request names the local server: agent pages open a private address only when the person did.
+    const secureUrl = `https://localhost:${server.address().port}/login`;
+    const started = await host.createTask({ originalRequest: `Exercise local browser backend controls at ${secureUrl}` });
     taskId = started.taskId;
     const activeBrowser = views.get(taskId).browser;
-    const secureUrl = `https://localhost:${server.address().port}/login`;
     const denied = await activeBrowser.execute({ type: "navigate", url: secureUrl });
     result.permission.observeDenied = denied.status === "failed" && denied.errorCode === "permission_mode_denied";
     assert.equal(result.permission.observeDenied, true, JSON.stringify(denied));

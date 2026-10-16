@@ -62,7 +62,8 @@ function adapterWith({ boxes, url = "https://page.test/" }) {
     close() {},
     executeJavaScriptInIsolatedWorld: async (_world, scripts) => {
       const code = scripts[0].code;
-      if (code.includes("getBoundingClientRect")) return boxes;
+      // The observe script also measures boxes (to tell an open modal from a closed drawer); the geometry read is the one that does not walk the page.
+      if (code.includes("getBoundingClientRect") && !code.includes("createTreeWalker")) return boxes;
       return { url, title: "t", text: "", elements: ELEMENTS.map((e, index) => ({ index, ...e, parentIndex: null })) };
     },
   });
@@ -141,10 +142,17 @@ test("a planner without image input gets the screen map and no attachment, and i
   assert.equal(controller.getSnapshot().state, "awaiting_approval");
 });
 
-test("an image-capable planner still gets an attachment path, not the text map", async (t) => {
-  const { seen } = await controllerFixture(t, { textMode: false }).catch((e) => ({ seen: [], e }));
-  // The fixture browser has no captureComputerUseObservation, so the image route pauses before any planner turn.
+test("an image-capable planner uses a rich text map without requiring an image", async (t) => {
+  const { seen } = await controllerFixture(t, { textMode: false });
+  assert.equal(seen[0].observation.computerUse.mode, "text");
+  assert.ok(seen[0].observation.screenMap);
+  assert.equal(seen[0].options.attachments, undefined);
+});
+
+test("an image-capable planner pauses on sparse DOM when image capture is unavailable", async (t) => {
+  const { seen, controller } = await controllerFixture(t, { textMode: false, sparse: true });
   assert.equal(seen.length, 0);
+  assert.equal(controller.getSnapshot().pauseReason, "computer_use_capture_failed");
 });
 
 test("a capture failure pauses the task instead of sending the planner a blind turn", async (t) => {
@@ -204,7 +212,15 @@ test("the adapter sends key events for press_key and consumes the binding", asyn
   const observation = await adapter.observe();
   adapter.authorizeVisualBinding({ observationId: observation.id, taskId: "11111111-1111-4111-8111-111111111111", agentId: null, documentEpoch: observation.documentEpoch, origin: "https://page.test", capturedAt: 1, viewport: { width: 1440, height: 900 }, digest: "0".repeat(64) });
   const action = { type: "press_key", observationId: observation.id, key: "Enter" };
-  assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), { status: "ok" });
+  // Independently report a measurable effect after the input, not merely that
+  // sendInputEvent returned. Missing evidence must never count as success.
+  wc.executeJavaScriptInIsolatedWorld = async () => JSON.stringify({
+    url: "https://page.test/", title: "t", nodes: 10, textLength: 50,
+    focus: "INPUT#q", valueLength: sent.length ? 0 : 4,
+  });
+  assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), {
+    status: "ok", effect: { observed: true, changed: ["valueLength"] },
+  });
   assert.deepEqual(sent, [{ type: "keyDown", keyCode: "Enter" }, { type: "char", keyCode: "Enter" }, { type: "keyUp", keyCode: "Enter" }]);
   assert.deepEqual(await adapter.execute(action, { documentEpoch: observation.documentEpoch }), { status: "failed", errorCode: "stale_visual_observation" });
   assert.equal(sent.length, 3);
@@ -365,4 +381,13 @@ test("recalled activity joins the memory entries the planner sees, and a failing
     assert.equal(entries.some((e) => e.id === "activity-1"), included);
     assert.notEqual(controller.getSnapshot().pauseReason, "context_error");
   }
+});
+
+test("a play_loop proposal always waits for the person, with a plain description of what it will press", async (t) => {
+  const action = { type: "play_loop", seconds: 20, lanes: [{ x: 0.3, y: 0.8, key: "d", color: [255, 40, 40], tolerance: 60 }, { x: 0.5, y: 0.8, key: "f", color: [255, 40, 40], tolerance: 60 }] };
+  const { controller, executed } = await controllerFixture(t, { textMode: false, action });
+  const snapshot = controller.getSnapshot();
+  assert.equal(snapshot.state, "awaiting_approval");
+  assert.deepEqual(executed, [], "nothing runs before the person says yes");
+  assert.match(snapshot.approvalQueue[0].target, /play for up to 20s, pressing d f/);
 });

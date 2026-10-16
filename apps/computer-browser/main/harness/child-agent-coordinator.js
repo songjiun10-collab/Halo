@@ -23,6 +23,11 @@ const { resolveTaskProfile } = require("../../shared/task-profile-router");
 const { validateTaskProfileSelectedPayload } = require("../../shared/task-profile-contracts");
 const { MessageMailbox, MessageMailboxError } = require("./message-mailbox");
 const { TeamBoardStore, BOARD_KINDS, MAX_BOARD_TEXT_CHARS } = require("./team-board-store");
+const { isPrivateHost } = require("./private-network");
+
+function entersPrivateNetwork(url) {
+  try { return isPrivateHost(new URL(url).hostname); } catch { return true; }
+}
 
 // Team board (see readTeamBoard): newest entries a sibling's context and the
 // renderer's plan summary carry.
@@ -44,17 +49,6 @@ class ChildAgentCoordinatorError extends Error {
     super(message);
     this.name = "ChildAgentCoordinatorError";
     this.code = code;
-  }
-}
-
-async function readAllEvents(store) {
-  const events = [];
-  let since = 0;
-  for (;;) {
-    const page = await store.getEvents({ since });
-    if (page.length === 0) return events;
-    events.push(...page);
-    since = page[page.length - 1].seq;
   }
 }
 
@@ -133,6 +127,8 @@ class ChildAgentCoordinator {
     this._cancellingPlans = new Set();
     // childId -> { outcome: "completed"|"stopped"|"failed", reason? }
     this._terminalChildren = new Map();
+    // Children that sent their parent at least one progress or handoff report.
+    this._reportedChildren = new Set();
     // A failed start whose teardown itself failed keeps its lease reserved.
     // This is intentionally fail-closed: releasing it could admit another
     // child while the first one's browser/planner/store may still be alive.
@@ -312,6 +308,11 @@ class ChildAgentCoordinator {
     // child inherits the lock (its controller hands it to the child browser).
     const parentLock = currentGoal.lock ?? null;
     for (const a of validated.assignments) {
+      // A child never goes into the person's own machine or network, even to an address the person
+      // named: its entry is the parent's (model-written) choice and it runs without the person watching.
+      if (entersPrivateNetwork(a.entryUrl)) {
+        throw new ChildAgentCoordinatorError("private_network_blocked", "a child agent cannot be sent to an address on the person's own computer or network");
+      }
       const verdict = contracts.evaluateLock(parentLock, { action: "navigate", targetOrigin: contracts.deriveOrigin(a.entryUrl) });
       if (!verdict.allowed) {
         throw new ChildAgentCoordinatorError("intent_lock_denied", `child entryUrl is denied by the parent's Intent Lock (${verdict.reason})`);
@@ -419,6 +420,8 @@ class ChildAgentCoordinator {
         // The parent-authored label, so the UI names a child by its job, not its UUID.
         ...(typeof subgoal === "string" && subgoal ? { subgoal: subgoal.slice(0, 200) } : {}),
         ...(terminal?.reason ? { reason: terminal.reason } : {}),
+        ...(terminal && terminal.outcome === "completed" ? { reported: terminal.reported === true } : {}),
+        ...(terminal && terminal.outcome === "completed" && terminal.reported !== true ? { unreported: true } : {}),
       };
     });
     const count = (status) => agents.filter((agent) => agent.status === status).length;
@@ -821,6 +824,9 @@ class ChildAgentCoordinator {
       // The trusted entry navigation below bypasses the adapter's lock (it is
       // the user path), so the child's own inherited lock is checked here,
       // which also covers plans reconstructed from the journal.
+      if (entersPrivateNetwork(entryUrl)) {
+        throw new ChildAgentCoordinatorError("private_network_blocked", "a child agent cannot be sent to an address on the person's own computer or network");
+      }
       const entryVerdict = contracts.evaluateLock(childStore.getGoal().lock ?? null, { action: "navigate", targetOrigin: contracts.deriveOrigin(entryUrl) });
       if (!entryVerdict.allowed) {
         throw new ChildAgentCoordinatorError("intent_lock_denied", `child entryUrl is denied by its Intent Lock (${entryVerdict.reason})`);
@@ -937,7 +943,10 @@ class ChildAgentCoordinator {
     const live = this._liveChildren.get(childId);
     if (!live) return Promise.resolve();
     this._liveChildren.delete(childId);
-    this._terminalChildren.set(childId, { outcome: controllerState === "completed" ? "completed" : "stopped" });
+    this._terminalChildren.set(childId, {
+      outcome: controllerState === "completed" ? "completed" : "stopped",
+      reported: this._reportedChildren.has(childId),
+    });
     this._notifyPlanChange(parentTaskId);
     const retirement = {
       parentTaskId,
@@ -1000,7 +1009,7 @@ class ChildAgentCoordinator {
         this._retiringChildren.delete(live.store.taskId);
       }
       if (retirement.terminalOutcome) {
-        this._terminalChildren.set(live.store.taskId, { outcome: retirement.terminalOutcome });
+        this._terminalChildren.set(live.store.taskId, { outcome: retirement.terminalOutcome, reported: this._reportedChildren.has(live.store.taskId) });
       } else {
         this._terminalChildren.delete(live.store.taskId);
       }
@@ -1198,6 +1207,7 @@ class ChildAgentCoordinator {
         });
       }
       const sent = await this._mailbox.send(envelope);
+      if (senderTaskId === childTaskId && (proposal.messageKind === "progress" || proposal.messageKind === "handoff")) this._reportedChildren.add(childTaskId);
       if (senderTaskId === childTaskId) await this._postToBoard(parentTaskId, plan, envelope, sent);
       return sent;
     } catch (err) {
@@ -1279,7 +1289,7 @@ class ChildAgentCoordinator {
     if (!parentStore) {
       throw new ChildAgentCoordinatorError("task_unavailable", `task store unavailable for ${parentTaskId}`);
     }
-    const events = await readAllEvents(parentStore);
+    const events = await parentStore.getAllEvents();
     const nowMs = typeof this._now === "function" ? this._now() : Date.now();
     const windowStart = nowMs - contracts.STEER_RATE_WINDOW_MS;
     const recentSteers = events.filter(

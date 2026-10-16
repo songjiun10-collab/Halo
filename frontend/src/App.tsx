@@ -4,7 +4,8 @@ import { ControllerChip } from './components/ControllerChip'
 import { HaloButton } from './components/HaloButton'
 import { HaloChat } from './components/HaloChat'
 import { HaloSheet } from './components/HaloSheet'
-import { Back, Forward } from './components/Icons'
+import { FindBar } from './components/FindBar'
+import { PageDialog } from './components/PageDialog'
 import { Notice } from './components/Notice'
 import { SettingsPanel } from './components/SettingsPanel'
 import { ShortcutsHelp } from './components/ShortcutsHelp'
@@ -13,11 +14,15 @@ import { TabStrip } from './components/TabStrip'
 import { Toolbar } from './components/Toolbar'
 import { Viewport } from './components/Viewport'
 import { WorkspaceSidebar } from './components/WorkspaceSidebar'
+import { loadTabLayout, otherTabLayout, saveTabLayout, type TabLayout } from './session/tab-layout'
+import { addToGroup, createGroup, loadGroups, pruneGroups, removeFromGroup, renameGroup, saveGroups, toggleCollapsed, ungroup, ungroupAll, type TabGroups } from './session/tab-groups'
 import { SidebarAgents } from './agent/SidebarAgents'
 import { openAgentView, type AgentNavView } from './agent/agent-nav'
 import { usePresence } from './hooks/usePresence'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useTrackpad } from './hooks/useTrackpad'
+import type { BrowserSnapshot, TaskInput } from './session/api'
+import { RemotePageFrame } from './components/RemotePageFrame'
 import { captureSnapshot, syncDirectSurface, syncNativeSurface } from './session/browser-surface'
 import { AGENT, canNavigate, currentUrl, NEW_TAB_URL, pendingCriteria, SessionStore } from './session/session'
 import { tabTitle } from './session/pages'
@@ -44,7 +49,17 @@ export default function App() {
   useEffect(() => store.connect(), [store])
 
   const [activityOpen, setActivityOpen] = useState(false)
+  // The tab whose find bar is open; the bar belongs to that tab and is gone when another is shown.
+  const [findFor, setFindFor] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Vertical tabs live in the sidebar, so choosing them also opens it; the strip above the page goes away.
+  const [tabLayout, setTabLayout] = useState<TabLayout>(() => loadTabLayout())
+  const toggleTabLayout = () => {
+    const next = otherTabLayout(tabLayout)
+    setTabLayout(next)
+    saveTabLayout(next)
+    if (next === 'vertical') setSidebarOpen(true)
+  }
   const [chatOpen, setChatOpen] = useState(false)
   /** ⌘/Ctrl + . keeps Halo's controls unfolded even when nothing needs you. */
   const [pinned, setPinned] = useState(false)
@@ -61,16 +76,12 @@ export default function App() {
   }, [toast])
   const [seen, setSeen] = useState(0)
   const [dismissedNotice, setDismissedNotice] = useState<number | null>(null)
-  const [swipeHint, setSwipeHint] = useState<'back' | 'forward' | null>(null)
-  useEffect(() => {
-    if (!swipeHint) return
-    const id = window.setTimeout(() => setSwipeHint(null), 500)
-    return () => window.clearTimeout(id)
-  }, [swipeHint])
 
   // Surface a real backend failure once, as a toast, then clear it so it doesn't repeat.
+  const [errorSeen, setErrorSeen] = useState<string | null>(null)
+  if (s.error && s.error !== errorSeen) { setErrorSeen(s.error); setToast(s.error) }
   useEffect(() => {
-    if (s.error) { setToast(s.error); store.clearError() }
+    if (s.error) store.clearError()
   }, [s.error, store])
 
   // A Halo block needs no answer: show it for NOTICE_MS (even as the agent keeps working), then it lives in Activity.
@@ -92,6 +103,7 @@ export default function App() {
     setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id)
   }, [notableCount, lastBlock])
   const closeActivity = useCallback(() => { setActivityOpen(false); setSeen(notableCount) }, [notableCount])
+  const toggleActivity = useCallback(() => { if (activityOpen) closeActivity(); else openActivity() }, [activityOpen, closeActivity, openActivity])
   const openChat = useCallback(() => {
     setChatOpen(true); setActivityOpen(false); setOverviewOpen(false); setHelpOpen(false); setSettingsOpen(false)
     setSeen(notableCount); if (lastBlock) setDismissedNotice(lastBlock.id)
@@ -121,21 +133,30 @@ export default function App() {
   const onShare = useCallback(async () => {
     const url = currentUrl(tab)
     if (url.startsWith('halo://')) { setToast('Open a web page to share it'); return }
-    try {
-      if (navigator.share) await navigator.share({ title: tabTitle(tab), url })
-      else { await navigator.clipboard.writeText(url); setToast('Link copied') }
-    } catch (err) {
-      if ((err as DOMException)?.name !== 'AbortError') setToast('Unable to share this page')
+    // The host clipboard first: it needs neither a user gesture nor a permission.
+    if (await store.copyText(url)) { setToast('Link copied'); return }
+    // Otherwise copy inside the click itself; awaiting anything first could spend the user gesture.
+    const field = document.createElement('textarea')
+    field.value = url
+    field.setAttribute('readonly', '')
+    field.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
+    document.body.appendChild(field)
+    field.select()
+    let copied = false
+    try { copied = document.execCommand('copy') } catch { copied = false } finally { field.remove() }
+    if (!copied) {
+      try { await navigator.clipboard.writeText(url); copied = true } catch { copied = false }
     }
-  }, [tab])
+    setToast(copied ? 'Link copied' : 'Unable to share this page')
+  }, [tab, store])
   const onNewWindow = useCallback(() => { void store.newWindow() }, [store])
   const leases = s.snapshot?.leases ?? []
   const [leaseNow, setLeaseNow] = useState(() => Date.now())
   useEffect(() => {
     if (!leases.length) return
-    setLeaseNow(Date.now())
+    const first = window.setTimeout(() => setLeaseNow(Date.now()), 0)
     const timer = window.setInterval(() => setLeaseNow(Date.now()), 30_000)
-    return () => window.clearInterval(timer)
+    return () => { window.clearTimeout(first); window.clearInterval(timer) }
   }, [leases.length])
   const onSendMessage = useCallback((text: string, lock?: IntentLockInput) => { void store.sendMessage(text, lock) }, [store])
   const onNewTask = useCallback(() => { store.newTask(); openChat() }, [store, openChat])
@@ -157,6 +178,9 @@ export default function App() {
     onSelectTab: (id: string) => void store.selectBrowserTab(id),
     onBack: () => void store.navigate({ type: 'back' }),
     onForward: () => void store.navigate({ type: 'forward' }),
+    onReload: () => void store.reloadPage(),
+    onFind: () => { if (!s.activeTaskId) setFindFor(tab.id) },
+    onZoom: (action: 'in' | 'out' | 'reset') => void store.zoomPage(action),
     onFocusOmni: () => omniRef.current?.focus(),
     onTogglePin: () => setPinned((p) => !p),
     onToggleChat: toggleChat,
@@ -166,12 +190,20 @@ export default function App() {
     onToggleHelp: toggleHelp,
     onToggleSidebar: () => setSidebarOpen((open) => !open),
     onToggleSettings: toggleSettings,
-  }), [store, onNewTask, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp, toggleSettings, tab.id])
+  }), [store, onNewTask, toggleChat, toggleOverview, onNewWindow, onShare, toggleHelp, toggleSettings, tab.id, s.activeTaskId])
   useShortcuts(s, approval, shortcutHandlers)
 
+  // Safari-style swipe: the page you leave slides off in the swipe's direction. The native view
+  // can't be animated, so it is hidden for the slide while its still moves in its place.
+  const [swipeDir, setSwipeDir] = useState<'back' | 'forward' | null>(null)
+  useEffect(() => {
+    if (!swipeDir) return
+    const id = window.setTimeout(() => setSwipeDir(null), 340)
+    return () => window.clearTimeout(id)
+  }, [swipeDir])
   const trackpadHandlers = useMemo(() => ({
-    onBack: () => { void store.navigate({ type: 'back' }); setSwipeHint('back') },
-    onForward: () => { void store.navigate({ type: 'forward' }); setSwipeHint('forward') },
+    onBack: () => { setSwipeDir('back'); void store.navigate({ type: 'back' }) },
+    onForward: () => { setSwipeDir('forward'); void store.navigate({ type: 'forward' }) },
     onToggleOverview: toggleOverview,
   }), [store, toggleOverview])
   useTrackpad(!approval, overviewOpen, trackpadHandlers)
@@ -227,15 +259,100 @@ export default function App() {
   const helpShown = usePresence(helpOpen ? true : null)
   const settingsShown = usePresence(settingsOpen ? true : null)
 
+  // The agent works in a hidden page. While it does, its page is mirrored here as a live still.
+  const [agentFrameOf, setAgentFrameOf] = useState<{ taskId: string; src: string | null } | null>(null)
+  const agentWorking = s.control === 'claude' && !!s.activeTaskId
+  const agentFrame = agentWorking && agentFrameOf?.taskId === s.activeTaskId ? agentFrameOf.src : null
+  useEffect(() => {
+    const api = window.haloBrowser
+    const taskId = s.activeTaskId
+    if (!agentWorking || !taskId || typeof api?.captureAgentFrame !== 'function') return
+    let stopped = false
+    const tick = async () => {
+      const frame = await api.captureAgentFrame!(taskId).catch(() => null)
+      if (!stopped) setAgentFrameOf({ taskId, src: frame })
+      if (!stopped) id = window.setTimeout(() => void tick(), 250)
+    }
+    let id: number | undefined
+    void tick()
+    return () => { stopped = true; window.clearTimeout(id) }
+  }, [agentWorking, s.activeTaskId])
+
+  // When you take over from a UI attached to the background service, the task's page lives in
+  // that other process: it arrives as stills here and your input goes back to it.
+  const [userFrameOf, setUserFrameOf] = useState<{ taskId: string; src: string | null } | null>(null)
+  const userDriving = s.control === 'you' && !!s.activeTaskId
+  const userFrame = userDriving && userFrameOf?.taskId === s.activeTaskId ? userFrameOf.src : null
+  useEffect(() => {
+    const api = window.haloBrowser
+    const taskId = s.activeTaskId
+    if (!userDriving || !taskId || typeof api?.captureTaskFrame !== 'function') return
+    let stopped = false
+    const tick = async () => {
+      const frame = await api.captureTaskFrame!(taskId).catch(() => null)
+      if (!stopped) setUserFrameOf({ taskId, src: frame })
+      if (!stopped) id = window.setTimeout(() => void tick(), 120)
+    }
+    let id: number | undefined
+    void tick()
+    return () => { stopped = true; window.clearTimeout(id) }
+  }, [userDriving, s.activeTaskId])
+  const sendInput = (input: TaskInput) => {
+    const api = window.haloBrowser
+    if (s.activeTaskId && typeof api?.sendTaskInput === 'function') void api.sendTaskInput(s.activeTaskId, input).catch(() => {})
+  }
+  const chromium = window.haloBrowser?.runtime === 'chromium'
+  const directDriving = chromium && s.directBrowser && !s.activeTaskId
+  const [directFrameOf, setDirectFrameOf] = useState<{ tabId: string; src: string | null } | null>(null)
+  const directFrame = directDriving && directFrameOf?.tabId === (s.activeTabId ?? '') ? directFrameOf.src : null
+  // Read by a stream start that finishes late: if the live view has ended meanwhile, nobody is left to stop it.
+  const directDrivingRef = useRef(directDriving)
+  useEffect(() => { directDrivingRef.current = directDriving }, [directDriving])
+  useEffect(() => {
+    const api = window.haloBrowser
+    if (!directDriving || !api?.captureSurface) return
+    const tabId = s.activeTabId ?? ''
+    let stopped = false
+    let id: number | undefined
+    // Polling is the fallback for engines that cannot stream.
+    const tick = async () => {
+      const frame = await api.captureSurface!().catch(() => null)
+      if (!stopped) { setDirectFrameOf({ tabId, src: frame }); id = window.setTimeout(() => void tick(), 120) }
+    }
+    let unsubscribe: (() => void) | undefined
+    if (typeof api.startSurfaceStream === 'function' && typeof api.onSurfaceFrame === 'function') {
+      unsubscribe = api.onSurfaceFrame((payload) => {
+        if (!stopped && typeof payload?.frame === 'string' && payload.frame.startsWith('data:image/jpeg;base64,')) setDirectFrameOf({ tabId, src: payload.frame })
+      })
+      // One still first so the page never flashes empty, then the pushed frames take over.
+      void api.captureSurface().then((frame) => {
+        if (!stopped && frame) setDirectFrameOf((current) => current?.tabId === tabId && current.src ? current : { tabId, src: frame })
+      }).catch(() => {})
+      void api.startSurfaceStream().then((started) => {
+        // A tab switch already replaced this stream; only a finished live view leaves a stream nobody will stop.
+        if (stopped) { if (started && !directDrivingRef.current) void api.stopSurfaceStream?.().catch(() => {}); return }
+        if (!started) void tick()
+      }).catch(() => { if (!stopped) void tick() })
+    } else void tick()
+    return () => {
+      stopped = true; window.clearTimeout(id); unsubscribe?.()
+    }
+  }, [directDriving, s.activeTabId])
+  // A tab switch restarts the stream in place (the host replaces the old one); stop only when the live view ends.
+  useEffect(() => {
+    if (!directDriving) return
+    return () => { void window.haloBrowser?.stopSurfaceStream?.().catch(() => {}) }
+  }, [directDriving])
+
   const nativeSurfaceVisible = ((!!s.activeTaskId && !!s.browser) || (!s.activeTaskId && s.directBrowser)) && !approval && !activityOpen && !chatOpen &&
-    !overviewOpen && !helpOpen && !settingsOpen && !noticeShown.item && !toastShown.item
+    !overviewOpen && !helpOpen && !settingsOpen && !noticeShown.item && !toastShown.item && !swipeDir && (chromium || (!agentFrame && !userFrame))
   // A native view draws above the DOM, so overlays hide it. A still of the page stays in the
   // slot meanwhile: taken while the page is still on screen, then the view is hidden.
-  const [snapshot, setSnapshot] = useState<string | null>(null)
+  const [snapshotOf, setSnapshotOf] = useState<{ taskId: string | null; src: string | null }>({ taskId: null, src: null })
+  const snapshot = snapshotOf.taskId === (s.activeTaskId ?? null) ? snapshotOf.src : null
   const surfaceShown = useRef(false)
   const visibleNow = useRef(nativeSurfaceVisible)
-  visibleNow.current = nativeSurfaceVisible
-  useEffect(() => setSnapshot(null), [s.activeTaskId])
+  useLayoutEffect(() => { visibleNow.current = nativeSurfaceVisible })
   useLayoutEffect(() => {
     const api = window.haloBrowser
     if (!api) return
@@ -260,11 +377,11 @@ export default function App() {
     if (nativeSurfaceVisible) {
       surfaceShown.current = true
       // Drop the still only once the live page is back on top of it.
-      sync(() => setSnapshot(null))
+      sync(() => setSnapshotOf({ taskId: s.activeTaskId ?? null, src: null }))
     } else if (surfaceShown.current) {
       surfaceShown.current = false
       void captureSnapshot(api).then((url) => {
-        if (!visibleNow.current) setSnapshot(url)
+        if (!visibleNow.current) setSnapshotOf({ taskId: s.activeTaskId ?? null, src: url })
         sync()
       })
     } else {
@@ -287,6 +404,17 @@ export default function App() {
 
   const tabsForDisplay = s.tabs.length ? s.tabs : [HOME_TAB]
 
+  // Tab groups live in the sidebar and are remembered per window; closed tabs drop out when read.
+  const [storedGroups, setStoredGroups] = useState<TabGroups>(() => loadGroups())
+  const tabIds = tabsForDisplay.map((t) => t.id)
+  const groups = pruneGroups(storedGroups, tabIds)
+  const updateGroups = (change: (current: TabGroups) => TabGroups) => {
+    const next = change(groups)
+    setStoredGroups(next)
+    saveGroups(next)
+  }
+  const newGroupId = () => `tg${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+
   return (
     <div className="hx-app" data-active-task-id={s.activeTaskId ?? undefined}>
       <a className="hx-skip" href="#hx-page" inert={!!approval}>Skip to page</a>
@@ -301,10 +429,14 @@ export default function App() {
             omniRef={omniRef}
             onBack={() => void store.navigate({ type: 'back' })}
             onForward={() => void store.navigate({ type: 'forward' })}
+            onReload={() => void store.reloadPage()}
+            onStop={() => void store.stopPage()}
+            onZoomReset={() => void store.zoomPage('reset')}
             onShare={onShare}
             onOverview={toggleOverview}
-            onActivity={openActivity}
+            onActivity={toggleActivity}
             onNavigate={(url) => void store.navigate({ type: 'navigate', url })}
+            onAsk={onSendMessage}
             onSettings={toggleSettings}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((open) => !open)}
@@ -316,13 +448,28 @@ export default function App() {
                   recoveryReason={s.recoveryReason}
                   onTakeOver={() => void store.control('takeOver')}
                   onResume={() => void store.control('resume', s.recoveryReason === 'execution_uncertain')}
+                  awaitingReview={s.snapshot?.state === 'awaiting_verification' && pendingCriteria(s).length > 0}
+                  onReview={openChat}
                 />
                 <LeaseChip leases={leases} now={leaseNow} agent={AGENT} onRevoke={(id) => void store.revokeLease(id)} />
               </>
             }
               halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
             />
-          <TabStrip
+          {tab.dialog && !s.activeTaskId && (
+            <PageDialog
+              key={`${tab.id}:${tab.dialog.type}:${tab.dialog.message}`}
+              dialog={tab.dialog}
+              onAnswer={(accept, text) => void store.answerDialog(accept, text)}
+            />
+          )}
+          {findFor === tab.id && !s.activeTaskId && (
+            <FindBar
+              onFind={(query, backwards) => store.findText(query, backwards)}
+              onClose={() => { setFindFor(null); void store.clearFind() }}
+            />
+          )}
+          {tabLayout === 'horizontal' && <TabStrip
             tabs={tabsForDisplay}
             activeTabId={tab.id}
             canClose={(candidate) => !s.activeTaskId && tabsForDisplay.length > 1 && candidate.id !== 'home'}
@@ -330,7 +477,7 @@ export default function App() {
             onClose={(id) => void store.closeBrowserTab(id)}
             canCreate={!s.activeTaskId}
             onNew={() => { void store.newBrowserTab() }}
-          />
+          />}
         </header>
         <div className="hx-window-row hx-workspace">
           <WorkspaceSidebar
@@ -340,6 +487,22 @@ export default function App() {
             inert={overviewOpen || !!approval}
             onNewTask={onNewTask}
             onSelectTask={(taskId) => void store.selectTask(taskId)}
+            tabs={tabsForDisplay.map((t) => ({ id: t.id, title: tabTitle(t), url: currentUrl(t), activity: t.claude, closable: !s.activeTaskId && tabsForDisplay.length > 1 && t.id !== 'home' }))}
+            onCloseTab={(id) => void store.closeBrowserTab(id)}
+            tabLayout={tabLayout}
+            onToggleTabLayout={toggleTabLayout}
+            groups={groups}
+            onCreateGroup={(tabId) => updateGroups((g) => createGroup(g, tabId, newGroupId()))}
+            onAddToGroup={(groupId, tabId) => updateGroups((g) => addToGroup(g, groupId, tabId))}
+            onRemoveFromGroup={(tabId) => updateGroups((g) => removeFromGroup(g, tabId))}
+            onUngroup={(groupId) => updateGroups((g) => ungroup(g, groupId))}
+            onUngroupAll={() => updateGroups(() => ungroupAll())}
+            onToggleGroup={(groupId) => updateGroups((g) => toggleCollapsed(g, groupId))}
+            onRenameGroup={(groupId, name) => updateGroups((g) => renameGroup(g, groupId, name))}
+            activeTabId={tab.id}
+            onSelectTab={(id) => void store.selectBrowserTab(id)}
+            onOpenUrl={(url) => void store.navigate({ type: 'navigate', url })}
+            onNewTab={!s.activeTaskId ? () => { void store.newBrowserTab() } : undefined}
             agents={<SidebarAgents onOpen={(owner) => openAgents({ n: 'detail', owner })} onSeeAll={() => openAgents({ n: 'hub' })} onNew={() => openAgents({ n: 'hub' })} />}
           />
           <div className="hx-content-col">
@@ -355,7 +518,10 @@ export default function App() {
                   aria-label="Page rendered in the isolated browser surface"
                   tabIndex={-1}
                 >
-                  {snapshot && !nativeSurfaceVisible && <img className="hx-snapshot" src={snapshot} alt="" aria-hidden="true" draggable={false} />}
+                  {agentFrame && <img className="hx-snapshot" data-live="agent" src={agentFrame} alt="" aria-hidden="true" draggable={false} />}
+                  {userFrame && <RemotePageFrame frame={userFrame} onInput={sendInput} />}
+                  {directFrame && !s.activeTaskId && <RemotePageFrame frame={directFrame} onInput={(input) => { void window.haloBrowser?.sendSurfaceInput?.(input).catch(() => {}) }} />}
+                  {snapshot && !agentFrame && !userFrame && !nativeSurfaceVisible && <img className="hx-snapshot" data-swipe={swipeDir || undefined} src={snapshot} alt="" aria-hidden="true" draggable={false} />}
                 </main>
               ) : (
                 <Viewport
@@ -364,15 +530,28 @@ export default function App() {
                   activeTask={activeTask}
                   onSelectTab={(id) => void store.selectTask(id)}
                   onStartTask={onSendMessage}
+                  onNavigate={(url) => void store.navigate({ type: 'navigate', url })}
                 />
               )}
               <div className="hx-edge" data-on={(driven && !folded) || undefined} aria-hidden="true" />
-              {swipeHint && (
-                <span className={`hx-swipe hx-swipe--${swipeHint}`} aria-hidden="true">
-                  {swipeHint === 'back' ? <Back /> : <Forward />}
-                </span>
-              )}
             </div>
+            {chatShown.item && !approval && !activityOpen && !overviewOpen && !helpOpen && (
+                <HaloChat
+                  taskLabel={s.task || 'New task'}
+                  tabContext={chatTabContext(s.browser)}
+                  messages={s.messages}
+                  timeline={s.timeline}
+                  recentTasks={recentTasks}
+                  pendingCriteria={pendingCriteria(s)}
+                  isTaskActive={!!s.activeTaskId}
+                  leaving={chatShown.leaving}
+                  onClose={closeChat}
+                  onSend={onSendMessage}
+                  onSelectTask={(taskId) => void store.selectTask(taskId)}
+                  onNewTask={() => { store.newTask(); closeChat() }}
+                  onConfirmCriterion={(criterion, outcome) => void store.confirmCriterion(criterion, outcome)}
+                />
+              )}
             {/* One Halo surface at a time: a surface a newer one supersedes cuts instantly rather
               than cross-fading underneath it, so the glass never stacks two deep. */}
             <div className="hx-overlays">
@@ -388,21 +567,6 @@ export default function App() {
               )}
               {noticeShown.item && !activityOpen && !chatOpen && !approval && <Notice event={noticeShown.item} leaving={noticeShown.leaving} blocked={!!approval} onOpen={openActivity} />}
               {activityShown.item && !approval && !chatOpen && !overviewOpen && !helpOpen && <Activity session={s} leaving={activityShown.leaving} onClose={closeActivity} />}
-              {chatShown.item && !approval && !activityOpen && !overviewOpen && !helpOpen && (
-                <HaloChat
-                  taskLabel={s.task || 'New task'}
-                  messages={s.messages}
-                  recentTasks={recentTasks}
-                  pendingCriteria={pendingCriteria(s)}
-                  isTaskActive={!!s.activeTaskId}
-                  leaving={chatShown.leaving}
-                  onClose={closeChat}
-                  onSend={onSendMessage}
-                  onSelectTask={(taskId) => void store.selectTask(taskId)}
-                  onNewTask={() => { store.newTask(); closeChat() }}
-                  onConfirmCriterion={(criterion, outcome) => void store.confirmCriterion(criterion, outcome)}
-                />
-              )}
               {helpShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && <ShortcutsHelp leaving={helpShown.leaving} onClose={() => setHelpOpen(false)} />}
               {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}
             </div>
@@ -422,4 +586,13 @@ export default function App() {
       </div>
     </div>
   )
+}
+
+/** The agent's active page as a chat context chip: its title and host, never the full URL. */
+function chatTabContext(browser: BrowserSnapshot | null): { title: string; host: string } | null {
+  const page = browser?.tabs.find((t) => t.id === browser.activeTabId)
+  if (!page) return null
+  let host = ''
+  try { host = new URL(page.url).host } catch { /* about:blank and the like have no host */ }
+  return host || page.title ? { title: page.title, host } : null
 }

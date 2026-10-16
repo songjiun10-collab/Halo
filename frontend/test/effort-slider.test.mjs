@@ -44,7 +44,7 @@ test('as in the design, effort lives in the model picker popover between the inp
   const closed = renderToStaticMarkup(React.createElement(ModelPicker, props))
   assert.match(closed, /class="hx-mpick"/)
   assert.match(closed, /class="hx-mpick__toggle" aria-haspopup="true" aria-expanded="false"/)
-  assert.match(closed, /<span>Claude Opus 5.5<\/span>/)
+  assert.match(closed, /<span title="Claude Opus 5.5">Opus 5.5<\/span>/)
   assert.doesNotMatch(closed, /hx-mpick__pop/)
   const open = renderToStaticMarkup(React.createElement(ModelPicker, { ...props, defaultOpen: true }))
   assert.match(open, /class="hx-mpick" data-open="true"/)
@@ -78,7 +78,7 @@ test('only Ultra sparkles: lower levels have no stars in either style', () => {
 })
 
 test('a drag position snaps to the nearest level only on release', async () => {
-  const { effortAtFraction } = await vite.ssrLoadModule('/src/components/EffortSlider.tsx')
+  const { effortAtFraction } = await vite.ssrLoadModule('/src/session/effort-fraction.ts')
   assert.equal(effortAtFraction(0), 'low')
   assert.equal(effortAtFraction(0.09), 'low')
   assert.equal(effortAtFraction(0.11), 'medium')

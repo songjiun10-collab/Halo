@@ -532,7 +532,7 @@ test("a live lock held by another host is never taken over, a symlinked lock is 
   await assert.rejects(store.acquireRoundLock(TEAM), { code: "unsafe_path" });
 });
 
-test("a worker that cannot take room turns gets one notice instead of silent passes", async () => {
+test("a worker that cannot take room turns gets a per-member warning instead of silent passes", async () => {
   const bad = Object.assign(new Error("not a room turn"), { code: "invalid_room_turn" });
   const h = await harness({ members: [A, B], replies: { [A]: Array(3).fill(bad), [B]: Array(3).fill(bad) } });
   await h.orchestrator.post(TEAM, "hi");
@@ -596,4 +596,26 @@ test("a proposed task carries the person's own message so its intent survives re
   await h.orchestrator.post(TEAM, "컴퓨터 유즈로 버튼 확인해 줘");
   await h.orchestrator.idle(TEAM);
   assert.equal(calls[0].intentText, "컴퓨터 유즈로 버튼 확인해 줘");
+});
+
+test("@name addresses only the mentioned members, once each, in mention order", async () => {
+  const h = await harness({ replies: { [A]: [{ kind: "say", text: "a" }], [C]: [{ kind: "say", text: "c" }] } });
+  await h.orchestrator.post(TEAM, "@Cy 먼저, 그리고 @Ann 도 의견 줘");
+  await h.orchestrator.idle(TEAM);
+  assert.deepEqual(h.calls, [C, A]);
+});
+
+test("a mention must end at a name boundary, and no mention keeps the normal rotation", async () => {
+  const h = await harness({});
+  await h.orchestrator.post(TEAM, "@Anna 안녕");
+  await h.orchestrator.idle(TEAM);
+  assert.deepEqual(h.calls, [A, B, C], "unmatched mention falls back to everyone passing in rotation");
+});
+
+test("a failed turn posts a plain warning naming the member and the likely cause", async () => {
+  const h = await harness({ replies: { [A]: [Object.assign(new Error("x"), { code: "planner_failed", plannerCode: "cli_error" })] } });
+  await h.orchestrator.post(TEAM, "@Ann hi");
+  await h.orchestrator.idle(TEAM);
+  const warning = (await h.store.read(TEAM)).find((m) => m.kind === "notice" && m.text.startsWith("⚠"));
+  assert.match(warning.text, /Ann couldn't reply: .*signed out/);
 });

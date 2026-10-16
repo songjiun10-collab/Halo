@@ -74,7 +74,8 @@ function validatePlannerMcpActions(proposal) {
 
 // Only pass through what a plain worker process needs to actually run.
 // Never inherit the full parent environment.
-const ENV_ALLOWLIST = ["PATH", "HOME", "LANG", "TZ", "TMPDIR"];
+// USER: the claude CLI reads its login from the macOS keychain by account name.
+const ENV_ALLOWLIST = ["PATH", "HOME", "USER", "LANG", "TZ", "TMPDIR"];
 const SECRET_ENV_PATTERN = /^HALO_(APPROVER|EXECUTOR)_KEY/i;
 
 function buildWorkerEnv(extraEnv) {

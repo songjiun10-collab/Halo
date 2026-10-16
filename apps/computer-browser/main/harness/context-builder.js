@@ -107,7 +107,7 @@ function validContextManifest(manifest) {
     }
     return { version: 1, refs: kept, omittedRefs: manifest.refs.length - kept.length };
 }
-function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest }) {
+function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest, strategyGuidance }) {
     contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
     if (!contracts.isPlainObject(state)) {
         throw new ContextError("invalid_field", "state must be a plain object");
@@ -186,8 +186,14 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     // context_error or displace communication that the planner needs to consume.
     const adapt = (input) => {
         const plannerAdaptation = derivePlannerAdaptation({ goal, state: trustedProgress, observation, customMemory });
-        const candidate = { ...input, plannerAdaptation };
-        return Buffer.byteLength(JSON.stringify(candidate), "utf8") <= contracts.MAX_CONTEXT_PACKET_BYTES ? candidate : input;
+        const base = { ...input, plannerAdaptation };
+        const candidate = typeof strategyGuidance === "string" && strategyGuidance.length <= 4096
+            ? { ...base, learnedStrategyGuidance: { authority: "host_advisory", text: strategyGuidance } }
+            : base;
+        if (Buffer.byteLength(JSON.stringify(candidate), "utf8") <= contracts.MAX_CONTEXT_PACKET_BYTES)
+            return candidate;
+        // Optional learned hints never make an otherwise valid planner packet fail.
+        return Buffer.byteLength(JSON.stringify(base), "utf8") <= contracts.MAX_CONTEXT_PACKET_BYTES ? base : input;
     };
     if (!board)
         return adapt(packet);

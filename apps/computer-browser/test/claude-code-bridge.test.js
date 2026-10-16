@@ -770,3 +770,18 @@ test("buildPrompt: a need_user reason is described as the person's chat reply", 
   const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
   assert.match(buildPrompt(makeContext()), /the person reads verbatim in the chat as/);
 });
+
+test("a room turn drops the proposal --json-schema so say/pass/propose_task replies validate", () => {
+  const { ClaudeCodeBridge } = require("../main/harness/providers/claude-code-bridge");
+  const bridge = new ClaudeCodeBridge({ cwd: "/tmp", env: {} });
+  assert.ok(bridge._argsFor("low", false).includes("--json-schema"));
+  assert.equal(bridge._argsFor("low", true).includes("--json-schema"), false);
+});
+
+test("a Haiku-pinned bridge turns extended thinking off for the CLI; other models keep it", () => {
+  const { ClaudeCodeBridge } = require("../main/harness/providers/claude-code-bridge");
+  const haiku = new ClaudeCodeBridge({ model: "claude-haiku-4-5-20251001" });
+  assert.equal(haiku._buildEnv().MAX_THINKING_TOKENS, "0");
+  assert.equal(new ClaudeCodeBridge({ model: "claude-sonnet-5-5" })._buildEnv().MAX_THINKING_TOKENS, undefined);
+  assert.equal(new ClaudeCodeBridge()._buildEnv().MAX_THINKING_TOKENS, undefined);
+});

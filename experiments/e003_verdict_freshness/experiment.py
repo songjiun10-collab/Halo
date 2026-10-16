@@ -11,6 +11,8 @@ def run(
     volatility: float,
     n: int = 100_000,
     freshness_window: int = 2,
+    observation_lag: int = 0,
+    max_observation_age: int = 0,
 ):
     """Simulate stale authorization decisions under policy-relevant state drift.
 
@@ -19,6 +21,14 @@ def run(
     verdict is refreshed against the then-current state. This intentionally
     differs from perfect use-time revalidation: the refreshed verdict can
     become stale again before the action is finally used.
+
+    ``observation_bounded_revalidation`` revalidates at use time against an
+    observation of state taken ``observation_lag`` steps earlier. If that
+    observation is older than ``max_observation_age`` the decision fails
+    closed (BLOCK); otherwise the policy is evaluated on the observed state.
+    This separates "the verdict is too old" from "the evidence used to
+    refresh it is too old". It adds no rng draws, so the other protocols'
+    seeded results are unchanged.
     """
     if not isinstance(delay_steps, numbers.Integral) or isinstance(delay_steps, bool) or delay_steps < 0:
         raise ValueError("delay_steps must be a non-negative integer")
@@ -28,6 +38,14 @@ def run(
         raise ValueError("n must be a positive integer")
     if not isinstance(freshness_window, numbers.Integral) or isinstance(freshness_window, bool) or freshness_window < 0:
         raise ValueError("freshness_window must be a non-negative integer")
+    if not isinstance(observation_lag, numbers.Integral) or isinstance(observation_lag, bool) or observation_lag < 0:
+        raise ValueError("observation_lag must be a non-negative integer")
+    if (
+        not isinstance(max_observation_age, numbers.Integral)
+        or isinstance(max_observation_age, bool)
+        or max_observation_age < 0
+    ):
+        raise ValueError("max_observation_age must be a non-negative integer")
 
     rng = np.random.default_rng(seed)
     sensitive = rng.random(n) < 0.30
@@ -62,9 +80,12 @@ def run(
         # Keep the Python reference's ties-to-even rule in both languages.
         return max(0, round(freshness_window * (1.0 - vol)))
 
+    state_history = [(s.copy(), w.copy())]
+
     for step in range(1, delay_steps + 1):
         s = np.logical_xor(s, rng.random(n) < volatility)
         w = np.logical_xor(w, rng.random(n) < volatility)
+        state_history.append((s.copy(), w.copy()))
 
         # A verdict checked at step t can be reused while age <= window.
         # Refresh only when the next use would make it older than the bound.
@@ -91,6 +112,13 @@ def run(
         # Even lower threshold for full revalidation based on ultra exploit findings
         adaptive_cached = allow_at_use
 
+    # Observation-bounded revalidation: evidence older than the bound fails closed.
+    if observation_lag > max_observation_age:
+        observation_allow = np.zeros(n, dtype=bool)
+    else:
+        obs_s, obs_w = state_history[max(delay_steps - observation_lag, 0)]
+        observation_allow = policy_allow(obs_s, obs_w)
+
     unsafe_now = ~allow_at_use
     safe_now = allow_at_use
     out = {}
@@ -100,6 +128,7 @@ def run(
         "fixed_window_revalidation": fixed_window_allow,  # Window-based
         "adaptive_cached": adaptive_cached,  # Volatility-aware
         "progressive_refresh": progressive_allow,  # Adaptive window
+        "observation_bounded_revalidation": observation_allow,  # Fail closed on stale evidence
     }.items():
         unsafe_allowed = int((unsafe_now & decision).sum())
         safe_blocked = int((safe_now & ~decision).sum())

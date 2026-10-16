@@ -1,0 +1,19 @@
+# Payment safety rules change only with an owner's review.
+/apps/computer-browser/main/harness/payment-mandate.js @songjiun10-collab
+/apps/computer-browser/main/harness/task-controller.js @songjiun10-collab
+/apps/computer-browser/runtime-src/main/harness/effect-classifier.ts @songjiun10-collab
+/apps/computer-browser/test/payment-mandate.test.js @songjiun10-collab
+/apps/computer-browser/test/task-controller-payment.test.js @songjiun10-collab
+/docs/incident-playbook.ko.md @songjiun10-collab
+
+# Safety checks that run before every browser action, and who may change them.
+/apps/computer-browser/main/harness/action-safety.js @songjiun10-collab
+/apps/computer-browser/main/harness/host-settings.js @songjiun10-collab
+/apps/computer-browser/main/harness/build-expiry.js @songjiun10-collab
+/apps/computer-browser/main/harness/chromium-bridge.js @songjiun10-collab
+/apps/computer-browser/runtime-src/main/harness/chromium-bridge.ts @songjiun10-collab
+/apps/computer-browser/tools/halo-admin.js @songjiun10-collab
+/apps/computer-browser/test/action-safety.test.js @songjiun10-collab
+/apps/computer-browser/test/task-host-payments.test.js @songjiun10-collab
+/apps/computer-browser/test/halo-admin.test.js @songjiun10-collab
+/.github/CODEOWNERS @songjiun10-collab

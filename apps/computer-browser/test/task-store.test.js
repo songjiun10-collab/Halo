@@ -1297,3 +1297,19 @@ test("legacy stores remain replayable and are not rewritten or implicitly profil
   await reopened.close();
   assert.equal(await fs.readFile(journalPath, "utf8"), before);
 });
+
+test("getEvents returns one page but getAllEvents returns the whole journal in order", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-taskstore-all-"));
+  const store = await TaskStore.create({ originalRequest: "long journal" }, { storageRoot });
+  try {
+    for (let i = 0; i < 450; i += 1) await store.append({ type: "note", payload: { kind: "filler", i } });
+    const page = await store.getEvents();
+    assert.equal(page.length, 200, "the default read is one bounded page");
+    const all = await store.getAllEvents();
+    assert.equal(all.length, 451, "goal_created plus 450 notes");
+    assert.deepEqual(all.map((e) => e.seq), all.map((_, i) => i + 1), "contiguous and ordered, no repeats");
+  } finally {
+    await store.close();
+    await fs.rm(storageRoot, { recursive: true, force: true });
+  }
+});

@@ -81,6 +81,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
     "./control-api": { ControlApi: class { onChange() { return () => {}; } } },
     "./ipc": (...args) => calls.ipc.push(args),
     "./page-theme": { applyPageTheme: (options) => { calls.pageTheme = options; } },
+    "./process-guard": { installProcessGuard: () => { calls.processGuard = (calls.processGuard || 0) + 1; } },
     "../shared/layout-constants": { HEADER_HEIGHT: 1, FOOTER_HEIGHT: 1, SIDE_PANEL_WIDTH: 1, MOBILE_BREAKPOINT: 1 },
     "./approver-client": { requestDecision() {} },
     "./harness/task-host": { TaskHost: FakeTaskHost },
@@ -119,6 +120,8 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
       },
     },
     "./harness/generic-mcp-broker": { GenericMcpBroker: class { constructor(options) { this.options = options; } } },
+    "./session-vault-setup": require("../main/session-vault-setup"),
+    "./harness/session-vault": require("../main/harness/session-vault"),
     "./harness/shared-mcp-provider": require("../main/harness/shared-mcp-provider"),
     "./harness/mcp-catalog-cache": require("../main/harness/mcp-catalog-cache"),
     "./harness/mcp-schema-validator": require("../main/harness/mcp-schema-validator"),
@@ -127,9 +130,14 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
         if (key === "dispose") return async () => { calls.connectorDisposed = (calls.connectorDisposed || 0) + 1; };
         return Reflect.get(target, key);
       } }) },
-    "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } } },
+    "./harness/build-expiry": { readBuildInfo: () => ({ expiresAt: null, invalid: false }) },
+    "./harness/voice-transcriber": { VoiceTranscriber: class { available() { return false; } } },
+    "./harness/host-settings": { HostSettingsStore: class { load() { return Promise.resolve({}); } update(patch) { return Promise.resolve(patch); } } },
+    "./harness/api-key-store": { ApiKeyStore: class { load() { return Promise.resolve(); } env() { return {}; } } },
     "./harness/local-memory-store": { LocalMemoryStore: class {} },
     "./harness/activity-journal-store": { ActivityJournalStore: class {} },
+    "./harness/strategy-learning-store": { StrategyLearningStore: class { async setEnabled() {} } },
+    "./harness/cdp-engine": { CdpEngine: class { configure() {} createPage() { return null; } async release() {} } },
     "./harness/providers/nvidia-models": { loadDiscoveredNvidiaModels() {} },
     "./activity-capture": { createPageVisitSink: () => async () => {} },
     "./harness/usage-ledger": { UsageLedger: class { async load() { return this; } record(...args) { calls.usage.push(args); } } },
@@ -147,6 +155,7 @@ function loadEntrypoint({ serviceMode = false, userData, dialogResponse = 0, mcp
       createBackgroundLaunchAgent: (options) => { calls.launchAgents = [...(calls.launchAgents ?? []), options]; return { label: "test", isInstalled: async () => false, enable: async () => {}, disable: async () => {} }; },
     },
   };
+  map["./desktop-runtime"] = map.electron;
   const realRequire = require;
   const context = {
     require: (name) => Object.hasOwn(map, name) ? map[name] : realRequire(name),
@@ -438,5 +447,13 @@ test("the entrypoint applies the page theme before the app is ready", async (t) 
   const { calls } = loadEntrypoint({ serviceMode: false, userData });
   assert.ok(calls.pageTheme, "applied synchronously at load, not after whenReady");
   assert.ok(calls.pageTheme.nativeTheme && calls.pageTheme.app);
+  await flushStartup();
+});
+
+test("the entrypoint installs the process guard at load, so a stray rejection cannot end the host", async (t) => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "halo-entry-guard-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const { calls } = loadEntrypoint({ serviceMode: false, userData });
+  assert.equal(calls.processGuard, 1);
   await flushStartup();
 });

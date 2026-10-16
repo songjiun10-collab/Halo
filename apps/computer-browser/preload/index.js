@@ -23,7 +23,7 @@ function readLayoutFromArgv() {
 // ones only meant for main<->main coordination.
 const METHODS = [
   "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask", "takeOverTask",
-  "goBack", "goForward", "reload", "newTab", "selectTab", "closeTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
+  "goBack", "goForward", "reload", "stopLoading", "zoom", "findInPage", "clearFind", "answerDialog", "newTab", "selectTab", "closeTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
 ];
 
 // Long-horizon harness channels (main/harness/task-host.js via main/ipc.js).
@@ -36,8 +36,10 @@ const HARNESS_METHODS = [
   "createTask", "listTasks", "resumeSavedTask", "amendTask", "confirmCriterion", "getTaskDetail",
   "taskApprove", "taskDeny", "taskLend", "taskRevokeLease", "taskPause", "taskStop", "taskTakeOver", "getTaskEvents", "getChildPlan", "listMcpProviders", "refreshPlannerModels",
   "getTaskBrowser", "taskBrowserAction", "setTaskViewport", "getHostSettings", "updateHostSettings", "getUsage", "setUsageLimit", "syncUsage",
+  "getApiKeyStatus", "setApiKey", "clearApiKey",
   "listCredentials", "saveCredential", "removeCredential",
   "listActivity", "clearActivity",
+  "getStrategyLearningState", "evaluateStrategyCandidate", "promoteStrategyCandidate", "rollbackStrategyGuidance", "clearStrategyLearning",
   "listMemories", "saveMemory", "removeMemory",
   "fillCredential",
   "listRoutines", "getRoutine", "saveRoutine", "deleteRoutine", "runRoutine",
@@ -57,7 +59,7 @@ const HARNESS_METHODS = [
   "setMemoryPolicy", "stopBackgroundService", "setBackgroundLaunchAtLogin",
 ];
 
-const WINDOW_METHODS = ["newWindow", "captureSurface"];
+const WINDOW_METHODS = ["newWindow", "captureSurface", "copyText", "captureAgentFrame", "captureTaskFrame", "sendTaskInput", "sendSurfaceInput", "voiceAvailable", "transcribeAudio"];
 
 const api = {};
 for (const method of METHODS) {

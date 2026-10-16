@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { LIM, applyRoomEvent, errText, type AgentRecord, type RoomApi, type RoomMessage, type RoomRound } from './agent-api'
 import { Avatar } from './AgentUi'
+import { HaloMark } from '../components/Logo'
 
 type Named = Pick<AgentRecord, 'id' | 'name' | 'avatar'>
 const IDLE: RoomRound = { active: false, turn: 0, speakerId: null }
@@ -20,7 +21,7 @@ export function RoomTranscript({ messages, agents, round, onOpenTask }: { messag
       if (m.author === 'host') {
         if (m.kind === 'task_started') return <li key={m.messageId} className="hx-room__task hx-gl"><span><b>Task started</b><small>{m.text}</small></span>
           {m.taskId ? <button type="button" className="hx-agbtn" onClick={() => onOpenTask(m.taskId!)}>Open task</button> : null}</li>
-        return <li key={m.messageId} className="hx-room__notice">{m.text}</li>
+        return <li key={m.messageId} className="hx-room__notice" data-warn={m.text.startsWith('⚠') || undefined} role={m.text.startsWith('⚠') ? 'alert' : undefined}>{m.text}</li>
       }
       const agent = byId.get(m.author)
       return <li key={m.messageId} className="hx-room__msg">
@@ -37,7 +38,7 @@ export function RoomTranscript({ messages, agents, round, onOpenTask }: { messag
  * A team's chat room. Members reply in turn after each message; when they agree on
  * work, one team task starts automatically and still goes through approval.
  */
-export function TeamRoom({ api, teamId, agents, archived, onOpenTask }: { api: RoomApi; teamId: string; agents: Named[]; archived: boolean; onOpenTask: (taskId: string) => void }) {
+export function TeamRoom({ api, teamId, agents, members = agents, archived, onOpenTask }: { api: RoomApi; teamId: string; agents: Named[]; members?: Named[]; archived: boolean; onOpenTask: (taskId: string) => void }) {
   const [state, setState] = useState<{ messages: RoomMessage[]; round: RoomRound }>({ messages: [], round: IDLE })
   const [draft, setDraft] = useState(''), [err, setErr] = useState<string | null>(null), [sending, setSending] = useState(false)
   const end = useRef<HTMLDivElement>(null)
@@ -48,7 +49,10 @@ export function TeamRoom({ api, teamId, agents, archived, onOpenTask }: { api: R
       .catch((e) => { if (live) setErr(errText(e)) })
     return () => { live = false; off() }
   }, [api, teamId])
-  useEffect(() => { end.current?.scrollIntoView?.({ block: 'nearest' }) }, [state.messages.length])
+  useEffect(() => {
+    const id = requestAnimationFrame(() => end.current?.scrollIntoView?.({ block: 'end' }))
+    return () => cancelAnimationFrame(id)
+  }, [state.messages.length, state.round.speakerId])
   const send = async () => {
     const text = draft.trim()
     if (!text || sending || archived) return
@@ -58,10 +62,13 @@ export function TeamRoom({ api, teamId, agents, archived, onOpenTask }: { api: R
   const stop = async () => { try { await api.stopRoomRound(teamId) } catch (e) { setErr(errText(e)) } }
   return <section className="hx-room hx-gl" aria-label="Team room">
     {state.messages.length ? <RoomTranscript messages={state.messages} agents={agents} round={state.round} onOpenTask={onOpenTask} />
-      : <p className="hx-ag__empty">Ask the team something. Members reply in turn.</p>}
+      : <p className="hx-ag__empty"><HaloMark className="hx-sheet__mark" /> Ask the team something. Members reply in turn.</p>}
     <div ref={end} />
     <p className="hx-ag__note">When the team agrees on work, it starts one task automatically. Anything with an effect still needs your approval.</p>
     {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
+    {archived || members.length < 2 ? null : <div className="hx-room__mentions" aria-label="Address a member">
+      {members.map((member) => <button key={member.id} type="button" className="hx-room__mention" onClick={() => setDraft((text) => `${text}${text && !/\s$/.test(text) ? ' ' : ''}@${member.name} `)}>@{member.name}</button>)}
+    </div>}
     <div className="hx-room__compose">
       <textarea className="hx-fld__in" rows={2} value={draft} maxLength={LIM.message} disabled={archived} aria-label="Message to the team"
         placeholder={archived ? 'This team is archived' : 'Message the team'} onChange={(e) => setDraft(e.target.value)}

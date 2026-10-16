@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { errText, errorCopy, getRoomApi, setPinned, startTask, type AgentApi, type AgentRecord, type OwnerRef, type TeamRecord } from './agent-api'
-import { Avatar, ConvoList, Ic, modelBrand, type AgentBrand } from './AgentUi'
+import { Avatar, ConvoList, Ic, type AgentBrand } from './AgentUi'
+import { modelBrand } from './agent-visuals'
 import { McpScope, PersistentBrowserSetting, ScheduleSection } from './AgentSettings'
 import { TeamRoom } from './Room'
 import type { UiConversation } from './normalize'
@@ -43,7 +44,7 @@ export function AgentDetail({ api, owner, item, agents, defaultBrand, convos, on
       <button type="button" className="hx-agbtn hx-agbtn--p" disabled={blocked || busy || !req.trim()} onClick={() => void start()}>Start</button></div>
     {item.archived ? <p className="hx-ag__err">{errorCopy('agent_unavailable')}</p> : memberGone ? <p className="hx-ag__err">{errorCopy('team_member_unavailable')} <button type="button" className="hx-link" onClick={onEdit}>Edit team</button></p> : null}
     {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
-    {roomApi ? <><h3 className="hx-ag__h">Team room</h3><TeamRoom api={roomApi} teamId={item.id} agents={agents} archived={item.archived} onOpenTask={(taskId) => onOpenTask(taskId, owner)} /></> : null}
+    {roomApi ? <><h3 className="hx-ag__h">Team room</h3><TeamRoom api={roomApi} teamId={item.id} agents={agents} members={members.filter((m): m is NonNullable<typeof m> => Boolean(m))} archived={item.archived} onOpenTask={(taskId) => onOpenTask(taskId, owner)} /></> : null}
     {!isTeam && !item.archived ? <><h3 className="hx-ag__h">Browser profile</h3><PersistentBrowserSetting api={api} agent={item as AgentRecord} onSaved={() => void onChanged()} /><h3 className="hx-ag__h">Tools <small>MCP · can only narrow the workspace set</small></h3><McpScope api={api} agent={item as AgentRecord} onSaved={() => void onChanged()} /></> : null}
     {!item.archived ? <ScheduleSection api={api} owner={owner} /> : null}
     <h3 className="hx-ag__h">Conversations</h3>

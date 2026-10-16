@@ -2,10 +2,15 @@
 const contracts = require("../../../shared/harness-contracts");
 const { normalizeUsage } = require("../../../shared/usage");
 const { buildPrompt, buildRoomPrompt, isRoomTurn, parseRoomTurn, parseAndValidateProposal, stripCodeFence, MAX_CLI_STDOUT_BYTES } = require("./claude-code-bridge");
-const { DEFAULT_NVIDIA_MODEL, isNvidiaModel } = require("./nvidia-models");
+const { DEFAULT_NVIDIA_MODEL, isNvidiaModel, nvidiaReasoningKwargs } = require("./nvidia-models");
 const { getModelPromptGuidance } = require("./model-prompt-guidance");
 const ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions";
 const failure = (code) => Object.assign(new Error(`NVIDIA planner: ${code}`), { code });
+
+// A team-chat reply is a few sentences: bound the output and the wait so a
+// slow model costs one short pass instead of a minute of silence.
+const ROOM_MAX_TOKENS = 2048;
+const ROOM_TIMEOUT_MS = 25000;
 
 class NvidiaPlannerBridge {
   constructor({ apiKey = process.env.NVIDIA_API_KEY, model = DEFAULT_NVIDIA_MODEL, fetchFn = globalThis.fetch, timeoutMs = 55000 } = {}) {
@@ -25,12 +30,13 @@ class NvidiaPlannerBridge {
     const room = isRoomTurn(context);
     const promptGuidance = getModelPromptGuidance("nvidia", this._model, context.progress?.plannerEffort);
     const prompt = room ? buildRoomPrompt(context, promptGuidance) : buildPrompt(context, promptGuidance);
-    const body = JSON.stringify({ model: this._model, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: 8192 });
+    const reasoning = nvidiaReasoningKwargs(this._model, context.progress?.plannerEffort);
+    const body = JSON.stringify({ model: this._model, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: room ? ROOM_MAX_TOKENS : 8192, ...(reasoning ? { chat_template_kwargs: reasoning } : {}) });
     if (Buffer.byteLength(body) > contracts.MAX_PLANNER_FRAME_BYTES) throw failure("invalid_field");
     const controller = new AbortController(); this._abort = controller; this._usage = null;
     const cancel = () => controller.abort(failure("cancelled"));
     signal?.addEventListener("abort", cancel, { once: true });
-    const timer = setTimeout(() => controller.abort(failure("timeout")), this._timeoutMs);
+    const timer = setTimeout(() => controller.abort(failure("timeout")), room ? Math.min(this._timeoutMs, ROOM_TIMEOUT_MS) : this._timeoutMs);
     const started = performance.now();
     // Defer until _pending has been assigned, including synchronous fetch errors.
     const pending = Promise.resolve().then(async () => {
@@ -55,7 +61,7 @@ class NvidiaPlannerBridge {
       if (!Array.isArray(data?.choices) || data.choices.length !== 1 || choice.finish_reason !== "stop" || choice.message?.role !== "assistant"
         || typeof choice.message.content !== "string" || choice.message.tool_calls?.length || choice.message.function_call || choice.message.refusal) throw failure("invalid_response");
       const text = stripCodeFence(choice.message.content);
-      const proposal = room ? parseRoomTurn(text) : parseAndValidateProposal(text);
+      const proposal = room ? parseRoomTurn(text) : parseAndValidateProposal(text, { taskId: context.goal?.taskId ?? context.taskId, goalVersion: context.goal?.goalVersion ?? context.goalVersion, observationId: context.observation?.id });
       this._usage = normalizeUsage("nvidia", { usage: data.usage, duration_ms: performance.now() - started });
       return proposal;
     }).catch((error) => {

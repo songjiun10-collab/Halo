@@ -1,5 +1,6 @@
 "use strict";
 
+const { createBranchRunner } = require("./branch-runner");
 const crypto = require("node:crypto");
 
 // TaskHost (Task 5): the multi-task coordinator behind the new IPC surface
@@ -31,6 +32,7 @@ const { routedModel } = require("./planner-routing");
 const { tierOf, modelsInTier, MODEL_TIERS } = require("./model-tiers");
 const { setDiscoveredNvidiaModels, saveDiscoveredNvidiaModels, listNvidiaModels } = require("./providers/nvidia-models");
 const { TaskController, TaskControllerError } = require("./task-controller");
+const { checkBuild } = require("./build-expiry");
 const { TaskQueue, TaskQueueError } = require("./task-queue");
 const { ResourceAdmission } = require("./resource-admission");
 const { CoordinatorCore } = require("./coordinator-core");
@@ -46,7 +48,7 @@ const { PLANNER_PROVIDERS } = require("./planner-providers");
 
 // The planner provider whose allowlist holds this model id, or null.
 // What an unpinned plannerModel runs per provider (for tier lookup only).
-const DEFAULT_MODEL_BY_PROVIDER = Object.freeze({ claude_code: "claude-opus-5-5", codex_cli: "gpt-6.1-sol", antigravity: "antigravity-default", cursor: "cursor-auto", nvidia: "deepseek-ai/deepseek-v4-flash", opencode_cli: "opencode-default" });
+const DEFAULT_MODEL_BY_PROVIDER = Object.freeze({ claude_code: "claude-opus-5-5", codex_cli: "gpt-6.1-sol", antigravity: "antigravity-default", cursor: "cursor-auto", nvidia: "nvidia/nemotron-3-super-120b-a12b", opencode_cli: "opencode-default" });
 const providerForModel = (model) => Object.values(PLANNER_PROVIDERS).find((provider) => provider.isModel(model))?.id ?? null;
 const { effortForRoute, routeForProfile } = require("./planner-effort-policy");
 const { RoutineRunner } = require("./routine-runner");
@@ -60,7 +62,10 @@ const { selectHarnessProfile, maxActionsPerProposal } = require("../../shared/ha
 const { resolveTaskProfile } = require("../../shared/task-profile-router");
 const { clearSessionCookies, clearDisallowedSessionCookies } = require("./profile-import/session-injector");
 
-const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone", "useImportedSessions", "mcpProviders", "reviewFallback", "plannerModel"]);
+// Every click the product sends waits a random 0.1 to 0.5 s first (5 decimal places).
+const CLICK_DELAY_MIN_SEC = 0.1;
+const CLICK_DELAY_MAX_SEC = 0.5;
+const TASK_PROFILE_SELECTOR_FIELDS = Object.freeze(["requestedDurationProfile", "requestedCapabilityProfile", "standalone", "useImportedSessions", "mcpProviders", "reviewFallback", "plannerModel", "requestAuthor"]);
 const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
   planner_unavailable: "planner", planner_error: "planner", observation_error: "browser_observation",
   context_error: "context_build", no_progress: "action_progress", budget_exhausted: "budget",
@@ -73,6 +78,8 @@ const WORK_GOAL_BLOCKER_PHASE = Object.freeze({
 // rounded-up per-task half plus margin. Planner subtree reserve is added
 // dynamically from the measured live worker high-water mark below.
 
+const { validateBrowserInput } = require("./browser-input");
+
 class TaskHostError extends Error {
   constructor(code, message) {
     super(message);
@@ -84,12 +91,17 @@ class TaskHostError extends Error {
 class TaskHost {
   constructor({
     storageRoot,
+    releaseViewsOnReview = false,
     makeBrowser,
     makePlanner,
     makeChildBrowser,
     hostVerifier,
     approve,
     memoryMonitor,
+    reclaimMemory,
+    captureAgentFrame,
+    captureTaskFrame,
+    sendTaskInput,
     now,
     segmentRotationCalls,
     noProgressThreshold,
@@ -105,9 +117,13 @@ class TaskHost {
     plannerFast,
     plannerEscalation,
     plannerRouting,
+    paymentsEnabled,
+    buildInfo = null,
+    wallClock = Date.now,
     mcpProviders = [],
     memoryStore,
     activityJournal,
+    strategyLearning,
     nvidiaModelsFile,
     settingsStore,
     usageLedger,
@@ -116,6 +132,7 @@ class TaskHost {
     subscriptionPlatform,
     subscriptionExecFn,
     credentialVault,
+    apiKeyStore,
     profileImporter,
     getTaskSession,
     workGoalStore,
@@ -134,7 +151,11 @@ class TaskHost {
       throw new TaskHostError("invalid_config", "makeMcpBroker must be a function when provided");
     }
 
+    this._releaseViewsOnReview = releaseViewsOnReview === true;
     this._storageRoot = storageRoot;
+    this._captureAgentFrame = captureAgentFrame;
+    this._captureTaskFrame = captureTaskFrame;
+    this._sendTaskInput = sendTaskInput;
     this._makeBrowser = makeBrowser;
     this._makePlanner = makePlanner;
     this._makeChildBrowser = makeChildBrowser || null;
@@ -161,11 +182,16 @@ class TaskHost {
     this._plannerFast = plannerFast === true;
     this._plannerEscalation = plannerEscalation === true;
     this._plannerRouting = plannerRouting === true;
+    this._paymentsEnabled = paymentsEnabled === true;
+    // Beta build expiry: an expired (or unreadable) build starts and resumes no tasks. See build-expiry.js.
+    this._buildInfo = buildInfo;
+    this._wallClock = typeof wallClock === "function" ? wallClock : Date.now;
     this._mcpProviders = Array.isArray(mcpProviders) ? [...mcpProviders] : [];
     this._routineBatchReadOnlySteps = routineReadOnlyBatching !== false;
     this._memoryStore = memoryStore || null;
     // { store, isEnabled }: the Context Awareness journal (local host only).
     this._activityJournal = activityJournal || null;
+    this._strategyLearning = strategyLearning || null;
     this._nvidiaModelsFile = typeof nvidiaModelsFile === "string" ? nvidiaModelsFile : null;
     this._settingsStore = settingsStore || null;
     this._usageLedger = usageLedger || null;
@@ -174,6 +200,7 @@ class TaskHost {
     this._subscriptionPlatform = subscriptionPlatform;
     this._subscriptionExecFn = subscriptionExecFn;
     this._credentialVault = credentialVault || null;
+    this._apiKeyStore = apiKeyStore || null;
     this._profileImporter = profileImporter || null;
     this._getTaskSession = typeof getTaskSession === "function" ? getTaskSession : null;
     this._workGoalStore = workGoalStore || new WorkGoalStore({ storageRoot, now });
@@ -218,7 +245,8 @@ class TaskHost {
       getTeam: (teamId) => this._agentStore.getTeam(teamId),
       getAgent: (agentId) => this._agentStore.getAgent(agentId),
       requestTurn: (turn) => this._requestRoomTurn(turn),
-      startTask: ({ teamId, request, intentText }) => this.startAgentTask({ teamId, request }, { intentText }),
+      // A room task's request is written by a member agent's planner, never typed by the person.
+      startTask: ({ teamId, request, intentText }) => this.startAgentTask({ teamId, request }, { intentText, requestAuthor: "model" }),
       getTaskState: async (taskId) => {
         await this._ensureQueue();
         return (await this._listTaskSummaries()).find((task) => task.taskId === taskId)?.state ?? null;
@@ -227,7 +255,7 @@ class TaskHost {
     });
     // One planner per room, reused across its turns and closed after a
     // minute without one (or at shutdown). A failed turn drops it.
-    this._roomPlanners = new Map(); // teamId -> { planner, timer }
+    this._roomPlanners = new Map(); // `${teamId}|${model}|${effort}` -> { planner, timer }
     this._roomsRecovered = null;
     if (executionMode !== "sequential" && executionMode !== "parallel") throw new TaskHostError("invalid_config", "executionMode must be sequential or parallel");
     this._executionMode = executionMode;
@@ -289,6 +317,7 @@ class TaskHost {
       maxParallelTasks: this._maxParallelTasks,
       parallelTaskReserveBytes: this._parallelTaskReserveBytes,
       isAdmissionBlocked: () => this._terminalTeardowns.size > 0,
+      reclaimMemory,
     });
     // Task 3: parent<->child linkage/lifecycle authority, shared across every
     // task this host manages (a child's own coordination never depends on
@@ -341,7 +370,7 @@ class TaskHost {
     if (this._runScopes.has(taskId)) return this._runScopes.get(taskId);
     const events = await store.getEvents();
     const note = (kind) => events.find((event) => event.type === "note" && event.payload?.kind === kind);
-    const scope = { mcpProviders: null, reviewFallback: "queue", plannerModel: null };
+    const scope = { mcpProviders: null, reviewFallback: "queue", plannerModel: null, requestAuthor: "person" };
     const mcp = note("mcp_scope_selected");
     if (mcp) {
       const providers = mcp.payload.providers;
@@ -361,6 +390,12 @@ class TaskHost {
     if (model) {
       if (!providerForModel(model.payload.model)) throw new TaskHostError("invalid_planner_model", "saved task planner model is invalid");
       scope.plannerModel = model.payload.model;
+    }
+    // Who wrote the task request. Absent means the person; only "model" is ever recorded, and it only restricts.
+    const author = note("request_author_selected");
+    if (author) {
+      if (author.payload.author !== "model") throw new TaskHostError("invalid_request_author", "saved task request author is invalid");
+      scope.requestAuthor = "model";
     }
     this._runScopes.set(taskId, scope);
     return scope;
@@ -407,7 +442,7 @@ class TaskHost {
     this._assertOpen();
     let error = null;
     try {
-      setDiscoveredNvidiaModels(await fetchNvidiaModelIds({ apiKey: process.env.NVIDIA_API_KEY }));
+      setDiscoveredNvidiaModels(await fetchNvidiaModelIds({ apiKey: process.env.NVIDIA_API_KEY || this._apiKeyStore?.env().NVIDIA_API_KEY }));
       if (this._nvidiaModelsFile) { try { saveDiscoveredNvidiaModels(this._nvidiaModelsFile); } catch { /* still valid for this run */ } }
     } catch (caught) {
       error = typeof caught?.code === "string" ? caught.code : "network_error";
@@ -452,6 +487,7 @@ class TaskHost {
   }
 
   async _attach(store, routine = null) {
+    this._assertBuildLive();
     if (this._ensureResourceAdmission() && !this._coordinator.hasLease(store.taskId)) {
       throw new TaskHostError("memory_lease_required", "top-level task requires a memory lease before creating resources");
     }
@@ -482,6 +518,9 @@ class TaskHost {
     browser = this._makeBrowser(store.taskId, taskProfile);
     const pinnedModel = this._runScopes.get(store.taskId)?.plannerModel;
     const parentPin = this._plannerPin("parent", pinnedModel ?? this._routedModel(taskProfile), { forceFast: taskProfile?.duration.id === "fast" });
+    const strategyGuidance = this._strategyLearning
+      ? await this._strategyLearning.activeGuidance(parentPin.plannerModel ?? DEFAULT_MODEL_BY_PROVIDER[parentPin.plannerProvider]).catch(() => null)
+      : null;
     planner = routine ? routine.runner : this._makePlanner(store.taskId, parentPin);
     // Profile selection is a host operation (design doc "Profile selection"):
     // TaskHost is the sole authority that decides harnessProfile, and passes
@@ -494,7 +533,14 @@ class TaskHost {
       store,
       planner,
       browser,
+      releaseViewsOnReview: this._releaseViewsOnReview,
       harnessProfile,
+      // Measured in the compare20 runs: a finish with no recorded evidence is sent back once, and an action that
+      // failed twice with the same deterministic error is not run a third time.
+      finishEvidenceRejections: 1,
+      repeatFailureLimit: 2,
+      clickDelayMinSec: CLICK_DELAY_MIN_SEC,
+      clickDelayMaxSec: CLICK_DELAY_MAX_SEC,
       // Only the Codex route accepts a screenshot; every other planner uses
       // the text screen map for computer use.
       plannerImageInput: parentPin.plannerProvider === "codex_cli",
@@ -504,11 +550,14 @@ class TaskHost {
       hostVerifier: this._hostVerifier,
       memoryMonitor: controllerMemoryMonitor,
       memoryStore: this._memoryStore,
+      strategyGuidance,
       ...(this._activityJournal ? { activityRecall: async (query) => (await this._activityJournal.isEnabled()) ? this._activityJournal.store.recall(query) : [] } : {}),
       permissionMode: this._permissionMode,
+      paymentsEnabled: this._paymentsEnabled,
       plannerEffort: this._effortForProfile(taskProfile),
       adaptiveEffort: this._plannerEffortMode === "auto",
       reviewFallback: this._runScopes.get(store.taskId)?.reviewFallback ?? "queue",
+      requestAuthor: this._runScopes.get(store.taskId)?.requestAuthor ?? "person",
       now: this._now,
       segmentRotationCalls: this._segmentRotationCalls,
       noProgressThreshold: this._noProgressThreshold,
@@ -517,6 +566,10 @@ class TaskHost {
       // never receive onChildPlan, which is exactly what prevents nested
       // child agents.
       onChildPlan: (proposal) => this._onChildPlan(store.taskId, store, proposal),
+      // Task Branches: read-only side reads while an approval waits (needs the hidden child surface).
+      ...(this._makeChildBrowser && !routine ? {
+        branchRunner: createBranchRunner({ makeBrowser: (branchId, origin) => this._makeChildBrowser(store.taskId, branchId, origin, "isolated") }),
+      } : {}),
       // Lets the parent's planner know whether a plan already runs, so it is
       // offered a split only when one could be accepted.
       readChildPlan: () => this._childCoordinator.getPlanSummary(store.taskId),
@@ -560,6 +613,23 @@ class TaskHost {
       entry.snapshot = snapshot;
       this._emit(store.taskId, snapshot, { goal: controller.getGoal(), browser: browser.getBrowserSnapshot?.() });
       const binding = store.taskProfile?.workGoalBinding;
+      if (this._strategyLearning && (snapshot.state === "completed" || snapshot.state === "paused")) {
+        const modelId = parentPin.plannerModel ?? DEFAULT_MODEL_BY_PROVIDER[parentPin.plannerProvider];
+        const profile = taskProfile?.duration?.id;
+        void this._strategyLearning.recordEpisode({
+          // A durable checkpoint sequence distinguishes a later retry episode
+          // from the same task pausing again for the same stable reason.
+          id: `${store.taskId}:${store.lastCheckpoint?.seq ?? store._nextSeq ?? 0}:${snapshot.state}:${snapshot.pauseReason ?? "none"}`,
+          modelId,
+          duration: profile,
+          outcome: snapshot.state === "completed" ? "completed" : "paused",
+          failureCode: snapshot.state === "paused" ? snapshot.pauseReason : null,
+          actionClass: "unknown",
+          verifiedCriteria: snapshot.criteriaStatus?.filter((item) => item.status === "verified").length ?? 0,
+          plannerCalls: snapshot.budgets?.plannerCallsUsed ?? 0,
+          at: new Date().toISOString(),
+        }).catch(() => {});
+      }
       const phase = WORK_GOAL_BLOCKER_PHASE[snapshot.pauseReason];
       if (binding && snapshot.state === "paused") {
         // Controller pause transitions checkpoint before notifying listeners.
@@ -979,6 +1049,7 @@ class TaskHost {
       (Object.hasOwn(selectors, "mcpProviders") && (!Array.isArray(selectors.mcpProviders) ||
         selectors.mcpProviders.some((id) => !MCP_PROVIDER_IDS.includes(id)) || new Set(selectors.mcpProviders).size !== selectors.mcpProviders.length)) ||
       (Object.hasOwn(selectors, "reviewFallback") && selectors.reviewFallback !== "queue" && selectors.reviewFallback !== "deny") ||
+      (Object.hasOwn(selectors, "requestAuthor") && selectors.requestAuthor !== "person" && selectors.requestAuthor !== "model") ||
       (Object.hasOwn(selectors, "plannerModel") && !providerForModel(selectors.plannerModel))) {
       return Promise.reject(new TaskHostError("invalid_selector", "task profile selectors contain unknown fields"));
     }
@@ -1002,6 +1073,7 @@ class TaskHost {
       mcpProviders: Object.hasOwn(selectors, "mcpProviders") ? [...selectors.mcpProviders] : null,
       reviewFallback: selectors.reviewFallback ?? "queue",
       plannerModel: selectors.plannerModel ?? null,
+      requestAuthor: selectors.requestAuthor === "model" ? "model" : "person",
     };
     return this._createNewTask(stableGoalInput, null, null, resolvedProfile, selectors.standalone === true, selectors.useImportedSessions === true, runScope, agentBrowserProfileBinding, onAgentBrowserProfileAttached, waitForRunLoop);
   }
@@ -1133,7 +1205,7 @@ class TaskHost {
   async postRoomMessage(input) {
     this._assertOpen();
     await this._recoverRooms();
-    if (!isPlainObject(input) || Object.keys(input).sort().join(",") !== "teamId,text") {
+    if (!(input && typeof input === "object" && !Array.isArray(input)) || Object.keys(input).sort().join(",") !== "teamId,text") {
       throw new RoomError("invalid_message", "postRoomMessage takes exactly {teamId, text}");
     }
     return this._rooms.post(input.teamId, input.text);
@@ -1169,29 +1241,33 @@ class TaskHost {
     return this._roomsRecovered;
   }
 
-  async _requestRoomTurn({ teamId, context, signal }) {
-    let entry = this._roomPlanners.get(teamId);
+  // Each speaker runs on its own saved model and effort (null inherits the
+  // host setting). Planners are pooled per team and per (model, effort).
+  async _requestRoomTurn({ teamId, agent, context, signal }) {
+    const key = `${teamId}|${agent?.model ?? ""}|${agent?.effort ?? ""}`;
+    let entry = this._roomPlanners.get(key);
     if (entry) clearTimeout(entry.timer);
     else {
-      entry = { planner: this._makePlanner(`room-${teamId}`, this._plannerPin("child")), timer: null };
-      this._roomPlanners.set(teamId, entry);
+      entry = { planner: this._makePlanner(`room-${teamId}`, this._plannerPin("child", agent?.model ?? null)), timer: null };
+      this._roomPlanners.set(key, entry);
     }
+    const effort = agent?.effort ?? effortForRoute({ base: this._plannerEffort, mode: this._plannerEffortMode, route: "child" });
     try {
-      return await entry.planner.next(context, { signal });
+      return await entry.planner.next({ ...context, progress: { plannerEffort: effort } }, { signal });
     } catch (error) {
-      await this._closeRoomPlanner(teamId, entry);
+      await this._closeRoomPlanner(key, entry);
       throw error;
     } finally {
-      if (this._roomPlanners.get(teamId) === entry) {
-        entry.timer = setTimeout(() => { void this._closeRoomPlanner(teamId, entry); }, ROOM_PLANNER_IDLE_MS);
+      if (this._roomPlanners.get(key) === entry) {
+        entry.timer = setTimeout(() => { void this._closeRoomPlanner(key, entry); }, ROOM_PLANNER_IDLE_MS);
         entry.timer.unref?.();
       }
     }
   }
 
-  async _closeRoomPlanner(teamId, entry) {
+  async _closeRoomPlanner(key, entry) {
     clearTimeout(entry.timer);
-    if (this._roomPlanners.get(teamId) === entry) this._roomPlanners.delete(teamId);
+    if (this._roomPlanners.get(key) === entry) this._roomPlanners.delete(key);
     await Promise.resolve(entry.planner.close?.()).catch(() => {});
   }
 
@@ -1391,6 +1467,7 @@ class TaskHost {
   _createNewTask(goalInput, routineRun = null, pinnedRoutineDefinition = null, resolvedProfile = null, standalone = false, useImportedSessions = false, runScope = null, agentBrowserProfileBinding = null, onAgentBrowserProfileAttached = null, waitForRunLoop = true) {
     const scope = runScope ?? { mcpProviders: null, reviewFallback: "queue", plannerModel: null };
     this._assertOpen();
+    this._assertBuildLive();
     if (!resolvedProfile) throw new TaskHostError("profile_required", "new tasks must have a host-resolved profile before storage or admission");
     return this._trackAttachment(async () => {
       await this._ensureQueue();
@@ -1469,6 +1546,7 @@ class TaskHost {
           if (scope.mcpProviders !== null) await taskStore.append({ type: "note", payload: { kind: "mcp_scope_selected", providers: [...scope.mcpProviders] } });
           if (scope.reviewFallback !== "queue") await taskStore.append({ type: "note", payload: { kind: "review_fallback_selected", mode: scope.reviewFallback } });
           if (scope.plannerModel) await taskStore.append({ type: "note", payload: { kind: "planner_model_selected", model: scope.plannerModel } });
+          if (scope.requestAuthor === "model") await taskStore.append({ type: "note", payload: { kind: "request_author_selected", author: "model" } });
           if (this._closeRequested) throw new TaskHostError("host_closed", "task host is closing or closed");
           if (binding) {
             await this._workGoalOrchestrator.recordContinuation(binding.goalId, binding.goalVersion, {
@@ -1548,7 +1626,7 @@ class TaskHost {
         const goal = store.getGoal();
         await this._closeUnattachedTaskStore(store);
         onAgentBrowserProfileAttached?.();
-        return { taskId: store.taskId, snapshot: { state: "queued", queuePosition: this._queue.pendingIds().indexOf(store.taskId) + 1 }, goal };
+        return { taskId: store.taskId, snapshot: { state: "queued", queuePosition: this._queue.pendingIds().indexOf(store.taskId) + 1, waitReason: this._coordinator.getWaitReason(store.taskId, this._queue.pendingIds().indexOf(store.taskId) + 1) }, goal };
       }
       let attached;
       try {
@@ -1983,6 +2061,7 @@ class TaskHost {
         const index = pending.indexOf(summary.taskId);
         if (index !== -1) {
           summary.queuePosition = index + 1;
+          summary.waitReason = this._coordinator.getWaitReason(summary.taskId, index + 1);
           if (summary.state === "idle") summary.state = "queued";
         }
       }
@@ -2034,7 +2113,7 @@ class TaskHost {
     // have failed, so the old worker's exit is confirmed here first: a
     // failure propagates and keeps the stale entry, and no replacement
     // adapter is minted while the previous one may still be running.
-    if (entry && entry.controller.getSnapshot().pauseReason === "memory_emergency") {
+    if (entry && (entry.controller.getSnapshot().pauseReason === "memory_emergency" || entry.controller.needsReattach)) {
       await entry.planner?.close?.();
       this._unsubscribe(entry);
       this._active.delete(taskId);
@@ -2174,6 +2253,14 @@ class TaskHost {
   async stopTask(taskId) {
     const { controller } = this._require(taskId);
     const retryingTeardown = this._terminalTeardownFailures.has(taskId);
+    // After a memory emergency (or a rejected review) the controller already
+    // closed its store, so controller.stop() would throw and the task would
+    // hold the queue slot forever. Run the terminal path directly instead.
+    if (controller.needsReattach || controller.getSnapshot().pauseReason === "memory_emergency") {
+      await this._recordTerminal(taskId, "stopped");
+      await this._queueTransition;
+      return { ...controller.getSnapshot(), state: "stopped", pauseReason: null };
+    }
     const snapshot = await controller.stop();
     // Terminal notification schedules durable FIFO cleanup and resource
     // teardown on this shared chain. Do not report a stopped task while its
@@ -2231,6 +2318,30 @@ class TaskHost {
     const entry = this._active.get(taskId);
     if (entry) return entry.controller.getEvents(options);
     return TaskStore.readEvents(taskId, { storageRoot: this._storageRoot }, options);
+  }
+
+  // Latest still of a task's hidden agent view, for a UI attached from another process.
+  async captureAgentFrame(taskId) {
+    if (typeof taskId !== "string" || !taskId || typeof this._captureAgentFrame !== "function") return null;
+    return (await this._captureAgentFrame(taskId)) ?? null;
+  }
+
+  // Latest still of a task's visible page while the user drives it from a UI
+  // attached from another process. Only while the user owns the task.
+  async captureTaskFrame(taskId) {
+    if (typeof taskId !== "string" || !taskId || typeof this._captureTaskFrame !== "function") return null;
+    if (!this.canUseTaskBrowser(taskId)) return null;
+    return (await this._captureTaskFrame(taskId)) ?? null;
+  }
+
+  // One user input (normalised 0..1 coordinates) for that same page. Strictly
+  // validated: this is the remote-control surface, so it accepts nothing else.
+  async sendTaskInput(taskId, input) {
+    this._assertOpen();
+    if (typeof taskId !== "string" || !taskId || typeof this._sendTaskInput !== "function") return false;
+    try { input = validateBrowserInput(input); } catch (error) { throw new TaskHostError("invalid_field", error.message); }
+    if (!this.canUseTaskBrowser(taskId)) return false;
+    return Boolean(await this._sendTaskInput(taskId, input));
   }
 
   getTaskBrowser(taskId) {
@@ -2318,7 +2429,15 @@ class TaskHost {
   async getHostSettings() {
     this._assertOpen();
     if (!this._settingsStore) throw new TaskHostError("settings_unavailable", "host settings are unavailable");
-    return this._settingsStore.load();
+    return this._withBuildExpiry(await this._settingsStore.load());
+  }
+
+  // Read-only notice for the settings screen; never stored, never accepted back by updateHostSettings.
+  // Every method that returns settings to the UI uses this, so the notice survives a setting change.
+  _withBuildExpiry(settings) {
+    const status = this._buildInfo ? checkBuild(this._buildInfo, this._wallClock()) : null;
+    if (!status || (status.expiresAt === null && !status.invalid)) return settings;
+    return { ...settings, buildExpiry: { expired: status.expired, daysLeft: status.daysLeft, expiresAt: status.expiresAt } };
   }
 
   // Opt-in (plannerRouting): a model of the configured provider whose tier fits
@@ -2364,7 +2483,18 @@ class TaskHost {
     if (!this._settingsStore) throw new TaskHostError("settings_unavailable", "host settings are unavailable");
     // Only this trusted host method is exposed through the allowlisted UI
     // action. The renderer never supplies or selects an audit actor.
-    const settings = await this._settingsStore.update(patch, { actor: "user" });
+    const previousSettings = await this._settingsStore.load();
+    if (this._strategyLearning && typeof patch.strategyLearning === "boolean") {
+      await this._strategyLearning.setEnabled(patch.strategyLearning);
+    }
+    let settings;
+    try { settings = await this._settingsStore.update(patch, { actor: "user" }); }
+    catch (error) {
+      if (this._strategyLearning && typeof patch.strategyLearning === "boolean") {
+        await this._strategyLearning.setEnabled(previousSettings.strategyLearning === true).catch(() => {});
+      }
+      throw error;
+    }
     this._executionMode = settings.executionMode;
     this._permissionMode = settings.permissionMode;
     this._plannerEffort = settings.plannerEffort;
@@ -2374,11 +2504,66 @@ class TaskHost {
     this._plannerFast = settings.plannerFast === true;
     this._plannerEscalation = settings.plannerEscalation === true;
     this._plannerRouting = settings.plannerRouting === true;
+    this._paymentsEnabled = settings.paymentsEnabled === true;
     this._mcpProviders = [...settings.mcpProviders];
     for (const entry of this._active.values()) {
-      entry.controller.setPolicySettings({ ...settings, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
+      entry.controller.setPolicySettings({ ...settings, paymentsEnabled: settings.paymentsEnabled === true, plannerEffort: this._effortForProfile(entry.store?.taskProfile) });
     }
-    return settings;
+    return this._withBuildExpiry(settings);
+  }
+
+  async getStrategyLearningState() {
+    this._assertOpen();
+    if (!this._strategyLearning) throw new TaskHostError("strategy_learning_unavailable", "strategy learning is unavailable");
+    const data = await this._strategyLearning.snapshot();
+    return { enabled: data.enabled, candidates: data.candidates, revisions: data.revisions.map(({ agentMd, ...revision }) => revision), activeRevisionId: data.activeRevisionId };
+  }
+
+  async evaluateStrategyCandidate(candidateId) {
+    this._assertOpen();
+    if (!this._strategyLearning) throw new TaskHostError("strategy_learning_unavailable", "strategy learning is unavailable");
+    const data = await this._strategyLearning.evaluate(candidateId);
+    const candidate = data.candidates.find((item) => item.id === candidateId);
+    return candidate ? { id: candidate.id, status: candidate.status, evaluation: candidate.evaluation } : null;
+  }
+
+  async promoteStrategyCandidate(candidateId, expectedActiveRevisionId) {
+    this._assertOpen();
+    if (!this._strategyLearning) throw new TaskHostError("strategy_learning_unavailable", "strategy learning is unavailable");
+    const data = await this._strategyLearning.promote(candidateId, expectedActiveRevisionId);
+    return { activeRevisionId: data.activeRevisionId };
+  }
+
+  async rollbackStrategyGuidance(targetRevisionId, expectedActiveRevisionId) {
+    this._assertOpen();
+    if (!this._strategyLearning) throw new TaskHostError("strategy_learning_unavailable", "strategy learning is unavailable");
+    const data = await this._strategyLearning.rollback(targetRevisionId, expectedActiveRevisionId);
+    return { activeRevisionId: data.activeRevisionId };
+  }
+
+  async clearStrategyLearning() {
+    this._assertOpen();
+    if (!this._strategyLearning) throw new TaskHostError("strategy_learning_unavailable", "strategy learning is unavailable");
+    return this._strategyLearning.clear();
+  }
+
+  // Planner API keys registered in Settings: presence only ever leaves the host.
+  async getApiKeyStatus() {
+    this._assertOpen();
+    if (!this._apiKeyStore) throw new TaskHostError("api_keys_unavailable", "API key storage is unavailable");
+    return this._apiKeyStore.status();
+  }
+
+  async setApiKey(provider, key) {
+    this._assertOpen();
+    if (!this._apiKeyStore) throw new TaskHostError("api_keys_unavailable", "API key storage is unavailable");
+    return this._apiKeyStore.set(provider, key);
+  }
+
+  async clearApiKey(provider) {
+    this._assertOpen();
+    if (!this._apiKeyStore) throw new TaskHostError("api_keys_unavailable", "API key storage is unavailable");
+    return this._apiKeyStore.clear(provider);
   }
 
   async listCredentials() {
@@ -2460,7 +2645,7 @@ class TaskHost {
       await this._scheduler?.stop();
       await this._agentScheduler?.stop();
       await this._rooms.close();
-      await Promise.allSettled([...this._roomPlanners].map(([teamId, entry]) => this._closeRoomPlanner(teamId, entry)));
+      await Promise.allSettled([...this._roomPlanners].map(([key, entry]) => this._closeRoomPlanner(key, entry)));
       // A create/load that started before close() must either attach before
       // this snapshot (so it gets cleaned up below) or observe the closed
       // state after its await, close its store, and reject. Never let a late
@@ -2556,6 +2741,15 @@ class TaskHost {
 
   _assertOpen() {
     if (this._closeRequested) throw new TaskHostError("host_closed", "task host is closing or closed");
+  }
+
+  // A beta build past its expiry date (or whose expiry file is unreadable) runs no new work.
+  _assertBuildLive() {
+    const status = checkBuild(this._buildInfo, this._wallClock());
+    if (!status.expired) return;
+    throw new TaskHostError("build_expired", status.invalid
+      ? "This beta build's expiry information is unreadable, so it will not run tasks. Download a fresh build."
+      : "This beta build has expired. Download a newer build to run tasks.");
   }
 
   _trackAttachment(operation) {

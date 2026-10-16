@@ -1,4 +1,4 @@
-import type { BrowserSnapshot, GoalSpec, JournalEvent, TaskSnapshot, TaskSummary } from './api'
+import type { BrowserSnapshot, GoalSpec, JournalEvent, PageDialogInfo, TaskSnapshot, TaskSummary } from './api'
 import type { ChildPlanSummary } from './child-agents'
 
 export type Verdict = 'allow' | 'review' | 'deny' | 'quarantine'
@@ -14,6 +14,12 @@ export interface Tab {
   claude?: TabActivity
   canGoBack: boolean
   canGoForward: boolean
+  /** The page is still loading (direct tabs only). */
+  loading?: boolean
+  /** Browser zoom as a factor, 1 = 100% (direct tabs only). */
+  zoom?: number
+  /** A page dialog waiting for the person (direct tabs only). */
+  dialog?: PageDialogInfo | null
 }
 export interface TimelineEvent { id: number; actor: Actor; text: string; detail?: string; outcome?: Outcome; policy?: Verdict; notable?: boolean; at?: string }
 export interface Approval { taskId: string; id: string; action: string; request: string; createdAt: string; widen: boolean; leaseOffer: { action: string; origin: string } | null }

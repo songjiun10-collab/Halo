@@ -100,3 +100,27 @@ test("planner attachment validation accepts only private regular HALO PNGs and r
   await result.attachment.dispose();
   await assert.rejects(validateScreenshotAttachment({ kind: "image", id: result.attachment.id, path: result.attachment.path }), { code: "invalid_attachment" });
 });
+
+const lane = (extra = {}) => ({ x: 0.3, y: 0.8, key: "d", color: [255, 40, 40], tolerance: 60, ...extra });
+const loop = (extra = {}) => ({ type: "play_loop", observationId: "o", seconds: 20, lanes: [lane()], ...extra });
+
+test("play_loop accepts a bounded rule: up to 8 lanes, letters, digits and arrow keys, at most 60 seconds", () => {
+  assert.ok(validateCoordinateAction(loop()));
+  assert.ok(validateCoordinateAction(loop({ seconds: 60, lanes: ["d", "f", "j", "k", "ArrowLeft", "ArrowUp", "7", "z"].map((key, i) => lane({ key, x: i / 10 })) })));
+});
+
+test("play_loop refuses anything outside that: keys that act on a focused control, odd shapes, numbers out of range", () => {
+  for (const key of ["Enter", " ", "Space", "Tab", "Escape", "Backspace", "Control+D", "F5", "ab", "", "D", 7]) {
+    assert.throws(() => validateCoordinateAction(loop({ lanes: [lane({ key })] })), { code: "invalid_coordinate_action" }, JSON.stringify(key));
+  }
+  const bad = [
+    loop({ seconds: 0 }), loop({ seconds: 61 }), loop({ seconds: "5" }), loop({ seconds: NaN }), loop({ lanes: [] }),
+    loop({ lanes: Array.from({ length: 9 }, () => lane()) }), loop({ lanes: "d" }), loop({ lanes: [null] }),
+    loop({ lanes: [lane({ x: 1 })] }), loop({ lanes: [lane({ y: -0.1 })] }), loop({ lanes: [lane({ color: [1, 2] })] }),
+    loop({ lanes: [lane({ color: [1, 2, 256] })] }), loop({ lanes: [lane({ color: [1.5, 2, 3] })] }),
+    loop({ lanes: [lane({ tolerance: 0 })] }), loop({ lanes: [lane({ tolerance: 256 })] }),
+    loop({ lanes: [{ ...lane(), extra: 1 }] }), loop({ lanes: [{ x: 0.1, y: 0.1, key: "d", color: [1, 2, 3] }] }),
+    { ...loop(), extra: true },
+  ];
+  for (const action of bad) assert.throws(() => validateCoordinateAction(action), { code: "invalid_coordinate_action" }, JSON.stringify(action).slice(0, 80));
+});

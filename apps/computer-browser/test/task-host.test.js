@@ -760,17 +760,13 @@ test("createTask resolves and durably records the profile before browser or plan
   assert.equal(observedAtConstruction.length, 1);
 });
 
-test("unavailable or invalid routing creates no task store and constructs no resources", async () => {
+test("invalid routing creates no task store and constructs no resources", async () => {
   const storageRoot = await mkTempRoot();
   let resources = 0;
   const host = makeHost(storageRoot, {
     makeBrowser: () => { resources += 1; throw new Error("unexpected browser construction"); },
     makePlanner: () => { resources += 1; throw new Error("unexpected planner construction"); },
   });
-  await assert.rejects(() => host.createTask(
-    { originalRequest: "inspect the page" },
-    { requestedCapabilityProfile: "research" },
-  ), { code: "capability_unavailable" });
   await assert.rejects(() => host.createTask(
     { originalRequest: "inspect the page" },
     { requestedDurationProfile: "Long" },
@@ -3010,8 +3006,9 @@ test("a Multi-agent task's planner is told it may split work, a plain task's is 
     for (let i = 0; i < 100 && seen.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     return seen;
   };
-  assert.deepEqual(await seenFor({ requestedCapabilityProfile: "multi_agent" }), [{ enabled: true, maxAgents: 8, executionModes: ["host"], active: null }]);
-  assert.deepEqual(await seenFor({}), [undefined]);
+  // Only the first planner turn matters here: a finish without evidence is sent back once, which adds a second turn.
+  assert.deepEqual((await seenFor({ requestedCapabilityProfile: "multi_agent" }))[0], { enabled: true, maxAgents: 8, executionModes: ["host"], active: null });
+  assert.equal((await seenFor({}))[0], undefined);
 });
 
 test("a new planner pins the plannerModel chosen when it is created, and omits it while unset", async () => {
@@ -3049,4 +3046,62 @@ test("a fast-profile task pins its planner to the provider's fast tier; other pr
   await waitForPins(2);
   assert.equal(pins[0].plannerFast, true);
   assert.equal(pins[1].plannerFast, undefined);
+});
+
+test("stopTask() on a memory_emergency task frees its queue slot for the next task", async () => {
+  const storageRoot = await mkTempRoot();
+  const memoryMonitor = { getPressureLevel: () => "emergency" };
+  const host = makeHost(storageRoot, {
+    makeBrowser: () => ({ observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }), dispose: async () => {} }),
+    makePlanner: () => ({
+      next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "actions", actions: [{ type: "observe" }] }),
+      close: async () => {},
+    }),
+    memoryMonitor,
+  });
+  const { taskId } = await host.createTask({ originalRequest: "first" });
+  assert.equal((await host.getTaskDetail(taskId)).snapshot.pauseReason, "memory_emergency");
+  assert.equal(host._queue.activeIds().includes(taskId), true, "the emergency task still holds the slot");
+
+  const stopped = await host.stopTask(taskId);
+  assert.equal(stopped.state, "stopped");
+  memoryMonitor.getPressureLevel = () => "normal";
+  assert.equal(host._queue.activeIds().includes(taskId), false, "stop must release the slot");
+});
+
+test("captureAgentFrame returns the injected frame source's result, or null without one", async () => {
+  const base = { hostVerifier: () => true, approve: async () => ({ decision: "allow", reasons: [] }), storageRoot: await fs.mkdtemp(path.join(os.tmpdir(), "halo-frame-")), makeBrowser: () => ({}), makePlanner: () => ({}) };
+  const withSource = new TaskHost({ ...base, captureAgentFrame: async (id) => `frame-of-${id}` });
+  assert.equal(await withSource.captureAgentFrame("t1"), "frame-of-t1");
+  assert.equal(await withSource.captureAgentFrame(""), null);
+  const without = new TaskHost(base);
+  assert.equal(await without.captureAgentFrame("t1"), null);
+});
+
+test("takeover frame/input only flow while the user owns the task, and input is strictly validated", async () => {
+  const sent = [];
+  const base = { hostVerifier: () => true, approve: async () => ({ decision: "allow", reasons: [] }), storageRoot: await fs.mkdtemp(path.join(os.tmpdir(), "halo-takeover-")), makeBrowser: () => ({}), makePlanner: () => ({}) };
+  const host = new TaskHost({ ...base, captureTaskFrame: async (id) => `still-${id}`, sendTaskInput: async (id, input) => { sent.push([id, input]); return true; } });
+  hostsToClose.add(host);
+  let owned = false;
+  host.canUseTaskBrowser = () => owned;
+
+  assert.equal(await host.captureTaskFrame("t1"), null, "no frame while the agent drives");
+  assert.equal(await host.sendTaskInput("t1", { type: "mouseMove", nx: 0.5, ny: 0.5 }), false, "no input while the agent drives");
+  owned = true;
+  assert.equal(await host.captureTaskFrame("t1"), "still-t1");
+  assert.equal(await host.sendTaskInput("t1", { type: "mouseDown", nx: 0.2, ny: 0.9, button: "left", clickCount: 2 }), true);
+  assert.equal(await host.sendTaskInput("t1", { type: "keyDown", key: "a", modifiers: ["shift"] }), true);
+  assert.equal(sent.length, 2);
+
+  for (const bad of [
+    null, "x", { type: "eval" }, { type: "mouseMove", nx: 2, ny: 0 }, { type: "mouseMove", nx: "0", ny: 0 },
+    { type: "mouseWheel", nx: 0, ny: 0, deltaY: Infinity }, { type: "keyDown", key: "" }, { type: "keyDown", key: "x".repeat(17) },
+    { type: "mouseDown", nx: 0, ny: 0, button: "back" }, { type: "mouseDown", nx: 0, ny: 0, clickCount: 9 },
+    { type: "keyDown", key: "a", modifiers: ["super"] },
+  ]) {
+    await assert.rejects(host.sendTaskInput("t1", bad), TaskHostError, JSON.stringify(bad));
+  }
+  assert.equal(sent.length, 2, "rejected inputs never reach the page");
+  assert.equal(await new TaskHost(base).captureTaskFrame("t1"), null, "no frame source -> null");
 });

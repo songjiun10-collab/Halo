@@ -28,6 +28,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   memoryPolicy: "budgeted",
   plannerProvider: "none",
   mcpProviders: Object.freeze([]),
+  strategyLearning: false,
 });
 const SETTINGS_FIELDS = ["executionMode", "mcpProviders", "memoryPolicy", "permissionMode", "plannerEffort", "plannerEffortMode", "plannerProvider", "version"];
 // plannerModel is optional within v5: unset keeps the CLI's default Opus
@@ -37,8 +38,8 @@ const SETTINGS_FIELDS = ["executionMode", "mcpProviders", "memoryPolicy", "permi
 // contextAwareness (opt-in, off when unset) keeps a local journal of pages the user read.
 // plannerRouting (opt-in, off when unset) picks a planner tier from the task duration profile.
 // plannerEscalation (opt-in, off when unset) lets a stuck task move up one model tier.
-const OPTIONAL_FIELDS = ["plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness"];
-const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness"];
+const OPTIONAL_FIELDS = ["plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "paymentsEnabled", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy", "assignmentSolver"];
+const PATCH_FIELDS = ["executionMode", "permissionMode", "plannerEffort", "plannerEffortMode", "memoryPolicy", "plannerProvider", "mcpProviders", "plannerModel", "plannerFast", "plannerEscalation", "plannerRouting", "contextAwareness", "strategyLearning", "paymentsEnabled", "browserEngine", "chromiumPath", "chromiumEndpoint", "chromiumContextPolicy", "assignmentSolver"];
 const LEGACY_V1_FIELDS = "executionMode,permissionMode,plannerEffort,version";
 const LEGACY_V2_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,version";
 const LEGACY_V3_FIELDS = "executionMode,memoryPolicy,permissionMode,plannerEffort,plannerProvider,version";
@@ -104,6 +105,38 @@ function validateSettings(value) {
   if (hasAwareness && typeof value.contextAwareness !== "boolean") {
     throw new HostSettingsError("invalid_context_awareness", "contextAwareness must be a boolean");
   }
+  // Payments are opt-in: only true lets the host grant a payment mandate. Unset or false refuses every payment.
+  const hasPaymentsEnabled = Object.prototype.hasOwnProperty.call(value, "paymentsEnabled");
+  if (hasPaymentsEnabled && typeof value.paymentsEnabled !== "boolean") {
+    throw new HostSettingsError("invalid_payments_enabled", "paymentsEnabled must be a boolean");
+  }
+  const hasStrategyLearning = Object.prototype.hasOwnProperty.call(value, "strategyLearning");
+  if (hasStrategyLearning && typeof value.strategyLearning !== "boolean") {
+    throw new HostSettingsError("invalid_strategy_learning", "strategyLearning must be a boolean");
+  }
+  // Bring-your-own Chromium (cdp-engine.ts). Unset means the Electron engine. The endpoint's
+  // loopback rule is enforced where it is used (cdp-browser-host.ts), never trusted from here.
+  const hasEngine = Object.prototype.hasOwnProperty.call(value, "browserEngine");
+  if (hasEngine && !["electron", "chromium"].includes(value.browserEngine)) {
+    throw new HostSettingsError("invalid_browser_engine", "browserEngine must be electron or chromium");
+  }
+  const hasChromiumPath = Object.prototype.hasOwnProperty.call(value, "chromiumPath");
+  if (hasChromiumPath && (typeof value.chromiumPath !== "string" || !path.isAbsolute(value.chromiumPath) || value.chromiumPath.length > 1024 || value.chromiumPath.includes("\0"))) {
+    throw new HostSettingsError("invalid_chromium_path", "chromiumPath must be an absolute path");
+  }
+  const hasChromiumContextPolicy = Object.prototype.hasOwnProperty.call(value, "chromiumContextPolicy");
+  if (hasChromiumContextPolicy && value.chromiumContextPolicy !== "isolated" && value.chromiumContextPolicy !== "shared") {
+    throw new HostSettingsError("invalid_chromium_context_policy", "chromiumContextPolicy must be isolated or shared");
+  }
+  // Opt-in assignment solver (assignment-solver.js): greedy unless the person chooses rebalancer.
+  const hasAssignmentSolver = Object.prototype.hasOwnProperty.call(value, "assignmentSolver");
+  if (hasAssignmentSolver && value.assignmentSolver !== "greedy" && value.assignmentSolver !== "rebalancer") {
+    throw new HostSettingsError("invalid_assignment_solver", "assignmentSolver must be greedy or rebalancer");
+  }
+  const hasChromiumEndpoint = Object.prototype.hasOwnProperty.call(value, "chromiumEndpoint");
+  if (hasChromiumEndpoint && (typeof value.chromiumEndpoint !== "string" || value.chromiumEndpoint.length > 256 || !/^(https?|wss?):\/\//.test(value.chromiumEndpoint))) {
+    throw new HostSettingsError("invalid_chromium_endpoint", "chromiumEndpoint must be an http(s) or ws(s) URL");
+  }
   const hasRouting = Object.prototype.hasOwnProperty.call(value, "plannerRouting");
   if (hasRouting && typeof value.plannerRouting !== "boolean") {
     throw new HostSettingsError("invalid_planner_routing", "plannerRouting must be a boolean");
@@ -126,6 +159,13 @@ function validateSettings(value) {
     ...(hasEscalation ? { plannerEscalation: value.plannerEscalation } : {}),
     ...(hasRouting ? { plannerRouting: value.plannerRouting } : {}),
     ...(hasAwareness ? { contextAwareness: value.contextAwareness } : {}),
+    ...(hasStrategyLearning ? { strategyLearning: value.strategyLearning } : {}),
+    ...(hasPaymentsEnabled ? { paymentsEnabled: value.paymentsEnabled } : {}),
+    ...(hasEngine ? { browserEngine: value.browserEngine } : {}),
+    ...(hasChromiumPath ? { chromiumPath: value.chromiumPath } : {}),
+    ...(hasChromiumEndpoint ? { chromiumEndpoint: value.chromiumEndpoint } : {}),
+    ...(hasChromiumContextPolicy ? { chromiumContextPolicy: value.chromiumContextPolicy } : {}),
+    ...(hasAssignmentSolver ? { assignmentSolver: value.assignmentSolver } : {}),
   };
 }
 

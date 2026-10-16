@@ -10,7 +10,7 @@ export function addressTarget(value: string): string | null {
     return `https://${input}`
   }
   if (/\s/.test(input) || !input.includes('.')) {
-    return `https://duckduckgo.com/?q=${encodeURIComponent(input)}`
+    return `https://www.google.com/search?q=${encodeURIComponent(input)}`
   }
   return `https://${input}`
 }

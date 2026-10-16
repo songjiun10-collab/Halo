@@ -78,6 +78,78 @@ test('direct browser tab buttons call the native tab API and replace the live ta
   assert.deepEqual(store.getState().tabs.map((tab) => tab.id), ['one'])
 })
 
+test('reload calls the native reload on a direct page, and re-navigates a task page that has no reload call', async () => {
+  const calls = []
+  const direct = { page: { url: 'https://one.example/', title: '', canGoBack: false, canGoForward: false, hasPage: true }, tabs: [{ id: 'one', url: 'https://one.example/', title: 'One' }], activeTabId: 'one', task: { state: 'idle' }, approvalQueue: [], timeline: [] }
+  const { store } = harness({
+    getSnapshot: async () => direct,
+    reload: async () => { calls.push('reload'); return direct },
+    taskBrowserAction: async (id, action) => { calls.push(['task', action]); return browser('https://example.com/') },
+    getTaskDetail: async (id) => ({ taskId: id, goal: goal(id), snapshot: snapshot('paused'), active: true }),
+  })
+  await settle()
+  assert.equal(await store.reloadPage(), true)
+  assert.deepEqual(calls, ['reload'])
+  await store.selectTask('task')
+  await settle()
+  assert.equal(await store.reloadPage(), true, 'a paused task surface can be reloaded, as it can go back')
+  assert.deepEqual(calls.at(-1), ['task', { type: 'navigate', url: 'https://example.com/' }])
+  assert.equal(calls.filter((c) => c === 'reload').length, 1, 'a task view never reaches the human tab reload')
+})
+
+test('stop works while a navigation is still holding the busy flag, and zoom and find only touch the person\'s own tabs', async () => {
+  const calls = []
+  const direct = (extra = {}) => ({ page: { url: 'https://one.example/', title: '', canGoBack: false, canGoForward: false, hasPage: true, loadState: 'ready', zoom: 1, ...extra }, tabs: [{ id: 'one', url: 'https://one.example/', title: 'One' }], activeTabId: 'one', task: { state: 'idle' }, approvalQueue: [], timeline: [] })
+  let release
+  const slow = new Promise((resolve) => { release = resolve })
+  const { store } = harness({
+    getSnapshot: async () => direct(),
+    navigate: async () => { await slow; return direct() },
+    stopLoading: async () => { calls.push('stop'); return direct({ loadState: 'ready' }) },
+    zoom: async (action) => { calls.push(['zoom', action]); return direct({ zoom: action === 'in' ? 1.1 : 1 }) },
+    findInPage: async (query, options) => { calls.push(['find', query, options]); return { found: true, count: 2 } },
+    clearFind: async () => { calls.push('clear'); return true },
+  })
+  await settle()
+  const pending = store.navigate({ type: 'navigate', url: 'https://slow.example/' })
+  await settle()
+  assert.ok(store.getState().busy, 'the navigation holds the busy flag')
+  assert.equal(await store.stopPage(), true, 'Stop is not blocked by it')
+  release(); await pending
+  assert.equal(await store.zoomPage('in'), true)
+  assert.equal(store.getState().tabs[0].zoom, 1.1)
+  assert.deepEqual(await store.findText('  cart ', true), { found: true, count: 2 })
+  assert.deepEqual(await store.findText('   '), { found: false, count: 0 }, 'blank text is never sent')
+  await store.clearFind()
+  assert.deepEqual(calls, ['stop', ['zoom', 'in'], ['find', '  cart '.slice(0, 200), { backwards: true }], 'clear'])
+  await store.selectTask('task')
+  assert.equal(await store.stopPage(), false)
+  assert.equal(await store.zoomPage('out'), false)
+  assert.deepEqual(await store.findText('cart'), { found: false, count: 0 }, 'a task surface is not searched from here')
+})
+
+test('a dialog on the person\'s tab is answered through the host even while a navigation holds the busy flag', async () => {
+  const calls = []
+  const page = (dialog) => ({ page: { url: 'https://shop.example/', title: '', canGoBack: false, canGoForward: false, hasPage: true, dialog }, tabs: [{ id: 'one', url: 'https://shop.example/', title: 'Shop' }], activeTabId: 'one', task: { state: 'idle' }, approvalQueue: [], timeline: [] })
+  let release
+  const slow = new Promise((resolve) => { release = resolve })
+  const { store } = harness({
+    getSnapshot: async () => page({ type: 'confirm', message: 'Delete?', defaultPrompt: '', origin: 'https://shop.example' }),
+    navigate: async () => { await slow; return page(null) },
+    answerDialog: async (accept, text) => { calls.push([accept, text]); return page(null) },
+  })
+  await settle()
+  assert.equal(store.getState().tabs[0].dialog.message, 'Delete?')
+  const pending = store.navigate({ type: 'navigate', url: 'https://shop.example/next' })
+  await settle()
+  assert.equal(await store.answerDialog(false), true)
+  assert.deepEqual(calls, [[false, undefined]])
+  assert.equal(store.getState().tabs[0].dialog, null)
+  release(); await pending
+  await store.selectTask('task')
+  assert.equal(await store.answerDialog(true), false, 'a task surface answers its own dialogs')
+})
+
 test('direct tab controls cannot cross into an active task-owned browser', async () => {
   const calls = []
   const { store } = harness({
@@ -86,10 +158,18 @@ test('direct tab controls cannot cross into an active task-owned browser', async
     closeTab: async () => { calls.push('closeTab'); return {} },
   })
   await store.selectTask('task')
-  assert.equal(await store.newBrowserTab(), false)
   assert.equal(await store.selectBrowserTab('other'), false)
   assert.equal(await store.closeBrowserTab('page'), false)
   assert.deepEqual(calls, [])
+})
+
+test('the new-tab control leaves the active task and opens a direct tab instead of doing nothing', async () => {
+  const calls = []
+  const { store } = harness({ newTab: async () => { calls.push('newTab'); return { page: { url: '', title: '', canGoBack: false, canGoForward: false, hasPage: false }, tabs: [{ id: 'two', url: '', title: 'New tab' }], activeTabId: 'two', task: { state: 'idle' }, approvalQueue: [], timeline: [] } } })
+  await store.selectTask('task')
+  assert.equal(await store.newBrowserTab(), true)
+  assert.equal(store.getState().activeTaskId, null)
+  assert.deepEqual(calls, ['newTab'])
 })
 
 test('late task details and events cannot replace a newer selected task', async () => {

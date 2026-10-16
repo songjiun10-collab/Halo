@@ -4,6 +4,8 @@
 // selected native page, and switching tasks must hide every other page first.
 // This module owns layout only; TaskController remains the execution authority.
 const MIN_CHROME_HEIGHT = 94; // 42px tab strip + 52px toolbar, before outer padding.
+const { dispatchBrowserInput } = require("./browser-input");
+const { captureFrameJpeg } = require("./frame-capture");
 
 class BrowserSurfaces {
   constructor(win, { isUserControlled = () => false } = {}) {
@@ -45,6 +47,28 @@ class BrowserSurfaces {
     this._request = { taskId, bounds: { ...bounds } };
     this._layout();
     return { visible: Boolean(taskId && bounds.visible && this._views.has(taskId)) };
+  }
+
+  // Still of the task's visible page, for a UI attached from another process
+  // (the view lives in this process, so the UI cannot draw it natively).
+  async captureFrame(taskId) {
+    const view = this._views.get(taskId);
+    if (!view || view.webContents.isDestroyed()) return null;
+    try {
+      const jpeg = await captureFrameJpeg(view.webContents, { maxWidth: 1200, quality: 70 });
+      if (!jpeg || this._views.get(taskId) !== view) return null;
+      return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+    } catch {
+      return null;
+    }
+  }
+
+  // Forwards one already-validated user input to the visible page. Fails closed
+  // unless the user owns the task, same as the before-input guard above.
+  sendInput(taskId, input) {
+    const view = this._views.get(taskId);
+    if (!view || view.webContents.isDestroyed() || !this._isUserControlled(taskId)) return false;
+    return dispatchBrowserInput(view.webContents, view.getBounds(), input);
   }
 
   _layout() {

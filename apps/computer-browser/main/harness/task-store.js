@@ -716,6 +716,18 @@ class TaskStore {
     return events;
   }
 
+  // getEvents() returns one page (MAX_EVENTS_PER_PAGE); a caller that must see the whole journal pages through it.
+  async getAllEvents() {
+    const events = [];
+    let since = 0;
+    for (;;) {
+      const page = await this.getEvents({ since });
+      if (page.length === 0) return events;
+      events.push(...page);
+      since = page[page.length - 1].seq;
+    }
+  }
+
   isWriteBlocked() {
     return this._writeBlocked;
   }

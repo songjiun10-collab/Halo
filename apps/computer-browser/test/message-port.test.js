@@ -322,7 +322,8 @@ test("a TaskHost task runs end to end with browser and planner reachable only th
     assert.ok(["completed", "awaiting_verification"].includes(summary.state), JSON.stringify(summary));
     assert.equal(executed.length, 1);
     assert.equal(executed[0].type, "click");
-    assert.equal(plannerCalls, 2);
+    // click, a finish with no recorded evidence (the host sends it back once), then the finish that is accepted.
+    assert.equal(plannerCalls, 3);
     const methods = wire.filter((m) => m.type === "request").map((m) => m.method);
     assert.ok(methods.includes("observe") && methods.includes("execute") && methods.includes("next"), methods.join(","));
     for (const message of wire) assert.deepEqual(JSON.parse(JSON.stringify(message)), message);

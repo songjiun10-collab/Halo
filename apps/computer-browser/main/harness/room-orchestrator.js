@@ -54,6 +54,39 @@ class RoomError extends Error {
   }
 }
 
+// A visible, plain-language warning for one member's failed turn. Only host
+// labels are shown, never worker output.
+function failureWarning(speaker, code) {
+  const model = String(speaker.model ?? "");
+  const cli = /^claude/.test(model) ? "Claude" : /^gpt-/.test(model) ? "Codex" : null;
+  const hint = {
+    authentication_failed: "its login or API key was rejected",
+    cli_error: cli ? `the ${cli} CLI may be signed out; sign in again` : "its worker reported an error (it may be signed out)",
+    cli_exit_nonzero: cli ? `the ${cli} CLI may be signed out; sign in again` : "its worker exited with an error",
+    timeout: "the model took too long to answer",
+    rate_limited: "the model is rate limited right now",
+    network_error: "the network request failed",
+    spawn_failed: "its worker could not start",
+  }[code] ?? `its worker failed (${code})`;
+  return `⚠ ${speaker.name} couldn't reply: ${hint}.`;
+}
+
+// Members named as "@name" in the text, in the order they were mentioned.
+// Longer names match first so "@하이쿠 사본" is not read as "@하이쿠".
+function mentionedMembers(text, members) {
+  const found = [];
+  let rest = text;
+  for (const member of [...members].sort((a, b) => b.name.length - a.name.length)) {
+    const at = rest.indexOf(`@${member.name}`);
+    if (at < 0) continue;
+    const end = at + member.name.length + 1;
+    if (/[\p{L}\p{N}_]/u.test(rest[end] ?? "")) continue;
+    found.push({ at, member });
+    rest = rest.slice(0, at) + " ".repeat(end - at) + rest.slice(end);
+  }
+  return found.sort((a, b) => a.at - b.at).map((entry) => entry.member);
+}
+
 class RoomOrchestrator {
   constructor({ store, getTeam, getAgent, requestTurn, startTask, getTaskState, emit, maxTurns = contracts.DEFAULT_MAX_TURNS } = {}) {
     for (const [name, value] of Object.entries({ getTeam, getAgent, requestTurn, startTask, getTaskState })) {
@@ -236,8 +269,11 @@ class RoomOrchestrator {
       await this._append(teamId, { author: "host", kind: "notice", text: "No team member is available to reply." });
       return;
     }
-    const maxTurns = members.length === 1 ? 1 : this._maxTurns;
     const initialMessage = (await this._store.read(teamId)).find((message) => message.messageId === originMessageId);
+    // "@name" addresses members directly: only they answer, once each. A
+    // high-impact request still gets the full-team review, so it ignores it.
+    const addressed = HIGH_IMPACT_REQUEST.test(initialMessage?.text ?? "") ? [] : mentionedMembers(initialMessage?.text ?? "", members);
+    const maxTurns = addressed.length > 0 ? addressed.length : members.length === 1 ? 1 : this._maxTurns;
     const reviewReasons = new Set(HIGH_IMPACT_REQUEST.test(initialMessage?.text ?? "") && members.length > 1 ? ["high_impact"] : []);
     const reviewAttempts = new Map();
     const reviewCompleted = new Map();
@@ -271,14 +307,16 @@ class RoomOrchestrator {
     }
     let previous = null;
     let passes = 0;
-    const failures = new Set();
-    let failedTurns = 0;
     while (round.turn < maxTurns && (passes < members.length || reviewWorkRemains())) {
       if (signal.aborted) return;
-      let index = (this._rotation.get(teamId) ?? 0) % members.length;
-      if (members.length > 1 && members[index].id === previous) index = (index + 1) % members.length;
-      const speaker = members[index];
-      this._rotation.set(teamId, (index + 1) % members.length);
+      let speaker;
+      if (addressed.length > 0) speaker = addressed[round.turn];
+      else {
+        let index = (this._rotation.get(teamId) ?? 0) % members.length;
+        if (members.length > 1 && members[index].id === previous) index = (index + 1) % members.length;
+        speaker = members[index];
+        this._rotation.set(teamId, (index + 1) % members.length);
+      }
       round.turn += 1;
       round.speakerId = speaker.id;
       this._emitRound(teamId);
@@ -302,6 +340,8 @@ class RoomOrchestrator {
         reply = contracts.validateRoomTurn(await untilAborted(this._requestTurn({ teamId, agent: speaker, context, signal }), signal));
       } catch (caught) {
         error = typeof caught?.code === "string" && CODE_RE.test(caught.code) ? caught.code : "turn_failed";
+        const detail = typeof caught?.plannerCode === "string" && CODE_RE.test(caught.plannerCode) ? caught.plannerCode : error;
+        if (!signal.aborted) await this._append(teamId, { author: "host", kind: "notice", text: failureWarning(speaker, detail) }).catch(() => {});
       }
       if (signal.aborted) return;
       previous = speaker.id;
@@ -339,10 +379,6 @@ class RoomOrchestrator {
         await this._append(teamId, { author: "host", kind: "notice", text: `HALO requested a bounded read-only review for: ${newReviewReasons.join(", ")}.` });
       }
 
-      if (error) {
-        failures.add(error);
-        failedTurns += 1;
-      }
       if (error || reply.kind === "pass") {
         passes += 1;
         await this._append(teamId, { author: speaker.id, kind: "pass", text: "", ...(error ? { error } : {}) });
@@ -374,10 +410,6 @@ class RoomOrchestrator {
       return; // at most one task per round, and a start (or a failed one) ends it
     }
     await recordReviewOutcome();
-    // Every turn failed: say so once rather than leaving silent passes.
-    if (failedTurns > 0 && failedTurns === round.turn) {
-      await this._append(teamId, { author: "host", kind: "notice", text: `Team members couldn't reply (${[...failures].join(", ")}). Their worker may not support team rooms.` });
-    }
   }
 
   async _roomTaskRunning(teamId) {

@@ -1,12 +1,9 @@
 import type { ReactNode } from 'react'
 import type { Avatar as AvatarT, AvatarColor, AvatarShape, AgentRecord } from './agent-api'
 import { ago, statusLabel, type UiConversation } from './normalize'
-import { PLANNER_MODELS } from '../session/claude-models'
+import { COLORS } from './agent-visuals'
 
-export const SHAPES: AvatarShape[] = ['circle', 'square', 'bag', 'star', 'drop', 'cloud', 'triangle', 'hex']
-export const COLORS: Record<AvatarColor, string> = { brown: 'oklch(.5 .07 55)', yellow: 'oklch(.84 .15 95)', blue: 'oklch(.66 .15 250)', gray: 'oklch(.64 .02 150)', red: 'oklch(.64 .19 25)', green: 'oklch(.7 .14 155)', purple: 'oklch(.64 .16 305)', orange: 'oklch(.73 .17 55)' }
 export type AgentBrand = 'claude_code' | 'codex_cli' | 'antigravity' | 'cursor' | 'nvidia' | 'opencode_cli'
-export const modelBrand = (model: string | null | undefined): AgentBrand | undefined => PLANNER_MODELS.find((m) => m.id === model)?.provider
 
 const AG_INK = '#1d1a17', AG_BLUSH = '#ff8fa3'
 const agEye = (x: number, y: number, k: string) => k === 'wink' ? <path d={`M${x - 3.4} ${y}q3.4 -3.6 6.8 0`} fill="none" stroke={AG_INK} strokeWidth="2.4" strokeLinecap="round" /> : k === 'happy' ? <path d={`M${x - 3.4} ${y + 1.2}q3.4 -4.4 6.8 0`} fill="none" stroke={AG_INK} strokeWidth="2.4" strokeLinecap="round" /> : <g><ellipse cx={x} cy={y} rx="3" ry="3.6" fill={AG_INK} /><circle cx={x + 1} cy={y - 1.3} r="1.1" fill="#fff" /></g>

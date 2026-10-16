@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { HaloMark } from './Logo'
+import { ProviderIcon } from './BrandIcon'
 import type { HostSettings } from '../session/api'
 import { activeModel, DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL, DEFAULT_NVIDIA_MODEL, mergeDiscoveredNvidia, PLANNER_MODELS } from '../session/claude-models'
 import { DEFAULT_EFFORT, type PlannerEffort } from '../session/planner-effort'
-import { EXECUTION_OPTIONS, fastModeSupport, PERMISSION_OPTIONS, saveSetting, type SettingsPatch } from '../session/settings'
+import { buildExpiryNotice, EXECUTION_OPTIONS, fastModeSupport, paymentsSwitchPatch, PERMISSION_OPTIONS, permissionModePatch, saveSetting, type SettingsPatch } from '../session/settings'
+import { useEnabledPlanners } from '../session/enabled-planners'
 import { EffortSlider } from './EffortSlider'
 import { Back } from './Icons'
 
@@ -21,7 +24,20 @@ interface ViewProps {
   onChange: (patch: SettingsPatch) => void
   onClose?: () => void
   leaving?: boolean
+  /** Providers switched on besides the active one; the container persists it. */
+  enabledPlanners?: string[] | null
+  onEnabledPlanners?: (next: string[]) => void
+  /** Which key-taking providers have a registered API key, and the provider whose key form is open. */
+  apiKeys?: Record<string, boolean>
+  keyEditing?: string | null
+  keyError?: string | null
+  onKeyEditing?: (provider: string | null) => void
+  onSaveKey?: (provider: string, key: string) => void
+  onClearKey?: (provider: string) => void
 }
+
+/** Providers whose worker reads an API key from its environment; the others sign in through their own CLI. */
+const KEYED = new Set(['antigravity', 'cursor', 'nvidia'])
 
 /** External adapter keys come from the host environment, not this UI. */
 const PROVIDERS = [
@@ -48,11 +64,11 @@ function Cards<T extends string>({ label, options, value, disabled, onPick }: { 
 }
 
 /** The settings content, without host calls. */
-export function SettingsView({ settings, saving, error, onChange, onClose, leaving }: ViewProps) {
+export function SettingsView({ settings, saving, error, onChange, onClose, leaving, enabledPlanners: enabledList = null, onEnabledPlanners: setEnabledList = () => {}, apiKeys = {}, keyEditing = null, keyError = null, onKeyEditing = () => {}, onSaveKey = () => {}, onClearKey = () => {} }: ViewProps) {
   const head = (
     <header className="hx-settings__head">
       <button type="button" className="hx-settings__back" aria-label="Close settings" onClick={onClose}><Back /></button>
-      <h2>Settings</h2>
+      <h2><HaloMark className="hx-sheet__mark" /> Settings</h2>
     </header>
   )
   if (!settings) {
@@ -69,15 +85,37 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
       <div className="hx-settings__section">
         <p className="hx-settings__label">Planner</p>
         {PROVIDERS.map((p) => {
-          const on = settings.plannerProvider === p.id
+          const activeId = settings.plannerProvider
+          // Switches are independent: the active planner is always on; the rest are the providers the user turned on.
+          const enabled = new Set([...(enabledList ?? []), ...(activeId !== 'none' ? [activeId] : [])])
+          const on = enabled.has(p.id)
+          const toggle = () => {
+            const next = new Set(enabled)
+            if (on) next.delete(p.id); else next.add(p.id)
+            setEnabledList([...next])
+            if (on && activeId === p.id) {
+              const fallback = PROVIDERS.find((q) => next.has(q.id))
+              onChange(fallback ? { plannerProvider: fallback.id, plannerModel: fallback.model } : { plannerProvider: 'none' })
+            } else if (!on && activeId === 'none') onChange({ plannerProvider: p.id, plannerModel: p.model })
+          }
           return (
             <div key={p.id} className="hx-model-row" data-provider={p.id}>
-              <span className="hx-model-row__mark" aria-hidden="true">{p.mark}</span>
+              <span className="hx-model-row__mark" aria-hidden="true"><ProviderIcon id={p.id} size={28} /></span>
               <span className="hx-model-row__body">
                 <span className="hx-model-row__name">{p.name}</span>
-                <span className="hx-model-row__meta" data-mono="">{on && model ? `planner · ${model.label}` : p.cli}</span>
+                <span className="hx-model-row__meta" data-mono="">{activeId === p.id && model ? `planner · ${model.label}` : p.cli}</span>
               </span>
-              <button type="button" className="hx-switch" role="switch" aria-label={`Use ${p.name}`} aria-checked={on} disabled={saving} onClick={() => onChange(on ? { plannerProvider: 'none' } : { plannerProvider: p.id, plannerModel: p.model })}><span /></button>
+              {KEYED.has(p.id) ? <button type="button" className="hx-keybtn" data-set={apiKeys[p.id] || undefined} aria-label={`${p.name} API key`} onClick={() => onKeyEditing(keyEditing === p.id ? null : p.id)}>{apiKeys[p.id] ? 'Key set' : 'Add key'}</button> : null}
+              <button type="button" className="hx-switch" role="switch" aria-label={`Use ${p.name}`} aria-checked={on} disabled={saving} onClick={toggle}><span /></button>
+              {KEYED.has(p.id) && keyEditing === p.id ? (
+                <form className="hx-keyform" onSubmit={(e) => { e.preventDefault(); const field = e.currentTarget.elements.namedItem('key') as HTMLInputElement | null; const value = field?.value.trim() ?? ''; if (value) { onSaveKey(p.id, value); if (field) field.value = '' } }}>
+                  <input name="key" type="password" autoComplete="off" spellCheck={false} autoFocus aria-label={`${p.name} API key`} placeholder={apiKeys[p.id] ? 'Paste a new key to replace it' : 'Paste API key'} />
+                  <button type="submit" className="hx-keyform__save">Save</button>
+                  {apiKeys[p.id] ? <button type="button" className="hx-keyform__remove" onClick={() => onClearKey(p.id)}>Remove</button> : null}
+                  <p>Stored encrypted in your macOS keychain. A key set in the environment takes precedence.</p>
+                  {keyError ? <p role="alert" className="hx-keyform__error">{keyError}</p> : null}
+                </form>
+              ) : null}
             </div>
           )
         })}
@@ -125,11 +163,31 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
         </div>
         <p className="hx-settings__hint">Remembers the title and a short excerpt of pages you read in Halo, on this Mac only and encrypted, for 14 days. Sign-in, payment, mail and bank pages, and pages with password or card fields, are never saved. Tasks can recall matching pages. Off by default.</p>
         <ActivityClear />
+        <div className="hx-settings__row">
+          <span>Learn strategies for GPT-6 Luna</span>
+          <button type="button" className="hx-switch" role="switch" aria-label="Learn strategies for GPT-6 Luna" aria-checked={settings.strategyLearning === true} onClick={() => onChange({ strategyLearning: settings.strategyLearning !== true })}><span /></button>
+        </div>
+        <p className="hx-settings__hint">Opt-in. Keeps encrypted outcome metadata only, not prompts or page content. Repeated patterns create candidates; synthetic replay is not a model-performance benchmark. You must review and promote each passing candidate. Applies to newly attached Luna tasks.</p>
+        <StrategyLearningReview />
       </fieldset>
 
       <div className="hx-settings__section">
         <p className="hx-settings__label">What the agent may do</p>
-        <Cards label="Permission mode" options={PERMISSION_OPTIONS} value={settings.permissionMode} disabled={saving} onPick={(permissionMode) => onChange({ permissionMode })} />
+        <Cards label="Permission mode" options={PERMISSION_OPTIONS} value={settings.permissionMode} disabled={saving} onPick={(permissionMode) => { const patch = permissionModePatch(settings, permissionMode, () => typeof window !== 'undefined' && window.confirm('Switch to Full?\n\nHalo will click, type and submit forms without asking you first. Payments, card numbers and passwords still stop and wait for you, but other irreversible actions will not.')); if (patch) onChange(patch) }} />
+      </div>
+
+      <div className="hx-settings__section">
+        <p className="hx-settings__label">Payments</p>
+        <div className="hx-settings__row">
+          <span>Allow payments</span>
+          <button type="button" className="hx-switch" role="switch" aria-label="Allow payments" aria-checked={settings.paymentsEnabled === true} disabled={saving}
+            onClick={() => {
+              // Turning it on is the risky direction: say what it allows first.
+              const patch = paymentsSwitchPatch(settings, () => typeof window !== 'undefined' && window.confirm('Allow Halo to pay when you clearly order it in chat?\n\nIt pays once per request, only on the site you name, up to the amount you set. Unclear orders and transfers always ask you first. Card numbers and passwords are never seen or typed by Halo.'))
+              if (patch) onChange(patch)
+            }}><span /></button>
+        </div>
+        <p className="hx-settings__hint">Off by default. When on, Halo pays only after a clear order in chat (one site, one amount limit), once per request. Card numbers, passwords and one-time codes are never seen or typed by Halo; you enter them yourself. Turning this off stops payments right away, including in tasks that are already running.</p>
       </div>
 
       <div className="hx-settings__section">
@@ -137,10 +195,43 @@ export function SettingsView({ settings, saving, error, onChange, onClose, leavi
         <Cards label="Execution mode" options={EXECUTION_OPTIONS} value={settings.executionMode} disabled={saving} onPick={(executionMode) => onChange({ executionMode })} />
       </div>
 
+      {(() => { const n = buildExpiryNotice(settings); return n && <p className={n.urgent ? 'hx-settings__error' : 'hx-settings__hint'} role={n.urgent ? 'alert' : undefined}>{n.text}</p> })()}
       {error && <p className="hx-settings__error" role="alert">{error}</p>}
       </div>
     </section>
   )
+}
+
+function StrategyLearningReview() {
+  const [state, setState] = useState<{ enabled: boolean; activeRevisionId: string | null; candidates: { id: string; strategyId: string; support: number; status: string; evaluation: { result: string } | null }[]; revisions: { id: string; event: string; parentId: string | null }[] } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const refresh = async () => { try { setState(await window.haloBrowser?.getStrategyLearningState?.() ?? null) } catch { setMessage('Local strategy-learning store is unavailable.') } }
+  useEffect(() => {
+    let current = true
+    void (async () => {
+      try { const next = await window.haloBrowser?.getStrategyLearningState?.(); if (current) setState(next ?? null) }
+      catch { if (current) setMessage('Local strategy-learning store is unavailable.') }
+    })()
+    return () => { current = false }
+  }, [])
+  const call = async (fn: () => Promise<unknown>, success: string) => {
+    setBusy(true); setMessage('')
+    try { await fn(); setMessage(success); await refresh() } catch { setMessage('Action failed; no policy change was applied.') } finally { setBusy(false) }
+  }
+  if (!state) return <p className="hx-settings__hint">Loading local strategy candidates…</p>
+  return <div className="hx-settings__section" aria-label="Strategy learning review">
+    <p className="hx-settings__label">Agent.md review · GPT-6 Luna only</p>
+    <p className="hx-settings__hint">Replay checks deterministic selector behavior on synthetic cases. It does not prove the model will improve.</p>
+    {state.candidates.length === 0 ? <p className="hx-settings__hint">No repeated failure pattern yet. At least three matching episodes are required.</p> : state.candidates.map((candidate) => <div className="hx-model-row" key={candidate.id}>
+      <span className="hx-model-row__body"><span className="hx-model-row__name">{candidate.strategyId}</span><span className="hx-model-row__meta" data-mono="">{candidate.support} episodes · {candidate.evaluation?.result ?? 'not evaluated'}</span></span>
+      <button type="button" className="hx-keybtn" disabled={busy || !state.enabled} onClick={() => void call(() => window.haloBrowser!.evaluateStrategyCandidate!(candidate.id), 'Replay complete. Review the result before promotion.')}>Evaluate</button>
+      <button type="button" className="hx-keybtn" disabled={busy || !state.enabled || candidate.evaluation?.result !== 'pass'} onClick={() => void call(() => window.haloBrowser!.promoteStrategyCandidate!(candidate.id, state.activeRevisionId), 'Strategy promoted. New tasks will use it.')}>Promote</button>
+    </div>)}
+    {state.activeRevisionId ? <button type="button" className="hx-keybtn" disabled={busy} onClick={() => { const prior = [...state.revisions].reverse().find((revision) => revision.id !== state.activeRevisionId); void call(() => window.haloBrowser!.rollbackStrategyGuidance!(prior?.id ?? 'builtin', state.activeRevisionId), 'Rollback recorded as a new revision.') }}>Rollback to prior revision</button> : null}
+    {state.candidates.length || state.revisions.length ? <button type="button" className="hx-keybtn" disabled={busy} onClick={() => { if (window.confirm('Delete local strategy-learning episodes, candidates, and revisions?')) void call(() => window.haloBrowser!.clearStrategyLearning!(), 'Local strategy-learning data deleted.') }}>Clear learning data</button> : null}
+    {message ? <p className="hx-settings__hint" role="status">{message}</p> : null}
+  </div>
 }
 
 interface Props {
@@ -169,6 +260,7 @@ export function SettingsPanel({ leaving, onClose }: Props) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [, setModelsVersion] = useState(0)
+  const loaded = settings !== null
   const ref = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   useEffect(() => { closeRef.current = onClose }, [onClose])
@@ -178,13 +270,19 @@ export function SettingsPanel({ leaving, onClose }: Props) {
     return () => { current = false }
   }, [])
   // Opening settings asks the host which NVIDIA models the account can use; a failed lookup keeps the built-in list.
+  const mounted = useRef(true)
+  useEffect(() => () => { mounted.current = false }, [])
+  const refreshModels = async () => {
+    try {
+      const result = await window.haloBrowser?.refreshPlannerModels?.()
+      if (!result) return
+      mergeDiscoveredNvidia(result.nvidia)
+      if (mounted.current) setModelsVersion((v) => v + 1)
+    } catch { /* keep the built-in list */ }
+  }
   useEffect(() => {
     let current = true
-    void window.haloBrowser?.refreshPlannerModels?.().then((result) => {
-      if (!current || !result) return
-      mergeDiscoveredNvidia(result.nvidia)
-      setModelsVersion((v) => v + 1)
-    }).catch(() => {})
+    void (async () => { const result = await window.haloBrowser?.refreshPlannerModels?.().catch(() => null); if (current && result) { mergeDiscoveredNvidia(result.nvidia); setModelsVersion((v) => v + 1) } })()
     return () => { current = false }
   }, [])
   useEffect(() => {
@@ -193,7 +291,7 @@ export function SettingsPanel({ leaving, onClose }: Props) {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeRef.current() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [leaving, settings === null])
+  }, [leaving, loaded])
 
   const change = async (patch: SettingsPatch) => {
     if (!settings || saving) return
@@ -206,5 +304,15 @@ export function SettingsPanel({ leaving, onClose }: Props) {
     else { setSettings(previous); setError('Could not save that change.') }
     setSaving(false)
   }
-  return <div ref={ref} className="hx-settings__host"><SettingsView settings={settings} saving={saving} error={error} onChange={(p) => void change(p)} onClose={onClose} leaving={leaving} /></div>
+  const [enabledPlanners, setEnabledPlanners] = useEnabledPlanners()
+  const [apiKeys, setApiKeys] = useState<Record<string, boolean>>({})
+  const [keyEditing, setKeyEditing] = useState<string | null>(null)
+  const [keyError, setKeyError] = useState<string | null>(null)
+  useEffect(() => { window.haloBrowser?.getApiKeyStatus?.().then(setApiKeys).catch(() => {}) }, [])
+  const keyCall = async (call: Promise<Record<string, boolean>> | undefined, done: boolean, provider?: string) => {
+    setKeyError(null)
+    try { if (call) { setApiKeys(await call); if (done) setKeyEditing(null); if (provider === 'nvidia') await refreshModels() } else setKeyError('API keys are not available in this build.') }
+    catch (caught) { setKeyError((caught as { code?: string })?.code === 'encryption_unavailable' ? 'Secure keychain storage is unavailable, so the key was not saved.' : 'Could not save that key.') }
+  }
+  return <div ref={ref} className="hx-settings__host"><SettingsView settings={settings} saving={saving} error={error} onChange={(p) => void change(p)} onClose={onClose} leaving={leaving} enabledPlanners={enabledPlanners} onEnabledPlanners={setEnabledPlanners} apiKeys={apiKeys} keyEditing={keyEditing} keyError={keyError} onKeyEditing={(id) => { setKeyError(null); setKeyEditing(id) }} onSaveKey={(id, key) => void keyCall(window.haloBrowser?.setApiKey?.(id, key), true, id)} onClearKey={(id) => void keyCall(window.haloBrowser?.clearApiKey?.(id), true, id)} /></div>
 }

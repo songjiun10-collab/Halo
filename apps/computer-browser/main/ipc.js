@@ -3,6 +3,8 @@
 const { isTrustedSender } = require("./harness/trusted-sender");
 const { BackgroundRuntimeUi } = require("./harness/background-runtime-ui");
 const { captureVisibleSurface } = require("./surface-snapshot");
+const { createSurfaceStreams } = require("./surface-stream");
+const { clipboard } = require("./desktop-runtime");
 const registries = new WeakMap();
 
 // Exactly the method surface preload exposes as window.haloBrowser. No
@@ -10,7 +12,7 @@ const registries = new WeakMap();
 // whatever ControlApi's own method signature validates.
 const LEGACY_METHODS = [
   "getSnapshot", "navigate", "startTask", "pauseTask", "resumeTask", "resumeAfterCaptcha", "stopTask", "takeOverTask",
-  "goBack", "goForward", "reload", "newTab", "selectTab", "closeTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
+  "goBack", "goForward", "reload", "stopLoading", "zoom", "findInPage", "clearFind", "answerDialog", "newTab", "selectTab", "closeTab", "approve", "deny", "setBrowserBounds", "getMetricsSummary",
 ];
 
 // New long-horizon harness channels (design doc section 8), each mapped to
@@ -47,11 +49,19 @@ const HARNESS_METHODS = {
   "halo:setUsageLimit": "setUsageLimit",
   "halo:syncUsage": "syncUsage",
   "halo:updateHostSettings": "updateHostSettings",
+  "halo:getApiKeyStatus": "getApiKeyStatus",
+  "halo:setApiKey": "setApiKey",
+  "halo:clearApiKey": "clearApiKey",
   "halo:listCredentials": "listCredentials",
   "halo:saveCredential": "saveCredential",
   "halo:removeCredential": "removeCredential",
   "halo:listActivity": "listActivity",
   "halo:clearActivity": "clearActivity",
+  "halo:getStrategyLearningState": "getStrategyLearningState",
+  "halo:evaluateStrategyCandidate": "evaluateStrategyCandidate",
+  "halo:promoteStrategyCandidate": "promoteStrategyCandidate",
+  "halo:rollbackStrategyGuidance": "rollbackStrategyGuidance",
+  "halo:clearStrategyLearning": "clearStrategyLearning",
   "halo:listMemories": "listMemories",
   "halo:saveMemory": "saveMemory",
   "halo:removeMemory": "removeMemory",
@@ -111,10 +121,12 @@ const CODED_CHANNELS = new Set([
   "halo:setAgentPinned", "halo:listAgentSchedules", "halo:saveAgentSchedule",
   "halo:deleteAgentSchedule", "halo:listMcpProviders", "halo:getChildPlan",
   "halo:listRooms", "halo:getRoom", "halo:postRoomMessage", "halo:stopRoomRound",
+  "halo:getApiKeyStatus", "halo:setApiKey", "halo:clearApiKey",
 ]);
 const ERROR_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
 
 function withErrorCode(error) {
+  if (!(typeof error?.code === "string" && ERROR_CODE_RE.test(error.code))) console.error("[ipc] handler failed:", error?.stack ?? error);
   const code = error?.code;
   if (typeof code !== "string" || !ERROR_CODE_RE.test(code)) throw error;
   const coded = new Error(`[${code}] ${error.message}`, { cause: error });
@@ -146,8 +158,8 @@ const SHARED_RUNTIME_METHODS = new Set(["setMemoryPolicy", "setLaunchAtLogin"]);
 //     snapshot (main/harness/background-runtime-ui.js).
 //   launchAgent: optional {isInstalled, enable, disable} for "start at
 //     login" (main/harness/background-launch-agent.js).
-module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNewWindow, launchAgentInstalled, launchAgent } = {}) {
-  const ipc = ipcMain || require("electron").ipcMain;
+module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNewWindow, launchAgentInstalled, launchAgent, captureAgentFrame, captureTaskFrame, sendTaskInput, voice } = {}) {
+  const ipc = ipcMain || require("./desktop-runtime").ipcMain;
   let registry = registries.get(ipc);
   if (!registry) {
     registry = { contexts: new Map(), channels: new Set(), harnessEnabled: false };
@@ -188,11 +200,69 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
     return owner.onNewWindow();
   });
 
+  // Share copies the page link here: the renderer's own clipboard needs a live user gesture and a permission.
+  addHandler("halo:copyText", (event, text) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:copyText: rejected untrusted sender"));
+    if (typeof text !== "string" || text.length === 0 || text.length > 4096) return Promise.reject(new Error("halo:copyText: invalid text"));
+    clipboard.writeText(text);
+    return Promise.resolve(true);
+  });
+
   // A still of the showing page, painted under Halo overlays while the native view is hidden.
   addHandler("halo:captureSurface", (event) => {
     const owner = findContext(event);
     if (!owner) return Promise.reject(new Error("halo:captureSurface: rejected untrusted sender"));
     return captureVisibleSurface(owner.win);
+  });
+
+  // Live view: frames are pushed on "halo:surfaceFrame" while a stream is started for the showing page.
+  const surfaceStreams = createSurfaceStreams();
+  addHandler("halo:startSurfaceStream", (event) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:startSurfaceStream: rejected untrusted sender"));
+    return surfaceStreams.start(owner.win);
+  });
+  addHandler("halo:stopSurfaceStream", (event) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:stopSurfaceStream: rejected untrusted sender"));
+    return surfaceStreams.stop(owner.win);
+  });
+
+  // The agent works in a hidden page; this is the trusted window's read-only look at it.
+  addHandler("halo:captureAgentFrame", (event, taskId) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:captureAgentFrame: rejected untrusted sender"));
+    if (typeof taskId !== "string" || !taskId || typeof captureAgentFrame !== "function") return Promise.resolve(null);
+    return Promise.resolve(captureAgentFrame(taskId));
+  });
+
+  addHandler("halo:captureTaskFrame", (event, taskId) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:captureTaskFrame: rejected untrusted sender"));
+    if (typeof taskId !== "string" || !taskId || typeof captureTaskFrame !== "function") return Promise.resolve(null);
+    return Promise.resolve(captureTaskFrame(taskId));
+  });
+  addHandler("halo:sendTaskInput", (event, taskId, input) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:sendTaskInput: rejected untrusted sender"));
+    if (typeof taskId !== "string" || !taskId || typeof sendTaskInput !== "function") return Promise.resolve(false);
+    return Promise.resolve(sendTaskInput(taskId, input));
+  });
+  addHandler("halo:sendSurfaceInput", (event, input) => {
+    const owner = findContext(event);
+    if (!owner) return Promise.reject(new Error("halo:sendSurfaceInput: rejected untrusted sender"));
+    return Promise.resolve(owner.controlApi.sendSurfaceInput(input));
+  });
+
+  // Voice input: the clip stays on this machine (main/harness/voice-transcriber.js).
+  addHandler("halo:voiceAvailable", (event) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:voiceAvailable: rejected untrusted sender"));
+    return Promise.resolve(!!voice && voice.available());
+  });
+  addHandler("halo:transcribeAudio", (event, audio, options) => {
+    if (!findContext(event)) return Promise.reject(new Error("halo:transcribeAudio: rejected untrusted sender"));
+    if (!voice) return Promise.reject(Object.assign(new Error("voice input is not available"), { code: "not_set_up" }));
+    const bytes = audio instanceof ArrayBuffer ? Buffer.from(audio) : ArrayBuffer.isView(audio) ? Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength) : null;
+    if (!bytes) return Promise.reject(Object.assign(new Error("audio must be binary"), { code: "bad_audio" }));
+    const language = typeof options?.language === "string" ? options.language : "auto";
+    return voice.transcribe(bytes, { language }).catch((error) => { throw Object.assign(new Error(error.message), { code: error.code || "failed" }); });
   });
 
   if (taskHost) registry.harnessEnabled = true;
@@ -202,7 +272,7 @@ module.exports = function registerIpc(win, controlApi, { ipcMain, taskHost, onNe
       addHandler(channel, (event, ...args) => {
         const owner = findContext(event);
         if (!owner?.taskHost) return Promise.reject(new Error(`${channel}: rejected untrusted sender`));
-        if (!CODED_CHANNELS.has(channel)) return owner.taskHost[method](...args);
+        if (!CODED_CHANNELS.has(channel)) return Promise.resolve().then(() => owner.taskHost[method](...args)).catch((error) => { console.error(`[ipc] ${channel} failed:`, error?.stack ?? error); throw error; });
         return Promise.resolve().then(() => owner.taskHost[method](...args)).catch(withErrorCode);
       });
     }

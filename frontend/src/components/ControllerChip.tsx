@@ -7,17 +7,27 @@ interface Props {
   recoveryReason: string | null
   onTakeOver: () => void
   onResume: () => void
+  /** The agent says it is done and a criterion waits for the user's check. */
+  awaitingReview?: boolean
+  onReview?: () => void
 }
 
 /**
  * Who is driving this tab, as part of the address field (like a site-permission
  * icon), not a separate control bar. One click hands control over.
  */
-export function ControllerChip({ control, finished, recoveryReason, onTakeOver, onResume }: Props) {
+export function ControllerChip({ control, finished, recoveryReason, onTakeOver, onResume, awaitingReview, onReview }: Props) {
   if (control === 'you' && recoveryReason === 'execution_uncertain') {
     return (
       <button className="hx-chip" data-control="you" data-recovery="uncertain" onClick={onResume} title={`${AGENT}'s last action may not have finished before this restarted. Resume to check and continue.`}>
         <span className="hx-chip__dot" aria-hidden="true" />Confirm resume (uncertain)
+      </button>
+    )
+  }
+  if (control === 'you' && awaitingReview && onReview) {
+    return (
+      <button className="hx-chip" data-control="you" onClick={onReview} title={`${AGENT} says it is done. Check the result to finish the task.`}>
+        <span className="hx-chip__dot" aria-hidden="true" />Review result
       </button>
     )
   }

@@ -93,3 +93,43 @@ test("NVIDIA supports room turns and rejects oversized response bodies", async (
   const huge = new NvidiaPlannerBridge({ apiKey: "test-only", fetchFn: async () => new Response("x".repeat(1024 * 1024 + 1)) });
   await assert.rejects(huge.start({}), { code: "output_too_large" }); await huge.close();
 });
+
+test("the NVIDIA worker accepts a well-formed catalog-discovered model id, which only the host process knows", () => {
+  const { parseNvidiaWorkerArgs } = require("../main/harness/providers/nvidia-planner-worker");
+  assert.deepEqual(parseNvidiaWorkerArgs(["--model", "z-ai/glm-5.3-flash"]), { model: "z-ai/glm-5.3-flash" });
+  assert.throws(() => parseNvidiaWorkerArgs(["--model", "not a model id"]));
+});
+
+test("planner effort maps to the model's reasoning knob; models without one send nothing extra", () => {
+  const { nvidiaReasoningKwargs } = require("../main/harness/providers/nvidia-models");
+  assert.deepEqual(nvidiaReasoningKwargs("z-ai/glm-5.3-flash", "medium"), { reasoning_effort: "low" });
+  assert.deepEqual(nvidiaReasoningKwargs("z-ai/glm-5.3-flash", "high"), { reasoning_effort: "high" });
+  assert.deepEqual(nvidiaReasoningKwargs("z-ai/glm-5.3-flash", "max"), { reasoning_effort: "max" });
+  assert.equal(nvidiaReasoningKwargs("deepseek-ai/deepseek-v4.1-flash", "medium"), null);
+  assert.deepEqual(nvidiaReasoningKwargs("deepseek-ai/deepseek-v4.1-flash", "high"), { thinking: true, reasoning_effort: "high" });
+  assert.equal(nvidiaReasoningKwargs("nvidia/nemotron-3-super-120b-a12b", "max"), null);
+});
+
+test("Nemotron guidance tells the planner to put the answer in need_user instead of asking the person to confirm", () => {
+  const { getModelPromptGuidance } = require("../main/harness/providers/model-prompt-guidance");
+  const text = getModelPromptGuidance("nvidia", "nvidia/nemotron-3-super-120b-a12b");
+  assert.match(text, /answer itself/);
+  assert.match(text, /never end it by asking the person to confirm/);
+});
+
+test("a proposal that omits only host-known identifiers is completed from the host's context; a wrong value is left alone", async () => {
+  const { NvidiaPlannerBridge } = require("../main/harness/providers/nvidia-planner-bridge");
+  const context = { taskId: proposal.taskId, goalVersion: 1, observation: { id: "obs-1" } };
+  const run = async (body, ctx = context) => {
+    const bridge = new NvidiaPlannerBridge({ apiKey: "test-only", fetchFn: async () => reply(JSON.stringify(body)) });
+    try { return await bridge.start(ctx); } finally { await bridge.close(); }
+  };
+  const bare = { criterionIds: [], actions: [{ type: "observe" }] };
+  assert.deepEqual(await run(bare), proposal, "taskId, goalVersion, basedOnObservationId and kind are filled");
+  assert.deepEqual(await run(bare, { goal: { taskId: proposal.taskId, goalVersion: 1 }, observation: { id: "obs-1" } }), proposal, "identity may come from context.goal");
+
+  assert.equal((await run({ ...bare, taskId: "22222222-2222-2222-2222-222222222222" })).taskId, "22222222-2222-2222-2222-222222222222", "a present but different taskId is not overwritten (the controller rejects a wrong one)");
+  assert.equal((await run({ ...bare, goalVersion: 9 })).goalVersion, 9, "a present goalVersion is left alone (the controller rejects a stale one)");
+  await assert.rejects(run({ criterionIds: [], kind: "finish" }, { taskId: proposal.taskId, goalVersion: 1 }), { code: "invalid_proposal" }, "no observation id known: nothing is invented");
+  await assert.rejects(run({ criterionIds: [] }), { code: "invalid_proposal" }, "no kind and no actions array stays invalid");
+});

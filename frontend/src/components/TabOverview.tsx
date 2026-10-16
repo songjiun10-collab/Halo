@@ -54,7 +54,7 @@ export function TabOverview({ tabs, leaving, activeTabId, onPick, onClose }: Pro
                 <span className="hx-card__thumb" aria-hidden="true"><span>{title.split(' — ')[0]}</span></span>
                 <span className="hx-card__title">{title}</span>
                 <span className="hx-card__meta">
-                  <code>{url.startsWith('halo://') ? 'New tab' : host(url)}</code>
+                  <code>{url.startsWith('halo://') || url === 'about:blank' || !url ? 'New tab' : host(url)}</code>
                   {tab.claude && <span className="hx-card__agent">{activityText[tab.claude]}</span>}
                 </span>
               </button>

@@ -56,7 +56,7 @@ code { font-family: var(--font-mono); }
   border: 0; border-radius: var(--radius-md); background: transparent; color: var(--muted-foreground);
 }
 .hx-icbtn:disabled { color: var(--well); cursor: default; }
-.hx-icbtn--sm { width: 22px; height: 22px; border-radius: var(--radius-sm); }
+.hx-icbtn--sm { width: 24px; height: 24px; border-radius: var(--radius-sm); }
 .hx-icbtn--sm .hx-ic { width: 13px; height: 13px; }
 
 @media (hover: hover) and (pointer: fine) {
@@ -71,8 +71,11 @@ code { font-family: var(--font-mono); }
 .hx-app { height: 100%; padding: 12px; }
 .hx-window {
   position: relative; display: flex; flex-direction: column; height: 100%;
-  border-radius: var(--radius-lg); overflow: hidden; background: var(--backdrop); box-shadow: var(--shadow-window);
+  border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-window);
+  background: linear-gradient(180deg, #1d3a73 0%, #2a3566 28%, #4a3b63 62%, #5b3d4a 100%);
 }
+:root[data-theme="light"] .hx-window { background: linear-gradient(180deg, #9ec1ff 0%, #c9b8e8 60%, #f0c4b8 100%); }
+.hx-window::before { content: none; }
 /* Chrome Glass: the browser's own surface, almost opaque. It's a bar, not a floating card —
    no drop shadow here. Just enough translucency to read as "a layer", not "a panel". */
 .hx-chrome {
@@ -121,7 +124,7 @@ code { font-family: var(--font-mono); }
    border's opacity lifts on hover/focus, like light catching an edge. */
 .hx-omni {
   display: flex; align-items: center; gap: var(--space-sm); flex: 1; min-width: 0; height: 38px;
-  padding-inline: 14px 4px; border-radius: 19px; background: var(--halo-glass-chrome);
+  padding-inline: 14px 4px; border-radius: var(--radius-lg); background: var(--halo-glass-chrome);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: inset 0 1px 0 var(--halo-glass-highlight);
   font: 400 14px/1 var(--font-mono); color: var(--muted-foreground);
@@ -146,7 +149,7 @@ code { font-family: var(--font-mono); }
 /* Who is driving: part of the address field, like a site-permission icon. */
 .hx-chip {
   display: inline-flex; align-items: center; gap: 8px; flex: none; height: 30px; padding: 0 12px;
-  border: 0; border-radius: 15px; background: var(--toolbar); color: var(--muted-foreground);
+  border: 0; border-radius: var(--radius-md); background: var(--toolbar); color: var(--muted-foreground);
   font: 500 13px/1 var(--font-body); white-space: nowrap;
 }
 .hx-chip__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); }
@@ -217,6 +220,17 @@ code { font-family: var(--font-mono); }
 .hx-sidebar__task-state { color: var(--muted-foreground); font-size: 10px; line-height: 1.3; }
 .hx-sidebar__empty { margin: 0 8px; color: var(--muted-foreground); font-size: 12px; }
 .hx-sidebar__foot { display: flex; align-items: center; gap: 7px; margin-top: auto; padding: 10px 8px 2px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 11px; }
+/* Design-system sidebar: no panel, it sits on the window's own backdrop; only tiles and the selected row are glass. */
+@media (min-width: 681px) {
+  .hx-sidebar { margin: 0 0 0 8px; border-radius: 0; border: 0; background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
+  .hx-sidebar__item, .hx-sidebar__task { border-radius: 12px; }
+  .hx-sidebar__task[data-selected], .hx-sidebar__item[data-selected] {
+    background: color-mix(in oklab, var(--foreground) 9%, transparent); box-shadow: none;
+  }
+  .hx-sidebar__new { border-color: transparent; }
+  .hx-sidebar__task:hover:not([data-selected]), .hx-sidebar__new:hover { background: color-mix(in oklab, var(--foreground) 8%, transparent); }
+  .hx-sidebar__fav { background: color-mix(in oklab, var(--foreground) 7%, transparent); }
+}
 
 /* ---------- The page ---------- */
 
@@ -224,6 +238,11 @@ code { font-family: var(--font-mono); }
 .hx-page { position: relative; flex: 1; min-width: 0; display: flex; }
 .hx-native-page { flex: 1; min-width: 0; background: var(--site-bg); position: relative; overflow: hidden; }
 .hx-snapshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: left top; pointer-events: none; user-select: none; }
+.hx-snapshot[data-swipe] { animation: .32s cubic-bezier(.32,.72,0,1) both hx-swipe-away-back; box-shadow: -12px 0 32px rgb(0 0 0 / .22); }
+.hx-snapshot[data-swipe="forward"] { animation-name: hx-swipe-away-forward; box-shadow: 12px 0 32px rgb(0 0 0 / .22); }
+@keyframes hx-swipe-away-back { to { transform: translateX(100%); } }
+@keyframes hx-swipe-away-forward { to { transform: translateX(-100%); } }
+@media (prefers-reduced-motion: reduce) { .hx-snapshot[data-swipe] { animation-duration: .01s; } }
 .hx-site {
   flex: 1; min-width: 0; overflow: auto; padding: 40px 48px;
   background: var(--site-bg); color: var(--site-fg); font: 400 16px/1.5 var(--font-body);
@@ -238,19 +257,6 @@ code { font-family: var(--font-mono); }
 }
 .hx-edge[data-on] { opacity: 1; }
 
-/* A trackpad swipe's own back/forward, echoed briefly at the edge it came from. */
-.hx-swipe {
-  z-index: 6; background: var(--halo-glass-floating); border: 1px solid var(--halo-glass-border);
-  backdrop-filter: blur(var(--halo-blur-floating)); color: var(--foreground); width: 44px; height: 44px;
-  border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  position: absolute; top: 50%; transform: translateY(-50%); animation: .35s var(--ease-out) hx-swipe-in;
-}
-.hx-swipe--back { left: 16px; }
-.hx-swipe--forward { right: 16px; }
-@keyframes hx-swipe-in {
-  0% { opacity: 0; transform: translateY(-50%) scale(0.7); }
-  100% { opacity: 1; transform: translateY(-50%) scale(1); }
-}
 .hx-site h2 { margin: 0 0 var(--space-md); font-size: 24px; line-height: 1.2; font-weight: 700; }
 .hx-site__rows { margin: 0; max-width: 40rem; }
 .hx-site__rows div { display: flex; justify-content: space-between; gap: var(--space-md); padding: 10px 0; border-bottom: 1px solid var(--site-line); }
@@ -262,16 +268,46 @@ code { font-family: var(--font-mono); }
 
 /* A new tab: Halo's own dark surface, not the light web page. */
 .hx-site--home { display: flex; background: var(--backdrop); padding: 0; }
-.hx-home { margin: auto; width: min(30rem, calc(100% - 48px)); padding: 40px 0; text-align: center; }
-.hx-home__mark { width: 40px; height: 40px; color: var(--brand); }
-.hx-home__title { margin: var(--space-md) 0 var(--space-lg); font-size: 20px; font-weight: 600; color: var(--foreground); }
-.hx-home__form { display: flex; gap: var(--space-sm); }
+.hx-home { margin: auto; width: min(40rem, calc(100% - 48px)); padding: 40px 0; text-align: center; }
+.hx-home__mark { width: 48px; height: 48px; color: var(--brand); }
+.hx-home__title { margin: var(--space-md) 0 28px; font-size: 28px; font-weight: 600; letter-spacing: -.01em; color: var(--foreground); }
+.hx-home__form { display: flex; align-items: center; gap: 8px; }
 .hx-home__input {
-  flex: 1; min-width: 0; height: 44px; padding-inline: var(--space-md); border-radius: var(--radius-md);
-  border: 1px solid var(--border-strong); background: var(--toolbar); color: var(--foreground); font: 400 15px/1 var(--font-body);
+  flex: 1; min-width: 0; height: 56px; padding-inline: 20px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--toolbar); color: var(--foreground); font: 400 16px/1 var(--font-body);
 }
 .hx-home__input::placeholder { color: var(--muted-foreground); }
 .hx-home__input:focus-visible { outline-offset: 0; }
+.hx-home__form .hx-mpick { flex: none; max-width: 170px; border: 0; padding: 0; background: none; box-shadow: none; }
+.hx-home__form .hx-mpick__toggle { height: 56px; max-width: 170px; padding-inline: 16px; border-radius: 999px; font-size: 14px; }
+.hx-home__form .hx-mpick__toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hx-home__input { min-width: 180px; }
+.hx-home__form .hx-btn { width: 56px; height: 56px; min-height: 56px; padding: 0; border-radius: 999px; }
+.hx-home__form .hx-btn .hx-ic { width: 20px; height: 20px; }
+.hx-home__recent { margin-top: 28px; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.hx-home__recent p { margin: 0 4px 6px; font: 600 12px var(--font-body); color: var(--muted-foreground); }
+/* Liquid glass: translucent fill, blur, and a lit top edge (design system home). */
+.hx-home__input, .hx-home__form .hx-mpick__toggle {
+  background: linear-gradient(135deg, color-mix(in oklab, var(--foreground) 16%, transparent), color-mix(in oklab, var(--foreground) 5%, transparent) 55%, color-mix(in oklab, var(--foreground) 10%, transparent)), color-mix(in oklab, var(--toolbar) 45%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.7); backdrop-filter: blur(24px) saturate(1.7);
+  border: 1px solid color-mix(in oklab, var(--foreground) 18%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, #fff 40%, transparent), inset 0 -1px 0 color-mix(in oklab, #fff 8%, transparent), 0 2px 8px rgba(0, 0, 0, .14);
+}
+.hx-home__form .hx-btn--primary { box-shadow: inset 0 1px 0 #fff, 0 2px 8px rgba(0, 0, 0, .2); }
+.hx-rc:hover, .hx-home__try button:hover { box-shadow: inset 0 1px 0 color-mix(in oklab, #fff 18%, transparent); }
+.hx-rc { display: flex; align-items: center; gap: 10px; border: 0; background: transparent; color: var(--foreground); cursor: pointer; border-radius: 12px; padding: 10px 12px; font: 500 14px var(--font-body); text-align: left; }
+.hx-rc i { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted-foreground); }
+.hx-rc i[data-s=run] { background: var(--success); }
+.hx-rc i[data-s=ask] { background: var(--warning); }
+.hx-rc__t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hx-rc__s { color: var(--muted-foreground); font-size: 12.5px; font-weight: 400; }
+.hx-rc > span:last-child { color: var(--muted-foreground); }
+.hx-home__try { list-style: none; margin: 18px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.hx-home__try button { border: 0; background: transparent; color: var(--muted-foreground); cursor: pointer; font: 400 13px var(--font-body); padding: 4px 8px; border-radius: 999px; }
+@media (hover: hover) and (pointer: fine) {
+  .hx-rc:hover { background: color-mix(in oklab, var(--foreground) 9%, transparent); }
+  .hx-home__try button:hover { color: var(--foreground); background: color-mix(in oklab, var(--foreground) 9%, transparent); }
+}
 .hx-home__resume {
   display: inline-flex; align-items: center; gap: var(--space-sm); margin-top: var(--space-xl); padding: 8px 4px;
   border: 0; background: none; color: var(--muted-foreground); font: 500 13px/1 var(--font-body); cursor: pointer;
@@ -372,7 +408,7 @@ code { font-family: var(--font-mono); }
 .hx-chat:focus { outline: none; }
 .hx-chat__head { display: flex; align-items: baseline; gap: var(--space-sm); margin: 0 0 10px; font-weight: 600; }
 .hx-chat__task { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hx-chat__close { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted-foreground); font-size: 15px; line-height: 1; cursor: pointer; }
+.hx-chat__close { flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted-foreground); font-size: 15px; line-height: 1; cursor: pointer; }
 .hx-chat__close:hover { background: var(--hover); color: var(--foreground); }
 
 .hx-chat__recent { display: grid; gap: 2px; margin: 0 0 10px; padding: 0 0 10px; border-bottom: 1px solid var(--border); list-style: none; }
@@ -391,7 +427,14 @@ code { font-family: var(--font-mono); }
 .hx-msg__who { font-size: 11px; font-weight: 600; color: var(--muted-foreground); }
 .hx-msg__actions { display: flex; justify-content: flex-end; gap: var(--space-xs); }
 
-.hx-chat__composer { display: flex; gap: var(--space-sm); }
+.hx-chat__composer { display: flex; flex-direction: column; gap: var(--space-xs); }
+.hx-chat__row { display: flex; gap: var(--space-sm); }
+.hx-work { font-size: 12px; color: var(--muted-foreground); }
+.hx-work summary { cursor: pointer; padding: 2px 0; }
+.hx-work ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; }
+.hx-chat__ctx { display: flex; align-items: baseline; gap: var(--space-xs); margin: 0; padding: 4px 8px; width: fit-content; max-width: 100%; border-radius: var(--radius-md); background: var(--toolbar); font-size: 11px; color: var(--muted-foreground); }
+.hx-chat__ctx-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--foreground); }
+.hx-chat__ctx-h { flex: none; }
 .hx-chat__input {
   flex: 1; min-width: 0; height: 36px; padding-inline: var(--space-sm); border-radius: var(--radius-md);
   border: 1px solid var(--border-strong); background: var(--toolbar); color: var(--foreground); font: 400 13px/1 var(--font-body);
@@ -662,3 +705,251 @@ kbd {
 @media (prefers-reduced-motion: no-preference) { .hx-lease__dot { animation: hx-lease-blink 1.6s ease-in-out infinite; } }
 @keyframes hx-lease-blink { 50% { opacity: .35; } }
 .hx-sheet__actions { flex-wrap: wrap; }
+
+/* Sidebar from the design system: shortcut tiles, project folders. */
+.hx-scs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 8px; flex: none; }
+.hx-sidebar[data-open="false"] .hx-scs { display: none; }
+.hx-sc { min-width: 0; width: 100%; height: 38px; border: 0; border-radius: 12px; cursor: pointer; display: grid; place-items: center; font: 600 16px/1 var(--font-body);
+  background: color-mix(in oklab, var(--foreground) 9%, transparent); box-shadow: inset 0 1px 0 color-mix(in oklab, #fff 22%, transparent); }
+.hx-sc:hover { filter: brightness(1.15); }
+.hx-sc--empty { background: transparent; color: var(--muted-foreground); font-weight: 400; font-size: 18px; box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--foreground) 18%, transparent); }
+.hx-sidebar__label--row { display: flex; align-items: center; justify-content: space-between; }
+.hx-sidebar__add { background: none; border: 0; color: var(--muted-foreground); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; border-radius: 4px; }
+.hx-sidebar__add:hover { color: var(--foreground); background: var(--hover); }
+.hx-proj { display: flex; }
+.hx-proj > .hx-sidebar__item { flex: 1; min-width: 0; }
+.hx-sidebar__item--child { padding-left: 20px; color: var(--muted-foreground); }
+.hx-sidebar__rename { width: 100%; min-width: 0; background: var(--hover); color: var(--foreground); border: 1px solid var(--border-strong); border-radius: 6px; font: inherit; padding: 1px 4px; }
+.hx-more { color: var(--muted-foreground); }
+
+/* The window's own backdrop shows through the chrome and sidebar (design system); only the content card stays dark. */
+@media (min-width: 681px) {
+  .hx-window .hx-chrome, .hx-window .hx-toolbar, .hx-window .hx-strip { background: transparent !important; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; border-color: transparent; }
+  .hx-window .hx-sidebar { margin: 0 0 8px 8px; border: 0 !important; border-radius: 0; background: transparent !important; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
+  .hx-window .hx-content-col { margin: 0 8px 8px 8px; border-radius: 18px; overflow: hidden; background: var(--backdrop); }
+}
+
+/* Real glass: the Electron window is vibrant (macOS), so the page stays transparent and the desktop behind shows through. */
+html, body, #root { background: transparent !important; }
+.hx-window { background: rgba(18, 22, 32, 0.38) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
+:root[data-theme="light"] .hx-window { background: rgba(255, 255, 255, 0.35) !important; }
+
+.hx-sc__input { margin: 0 8px 8px; width: calc(100% - 16px); box-sizing: border-box; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, white 8%, transparent); color: var(--foreground); font: inherit; font-size: 12px; outline: none; }
+
+/* Sidebar as a liquid-glass panel over the vibrant window. */
+@media (min-width: 681px) {
+  .hx-window .hx-sidebar {
+    margin: 0 0 8px 8px; border-radius: 16px; overflow: hidden;
+    border: 1px solid color-mix(in srgb, white 7%, transparent) !important;
+    background: color-mix(in srgb, white 4%, transparent) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(1.3); backdrop-filter: blur(24px) saturate(1.3);
+    box-shadow: none;
+  }
+}
+
+.hx-sidebar__label--fold { display: flex; align-items: center; gap: 4px; width: calc(100% - 16px); border: 0; background: transparent; padding: 0; cursor: pointer; text-align: left; }
+.hx-sidebar__label--fold:hover { color: var(--foreground); }
+.hx-sidebar__chev { display: inline-block; transition: transform .15s; transform: rotate(90deg); }
+.hx-sidebar__label--fold[aria-expanded="false"] .hx-sidebar__chev { transform: none; }
+
+/* The design system's .hx-switch draws its own ::after knob; the settings switches already render a <span> knob. */
+.hx-switch[role="switch"]::after { content: none; }
+
+.hx-model-row { flex-wrap: wrap; }
+.hx-keybtn { margin-left: auto; margin-right: 10px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, white 6%, transparent); color: var(--muted-foreground); font: 500 11px/1.4 var(--font-body); cursor: pointer; }
+.hx-keybtn[data-set] { color: var(--foreground); border-color: color-mix(in srgb, var(--brand) 60%, transparent); }
+.hx-keybtn:hover { color: var(--foreground); }
+.hx-keyform { flex: 0 0 100%; display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; }
+.hx-keyform input { flex: 1 1 200px; min-width: 0; padding: 7px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--well); color: var(--foreground); font: 13px var(--font-mono, monospace); outline: none; }
+.hx-keyform input:focus { border-color: var(--brand); }
+.hx-keyform button { padding: 6px 14px; border-radius: 10px; border: 1px solid var(--border); background: color-mix(in srgb, white 8%, transparent); color: var(--foreground); font: 500 12px var(--font-body); cursor: pointer; }
+.hx-keyform__remove { color: #ff8a80 !important; }
+.hx-keyform p { flex: 0 0 100%; margin: 0; color: var(--muted-foreground); font-size: 11px; }
+.hx-keyform .hx-keyform__error { color: #ff8a80; }
+
+/* The design system's .hx-chat fixes 460px with overflow:visible; keep the panel inside its host so a long task list can't push the thread and composer out of it. */
+section.hx-chat { max-height: calc(100% - 20px); overflow: hidden; min-height: 0; }
+section.hx-chat .hx-chat__head, section.hx-chat .hx-chat__composer { flex: none; }
+section.hx-chat .hx-chat__recent { flex: 0 1 auto; max-height: 34%; overflow-y: auto; min-height: 0; }
+section.hx-chat .hx-chat__thread { flex: 1 1 auto; min-height: 120px; overflow-y: auto; }
+.hx-chat__fold { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 12px; padding: 6px 16px; cursor: pointer; text-align: left; flex: 0 0 auto; }
+.hx-chat__fold:hover { color: var(--foreground); }
+.hx-chat__fold[aria-expanded="false"] .hx-sidebar__chev { transform: none; }
+.hx-chat__fold-n { opacity: .6; }
+.hx-room__mentions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.hx-room__mention { border: 1px solid var(--border, rgba(255,255,255,.14)); background: transparent; color: var(--muted-foreground); font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 999px; cursor: pointer; }
+.hx-room__mention:hover { color: var(--foreground); }
+.hx-room__notice[data-warn] { color: #f0b429; background: rgba(240,180,41,.1); border: 1px solid rgba(240,180,41,.3); border-radius: 10px; padding: 6px 12px; }
+.hx-brand { display: inline-grid; place-items: center; border-radius: 8px; overflow: hidden; }
+.hx-sc:has(.hx-brand) { padding: 0; background: transparent; }
+.hx-sidebar__fav:has(.hx-brand), .hx-tab__fav:has(.hx-brand) { background: transparent; padding: 0; }
+.hx-model-row__mark:has(.hx-brand) { background: transparent; padding: 0; }
+
+/* Light theme: the window is real glass too; panels are frosted white, not opaque grey. */
+@media (min-width: 681px) {
+  :root[data-theme="light"] .hx-window .hx-content-col { background: rgba(255, 255, 255, 0.72); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); }
+  :root[data-theme="light"] .hx-window .hx-sidebar { background: rgba(255, 255, 255, 0.28) !important; border-color: rgba(255, 255, 255, 0.5) !important; }
+}
+
+/* Home composer: input, model picker and send button share one height and centre line. */
+.hx-home__form { align-items: stretch; }
+.hx-home__form .hx-home__input,
+.hx-home__form .hx-mpick__toggle,
+.hx-home__form .hx-btn { height: 52px !important; min-height: 52px !important; box-sizing: border-box; }
+.hx-home__form .hx-btn { width: 52px !important; }
+.hx-home__form .hx-mpick { display: flex; align-items: stretch; }
+.hx-home__form .hx-mpick__toggle { display: inline-flex; align-items: center; }
+
+/* Same material for the input and the model picker. */
+.hx-home__form .hx-home__input,
+.hx-home__form .hx-mpick__toggle {
+  background: color-mix(in oklab, var(--foreground) 7%, transparent) !important;
+  border: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent) !important;
+  box-shadow: none !important; color: var(--foreground);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4);
+}
+.hx-home__form .hx-mpick__toggle::before, .hx-home__form .hx-mpick__toggle::after { box-shadow: none !important; }
+.hx-home__form .hx-btn--primary { box-shadow: none; }
+.hx-home__form .hx-mpick { background: none !important; border: 0 !important; box-shadow: none !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; padding: 0 !important; }
+
+.hx-activity__auto { margin: 0 0 8px; font-size: 12px; opacity: .7; }
+.hx-msg__more { margin-top: 6px; font-size: 12px; opacity: .75; }
+.hx-msg__more summary { cursor: pointer; }
+.hx-msg__more code { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+
+/* macOS frameless window. The sidebar is a full-height glass column holding the traffic lights; the toolbar, tab strip and page sit to its right on one solid tone. */
+:root { --halo-solid: #0c0e0d; }
+:root[data-theme="light"] { --halo-solid: #f4f4f2; }
+@media (min-width: 681px) {
+  :root[data-platform="darwin"] .hx-window { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); background: transparent !important; }
+  :root[data-platform="darwin"] .hx-workspace { display: contents; }
+  :root[data-platform="darwin"] .hx-chrome { grid-column: 2; grid-row: 1; background: var(--halo-solid) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  :root[data-platform="darwin"] .hx-toolbar, :root[data-platform="darwin"] .hx-strip { background: transparent !important; border: 0 !important; box-shadow: none; }
+  :root[data-platform="darwin"] .hx-content-col { grid-column: 2; grid-row: 2; margin: 0; border-radius: 0; background: var(--halo-solid) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  :root[data-platform="darwin"] .hx-sidebar {
+    grid-column: 1; grid-row: 1 / span 2; width: 244px; margin: 0; border: 0 !important; border-radius: 0; padding-top: 52px;
+    background: rgba(12, 14, 13, 0.76) !important; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none;
+  }
+  :root[data-platform="darwin"][data-theme="light"] .hx-sidebar { background: rgba(255, 255, 255, 0.72) !important; }
+  :root[data-platform="darwin"] .hx-sidebar[data-open="false"] { width: 52px; }
+  :root[data-platform="darwin"] .hx-sidebar::before { content: ""; position: fixed; top: 0; left: 0; width: 244px; height: 44px; -webkit-app-region: drag; }
+  :root[data-platform="darwin"] .hx-toolbar { -webkit-app-region: drag; }
+  :root[data-platform="darwin"] .hx-toolbar button, :root[data-platform="darwin"] .hx-toolbar input, :root[data-platform="darwin"] .hx-toolbar a, :root[data-platform="darwin"] .hx-toolbar [role="button"] { -webkit-app-region: no-drag; }
+}
+
+/* No scrollbar chrome anywhere in the app UI; scrolling itself is unchanged. */
+.hx-window, .hx-window * { scrollbar-width: none; }
+.hx-window *::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+/* macOS frameless: the native window already has rounded corners, so the page fills it edge to edge (no inset showing the raw glass as a second tone). */
+:root[data-platform="darwin"] .hx-app { padding: 0; }
+:root[data-platform="darwin"] .hx-window { border-radius: 12px; box-shadow: none; }
+
+/* Home (Design System-7): Search/Ask toggle, Chats/Routines tabs, card list. */
+.hx-seg { display: flex; flex: none; gap: 2px; padding: 3px; border-radius: 12px; background: color-mix(in oklab, #000 25%, transparent); font-size: 13px; }
+.hx-seg button { border: 0; background: none; cursor: pointer; padding: 5px 14px; border-radius: 9px; color: var(--muted-foreground); font: 500 13px var(--font-body); }
+.hx-seg button[aria-pressed=true] { background: color-mix(in oklab, var(--foreground) 15%, transparent); color: var(--foreground); box-shadow: 0 1px 3px rgba(0, 0, 0, .25); }
+.hx-seg--lg { border-radius: 16px; }
+.hx-seg--lg button { padding: 6px 16px; border-radius: 13px; font-size: 14px; }
+.hx-home__row { display: flex; align-items: center; justify-content: space-between; margin-top: 28px; }
+.hx-home__all { display: flex; align-items: center; gap: 4px; border: 0; background: none; cursor: pointer; color: var(--muted-foreground); font: 400 13px var(--font-body); }
+.hx-home__all .hx-ic { width: 14px; height: 14px; }
+.hx-home__all:hover { color: var(--foreground); }
+.hx-home__list { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.hx-hc { display: flex; flex-direction: column; gap: 3px; border: 0; cursor: pointer; text-align: left; padding: 14px 16px; border-radius: 18px; color: var(--foreground); font-family: var(--font-body); background: color-mix(in oklab, var(--foreground) 7%, transparent); box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 14%, transparent); }
+.hx-hc[data-static] { cursor: default; }
+.hx-hc:not([data-static]):hover { background: color-mix(in oklab, var(--foreground) 11%, transparent); }
+.hx-hc small { font-size: 12px; color: var(--muted-foreground); }
+.hx-hc b { font-weight: 500; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hx-hc span { font-size: 13px; color: var(--muted-foreground); line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hx-home__empty { align-items: center; justify-content: center; gap: 6px; min-height: 200px; border: 1px dashed color-mix(in oklab, var(--foreground) 15%, transparent); border-radius: 18px; font-size: 13px; color: var(--muted-foreground); text-align: center; }
+.hx-home__empty b { font-weight: 500; font-size: 15px; color: var(--foreground); }
+
+/* Design System-7 sidebar sections */
+.hx-sidebar__foldbtn { flex: 1; width: auto; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; }
+.hx-sidebar__showall { color: var(--muted-foreground); font-size: 12px; }
+.hx-sidebar__agents { min-width: 0; }
+
+/* Design System-7: the agent panel docks to the right of the page instead of floating over it. */
+.hx-body > section.hx-chat { position: relative; flex: 0 0 372px; width: 372px; max-height: none; align-self: stretch; margin: 8px 8px 8px 0; z-index: 5; }
+.hx-chat__ttl { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; text-align: start; cursor: pointer; padding: 0; }
+.hx-chat__ttl .hx-sidebar__chev { transform: rotate(90deg); }
+.hx-chat__ttl[aria-expanded="false"] .hx-sidebar__chev { transform: none; }
+.hx-chat__new { flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted-foreground); font-size: 14px; cursor: pointer; }
+.hx-chat__new:hover { background: var(--hover); color: var(--foreground); }
+.hx-chat__row { align-items: center; gap: 8px; padding: 4px 4px 4px 14px; border: 1px solid var(--halo-glass-border); border-radius: 999px; background: var(--well, transparent); }
+.hx-chat__row .hx-chat__input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; }
+.hx-chat__send { flex: none; width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--primary-fill); color: var(--on-primary); font-size: 15px; line-height: 1; cursor: pointer; }
+.hx-chat__send:disabled { opacity: .4; cursor: default; }
+.hx-chat__mic { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--foreground); cursor: pointer; }
+.hx-chat__mic:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* Recording is Halo listening, not a failure: the accent edge and glyph, never a filled surface. */
+.hx-chat__mic[data-state='recording'] { border-color: var(--brand); color: var(--brand); }
+.hx-chat__mic:disabled { opacity: .4; cursor: default; }
+
+.hx-omni__mode { flex: none; display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-md); background: var(--well, transparent); }
+.hx-omni__mode button { border: 0; padding: 2px 10px; border-radius: calc(var(--radius-md) - 2px); background: transparent; color: var(--muted-foreground); font: 500 12px/1.4 var(--font-body); cursor: pointer; }
+.hx-omni__mode button[aria-pressed="true"] { background: var(--hover); color: var(--foreground); }
+
+/* The planner picker inside the docked agent panel: a compact pill, never a wrapped circle. */
+.hx-chat__composer .hx-mpick { align-self: flex-start; max-width: 100%; }
+.hx-chat__composer .hx-mpick__toggle { height: 30px; width: auto; min-width: 0; padding-inline: 12px; border-radius: 999px; font-size: 12.5px; white-space: nowrap; }
+.hx-chat__composer .hx-mpick__toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Tabs in the sidebar (vertical tabs): a row with a close button that shows on hover, focus or when selected. */
+.hx-sidebar__tab { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.hx-sidebar__tab-main { flex: 1; min-width: 0; }
+.hx-sidebar__tab-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.hx-sidebar__tab-close { flex: none; opacity: 0; }
+.hx-sidebar__tab:hover .hx-sidebar__tab-close, .hx-sidebar__tab:focus-within .hx-sidebar__tab-close, .hx-sidebar__tab[data-selected] .hx-sidebar__tab-close { opacity: 1; }
+.hx-sidebar__tab-act { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--muted-foreground); }
+.hx-sidebar__tab-act[data-state="working"] { background: var(--brand); }
+.hx-sidebar__tab-act[data-state="waiting"] { background: var(--warning); }
+.hx-sidebar__tab-act[data-state="done"] { background: var(--success); }
+.hx-sidebar[data-open="false"] .hx-sidebar__tab-close, .hx-sidebar[data-open="false"] .hx-sidebar__tab-title { display: none; }
+@media (prefers-reduced-motion: no-preference) { .hx-sidebar__tab-close { transition: opacity var(--press) var(--ease-out); } }
+
+/* Tab groups in the sidebar. */
+.hx-sidebar__group { display: flex; flex-direction: column; gap: 1px; margin: 2px 0; }
+.hx-sidebar__group-head { display: flex; align-items: center; gap: 2px; }
+.hx-sidebar__group-toggle { flex: 1; min-width: 0; font-weight: 600; }
+.hx-sidebar__group-toggle small { color: var(--muted-foreground); font-weight: 400; }
+.hx-sidebar__tab--grouped { padding-left: 14px; }
+.hx-sidebar__tab-groupwrap { position: relative; flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted-foreground); font-size: 11px; opacity: 0; }
+.hx-sidebar__tab-groupwrap[data-grouped] { color: var(--brand); }
+.hx-sidebar__tab-group { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; appearance: none; border: 0; }
+.hx-sidebar__tab:hover .hx-sidebar__tab-groupwrap, .hx-sidebar__tab:focus-within .hx-sidebar__tab-groupwrap, .hx-sidebar__tab[data-selected] .hx-sidebar__tab-groupwrap, .hx-sidebar__tab--grouped .hx-sidebar__tab-groupwrap { opacity: 1; }
+.hx-sidebar__tab-groupwrap:hover { color: var(--foreground); background: var(--hover); }
+.hx-sidebar__tab-groupwrap:focus-within { outline: 2px solid var(--ring); outline-offset: 1px; }
+.hx-sidebar__ungroup-all { color: var(--muted-foreground); font-size: 12px; }
+.hx-sidebar[data-open="false"] .hx-sidebar__tab-groupwrap, .hx-sidebar[data-open="false"] .hx-sidebar__ungroup-all { display: none; }
+
+/* Zoom level chip beside Reload: only shown when the page is not at 100%. */
+.hx-zoomchip {
+  height: 26px; padding: 0 var(--space-sm); border-radius: var(--radius-sm); background: transparent;
+  color: var(--muted-foreground); font: 500 12px/1 var(--font-mono); border: 1px solid var(--halo-glass-border); cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) { .hx-zoomchip:hover { background: var(--hover); color: var(--foreground); } }
+
+/* Find in page: its own row under the toolbar, inside the chrome, so the page below simply gets shorter
+   (the page is a native view that would cover anything drawn over it). */
+.hx-find {
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--space-xs);
+  padding: 6px var(--space-md); background: var(--halo-glass-chrome); border-bottom: 1px solid var(--halo-glass-border);
+}
+.hx-find__input { width: 220px; height: 28px; padding: 0 var(--space-sm); border-radius: var(--radius-sm); background: transparent; border: 1px solid var(--halo-glass-border); outline: none; color: var(--foreground); font: 400 13px/1 var(--font-mono); }
+.hx-find__input:focus { border-color: rgba(255, 255, 255, 0.18); }
+.hx-find__input::placeholder { color: var(--muted-foreground); }
+.hx-find__count { min-width: 72px; color: var(--muted-foreground); font: 400 12px/1 var(--font-mono); text-align: right; }
+
+/* A page dialog on the person's tab: its own row in the chrome, like find (the page is a native view below). */
+.hx-pagedialog {
+  display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap;
+  padding: 8px var(--space-md); background: var(--halo-glass-chrome); border-bottom: 1px solid var(--halo-glass-border);
+}
+.hx-pagedialog__text { flex: 1; min-width: 0; margin: 0; color: var(--foreground); font-size: 13px; line-height: 1.4; }
+.hx-pagedialog__site { font-weight: 600; }
+.hx-pagedialog__says { color: var(--muted-foreground); }
+.hx-pagedialog__message { display: block; max-height: 4.2em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hx-pagedialog__input { width: 240px; height: 28px; padding: 0 var(--space-sm); border-radius: var(--radius-sm); background: transparent; border: 1px solid var(--halo-glass-border); color: var(--foreground); font: 400 13px/1 var(--font-mono); }
+.hx-pagedialog__actions { display: flex; gap: var(--space-xs); }

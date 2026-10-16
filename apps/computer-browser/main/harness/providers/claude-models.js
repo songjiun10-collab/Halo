@@ -11,6 +11,7 @@ const entry = (id, label, family, legacy) => Object.freeze({ id, label, family, 
 const CLAUDE_MODELS = Object.freeze([
   entry("claude-opus-5-5", "Opus 5.5", "opus", false),
   entry("claude-sonnet-5-5", "Sonnet 5.5", "sonnet", false),
+  entry("claude-haiku-5-5", "Haiku 5.5", "haiku", false),
   entry("claude-haiku-4-5-20251001", "Haiku 4.5", "haiku", false),
   entry("claude-fable-5-1", "Fable 5.1", "fable", false),
   entry("claude-opus-4-5-20251101", "Opus 4.5", "opus", true),

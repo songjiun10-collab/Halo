@@ -22,7 +22,7 @@ test.afterEach(async () => {
   await Promise.all(open.map((host) => host.close()));
 });
 
-async function makeHost({ makeBrowser, makePlanner, maxParallelTasks } = {}) {
+async function makeHost({ makeBrowser, makePlanner, maxParallelTasks, strategyLearning } = {}) {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "halo-host-agents-"));
   const host = new TaskHost({
     storageRoot,
@@ -33,6 +33,7 @@ async function makeHost({ makeBrowser, makePlanner, maxParallelTasks } = {}) {
     hostVerifier: () => true,
     approve: async () => ({ decision: "allow", reasons: [] }),
     ...(maxParallelTasks ? { maxParallelTasks } : {}),
+    ...(strategyLearning ? { strategyLearning } : {}),
   });
   hosts.add(host);
   return { host, storageRoot };
@@ -215,22 +216,36 @@ test("failed browser teardown keeps an Agent profile revocation unconfirmed and 
 });
 
 test("profile disable serializes behind an in-flight Agent task start", async () => {
+  // An Agent start holds the Agent's profile lock while the host builds the task's browser and planner. The
+  // strategy lookup in that stretch is held open here, so the start is in flight for exactly as long as the
+  // test wants (no sleeping on a guessed delay): the revocation requested meanwhile must not finish first.
+  let enteredStart;
+  const entered = new Promise((resolve) => { enteredStart = resolve; });
+  let releaseStart;
+  const startGate = new Promise((resolve) => { releaseStart = resolve; });
   let releasePlanner;
   const plannerGate = new Promise((resolve) => { releasePlanner = resolve; });
-  const { host } = await makeHost({ makePlanner: () => ({ next: async (context) => {
-    await plannerGate;
-    return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "need_user", reason: "hold" };
-  } }) });
+  const { host } = await makeHost({
+    strategyLearning: { activeGuidance: async () => { enteredStart(); await startGate; return null; }, recordEpisode: async () => {}, setEnabled: async () => {} },
+    makePlanner: () => ({ next: async (context) => {
+      await plannerGate;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: [], kind: "need_user", reason: "hold" };
+    } }),
+  });
   const saved = await host.saveAgent({ ...agentInput, persistentBrowser: true });
   const start = host.startAgentTask({ agentId: saved.id, request: "start during revocation" });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await entered;
   let disabledDone = false;
   const disable = host.saveAgent({ ...agentInput, id: saved.id, persistentBrowser: false }).then((result) => { disabledDone = true; return result; });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Everything already queued gets its turn before this check; nothing here depends on a timer's accuracy.
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(disabledDone, false, "revocation waits for an admitted Agent start to settle");
-  releasePlanner();
+  releaseStart();
   const task = await start;
+  // The task's first planner call is still pending while the revocation stops it.
   const disabled = await disable;
+  releasePlanner();
   assert.equal(disabled.persistentBrowser, false);
   assert.equal((await host.listTasks()).find((item) => item.taskId === task.taskId).state, "stopped");
 });

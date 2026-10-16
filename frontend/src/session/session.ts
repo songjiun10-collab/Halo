@@ -24,14 +24,21 @@ export function initialSession(connected = false): SessionState {
   return { connected, activeTaskId: null, tasks: [], goal: null, snapshot: null, browser: null, directBrowser: false, recoveryReason: null, childPlan: null, task: '', control: 'you', finished: true, tabs: [], activeTabId: '', timeline: [], journal: [], messages: [], loading: false, busy: null, error: null }
 }
 
+const NOTE_KIND_LABELS: Record<string, string> = {
+  planner_model_selected: 'Chose the planner model', mcp_scope_selected: 'Scoped tool access', review_fallback_selected: 'Set the review fallback', agent_profile_unavailable: 'Agent profile unavailable',
+  memory_policy_selected: 'Set the memory policy', recovery: 'Recovering', planner_escalation: 'Escalated the planner', paused: 'Paused', review_auto_denied: 'Auto-denied an action', lock_denied: 'Blocked by the intent lock', effect_denied: 'Blocked an action by effect',
+  mcp_call_started: 'Started a tool call', mcp_call_outcome: 'Tool call finished', imported_sessions_injected: 'Applied imported sessions', imported_sessions_injection_failed: 'Imported sessions failed',
+}
+
 function describeEvent(e: JournalEvent): TimelineEvent {
   const p = e.payload
-  const labels: Record<JournalEvent['type'], string> = {
-    goal_created: 'Created the task', goal_amended: 'Amended the goal', action_started: 'Started an action', action_outcome: `Action ${String(p.status ?? 'finished')}`, evidence_recorded: 'Recorded criterion evidence', approval_cancelled: 'Cancelled an approval', note: String(p.msg ?? p.text ?? 'Recorded a note'),
+  const labels: Record<string, string> = {
+    task_profile_selected: 'Chose the task profile', 
+    goal_created: 'Created the task', goal_amended: 'Amended the goal', action_started: 'Started an action', action_outcome: `Action ${String(p.status ?? 'finished')}`, evidence_recorded: 'Recorded criterion evidence', approval_cancelled: 'Cancelled an approval', note: String(p.msg ?? p.text ?? NOTE_KIND_LABELS[String(p.kind ?? '')] ?? 'Recorded a note'),
   }
   const evidence = p.evidence as { criterionId?: string; verification?: string } | undefined
-  const detail = evidence ? `${evidence.criterionId ?? ''} · ${evidence.verification ?? 'pending'}` : p.reason ?? p.actionId
-  return { id: e.seq, actor: e.type.startsWith('goal_') ? 'you' : e.type === 'approval_cancelled' ? 'halo' : 'claude', text: labels[e.type], detail: detail === undefined ? undefined : String(detail), notable: !['action_started', 'action_outcome'].includes(e.type), at: e.at }
+  const detail = evidence ? `${evidence.criterionId ?? ''} · ${evidence.verification ?? 'pending'}` : p.reason ?? p.actionId ?? p.model
+  return { id: e.seq, actor: e.type.startsWith('goal_') ? 'you' : e.type === 'approval_cancelled' ? 'halo' : 'claude', text: labels[e.type] ?? e.type.replace(/_/g, ' '), detail: detail === undefined ? undefined : String(detail), notable: !['action_started', 'action_outcome'].includes(e.type), at: e.at }
 }
 
 function derive(s: SessionState): SessionState {
@@ -49,7 +56,7 @@ function derive(s: SessionState): SessionState {
       : s.tabs,
     activeTabId: s.activeTaskId ? (s.browser?.activeTabId ?? '') : s.activeTabId,
     approval: head && s.activeTaskId ? { taskId: s.activeTaskId, id: head.id, action: head.summary || head.action, request: head.action, createdAt: head.createdAt, widen: !!head.widen, leaseOffer: head.leaseOffer ?? null } : undefined,
-    messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text })), ...(snapshot?.pauseReason === 'need_user' && snapshot.needUserReason ? [{ from: 'claude' as const, text: snapshot.needUserReason }] : [])] : [],
+    messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text })), ...(snapshot?.pauseReason === 'need_user' ? [{ from: 'claude' as const, text: snapshot.needUserReason || 'The agent paused and needs your input to continue.' }] : [])] : [],
     timeline: s.journal.map(describeEvent),
   }
 }
@@ -115,6 +122,9 @@ export class SessionStore {
       titles: { [tab.url || NEW_TAB_URL]: tab.title || tab.url },
       canGoBack: tab.id === snapshot.activeTabId && snapshot.page.canGoBack,
       canGoForward: tab.id === snapshot.activeTabId && snapshot.page.canGoForward,
+      loading: tab.id === snapshot.activeTabId && snapshot.page.loadState === 'loading',
+      zoom: tab.id === snapshot.activeTabId ? snapshot.page.zoom ?? 1 : 1,
+      dialog: tab.id === snapshot.activeTabId ? snapshot.page.dialog ?? null : null,
     }))
     this.update({ directBrowser: visible, tabs, activeTabId: snapshot.activeTabId || tabs[0]?.id || '' })
   }
@@ -332,7 +342,50 @@ export class SessionStore {
     finally { if (selection === this.selection && token === this.commandToken) this.update({ busy: null }) }
   }
 
-  newBrowserTab = () => this.directTabCommand('newTab', () => this.api!.newTab(), () => false)
+  /** Reload the page in view. A task's own surface has no reload call, so it navigates to its current address again. */
+  reloadPage = () => {
+    if (!this.api) return Promise.resolve(false)
+    if (this.state.activeTaskId) {
+      const tab = this.state.tabs.find((t) => t.id === this.state.activeTabId) ?? this.state.tabs[0]
+      const url = tab ? currentUrl(tab) : ''
+      return /^https?:\/\//.test(url) ? this.navigate({ type: 'navigate', url }) : Promise.resolve(false)
+    }
+    return this.directTabCommand('reload', () => this.api!.reload())
+  }
+
+  /** Stop the page that is loading. A task's own surface has no stop here: it is the task's to stop. */
+  stopPage = async () => {
+    // Not gated on the busy flag: a navigation holds it until the page loads, and Stop is for exactly that wait.
+    if (!this.api?.stopLoading || this.state.activeTaskId) return false
+    try {
+      const snapshot = await this.api.stopLoading()
+      if (!this.state.activeTaskId) this.applyDirectSnapshot(snapshot, !!snapshot.page?.hasPage)
+      return true
+    } catch (error) { this.failure(error); return false }
+  }
+  /** Browser zoom for the page in view; only for the person's own tabs. */
+  zoomPage = (action: 'in' | 'out' | 'reset') => (this.api?.zoom && !this.state.activeTaskId ? this.directTabCommand('zoom', () => this.api!.zoom!(action)) : Promise.resolve(false))
+  /** Find text on the page in view. Never throws: a page that cannot be searched finds nothing. */
+  findText = async (query: string, backwards = false): Promise<{ found: boolean; count: number }> => {
+    if (!this.api?.findInPage || this.state.activeTaskId || query.trim().length === 0) return { found: false, count: 0 }
+    try { return await this.api.findInPage(query.slice(0, 200), { backwards }) } catch { return { found: false, count: 0 } }
+  }
+  clearFind = async () => { try { await this.api?.clearFind?.() } catch { /* nothing to clear */ } }
+  /** The person's answer to a page dialog. Not gated on the busy flag: the dialog is what a navigation may be waiting on. */
+  answerDialog = async (accept: boolean, text?: string) => {
+    if (!this.api?.answerDialog || this.state.activeTaskId) return false
+    try {
+      const snapshot = await this.api.answerDialog(accept, text)
+      if (!this.state.activeTaskId) this.applyDirectSnapshot(snapshot, !!snapshot.page?.hasPage)
+      return true
+    } catch (error) { this.failure(error); return false }
+  }
+
+  /** From a task view the tab strip's + leaves the task (it keeps running) rather than silently doing nothing. */
+  newBrowserTab = () => {
+    if (this.state.activeTaskId) this.newTask()
+    return this.directTabCommand('newTab', () => this.api!.newTab(), () => false)
+  }
   selectBrowserTab = (tabId: string) => {
     if (tabId === this.state.activeTabId) return Promise.resolve(true)
     return this.directTabCommand('selectTab', () => this.api!.selectTab(tabId))
@@ -340,6 +393,11 @@ export class SessionStore {
   closeBrowserTab = (tabId: string) => {
     if (this.state.tabs.length <= 1) return Promise.resolve(false)
     return this.directTabCommand('closeTab', () => this.api!.closeTab(tabId))
+  }
+  /** Copy through the host clipboard; false when the host cannot (the renderer then tries its own). */
+  copyText = async (text: string) => {
+    if (!this.api?.copyText) return false
+    try { return await this.api.copyText(text) } catch { return false }
   }
   newWindow = async () => {
     if (!this.api || this.state.busy) return false

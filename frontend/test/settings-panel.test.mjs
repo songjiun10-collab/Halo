@@ -52,7 +52,7 @@ test('the settings view shows every runtime setting with its current value', () 
 test('settings is a full panel with a back header, labelled sections and selectable cards', () => {
   const html = renderToStaticMarkup(React.createElement(SettingsView, { settings: base, saving: false, error: null, onChange: () => {}, onClose: () => {} }))
   assert.match(html, /class="hx-settings"/, 'a full panel, not the floating activity card')
-  assert.match(html, /class="hx-settings__head"[\s\S]*aria-label="Close settings"[\s\S]*<h2>Settings<\/h2>/)
+  assert.match(html, /class="hx-settings__head"[\s\S]*aria-label="Close settings"[\s\S]*<h2>(?:<svg[\s\S]*?<\/svg> )?Settings<\/h2>/)
   for (const label of ['Planner', 'What the agent may do', 'Running tasks']) assert.match(html, new RegExp(`class="hx-settings__label"[^>]*>${label}<`))
   assert.match(html, /class="hx-perm"[^>]*data-selected=""[^>]*aria-checked="true"[^>]*>[\s\S]*?Browse/, 'the selected permission is a card')
   assert.match(html, /role="radiogroup"[^>]*aria-label="Permission mode"/)
@@ -61,9 +61,9 @@ test('settings is a full panel with a back header, labelled sections and selecta
   assert.doesNotMatch(html, /type="password"/i, 'settings never collects provider keys')
 })
 
-test('turning a provider row on picks its default model, and off turns the planner off', () => {
+test('provider switches are independent; the active one falls back to another enabled one, or to none', () => {
   const patches = []
-  const view = SettingsView({ settings: base, saving: false, error: null, onChange: (p) => patches.push(p), onClose: () => {} })
+  const lists = []
   const find = (node, label) => {
     if (!node || typeof node !== 'object') return null
     if (Array.isArray(node)) { for (const n of node) { const hit = find(n, label); if (hit) return hit } return null }
@@ -71,9 +71,20 @@ test('turning a provider row on picks its default model, and off turns the plann
     if (typeof node.type === 'function') return find(node.type(node.props), label)
     return find(node.props?.children, label)
   }
-  find(view, 'Use Codex').props.onClick()
-  find(view, 'Use Claude').props.onClick()
-  assert.deepEqual(patches, [{ plannerProvider: 'codex_cli', plannerModel: 'gpt-6.1-sol' }, { plannerProvider: 'none' }])
+  const view = (settings, enabledPlanners) => SettingsView({ settings, saving: false, error: null, onChange: (p) => patches.push(p), onClose: () => {}, enabledPlanners, onEnabledPlanners: (l) => lists.push(l) })
+  // nothing active: turning one on picks its default model; turning it off again turns the planner off
+  const off = { ...base, plannerProvider: 'none' }
+  delete off.plannerModel
+  find(view(off, null), 'Use Codex').props.onClick()
+  find(view({ ...off, plannerProvider: 'codex_cli' }, ['codex_cli']), 'Use Codex').props.onClick()
+  // claude active: switching Codex on leaves the active planner alone, both read as on
+  find(view(base, null), 'Use Codex').props.onClick()
+  assert.equal(find(view(base, ['codex_cli']), 'Use Codex').props['aria-checked'], true)
+  assert.equal(find(view(base, ['codex_cli']), 'Use Claude').props['aria-checked'], true)
+  // turning the active Claude off hands the planner to the other enabled provider
+  find(view(base, ['codex_cli']), 'Use Claude').props.onClick()
+  assert.deepEqual(patches, [{ plannerProvider: 'codex_cli', plannerModel: 'gpt-6.1-sol' }, { plannerProvider: 'none' }, { plannerProvider: 'codex_cli', plannerModel: 'gpt-6.1-sol' }])
+  assert.deepEqual(lists.at(-1), ['codex_cli'])
 })
 
 test('fast mode is off and explained when the model cannot use it', () => {
@@ -92,4 +103,47 @@ test('the toolbar opens settings and the app wires it as an overlay that hides t
   const shortcuts = await fs.readFile(path.join(root, 'src/hooks/useShortcuts.ts'), 'utf8')
   assert.match(shortcuts, /keys: 'Mod\+,'/)
   assert.match(shortcuts, /e\.code === 'Comma'/)
+})
+
+test('payments are off by default, shown as a switch, and a saved opt-in shows as on', () => {
+  const off = renderToStaticMarkup(React.createElement(SettingsView, { settings: base, saving: false, error: null, onChange: () => {} }))
+  assert.match(off, /role="switch"[^>]*aria-label="Allow payments"[^>]*aria-checked="false"/)
+  assert.match(off, /Off by default\. When on, Halo pays only after a clear order/)
+  const on = renderToStaticMarkup(React.createElement(SettingsView, { settings: { ...base, paymentsEnabled: true }, saving: false, error: null, onChange: () => {} }))
+  assert.match(on, /aria-label="Allow payments"[^>]*aria-checked="true"/)
+  const off2 = renderToStaticMarkup(React.createElement(SettingsView, { settings: { ...base, paymentsEnabled: false }, saving: false, error: null, onChange: () => {} }))
+  assert.match(off2, /aria-label="Allow payments"[^>]*aria-checked="false"/)
+})
+
+test('the payments switch asks before turning on, never before turning off, and a refusal changes nothing', () => {
+  const { paymentsSwitchPatch } = settingsLib
+  let asked = 0
+  assert.deepEqual(paymentsSwitchPatch(base, () => { asked += 1; return true }), { paymentsEnabled: true })
+  assert.equal(asked, 1, 'turning on is confirmed')
+  assert.equal(paymentsSwitchPatch(base, () => false), null, 'a refused confirmation leaves it off')
+  assert.equal(paymentsSwitchPatch({ ...base, paymentsEnabled: false }, () => false), null)
+  asked = 0
+  assert.deepEqual(paymentsSwitchPatch({ ...base, paymentsEnabled: true }, () => { asked += 1; return false }), { paymentsEnabled: false })
+  assert.equal(asked, 0, 'turning off needs no question')
+})
+
+test('buildExpiryNotice stays quiet on dev builds and early beta, warns in the last two weeks', () => {
+  const { buildExpiryNotice } = settingsLib
+  assert.equal(buildExpiryNotice(base), null)
+  assert.equal(buildExpiryNotice({ ...base, buildExpiry: { expired: false, daysLeft: 30, expiresAt: 1 } }), null)
+  assert.deepEqual(buildExpiryNotice({ ...base, buildExpiry: { expired: false, daysLeft: 10, expiresAt: 1 } }), { text: 'This beta build expires in 10 days.', urgent: false })
+  assert.equal(buildExpiryNotice({ ...base, buildExpiry: { expired: false, daysLeft: 3, expiresAt: 1 } }).urgent, true)
+  assert.match(buildExpiryNotice({ ...base, buildExpiry: { expired: false, daysLeft: 1, expiresAt: 1 } }).text, /within a day/)
+  assert.equal(buildExpiryNotice({ ...base, buildExpiry: { expired: true, daysLeft: 0, expiresAt: null } }).urgent, true)
+})
+
+test('permissionModePatch asks only when moving to Full, and does nothing for the current mode', () => {
+  const { permissionModePatch } = settingsLib
+  let asked = 0
+  assert.deepEqual(permissionModePatch(base, 'observe', () => { asked += 1; return false }), { permissionMode: 'observe' })
+  assert.equal(asked, 0, 'going down or sideways needs no question')
+  assert.equal(permissionModePatch(base, 'full', () => { asked += 1; return false }), null)
+  assert.equal(asked, 1)
+  assert.deepEqual(permissionModePatch(base, 'full', () => true), { permissionMode: 'full' })
+  assert.equal(permissionModePatch({ ...base, permissionMode: 'full' }, 'full', () => true), null)
 })

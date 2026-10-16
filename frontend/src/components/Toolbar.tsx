@@ -1,8 +1,8 @@
-import { useEffect, useState, type FormEvent, type ReactNode, type Ref } from 'react'
+import { useState, type FormEvent, type ReactNode, type Ref } from 'react'
 import { currentUrl } from '../session/session'
 import { addressTarget } from '../session/navigation'
 import type { Tab } from '../session/types'
-import { ActivityLog, Back, Forward, Lock, Share, Sidebar, Tabs, Gear } from './Icons'
+import { ActivityLog, Back, Forward, Reload, Stop, Lock, Share, Sidebar, Tabs, Gear } from './Icons'
 
 interface Props {
   tab: Tab
@@ -12,10 +12,17 @@ interface Props {
   omniRef: Ref<HTMLInputElement>
   onBack: () => void
   onForward: () => void
+  onReload: () => void
+  /** Stop a page that is still loading (shown in place of Reload while it loads). */
+  onStop?: () => void
+  /** Reset a page that is not at 100%. */
+  onZoomReset?: () => void
   onShare: () => void
   onOverview: () => void
   onActivity: () => void
   onNavigate: (url: string) => void
+  /** Ask mode: the address field text becomes a task for the agent. */
+  onAsk?: (text: string) => void
   onSettings: () => void
   sidebarOpen: boolean
   onToggleSidebar: () => void
@@ -25,13 +32,20 @@ interface Props {
   halo: ReactNode
 }
 
-export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onShare, onOverview, onActivity, onNavigate, onSettings, sidebarOpen, onToggleSidebar, controller, halo }: Props) {
+export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onReload, onStop, onZoomReset, onShare, onOverview, onActivity, onNavigate, onAsk, onSettings, sidebarOpen, onToggleSidebar, controller, halo }: Props) {
   const url = currentUrl(tab)
-  const addressUrl = url.startsWith('halo://') ? '' : url
+  const addressUrl = url.startsWith('halo://') || url === 'about:blank' ? '' : url
   const [address, setAddress] = useState(addressUrl)
-  useEffect(() => setAddress(addressUrl), [addressUrl])
+  const [addressFrom, setAddressFrom] = useState(addressUrl)
+  if (addressFrom !== addressUrl) { setAddressFrom(addressUrl); setAddress(addressUrl) }
+  const [ask, setAsk] = useState(false)
   const submitAddress = (event: FormEvent) => {
     event.preventDefault()
+    if (ask && onAsk) {
+      const text = address.trim()
+      if (text) { onAsk(text); setAddress(addressUrl); setAsk(false) }
+      return
+    }
     const target = addressTarget(address)
     if (target) onNavigate(target)
   }
@@ -41,13 +55,25 @@ export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onSha
         <button className="hx-icbtn" aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} aria-pressed={sidebarOpen} title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} onClick={onToggleSidebar}><Sidebar /></button>
         <button className="hx-icbtn" aria-label="Back" aria-keyshortcuts="Alt+ArrowLeft" disabled={locked || !tab.canGoBack} onClick={onBack}><Back /></button>
         <button className="hx-icbtn" aria-label="Forward" aria-keyshortcuts="Alt+ArrowRight" disabled={locked || !tab.canGoForward} onClick={onForward}><Forward /></button>
+        {tab.loading && onStop
+          ? <button className="hx-icbtn" aria-label="Stop loading" title="Stop loading" onClick={onStop}><Stop /></button>
+          : <button className="hx-icbtn" aria-label="Reload" aria-keyshortcuts="Control+R Meta+R" title="Reload" disabled={locked || !(url.startsWith('http://') || url.startsWith('https://'))} onClick={onReload}><Reload /></button>}
+        {tab.zoom && tab.zoom !== 1 && onZoomReset
+          ? <button className="hx-zoomchip" aria-label={`Zoom ${Math.round(tab.zoom * 100)} percent, reset to 100 percent`} title="Reset zoom" onClick={onZoomReset}>{Math.round(tab.zoom * 100)}%</button>
+          : null}
       </div>
       <div className="hx-omni">
         {url.startsWith('https://') && <span className="hx-omni__lock" role="img" aria-label="Secure connection"><Lock /></span>}
         <form className="hx-omni__form" onSubmit={submitAddress}>
-          <input ref={omniRef} className="hx-omni__input" aria-label="Address" placeholder="Search or enter address" value={address} onChange={(event) => setAddress(event.target.value)} disabled={locked} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
+          <input ref={omniRef} className="hx-omni__input" aria-label="Address" placeholder={ask ? 'Ask Halo to do something' : 'Search or enter address'} value={address} onChange={(event) => setAddress(event.target.value)} disabled={locked} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
           <button className="hx-sr" type="submit" tabIndex={-1}>Go</button>
         </form>
+        {onAsk ? (
+          <span className="hx-omni__mode" role="group" aria-label="Address mode">
+            <button type="button" aria-pressed={!ask} onClick={() => setAsk(false)}>Tab</button>
+            <button type="button" aria-pressed={ask} onClick={() => setAsk(true)}>Ask</button>
+          </span>
+        ) : null}
         {controller}
       </div>
       <div className="hx-nav">

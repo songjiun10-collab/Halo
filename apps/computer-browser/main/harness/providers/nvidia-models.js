@@ -8,7 +8,10 @@ const NVIDIA_MODELS = Object.freeze([
   { id: "nvidia/nemotron-3-super-120b-a12b", label: "Nemotron 3 Super" },
   { id: "deepseek-ai/deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
 ].map(Object.freeze));
-const DEFAULT_NVIDIA_MODEL = NVIDIA_MODELS[0].id;
+// DeepSeek V4 Flash/Pro reached end of life on the hosted API (HTTP 410, checked
+// 2026-10-04). They stay in the allowlist so saved settings still load, but the
+// default must be a model that answers.
+const DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b";
 // Ids discovered from the hosted /v1/models endpoint (host-fetched and
 // shape-checked by nvidia-model-catalog). They extend the built-in list only.
 let discovered = new Set();
@@ -26,9 +29,22 @@ const saveDiscoveredNvidiaModels = (file) => {
   const fs = require("node:fs");
   fs.writeFileSync(file, JSON.stringify([...discovered].sort()), { mode: 0o600 });
 };
+// Planner effort -> the model's own reasoning knob (chat_template_kwargs), or
+// null when the model has none or runs without reasoning unless asked.
+// GLM 5.3 Flash cannot turn thinking off and defaults to "max", which blew the
+// planner's 60 s response budget; DeepSeek V4.x Flash is non-thinking by default.
+const nvidiaReasoningKwargs = (model, effort = "medium") => {
+  if (typeof model !== "string") return null;
+  if (/(^|\/)glm-5\.3/.test(model)) return { reasoning_effort: effort === "low" || effort === "medium" ? "low" : effort === "high" ? "high" : "max" };
+  if (/(^|\/)deepseek-v4/.test(model) && ["high", "xhigh", "max", "ultra"].includes(effort)) return { thinking: true, reasoning_effort: effort === "high" ? "high" : "max" };
+  return null;
+};
 const listNvidiaModels = () => [
   ...NVIDIA_MODELS.map((entry) => ({ id: entry.id, label: entry.label, discovered: false })),
   ...[...discovered].sort().map((id) => ({ id, label: id, discovered: true })),
 ];
+// The host validated the saved model against the catalog; a worker process has
+// no copy of the discovered list, so it accepts a well-formed id from its argv.
+const isNvidiaModelId = (model) => typeof model === "string" && ID_RE.test(model);
 const isNvidiaModel = (model) => NVIDIA_MODELS.some((entry) => entry.id === model) || (typeof model === "string" && discovered.has(model));
-module.exports = { NVIDIA_MODELS, DEFAULT_NVIDIA_MODEL, isNvidiaModel, setDiscoveredNvidiaModels, loadDiscoveredNvidiaModels, saveDiscoveredNvidiaModels, listNvidiaModels };
+module.exports = { nvidiaReasoningKwargs, isNvidiaModelId, NVIDIA_MODELS, DEFAULT_NVIDIA_MODEL, isNvidiaModel, setDiscoveredNvidiaModels, loadDiscoveredNvidiaModels, saveDiscoveredNvidiaModels, listNvidiaModels };

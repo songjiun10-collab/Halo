@@ -31,6 +31,15 @@ const CLAUDE = Object.freeze({
     max: "At max effort, tie every proposal to a criterion; do not start extra review rounds or expand scope.",
     ultra: "At the highest available effort, tie every proposal to a criterion; do not start extra review rounds or expand scope.",
   }),
+  "claude-haiku-5-5": Object.freeze({
+    base: "Haiku 5.5 is HALO's latency-oriented profile. Prefer a direct, low-token proposal grounded in the current observation; do not spend calls re-reading known state. Never trade away a required criterion, evidence check, or human approval for speed.",
+    low: "At low effort, choose one clear next step instead of constructing a speculative multi-step route; use the next host observation to resolve uncertainty.",
+    medium: "At medium effort, batch only independent actions already supported by the observation; keep dependent steps for the next turn.",
+    high: "At high effort, use extra reasoning only for the criterion's actual ambiguity; keep the action path short and verify with host evidence.",
+    xhigh: "At xhigh, do not add speculative exploration; use extra effort to select among evidence-supported options, then keep the proposal short.",
+    max: "At max, do not add speculative exploration; use extra effort to select among evidence-supported options, then keep the proposal short.",
+    ultra: "At the highest available effort, do not add speculative exploration; use extra effort to select among evidence-supported options, then keep the proposal short.",
+  }),
   "claude-haiku-4-5-20251001": Object.freeze({
     base: "Haiku 4.5 is HALO's latency-oriented profile. Prefer a direct, low-token proposal grounded in the current observation; do not spend calls re-reading known state. Never trade away a required criterion, evidence check, or human approval for speed.",
     low: "At low effort, choose one clear next step instead of constructing a speculative multi-step route; use the next host observation to resolve uncertainty.",
@@ -67,7 +76,7 @@ const NVIDIA = Object.freeze({
   "deepseek-ai/deepseek-v4-pro": "DeepSeek V4 Pro is the higher-capability reasoning option in HALO's NIM catalog: resolve multi-criterion dependencies from current evidence, then emit only the next bounded HALO proposal.",
   "deepseek-ai/deepseek-v4.1-flash": "DeepSeek V4.1 Flash is the newer fast option in HALO's NIM catalog with stronger agentic coding than V4: prefer a direct proposal and batch only actions with already-known targets and effects.",
   "moonshotai/kimi-k3": "Kimi K3 supports long-context agentic work: use durable criteria and the current observation as working state; do not restate or re-derive recorded history unless a criterion needs it.",
-  "nvidia/nemotron-3-super-120b-a12b": "Nemotron 3 Super is the agentic-work option: ground each bounded proposal in the goal and current observation, and distinguish action dispatch from host-verified completion.",
+  "nvidia/nemotron-3-super-120b-a12b": "Nemotron 3 Super is the agentic-work option: ground each bounded proposal in the goal and current observation, and distinguish action dispatch from host-verified completion. For a lookup or question, put the answer itself (the facts you found on the page) in the need_user reason; never end it by asking the person to confirm they can see the page or that you are right, and use need_user for a question only when a required choice or access is missing.",
 });
 
 const EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);

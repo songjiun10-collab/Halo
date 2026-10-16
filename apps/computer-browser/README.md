@@ -85,7 +85,11 @@ scrolling, click, text replacement and native form submission. Interactions use
 one-use DOM bindings and require a fresh observation for each step. See the
 [interaction contract](contracts/BROWSER-INTERACTIONS.md) for action shapes,
 uncertainty handling and the loopback Electron verification command.
-Downloads and coordinate computer-use remain unavailable.
+Downloads remain unavailable. Coordinate actions (`click_at`, `type_at`,
+`press_key`) exist only for tasks whose profile carries the `computer_use`
+capability: each is bound to the current observation, hit-tested against the
+host-built screen map, and classified by the control it lands on (Delete, Buy,
+Send and similar go to the human). Desktop-wide control is not supported.
 
 Antigravity (`agy`) and Cursor (`agent`) are experimental planner choices in
 Settings and the model picker. They use private temporary profiles and explicit

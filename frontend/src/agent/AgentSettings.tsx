@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { DAY_NAMES, LIM, blankSchedule, errText, fromLocalInput, saveMcpScope, savePersistentBrowser, scheduleInput, scheduleLabel, schedulesFor, switchTrigger, toLocalInput, triggerProblem, type AgentApi, type AgentRecord, type McpProvider, type OwnerRef, type ScheduleInput, type ScheduleRecord, type ScheduleTrigger } from './agent-api'
 import { Ic } from './AgentUi'
-import { useBackgroundRuntime } from './BackgroundRuntimePanel'
+import { useBackgroundRuntime } from './use-background-runtime'
 
 const localZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' } }
 const ZONES = ['Asia/Seoul', 'America/Los_Angeles', 'America/New_York', 'Europe/London', 'UTC']

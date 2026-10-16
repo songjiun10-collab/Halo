@@ -109,3 +109,34 @@ def test_rejects_invalid_parameters(kwargs, message):
     params.update(kwargs)
     with pytest.raises(ValueError, match=message):
         run(**params)
+
+
+def test_fresh_observation_matches_use_time_oracle():
+    out, _ = run(seed=3, delay_steps=8, volatility=0.02, n=20_000, observation_lag=0, max_observation_age=0)
+    assert out["observation_bounded_revalidation"] == out["use_time_revalidation"]
+
+
+def test_stale_observation_fails_closed():
+    out, _ = run(seed=3, delay_steps=8, volatility=0.02, n=20_000, observation_lag=3, max_observation_age=2)
+    r = out["observation_bounded_revalidation"]
+    assert r["containment_failure_rate"] == 0.0
+    assert r["false_block_rate"] == 1.0
+
+
+def test_observation_within_bound_can_still_be_wrong():
+    out, _ = run(seed=3, delay_steps=8, volatility=0.05, n=20_000, observation_lag=4, max_observation_age=4)
+    assert out["observation_bounded_revalidation"]["containment_failure_rate"] > 0
+
+
+def test_observation_protocol_leaves_other_protocols_unchanged():
+    a, _ = run(seed=5, delay_steps=8, volatility=0.02, n=20_000)
+    b, _ = run(seed=5, delay_steps=8, volatility=0.02, n=20_000, observation_lag=6, max_observation_age=1)
+    for k in a:
+        if k != "observation_bounded_revalidation":
+            assert a[k] == b[k]
+
+
+@pytest.mark.parametrize("kw", [{"observation_lag": -1}, {"max_observation_age": -1}, {"observation_lag": 1.5}])
+def test_observation_parameter_validation(kw):
+    with pytest.raises(ValueError):
+        run(seed=1, delay_steps=2, volatility=0.01, n=10, **kw)

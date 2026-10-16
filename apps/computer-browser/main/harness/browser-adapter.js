@@ -40,7 +40,15 @@
 // maxTextBytes, which are unchanged.
 const MAX_NODES_VISITED = 3000;
 const MAX_ELEMENTS = 100; // section 6: "100개 element"
+const HEADING_RESERVE = 40; // extra headings kept after MAX_ELEMENTS is reached
+// On a scrolled page the last VIEWPORT_RESERVE slots of the cap go to what is on screen, so scrolling changes what the planner
+// sees and a link far below the first MAX_ELEMENTS elements can be reached. An unscrolled page keeps plain document order.
+const VIEWPORT_RESERVE = 40;
 const MAX_TEXT_BYTES = 12 * 1024; // section 6: "text 12 KiB"
+// A PDF tab shows nothing to page scripts, so its text comes from the file.
+const MAX_PDF_TEXT_BYTES = 2 * MAX_TEXT_BYTES;
+const { extractPdfText, formatPdfObservationText, looksLikePdfUrl } = require("./pdf-text");
+const { isPrivateHost } = require("./private-network");
 const NAVIGATION_TIMEOUT_MS = 30000; // matches control-api.js's existing bound
 const { randomUUID } = require("node:crypto");
 const INTERACTION_WORLD_ID = 1001;
@@ -48,6 +56,8 @@ const MAX_INPUT_BYTES = 4096;
 const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
 const { evaluateLock } = require("../../shared/harness-contracts");
 const { validateCoordinateAction } = require("./computer-use-contract");
+const { runReflexLoop } = require("./reflex-loop");
+const { PAGE_SNAPSHOT_SOURCE, parseSnapshot, verifyEffect } = require("./effect-verifier");
 
 // The http(s) origin of a URL string, or null.
 function bareOrigin(value) {
@@ -59,8 +69,81 @@ function bareOrigin(value) {
   }
 }
 const UNSUPPORTED_ACTIONS = new Set(["download"]);
-const INTERACTION_ACTIONS = new Set(["click", "type", "submit_form"]);
-const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "observe", "click_at", "type_at", "press_key", ...INTERACTION_ACTIONS]);
+// A container's accessible name is its text, which repeats the names of the elements inside it. Only roles
+// whose name is that text are trimmed. Forms and landmarks are named by a label a person wrote (aria-label,
+// aria-labelledby), and the payment check reads a form's name, so they, interactive elements and headings
+// always keep their whole names.
+const STRUCTURAL_ROLES = new Set([
+  "list", "listitem", "row", "rowgroup", "cell", "gridcell", "table", "grid", "group", "generic", "article", "section", "figure",
+]);
+
+// Index of `part` in `text` as whole words (whitespace or the ends on both sides), or -1.
+function wholeWordIndex(text, part) {
+  for (let at = text.indexOf(part); at !== -1; at = text.indexOf(part, at + 1)) {
+    const end = at + part.length;
+    if ((at === 0 || /\s/.test(text[at - 1])) && (end === text.length || /\s/.test(text[end]))) return at;
+  }
+  return -1;
+}
+
+// Removes from each structural element's name the names of the elements directly inside it, so a product card
+// says its price once instead of repeating its link and button. No element is removed and parents are unchanged.
+function trimContainerNames(elements) {
+  const childNames = new Map();
+  for (const element of elements) {
+    if (element.parentElementId === null || element.parentElementId === undefined || typeof element.name !== "string" || element.name.length < 2) continue;
+    const list = childNames.get(element.parentElementId);
+    if (list) list.push(element.name); else childNames.set(element.parentElementId, [element.name]);
+  }
+  return elements.map((element) => {
+    if (!STRUCTURAL_ROLES.has(element.role) || typeof element.name !== "string" || element.name.length === 0) return element;
+    const inside = childNames.get(element.elementId);
+    if (!inside) return element;
+    let rest = element.name;
+    for (const child of [...inside].sort((x, y) => y.length - x.length)) {
+      const at = wholeWordIndex(rest, child);
+      if (at !== -1) rest = `${rest.slice(0, at)} ${rest.slice(at + child.length)}`;
+    }
+    rest = rest.replace(/\s+/g, " ").trim();
+    return rest === element.name ? element : { ...element, name: rest };
+  });
+}
+
+const MAX_SELECT_OPTIONS = 40;
+const MAX_OPTION_LABEL = 120;
+// The observation shows each dropdown option's label cut to this many characters.
+const SHOWN_OPTION_LABEL = 60;
+const INTERACTION_ACTIONS = new Set(["click", "type", "select_option", "submit_form"]);
+const MAX_FIND_TEXT = 200;
+const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find_text", "observe", "click_at", "type_at", "press_key", "play_loop", ...INTERACTION_ACTIONS]);
+
+// Runs in the host's isolated world on every pass of play_loop. For each lane it reads one pixel of the largest
+// canvas (the lane's point is in viewport fractions, like a click) and says whether it is within `tolerance` of the
+// lane's colour. null means the canvas cannot be read (none, WebGL, tainted): the loop then fails instead of guessing.
+function buildPlaySampleScript(lanes) {
+  const rules = lanes.map((lane) => ({ x: lane.x, y: lane.y, c: lane.color, t: lane.tolerance }));
+  return `(() => { /* __haloPlaySample */
+    const rules = ${JSON.stringify(rules)};
+    let canvas = null, area = 0;
+    for (const el of document.querySelectorAll("canvas")) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && r.width * r.height > area) { canvas = el; area = r.width * r.height; }
+    }
+    if (!canvas) return null;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    const box = canvas.getBoundingClientRect();
+    const sx = canvas.width / box.width, sy = canvas.height / box.height;
+    try {
+      return rules.map((rule) => {
+        const px = Math.floor((rule.x * window.innerWidth - box.left) * sx), py = Math.floor((rule.y * window.innerHeight - box.top) * sy);
+        if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return false;
+        const d = ctx.getImageData(px, py, 1, 1).data;
+        return Math.abs(d[0] - rule.c[0]) <= rule.t && Math.abs(d[1] - rule.c[1]) <= rule.t && Math.abs(d[2] - rule.c[2]) <= rule.t;
+      });
+    } catch { return null; }
+  })()`;
+}
 
 class BrowserAdapterError extends Error {
   constructor(code, message) {
@@ -198,6 +281,53 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       form: formInfo(node), disabled: !!node.disabled || node.getAttribute("aria-disabled") === "true",
       readonly: !!node.readOnly || node.getAttribute("readonly") !== null,
     });
+    // A modal dialog makes the rest of the page unusable for a person, so only the dialog and the elements
+    // that contain it are listed. dialog.showModal() makes the page inert, so it always counts. aria-modal="true"
+    // is only a promise, and sites leave it on closed drawers that sit off screen or faded out, so it counts
+    // only while a person can see it on top of the page. A plain role="dialog" widget is not modal.
+    // insideOf crosses shadow roots, so a modal built as a web component keeps its own buttons.
+    const insideOf = (container, node) => {
+      for (let current = node; current; current = current.parentNode || (current.nodeType === 11 ? current.host : null)) {
+        if (current === container) return true;
+      }
+      return false;
+    };
+    const onTop = (candidate) => {
+      if (hidden(candidate)) return false;
+      for (let current = candidate; current && current.nodeType === 1; current = current.parentElement || current.getRootNode().host) {
+        if (Number(getComputedStyle(current).opacity) === 0) return false;
+      }
+      const box = candidate.getBoundingClientRect();
+      const width = window.innerWidth || document.documentElement.clientWidth;
+      const height = window.innerHeight || document.documentElement.clientHeight;
+      const left = Math.max(0, box.left), top = Math.max(0, box.top);
+      const right = Math.min(width, box.right), bottom = Math.min(height, box.bottom);
+      if (right - left < 2 || bottom - top < 2) return false;
+      const x = (left + right) / 2, y = (top + bottom) / 2;
+      let hit = document.elementFromPoint(x, y);
+      for (let depth = 0; hit && hit.shadowRoot && depth < 16; depth += 1) {
+        const inner = hit.shadowRoot.elementFromPoint(x, y);
+        if (!inner || inner === hit) break;
+        hit = inner;
+      }
+      return !!hit && insideOf(candidate, hit);
+    };
+    // A page whose scroll position cannot be read counts as unscrolled: plain document order, as before.
+    const scrolled = (() => { try { return (window.scrollY || (document.scrollingElement && document.scrollingElement.scrollTop) || 0) > 0; } catch { return false; } })();
+    let viewportAdmitted = 0;
+    const onScreen = (candidate) => {
+      const box = candidate.getBoundingClientRect();
+      const width = window.innerWidth || document.documentElement.clientWidth;
+      const height = window.innerHeight || document.documentElement.clientHeight;
+      return box.bottom > 0 && box.top < height && box.right > 0 && box.left < width;
+    };
+    let modal = null;
+    try {
+      for (const candidate of document.querySelectorAll('dialog[open], [aria-modal="true"]')) {
+        const native = candidate.tagName === "DIALOG" && candidate.matches(":modal");
+        if (native ? !hidden(candidate) : candidate.getAttribute("aria-modal") === "true" && onTop(candidate)) modal = candidate;
+      }
+    } catch { modal = null; }
     if (root) {
       // Open shadow roots (web components such as MDN's compat table) are
       // queued and walked after the light DOM, under the same visit cap.
@@ -212,8 +342,18 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
           const ownText = (node.childElementCount === 0 && !hidden(node) && node.tagName !== "INPUT" && node.tagName !== "TEXTAREA" && node.tagName !== "SELECT" ? (node.innerText || node.textContent || "") : "").trim().slice(0, 200);
           const role = roleOf(node);
           const isTextNode = ["P", "LI", "LABEL", "DT", "DD", "FIGCAPTION"].includes(node.tagName);
-          const shouldInclude = role && !hidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
-          const name = shouldInclude && elements.length < ${maxElements} ? nameOf(node, role) : "";
+          const behindModal = modal !== null && !insideOf(modal, node) && !insideOf(node, modal);
+          const shouldInclude = role && !behindModal && !hidden(node) && (INTERACTIVE_TAGS.has(node.tagName) || LANDMARK_TAGS.has(node.tagName) || Boolean(ROLE_TAGS[node.tagName]) || /^H[1-6]$/.test(node.tagName) || Boolean(node.getAttribute("role")) || isTextNode);
+          // Headings get a small reserve past the element cap: on long articles the
+          // nav and table-of-contents links fill the cap before the first section title.
+          // Scrolled: the first (cap - reserve) elements in document order, then up to VIEWPORT_RESERVE that are on screen
+          // (headings too: off-screen headings do not get their reserve, or they would fill the room before the screen).
+          const viaScreen = scrolled && shouldInclude && elements.length >= ${maxElements} - ${VIEWPORT_RESERVE} && viewportAdmitted < ${VIEWPORT_RESERVE} && onScreen(node);
+          const withinCap = !shouldInclude ? false
+            : scrolled
+              ? (elements.length < ${maxElements} - ${VIEWPORT_RESERVE} || viaScreen)
+              : (elements.length < ${maxElements} || (/^H[1-6]$/.test(node.tagName) && elements.length < ${maxElements} + ${HEADING_RESERVE}));
+          const name = shouldInclude && withinCap ? nameOf(node, role) : "";
           // A visible leaf represented by its accessible name does not also
           // consume the free-text channel. This avoids sending button/link/
           // heading labels twice while preserving unstructured page copy.
@@ -225,7 +365,8 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
               textBytes += encodedBytes;
             }
           }
-          if (shouldInclude && elements.length < ${maxElements}) {
+          if (shouldInclude && withinCap) {
+            if (viaScreen) viewportAdmitted += 1;
             const index = elements.length;
             let parent = node.parentElement;
             while (parent && !included.has(parent)) parent = parent.parentElement;
@@ -239,6 +380,21 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
             if (node.tagName === "INPUT") {
               const type = (node.getAttribute("type") || "text").toLowerCase();
               entry.inputType = type;
+              if ((node.getAttribute("autocomplete") || "").toLowerCase().startsWith("cc-")) entry.cardField = true;
+              // Show what a text field currently holds so the planner can tell a typed query landed.
+              if (["text", "search", "email", "url", "tel", "number"].includes(type) && typeof node.value === "string" && node.value) entry.value = clean(node.value, 120);
+            }
+            if (node.tagName === "SELECT") {
+              // A native dropdown shows its choices so the planner can pick one by its visible label.
+              entry.options = Array.from(node.options || []).slice(0, ${MAX_SELECT_OPTIONS}).map((option) => {
+                const choice = { label: clean(option.label || option.textContent || "", ${SHOWN_OPTION_LABEL}) };
+                if (option.selected) choice.selected = true;
+                if (option.disabled) choice.disabled = true;
+                return choice;
+              });
+              if ((node.options || []).length > ${MAX_SELECT_OPTIONS}) entry.optionCount = node.options.length;
+              const chosen = node.selectedOptions && node.selectedOptions[0];
+              if (chosen) entry.value = clean(chosen.label || chosen.textContent || "", 120);
             }
             if (node.disabled || node.getAttribute("disabled") !== null || node.getAttribute("aria-disabled") === "true") entry.disabled = true;
             if (node.required || node.getAttribute("required") !== null || node.getAttribute("aria-required") === "true") entry.required = true;
@@ -277,6 +433,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       title: document.title || "",
       text: textParts.join(" ").slice(0, ${maxTextBytes}),
       elements,
+      ...(modal ? { modalOpen: true } : {}),
     };
   })()`;
 }
@@ -294,6 +451,7 @@ class BrowserAdapter {
     randomId,
     permissionMode = "browse",
     assignedOrigin,
+    blockPrivateNetwork = false,
   } = {}) {
     if (!view) throw new BrowserAdapterError("invalid_config", "view is required");
     this._view = view;
@@ -313,6 +471,11 @@ class BrowserAdapter {
     // could still carry the child to an origin the parent never assigned it.
     this._assignedOrigin = assignedOrigin || null;
     this._intentLock = null;
+    // Agent pages only (AgentViewportHost): a page on the person's own machine or network
+    // (localhost, a router, an intranet tool) is opened only when the person named it -- by the
+    // agent, by a link or script on the page, or by a redirect. See private-network.js.
+    this._blockPrivateNetwork = blockPrivateNetwork === true;
+    this._privateAllowance = new Set();
     // While a widened navigation runs, the origin the user granted it for:
     // a redirect elsewhere is refused (see rejectIfBlocked and _navigate).
     this._widenedPin = null;
@@ -381,6 +544,7 @@ class BrowserAdapter {
         event.preventDefault();
         return;
       }
+      if (this._privateNetworkBlocked(parsed)) { event.preventDefault(); return; }
       const origin = parsed.origin;
       if (this._assignedOrigin && origin !== this._assignedOrigin) { event.preventDefault(); return; }
       if (this._widenedPin && origin !== this._widenedPin.origin) { this._widenedPin.violated = true; event.preventDefault(); return; }
@@ -402,6 +566,25 @@ class BrowserAdapter {
 
   setIntentLock(lock) {
     this._intentLock = lock ?? null;
+  }
+
+  // The private origins the person's own words name (TaskController reads them from the request
+  // and the person's amendments). Replaced, not merged, so a new goal can take one back.
+  setPrivateNetworkAllowance(origins) {
+    const next = new Set();
+    for (const value of Array.isArray(origins) ? origins.slice(0, 32) : []) {
+      try {
+        const url = new URL(value);
+        if ((url.protocol === "http:" || url.protocol === "https:") && isPrivateHost(url.hostname)) next.add(url.origin);
+      } catch { /* not an origin */ }
+    }
+    this._privateAllowance = next;
+  }
+
+  _privateNetworkBlocked(parsed) {
+    if (!this._blockPrivateNetwork || !isPrivateHost(parsed.hostname) || this._privateAllowance.has(parsed.origin)) return false;
+    // An Intent Lock the person set that lists the origin is the same as naming it.
+    return !(this._intentLock?.rules ?? []).some((rule) => rule.kind === "allow_origins" && rule.origins.includes(parsed.origin));
   }
 
   supportsAction(type) {
@@ -482,7 +665,9 @@ class BrowserAdapter {
   // Main-process-only autofill primitive. The only page script performs a
   // bounded visible-field lookup and value/input/change events; it never
   // clicks submit, calls requestSubmit(), or returns either secret. The
-  // origin is checked immediately before entering the page's main world.
+  // origin is checked before entering the page's main world, and again by the
+  // script itself before it touches a field: a navigation can commit between
+  // the two, and location cannot be faked by the page.
   async fillCredential({ username, password, origin } = {}) {
     if (this._disposed) return { status: "failed", errorCode: "disposed" };
     if (typeof username !== "string" || typeof password !== "string" || !password || typeof origin !== "string") {
@@ -501,6 +686,7 @@ class BrowserAdapter {
     }
     const payload = JSON.stringify({ username, password }).replace(/</g, "\\u003c");
     const script = `(() => {
+      if (location.origin !== ${JSON.stringify(expected.origin)}) return { status: "failed", errorCode: "credential_origin_mismatch" };
       const secret = ${payload};
       const visible = (element) => {
         const style = getComputedStyle(element);
@@ -625,27 +811,56 @@ class BrowserAdapter {
     }
     if (observationEpoch !== this._documentEpoch) throw new BrowserAdapterError("stale_document", "page navigated during observation");
     if (binding) this._interactionBinding = { ...binding, epoch: observationEpoch, url: raw.url, elements: raw.elements };
+    // Page dialogs the host answered since the last look (alert/confirm/prompt/beforeunload), so the planner knows.
+    const dialogs = typeof wc.takeDialogNotices === "function" ? wc.takeDialogNotices() : [];
+    const playLoop = this._loopReport ?? null;
+    this._loopReport = null;
     const observation = {
       id: this._randomId(),
       documentEpoch: this._documentEpoch,
       url: raw.url,
       title: raw.title,
       text: raw.text,
+      ...(dialogs.length > 0 ? { dialogs } : {}),
+      // What the last play_loop did (shown once): how long it ran, why it stopped, presses per key.
+      ...(playLoop ? { playLoop } : {}),
+      // A modal dialog is open: only it (and what contains it) is listed, because the page behind it cannot be used.
+      ...(raw.modalOpen === true ? { modalOpen: true } : {}),
       // Only error responses are surfaced, so ordinary observations stay unchanged.
       ...(this._lastHttpStatus >= 400 ? { httpStatus: this._lastHttpStatus } : {}),
-      elements: raw.elements.map((el, index) => {
+      elements: trimContainerNames(raw.elements.map((el, index) => {
         const { index: _index, parentIndex, ...entry } = el;
         return {
           ...entry,
           elementId: String(index),
           parentElementId: parentIndex === null || parentIndex === undefined ? null : String(parentIndex),
         };
-      }),
+      })),
       at: this._now(),
     };
+    const pdfText = await this._readPdfTextIfEmpty(wc, raw);
+    if (pdfText) observation.text = pdfText;
     this._visualBinding = null;
     this._latestObservation = { id: observation.id, documentEpoch: observation.documentEpoch, url: observation.url };
     return observation;
+  }
+
+  // The PDF viewer leaves the document empty. Only an empty page, or a URL that
+  // names a .pdf, is worth one extra request; the file is checked for the PDF
+  // signature before it is parsed, so any other empty page costs one discarded fetch.
+  async _readPdfTextIfEmpty(wc, raw) {
+    const fetchImpl = typeof wc.session?.fetch === "function" ? (url, init) => wc.session.fetch(url, init) : null;
+    if (!fetchImpl || typeof raw?.url !== "string") return "";
+    const empty = (!raw.text || !raw.text.trim()) && Array.isArray(raw.elements) && raw.elements.length === 0;
+    if (!empty && !looksLikePdfUrl(raw.url)) return "";
+    try {
+      const result = await extractPdfText(raw.url, { fetchImpl });
+      if (process.env.HALO_DEBUG_ACTIONS) console.log(`[browser-adapter] pdf text url=${raw.url} pages=${result?.pageCount ?? "none"} scanned=${result?.scanned ?? "-"}`);
+      return result ? formatPdfObservationText(result, { maxBytes: MAX_PDF_TEXT_BYTES }) : "";
+    } catch {
+      // Reading is best effort: a failure leaves the observation as it was.
+      return "";
+    }
   }
 
   // Text computer use: viewport-normalized boxes for the current observation's
@@ -820,14 +1035,18 @@ class BrowserAdapter {
         return this._followLink(action.elementId, { expectedOrigin });
       case "click":
       case "type":
+      case "select_option":
       case "submit_form":
         return this._interact(action, { signal, documentEpoch, expectedOrigin });
       case "click_at":
       case "type_at":
       case "press_key":
+      case "play_loop":
         return this._coordinateAction(action, { signal, documentEpoch, expectedOrigin });
       case "scroll":
         return this._scroll(action.direction, action.amount);
+      case "find_text":
+        return this._findText(action.text);
       case "observe":
         try {
           const observation = await this.observe({ signal });
@@ -844,6 +1063,26 @@ class BrowserAdapter {
       default:
         return { status: "failed", errorCode: "unknown_action" };
     }
+  }
+
+  // Reads the host-measured page snapshot, or null when this page cannot run scripts
+  // (a test double) or the read fails.
+  async _readSnapshot(wc) {
+    if (typeof wc.executeJavaScriptInIsolatedWorld !== "function") return null;
+    try {
+      const raw = await wc.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD_ID, [{ code: PAGE_SNAPSHOT_SOURCE }], false);
+      return parseSnapshot(Array.isArray(raw) ? raw[0] : raw);
+    } catch { return null; }
+  }
+
+  // Wraps a write action: `perform` sends the input. ok only when the page measurably changed.
+  async _withEffectCheck(wc, perform) {
+    const before = await this._readSnapshot(wc);
+    if (!before && typeof wc.executeJavaScriptInIsolatedWorld === "function") return { status: "failed", errorCode: "effect_unverifiable" };
+    perform();
+    if (!before) return { status: "ok" };
+    const effect = await verifyEffect({ before, read: () => this._readSnapshot(wc), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) });
+    return effect.observed ? { status: "ok", effect } : { status: "uncertain", errorCode: "effect_not_observed" };
   }
 
   async _coordinateAction(action, { signal, documentEpoch, expectedOrigin }) {
@@ -865,6 +1104,7 @@ class BrowserAdapter {
     if (typeof wc.sendInputEvent !== "function" || (normalized.type === "type_at" && typeof wc.insertText !== "function")) {
       return { status: "failed", errorCode: "unsupported_action" };
     }
+    if (normalized.type === "play_loop") return this._playLoop(normalized, binding, wc, signal);
 
     const x = normalized.type === "press_key" ? 0 : Math.floor(normalized.x * binding.viewport.width);
     const y = normalized.type === "press_key" ? 0 : Math.floor(normalized.y * binding.viewport.height);
@@ -873,31 +1113,67 @@ class BrowserAdapter {
     this._visualBinding = null;
     try {
       if (normalized.type === "press_key") {
-        wc.sendInputEvent({ type: "keyDown", keyCode: normalized.key });
-        if (normalized.key === "Enter") wc.sendInputEvent({ type: "char", keyCode: "Enter" });
-        wc.sendInputEvent({ type: "keyUp", keyCode: normalized.key });
-        return { status: "ok" };
+        const send = () => {
+          wc.sendInputEvent({ type: "keyDown", keyCode: normalized.key });
+          if (normalized.key === "Enter") wc.sendInputEvent({ type: "char", keyCode: "Enter" });
+          wc.sendInputEvent({ type: "keyUp", keyCode: normalized.key });
+        };
+        if (normalized.key !== "Enter") { send(); return { status: "ok" }; }
+        return await this._withEffectCheck(wc, send);
       }
-      // Hover first so pointer-driven widgets (menus, custom buttons) arm before the click.
-      wc.sendInputEvent({ type: "mouseMove", x, y });
-      wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
-      wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
-      if (normalized.type === "type_at") {
-        // Like ordinary type, typing replaces the field: select what the click focused, then insert.
-        if (typeof wc.selectAll === "function") wc.selectAll();
-        wc.insertText(normalized.text);
-      }
-      return { status: "ok" };
+      return await this._withEffectCheck(wc, () => {
+        // Hover first so pointer-driven widgets (menus, custom buttons) arm before the click.
+        wc.sendInputEvent({ type: "mouseMove", x, y });
+        wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+        wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+        if (normalized.type === "type_at") {
+          // Like ordinary type, typing replaces the field: select what the click focused, then insert.
+          if (typeof wc.selectAll === "function") wc.selectAll();
+          wc.insertText(normalized.text);
+        }
+      });
     } catch {
       return { status: "uncertain", errorCode: "coordinate_input_uncertain" };
     }
   }
 
+  // The reflex loop (reflex-loop.js): the planner named lanes on the screen it saw; the host samples those points
+  // many times a second and presses each lane's key when its colour shows up. The approval covers this one run:
+  // the binding is consumed first, the page is watched for navigation, and the stop button ends it at once.
+  async _playLoop(action, binding, wc, signal) {
+    if (typeof wc.executeJavaScriptInIsolatedWorld !== "function") return { status: "failed", errorCode: "unsupported_action" };
+    this._visualBinding = null;
+    const epoch = this._documentEpoch;
+    const script = buildPlaySampleScript(action.lanes);
+    let navigated = false;
+    let passes = 0;
+    const sample = async () => {
+      // A look at the address every few passes costs nothing next to the pixel read.
+      if (passes++ % 4 === 0 && (this._documentEpoch !== epoch || bareOrigin(wc.getURL()) !== binding.origin)) { navigated = true; throw new Error("navigated"); }
+      const raw = await wc.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD_ID, [{ code: script }], false);
+      const value = Array.isArray(raw) && raw.length === 1 && Array.isArray(raw[0]) ? raw[0] : raw;
+      if (!Array.isArray(value)) throw new Error("canvas_unreadable");
+      return value.map(Boolean);
+    };
+    const press = async (key) => {
+      wc.sendInputEvent({ type: "keyDown", keyCode: key });
+      wc.sendInputEvent({ type: "keyUp", keyCode: key });
+    };
+    const outcome = await runReflexLoop({ lanes: action.lanes, seconds: action.seconds, sample, press, signal });
+    const stopped = navigated ? "navigated" : outcome.stopped;
+    this._loopReport = { stopped, total: outcome.total, seconds: Math.round(outcome.elapsedMs / 100) / 10, presses: action.lanes.map((l, i) => ({ key: l.key, count: outcome.presses[i] })) };
+    if (stopped === "aborted") return { status: "cancelled", errorCode: "aborted" };
+    if (stopped === "sampler_failed") return { status: "failed", errorCode: "canvas_unreadable" };
+    if (stopped === "press_failed") return { status: "uncertain", errorCode: "coordinate_input_uncertain" };
+    return { status: "ok" };
+  }
+
   async _interact(action, { signal, documentEpoch, expectedOrigin }) {
-    const keys = action.type === "type" ? ["type", "elementId", "text"] : ["type", "elementId"];
+    const keys = action.type === "type" ? ["type", "elementId", "text"] : action.type === "select_option" ? ["type", "elementId", "label"] : ["type", "elementId"];
     if (Object.keys(action).some(key => !keys.includes(key)) ||
         typeof action.elementId !== "string" || !/^(0|[1-9][0-9]*)$/.test(action.elementId) ||
-        (action.type === "type" && (typeof action.text !== "string" || Buffer.byteLength(action.text, "utf8") > MAX_INPUT_BYTES))) {
+        (action.type === "type" && (typeof action.text !== "string" || Buffer.byteLength(action.text, "utf8") > MAX_INPUT_BYTES)) ||
+        (action.type === "select_option" && (typeof action.label !== "string" || action.label.trim().length === 0 || action.label.length > MAX_OPTION_LABEL))) {
       return { status: "failed", errorCode: "invalid_action" };
     }
     const binding = this._interactionBinding;
@@ -907,7 +1183,7 @@ class BrowserAdapter {
     }
     const entry = binding.elements[Number(action.elementId)];
     if (!entry) return { status: "failed", errorCode: "element_not_found" };
-    const targetUrl = action.type === "type" ? binding.url : entry.formAction || entry.href || binding.url;
+    const targetUrl = action.type === "type" || action.type === "select_option" ? binding.url : entry.formAction || entry.href || binding.url;
     const origin = bareOrigin(targetUrl);
     if (!origin || new URL(targetUrl).username || new URL(targetUrl).password) return { status: "failed", errorCode: "invalid_url" };
     if (expectedOrigin && (origin !== expectedOrigin || bareOrigin(binding.url) !== expectedOrigin)) return { status: "failed", errorCode: "widened_origin_mismatch" };
@@ -949,6 +1225,24 @@ class BrowserAdapter {
             setter.call(node, action.text);
             node.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: action.text }));
             node.dispatchEvent(new Event("change", { bubbles: true }));
+          } else if (action.type === "select_option") {
+            // Native single-choice dropdowns only; the option is picked by its visible label, never by a value the page defines.
+            if (node.tagName !== "SELECT" || node.multiple) return failed("unsupported_input");
+            // A label longer than the observation shows also matches by the shortened label the planner saw;
+            // two options that look the same once shortened are reported as ambiguous below, never guessed.
+            const wanted = action.label.replace(/\\s+/g, " ").trim().toLowerCase();
+            const matches = (option) => {
+              const label = (option.label || option.textContent || "").replace(/\\s+/g, " ").trim();
+              return label.toLowerCase() === wanted || (label.length > ${SHOWN_OPTION_LABEL} && label.slice(0, ${SHOWN_OPTION_LABEL}).trim().toLowerCase() === wanted);
+            };
+            const choices = Array.from(node.options || []).filter((option) => !option.disabled && matches(option));
+            if (choices.length === 0) return failed("option_not_found");
+            if (choices.length > 1) return failed("option_ambiguous");
+            started = true; node.focus();
+            if (!valid()) return { status: "uncertain", errorCode: "target_changed_during_focus" };
+            choices[0].selected = true;
+            node.dispatchEvent(new Event("input", { bubbles: true }));
+            node.dispatchEvent(new Event("change", { bubbles: true }));
           } else if (action.type === "submit_form") {
             // Script-driven search boxes (e.g. GitHub) use role=form/search on a
             // plain element; submit them through their own visible Search button.
@@ -976,12 +1270,13 @@ class BrowserAdapter {
             if (!valid()) return failed("stale_element");
             started = true; HTMLFormElement.prototype.requestSubmit.call(form, submitter);
           } else {
-            const allowed = ["button", "link", "checkbox", "radio", "switch", "tab", "menuitem"];
+            const allowed = ["button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "textbox", "searchbox", "combobox"];
             if (!allowed.includes(state.nodes[Number(action.elementId)].node.getAttribute("role") || ${JSON.stringify(entry.role)}) ||
                 (node.tagName === "INPUT" && ["file", "password"].includes((node.getAttribute("type") || "").toLowerCase())) || node.hasAttribute("download")) return failed("unsupported_click");
             const info = state.formInfo(node);
             if (info && !["", "_self"].includes(info.target)) return failed("unsupported_form");
             started = true; HTMLElement.prototype.click.call(node);
+            if (["INPUT", "TEXTAREA"].includes(node.tagName) || node.isContentEditable) node.focus();
           }
           return { status: "ok" };
         } catch { return started ? { status: "uncertain", errorCode: "interaction_uncertain" } : failed("interaction_failed"); }
@@ -1021,6 +1316,9 @@ class BrowserAdapter {
     }
     if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password) {
       return { status: "failed", errorCode: "invalid_url" };
+    }
+    if (enforceLock && this._privateNetworkBlocked(parsed)) {
+      return { status: "failed", errorCode: "private_network_blocked" };
     }
     if (enforceLock && !evaluateLock(this._intentLock, { action: "navigate", targetOrigin: parsed.origin }).allowed) {
       return { status: "failed", errorCode: "intent_lock_denied" };
@@ -1116,6 +1414,49 @@ class BrowserAdapter {
       return { status: "failed", errorCode: "element_not_found" };
     }
     return this._navigate(current.href, { expectedOrigin });
+  }
+
+  // Finds the first visible passage containing the text (case-insensitive, whitespace folded) and
+  // scrolls it to the middle of the view. It runs only in the host's isolated world: in the page's own
+  // world a page script could read the words (they can come from the person's request) or fake the
+  // result. Without an isolated world it finds nothing rather than fall back.
+  async _findText(text) {
+    if (typeof text !== "string" || text.trim().length === 0 || text.length > MAX_FIND_TEXT) {
+      return { status: "failed", errorCode: "invalid_find_text" };
+    }
+    const wc = this._view.webContents;
+    if (typeof wc.executeJavaScriptInIsolatedWorld !== "function") return { status: "failed", errorCode: "find_text_failed" };
+    await this._ensureReadyForScriptExecution(wc);
+    const script = `(() => { /* __haloFindText */
+      const needle = ${JSON.stringify(text)}.replace(/\\s+/g, " ").trim().toLowerCase();
+      const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+      let first = null, count = 0;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(parent.tagName)) continue;
+        if (!(node.nodeValue || "").replace(/\\s+/g, " ").toLowerCase().includes(needle)) continue;
+        const box = parent.getBoundingClientRect();
+        const style = getComputedStyle(parent);
+        if (box.width === 0 || box.height === 0 || style.visibility === "hidden" || style.display === "none") continue;
+        count += 1;
+        if (!first) first = parent;
+      }
+      if (first) first.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+      return { found: !!first, count };
+    })()`;
+    let timer;
+    try {
+      const found = await Promise.race([
+        wc.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD_ID, [{ code: script }], true),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("find_text timed out")), this._scrollTimeoutMs); }),
+      ]);
+      if (!found || found.found !== true) return { status: "failed", errorCode: "text_not_found" };
+      return { status: "ok", matchCount: Number.isInteger(found.count) ? found.count : 1 };
+    } catch (error) {
+      return { status: "failed", errorCode: "find_text_failed" };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async _scroll(direction, amount) {

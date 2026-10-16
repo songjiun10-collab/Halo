@@ -280,7 +280,7 @@ function validateLimits(limits: unknown, label: string) {
   assertPositiveInteger(limits.maxActiveMs, `${label}.maxActiveMs`);
 }
 
-const LOCK_ACTIONS = Object.freeze(["navigate", "follow_link", "click", "type", "click_at", "type_at", "press_key", "submit_form"] as const);
+const LOCK_ACTIONS = Object.freeze(["navigate", "follow_link", "click", "type", "select_option", "click_at", "type_at", "press_key", "play_loop", "submit_form"] as const);
 type LockAction = (typeof LOCK_ACTIONS)[number];
 type LockRule =
   | { kind: "deny_action"; action: LockAction }
@@ -1000,6 +1000,7 @@ function validateProposalEnvelope(proposal: unknown, label: string = "proposal",
       "actions",
       "reason",
       "evidenceIds",
+      "waitingWork",
       ...CHILD_PLAN_FIELDS,
       ...SEND_MESSAGE_FIELDS,
     ],
@@ -1063,6 +1064,21 @@ function validateProposalEnvelope(proposal: unknown, label: string = "proposal",
     }
     proposal.actions.forEach((a, i) => assertPlainObject(a, `${label}.actions[${i}]`));
     disallow(["reason", "evidenceIds", ...CHILD_PLAN_FIELDS, ...SEND_MESSAGE_FIELDS]);
+    // Task Branches: independent reads the host may run while an approval waits.
+    if (proposal.waitingWork !== undefined) {
+      if (!Array.isArray(proposal.waitingWork) || proposal.waitingWork.length > 3) {
+        throw new ContractError("invalid_field", `${label}.waitingWork must be an array of at most 3 items`);
+      }
+      proposal.waitingWork.forEach((w: unknown, i: number) => {
+        assertPlainObject(w, `${label}.waitingWork[${i}]`);
+        assertNoUnknownKeys(w as Record<string, unknown>, ["url", "purpose"], `${label}.waitingWork[${i}]`);
+        assertString((w as Record<string, unknown>).url, `${label}.waitingWork[${i}].url`, { maxChars: 2048 });
+        assertString((w as Record<string, unknown>).purpose, `${label}.waitingWork[${i}].purpose`, { maxChars: 200 });
+      });
+    }
+  }
+  if (proposal.kind !== "actions" && proposal.waitingWork !== undefined) {
+    throw new ContractError("invalid_shape", `${label} kind=${proposal.kind} must not include "waitingWork"`);
   }
   return proposal;
 }

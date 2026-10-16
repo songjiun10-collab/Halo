@@ -1,4 +1,6 @@
 "use strict";
+const { capturePreferredObservation } = require("./computer-use-observation");
+const { startTurnMemoryReads } = require("./turn-memory-preparation");
 
 // The long-running task state machine (design doc sections 5-7): drives
 // observe -> plan -> approve -> execute -> verify -> checkpoint, one action
@@ -23,13 +25,20 @@ const { AsyncLocalStorage } = require("node:async_hooks");
 const contracts = require("../../shared/harness-contracts");
 const { validateHarnessProfile, selectHarnessProfile, maxActionsPerProposal, isQuickProfile } = require("../../shared/harness-profile");
 const { adaptiveEffort } = require("./planner-effort-policy");
-const { createRecoveryPolicy } = require("./recovery-policy");
+const { createRecoveryPolicy, buildRecoveryFeedback, buildProposalFeedback } = require("./recovery-policy");
 const { resolveTarget } = require("./screen-map");
+const { privateOriginsNamedIn } = require("./private-network");
+const { TaskBranchManager } = require("./task-branch-manager");
 const { classifyTarget } = require("./effect-classifier");
+const { inspectAction } = require("./action-safety");
+const { applyPrivacyTiers, containsTier3, hasSecretSurface, maskTier3 } = require("./pii-tiers");
+const payments = require("./payment-mandate");
+const research = require("./research-sources");
 const { buildContext } = require("./context-builder");
 const { ContextRefCatalog } = require("./context-refs");
 const { validateProposal, verifyCriterion, canComplete } = require("./progress");
 const { isReadOnlyAction } = require("./permission-policy");
+const { looksLikeCaptcha } = require("../../shared/captcha-heuristics");
 const { evaluateGate, actionTargetOrigin } = require("./action-gate");
 const { LEASE_ACTIONS, lendTerms, createLease, isLeaseLive, LeaseError } = require("./capability-lease");
 
@@ -57,15 +66,19 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
     if (element && typeof element.href === "string") return element.href;
     return typeof action.elementId === "string" ? `element ${action.elementId}` : null;
   }
+  if (action.type === "find_text") {
+    return typeof action.text === "string" ? JSON.stringify(action.text.slice(0, 80)) : null;
+  }
   if (action.type === "scroll") {
     const direction = typeof action.direction === "string" ? action.direction : "?";
     const amount = action.amount !== undefined ? String(action.amount) : "?";
     return `${direction} ${amount}`;
   }
-  if (["click", "type", "submit_form"].includes(action.type)) {
+  if (["click", "type", "select_option", "submit_form"].includes(action.type)) {
     const element = lastObservation?.elements?.find((el) => el.elementId === action.elementId);
     if (!element) return `unknown element ${String(action.elementId).slice(0, 32)}`;
     const identity = `${element.role || "element"} ${JSON.stringify(element.name || "")} [${element.elementId}]`;
+    if (action.type === "select_option") return `${identity}; choose ${JSON.stringify(typeof action.label === "string" ? action.label.slice(0, 120) : "")}`;
     if (action.type === "type") return `${identity}; replace text with ${JSON.stringify(action.text)}`;
     const destination = element.formAction ? `${(element.formMethod || "get").toUpperCase()} ${element.formAction}` : element.href;
     return destination ? `${identity}; ${destination}` : identity;
@@ -80,6 +93,7 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
     return ` -> ${hit.role} ${JSON.stringify(hit.name)}${flags ? ` [${flags}]` : ""}`;
   };
   if (action.type === "press_key") return `${lastObservation?.id || action.observationId}; press ${action.key}`;
+  if (action.type === "play_loop") return `${lastObservation?.id || action.observationId}; play for up to ${action.seconds}s, pressing ${[...new Set(action.lanes.map((l) => l.key))].join(" ")} when its lane shows a note`;
   if (["click_at", "type_at"].includes(action.type)) {
     const point = `(${Math.round(Number(action.x) * 100)}%, ${Math.round(Number(action.y) * 100)}%)`;
     const where = landed(lastObservation);
@@ -126,6 +140,21 @@ function isAutoComputerUseAction(action, taskProfile, screenTargets = null) {
   return classifyTarget(hit, action.type).gate === "auto";
 }
 
+// Same idea for DOM actions: a click on a link/tab/menu item or a button that
+// only moves around the page, or typing into an ordinary text field, cannot
+// carry an external effect on its own, so the approver alone decides. Anything
+// the classifier flags (Send, Buy, Delete ...), cannot rule out, or any
+// password field keeps the human gate.
+function isAutoDomAction(action, observation) {
+  if (action.type !== "click" && action.type !== "type") return false;
+  const element = observation?.elements?.find((el) => el.elementId === action.elementId);
+  if (!element || typeof element.role !== "string") return false;
+  if (action.type === "type" && element.inputType === "password") return false;
+  if (action.type === "click" && element.formAction) return false;
+  const target = { role: element.role, name: typeof element.name === "string" ? element.name : "", covered: false, disabled: !!element.disabled };
+  return classifyTarget(target, action.type === "type" ? "type_at" : "click_at").gate === "auto";
+}
+
 function hasMultiAgentCapability(taskProfile) {
   return ["multi_agent", "multi_agent_computer_use"].includes(taskProfile?.capability?.id);
 }
@@ -133,12 +162,23 @@ function hasMultiAgentCapability(taskProfile) {
 // Long-profile goal persistence: total finish proposals the host will reject
 // (criteria still unmet, all machine-verifiable) before pausing for a human.
 const GOAL_MAX_REJECTED_FINISHES = 5;
+// A research answer plus the host's own source list is longer than an ordinary reply.
+const RESEARCH_REASON_CAP = 2800;
 const NAV_VISITED_MAX = 32;
 // Consecutive scrolls on one page after which the task pauses as no_progress.
 const PLANNER_RETRYABLE_CODES = ["invalid_proposal", "invalid_proposal_json"];
 const SCROLL_STREAK_LIMIT = 6;
+// A random delay in seconds between min and max, rounded to 5 decimal places.
+function clickDelaySeconds(min, max, roll) {
+  return Math.round((min + roll * (max - min)) * 1e5) / 1e5;
+}
 // Planner turns spent on one page (query and hash ignored) within the recent window.
 const PAGE_LOOP_WINDOW = 12;
+const VISITED_PAGES_KEPT = 500;
+// Minimum gap between page loads on the same site; keeps agent browsing polite and less likely to trip bot checks.
+const SAME_SITE_NAV_INTERVAL_MS = 1500;
+// Sites that may show a human check before the task is handed to the person.
+const CAPTCHA_SITES_TRIED = 4;
 const PAGE_LOOP_LIMIT = 8;
 const ERROR_URLS_KEPT = 5;
 const OBSERVE_STALE_RETRIES = 2;
@@ -208,6 +248,7 @@ class TaskController {
     store,
     planner,
     browser,
+    releaseViewsOnReview = false,
     approve,
     hostVerifier,
     memoryMonitor,
@@ -217,8 +258,18 @@ class TaskController {
     noProgressThreshold,
     memoryStore,
     activityRecall,
+    strategyGuidance,
+    branchRunner,
+    branchLimits,
     permissionMode = "browse",
     observeRetryDelayMs = OBSERVE_RETRY_DELAY_MS,
+    navIntervalMs = SAME_SITE_NAV_INTERVAL_MS,
+    clickDelayMinSec = 0,
+    clickDelayMaxSec = 0,
+    random = Math.random,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    finishEvidenceRejections = 0,
+    repeatFailureLimit = 0,
     maxRecoveries,
     plannerImageInput = true,
     visionAssist = null,
@@ -235,6 +286,8 @@ class TaskController {
     routineRunner,
     routineRun,
     batchReadOnlyActions = true,
+    paymentsEnabled = false,
+    requestAuthor = "person",
     harnessProfile,
     makeMcpBroker,
     mcpEnabled,
@@ -274,6 +327,11 @@ class TaskController {
     this._planner = planner;
     this._routineRunner = routineRunner || null;
     this._batchReadOnlyActions = batchReadOnlyActions !== false;
+    // Opt-in: payments stay refused unless the host explicitly passes true (fail closed).
+    if (requestAuthor !== "person" && requestAuthor !== "model") throw new TaskControllerError("invalid_config", "requestAuthor must be person or model");
+    // A request a model wrote (a team room's propose_task) is never the person's payment order.
+    this._requestAuthor = requestAuthor;
+    this._paymentsEnabled = paymentsEnabled === true;
     const checkpointedRoutineRun = store.lastCheckpoint?.payload?.routineRun;
     this._routineRun = checkpointedRoutineRun ? { ...checkpointedRoutineRun } : routineRun ? { ...routineRun } : null;
     if (this._routineRunner && (!this._routineRun ||
@@ -322,6 +380,11 @@ class TaskController {
       recoveredRejected = count;
     }
     this._rejectedFinishes = recoveredRejected;
+    // Research tasks: the pages this host opened (the only sources an answer may cite) and how many
+    // answers were sent back. Both are rebuilt from the journal, so a restart cannot reset the loop.
+    this._researchLedger = null;
+    this._researchRejections = 0;
+    this._researchFeedback = null;
     // Generic MCP scope exists only when the trusted host supplies a broker
     // factory. Open calls (durable mcp_call_started without an outcome) are
     // recovered from the checkpoint plus the journal tail, like finish
@@ -381,9 +444,22 @@ class TaskController {
     this._memoryMonitor = memoryMonitor || NOOP_MEMORY_MONITOR;
     this._memoryStore = memoryStore || null;
     this._activityRecall = typeof activityRecall === "function" ? activityRecall : null;
+    this._strategyGuidance = typeof strategyGuidance === "string" && strategyGuidance.length <= 4096 ? strategyGuidance : null;
+    // Task Branches: read-only side reads while an approval waits. Off unless the
+    // host supplies a runner; the manager is the whole safety envelope.
+    this._branches = typeof branchRunner === "function"
+      ? new TaskBranchManager({
+        runner: branchRunner,
+        ...(branchLimits ?? {}),
+        onEvent: (kind, payload) => { void this._store.append({ type: "note", payload: { kind, ...payload } }).catch(() => {}); },
+        onChange: () => this._emit(),
+      })
+      : null;
     const { PERMISSION_MODES, evaluateActionPolicy } = require("./permission-policy");
     if (!PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_config", "permissionMode is invalid");
     this._permissionMode = permissionMode;
+    // Steps that ran without asking the user (approver-only or lease). Session-local, for the report.
+    this._autoHandled = 0;
     this._observeRetryDelayMs = Number.isFinite(observeRetryDelayMs) && observeRetryDelayMs >= 0 ? observeRetryDelayMs : OBSERVE_RETRY_DELAY_MS;
     this._plannerEffort = plannerEffort;
     this._adaptiveEffort = adaptiveEffortEnabled === true;
@@ -406,7 +482,11 @@ class TaskController {
     // Leases live only as long as this controller: a restarted task starts
     // with none, which is stricter than replaying them from the journal.
     this._leases = [];
+    // Payment Mandates made from the user's own chat request (see payment-mandate.js). Not restored after a restart.
+    this._mandates = [];
+    this._mandateGoalVersion = null;
     this._browser.setIntentLock?.(this._goal.lock ?? null);
+    this._browser.setPrivateNetworkAllowance?.(this._personNamedPrivateOrigins());
     this._epoch = 0;
     this._loopRunning = false;
     this._plannerAborter = null;
@@ -444,9 +524,47 @@ class TaskController {
     this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
     this._scrollStreak = { url: null, count: 0 };
     this._recentPages = [];
+    this._visitedPages = new Set();
+    this._lastNavAt = new Map();
+    this._captchaOrigins = new Set();
+    this._captchaNudges = 0;
+    this._captchaNudgePending = false;
+    this._onCaptchaPage = false;
+    // A click is sent after a random pause between min and max seconds, to 5 decimal places (0.23817 s), as a
+    // person's pointer does not land the instant the page changes. Off (0) unless the host sets it; the pause is
+    // also a brief settle time for page scripts.
+    const delayOk = (value) => Number.isFinite(value) && value >= 0 && value <= 5;
+    this._clickDelay = delayOk(clickDelayMinSec) && delayOk(clickDelayMaxSec) && clickDelayMaxSec >= clickDelayMinSec && clickDelayMaxSec > 0
+      ? { min: clickDelayMinSec, max: clickDelayMaxSec } : null;
+    this._random = typeof random === "function" ? random : Math.random;
+    this._sleep = typeof sleep === "function" ? sleep : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    this._navIntervalMs = Number.isFinite(navIntervalMs) ? navIntervalMs : SAME_SITE_NAV_INTERVAL_MS;
+    // A finish with no recorded evidence for any criterion is sent back this many times before it is accepted
+    // (measured in the compare20 runs: 10 of 15 Haiku finishes had no evidence observe, and all 3 plainly wrong ones were among them).
+    this._finishEvidenceBudget = Number.isInteger(finishEvidenceRejections) && finishEvidenceRejections >= 0 ? finishEvidenceRejections : 0;
+    this._finishEvidenceRejections = 0;
+    this._finishFeedback = null;
+    // An identical action that already failed this many times with a deterministic error is not dispatched again
+    // (compare20: 16 identical failing navigates, 12 identical failing selects). 0 = off.
+    this._repeatFailureLimit = Number.isInteger(repeatFailureLimit) && repeatFailureLimit >= 0 ? repeatFailureLimit : 0;
+    this._repeatFailures = new Map();
+    this._repeatBlocked = 0;
+    this._repeatFeedback = null;
     this._needUserReason = null;
     this._maxRecoveries = maxRecoveries;
-    this._recovery = createRecoveryPolicy(maxRecoveries);
+    this._proposalFeedbackCode = null;
+    this._rejectedProposals = 0;
+    this._recovery = createRecoveryPolicy(maxRecoveries, undefined, { state: store.lastCheckpoint?.payload?.recoveryBudget });
+    for (const event of store.eventsSinceCheckpoint || []) {
+      if (event.type !== "note" || event.payload?.kind !== "recovery") continue;
+      const state = event.payload.recoveryBudget;
+      if (state === undefined) continue; // Legacy notes had no durable budget.
+      const restored = createRecoveryPolicy(maxRecoveries, undefined, { state });
+      if (restored.snapshot().spent !== this._recovery.snapshot().spent + 1) {
+        throw new TaskControllerError("invalid_recovery_state", "recovery journal tail is inconsistent");
+      }
+      this._recovery = restored;
+    }
     // A planner without image input gets a text screen map instead of a
     // screenshot (text computer use). visionAssist, when given, may describe
     // the screen for sparse pages; its output is untrusted text.
@@ -455,12 +573,20 @@ class TaskController {
     // Opt-in: when same-model recovery is spent on a planner problem, the host
     // may hand back a stronger planner. At most once per task.
     this._escalatePlanner = typeof escalatePlanner === "function" ? escalatePlanner : null;
-    this._escalations = 0;
+    this._escalations = store.lastCheckpoint?.payload?.plannerEscalations ?? 0;
+    if (!Number.isInteger(this._escalations) || this._escalations < 0 || this._escalations > 1) {
+      throw new TaskControllerError("invalid_recovery_state", "planner escalation count is malformed");
+    }
+    for (const event of store.eventsSinceCheckpoint || []) {
+      if (event.type === "note" && event.payload?.kind === "planner_escalation") this._escalations = 1;
+    }
     this._visionAssist = typeof visionAssist === "function" ? visionAssist : null;
     this._loopHint = false;
     this._errorUrls = [];
     this._approvalQueue = [];
     this._lastObservation = null;
+    this._viewsReleased = false;
+    this._releaseViewsOnReview = releaseViewsOnReview === true;
     this._pendingMcpObservation = null;
     // Reusable-across-turns iff the last dispatched action was itself an
     // "observe" (see the reuse gate in the main loop and its assignment in
@@ -571,13 +697,18 @@ class TaskController {
     });
   }
 
-  setPolicySettings({ permissionMode, plannerEffort } = {}) {
+  setPolicySettings({ permissionMode, plannerEffort, paymentsEnabled } = {}) {
     const { PERMISSION_MODES } = require("./permission-policy");
     const allowedEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
     if (permissionMode !== undefined && !PERMISSION_MODES.includes(permissionMode)) throw new TaskControllerError("invalid_permission_mode", "permissionMode is invalid");
     if (plannerEffort !== undefined && !allowedEfforts.includes(plannerEffort)) throw new TaskControllerError("invalid_planner_effort", "plannerEffort is invalid");
     if (permissionMode !== undefined) this._permissionMode = permissionMode;
     if (plannerEffort !== undefined) this._plannerEffort = plannerEffort;
+    if (paymentsEnabled !== undefined) {
+      this._paymentsEnabled = paymentsEnabled === true;
+      // Turning payments off takes effect now: a mandate already granted dies with it.
+      if (!this._paymentsEnabled) for (const mandate of this._mandates) mandate.revoked = true;
+    }
     this._browser.setPermissionMode?.(this._permissionMode);
   }
 
@@ -590,6 +721,8 @@ class TaskController {
       budgets: { ...this._budgets },
       segment: { ...this._segment },
       criteriaStatus: [...this._criteriaStatus.entries()].map(([criterionId, v]) => ({ criterionId, ...v })),
+      autoHandled: this._autoHandled,
+      branches: this._branches ? this._branches.list() : [],
       approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor, widen, leaseOffer }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null, widen: !!widen, leaseOffer: leaseOffer ?? null })),
       ...(this._task.pauseReason === "need_user" && this._needUserReason ? { needUserReason: this._needUserReason } : {}),
       leases: this._terminal()
@@ -778,8 +911,10 @@ class TaskController {
         const idx = this._approvalQueue.findIndex((q) => q.id === item.id);
         if (idx !== -1) this._approvalQueue.splice(idx, 1);
         if (isMcpItem(item)) item.mcp.settle({ allowed: false });
+        this._branches?.resolve(item.id, "cancelled");
       }
     }
+    if (finalState === "stopped") this._branches?.closeAll("stopped");
     // Stop and takeOver hand control back to the person: every lent
     // permission ends with them. Revoked before the drain so an in-flight
     // loop can no longer spend one (_useLease re-checks after its append).
@@ -927,6 +1062,8 @@ class TaskController {
         segment: { ...this._segment },
         criteriaStatus: [...this._criteriaStatus.entries()],
         harnessProfile: this._harnessProfile,
+        recoveryBudget: this._recovery.snapshot(),
+        plannerEscalations: this._escalations,
         ...(this._harnessProfile === "long" ? { goalPersistence: { rejectedFinishes: this._rejectedFinishes } } : {}),
         ...(this._routineRun ? { routineRun: { ...this._routineRun } } : {}),
         ...(this._openMcpCalls.size > 0 ? { mcp: { openCalls: [...this._openMcpCalls] } } : {}),
@@ -946,7 +1083,14 @@ class TaskController {
   async _tryRecover(reason, step) {
     const granted = this._recovery.tryConsume(reason);
     if (!granted) return reason === "planner_error" || reason === "no_progress" ? this._tryEscalate(reason) : false;
-    await this._store.append({ type: "note", payload: { kind: "recovery", reason, step, attempt: granted.attempt, total: granted.total } }).catch(() => {});
+    // Retry only after its budget charge is durable. A crash before checkpoint
+    // replays this complete bounded state from the validated journal tail.
+    try {
+      await this._store.append({ type: "note", payload: { kind: "recovery", reason, step, attempt: granted.attempt, total: granted.total,
+        recoveryBudget: this._recovery.snapshot() } });
+    } catch {
+      return false; // No durable charge: take the caller's normal pause path.
+    }
     return true;
   }
 
@@ -955,19 +1099,25 @@ class TaskController {
     let next;
     try { next = await this._escalatePlanner({ reason }); } catch { return false; }
     if (!next || !next.planner || typeof next.planner.next !== "function") return false;
+    try {
+      await this._store.append({ type: "note", payload: { kind: "planner_escalation", reason, from: String(next.from ?? ""), to: String(next.to ?? "") } });
+    } catch {
+      await Promise.resolve(next.planner.close?.()).catch(() => {});
+      return false;
+    }
     const previous = this._planner;
     this._escalations += 1;
     this._planner = next.planner;
     this._plannerImageInput = next.imageInput !== false;
-    this._recovery = createRecoveryPolicy(this._maxRecoveries);
+    this._recovery.noteProgress(); // New model gets a recent window, not a new lifetime.
     this._loopHint = false;
-    await this._store.append({ type: "note", payload: { kind: "planner_escalation", reason, from: String(next.from ?? ""), to: String(next.to ?? "") } }).catch(() => {});
     await Promise.resolve(previous?.close?.()).catch(() => {});
     return true;
   }
 
   async _pauseWith(reason) {
     this._leaveActive();
+    this._finishFeedback = null;
     this._task = { state: "paused", pauseReason: reason };
     // Pause reasons otherwise live only in the latest checkpoint; keep each one
     // in the journal so "why does it keep pausing" can be answered afterwards.
@@ -1014,7 +1164,37 @@ class TaskController {
     this._emit();
   }
 
+  // Awaiting the person's review needs no live page: keep the final URL and
+  // title in the journal, then free both renderers so an unconfirmed task
+  // stops costing memory. The store and planner stay for confirmCriterion().
+  async _releaseViewsForReview() {
+    try {
+      const tab = this._browser.getBrowserSnapshot?.()?.tabs?.[0];
+      await this._store.append({ type: "note", payload: { kind: "result_snapshot", url: tab?.url ?? null, title: tab?.title ?? null } }).catch(() => {});
+      if (typeof this._browser.dispose === "function") {
+        await this._browser.dispose();
+        this._viewsReleased = true;
+      }
+    } catch {
+      // best-effort -- the views are released again on terminal teardown
+    }
+  }
+
+  // True once the review hand-off freed the views and a rejection also
+  // closed the planner and store: only a fresh TaskHost re-attachment works.
+  get needsReattach() { return this._needsReattach === true; }
+
+  async _releaseForReattach() {
+    this._needsReattach = true;
+    try { await this._planner.close?.(); } catch { /* best-effort */ }
+    try { await this._store.close(); } catch { /* best-effort */ }
+  }
+
   async _pauseForMemoryPressure(pressure) {
+    if (process.env.HALO_DEBUG_ACTIONS) {
+      const sample = this._memoryMonitor.getLastSample?.();
+      console.error("[memory-pause]", pressure, sample ? `${Math.round(sample.totalBytes / 1048576)}MB unmeasurable=${JSON.stringify(sample.unmeasurable)} by=${JSON.stringify(Object.entries((sample.byProcess ?? []).reduce((acc, p) => { acc[p.label] = (acc[p.label] ?? 0) + (p.bytes ?? 0); return acc; }, {})).map(([k, v]) => `${k}:${Math.round(v / 1048576)}MB`))} n=${(sample.byProcess ?? []).length}` : "no sample");
+    }
     if (pressure === "emergency") {
       await this._pauseForMemoryEmergency();
     } else {
@@ -1045,7 +1225,7 @@ class TaskController {
         "resume() from execution_uncertain requires resume({confirmed: true}) -- the dangling action is never auto-replayed",
       );
     }
-    if (this._task.pauseReason === "memory_emergency") {
+    if (this._task.pauseReason === "memory_emergency" || this._needsReattach) {
       // This controller's own browser/planner were already disposed when
       // emergency pressure hit -- there is nothing left here to resume into,
       // and no confirmed:true can rescue that (unlike execution_uncertain,
@@ -1072,6 +1252,7 @@ class TaskController {
     // resume either, for the same reason.
     this._lastObservation = null;
     this._reusableObservation = null;
+    this._rejectedProposals = 0; // Explicit user resume, never an automatic retry.
     this._emit();
     return this._runLoop();
   }
@@ -1143,6 +1324,7 @@ class TaskController {
     const nextGoal = await this._store.amendGoal(amendmentInput);
     this._goal = nextGoal;
     this._browser.setIntentLock?.(nextGoal.lock ?? null);
+    this._browser.setPrivateNetworkAllowance?.(this._personNamedPrivateOrigins());
     // The intent changed, so every lent permission is taken back.
     await this._revokeAllLeases("goal_amended", { durable: true });
     // A goal amendment invalidates any stale in-flight proposal/approval
@@ -1223,6 +1405,9 @@ class TaskController {
         // already accepts, with a pauseReason that names why.
         this._task = { state: "paused", pauseReason: "evidence_rejected" };
         await this._checkpoint();
+        // Views were released at the review hand-off; resume() cannot reuse
+        // them, so recover through a fresh re-attachment like an emergency.
+        if (this._viewsReleased) await this._releaseForReattach();
       }
     }
     return this.getSnapshot();
@@ -1234,6 +1419,8 @@ class TaskController {
     if (index === -1) return this.getSnapshot();
     const [item] = this._approvalQueue.splice(index, 1);
     if (isMcpItem(item)) return this._approveMcp(item);
+    const stale = this._stopHappenedSince(item.epoch) || this._monotonicNow() >= item.deadline;
+    this._branches?.resolve(item.id, stale ? "expired" : "approved");
     const wasAwaitingApproval = !this._approvalQueue.some((q) => !isMcpItem(q)) && this._task.state === "awaiting_approval";
     if (wasAwaitingApproval) {
       this._task = { state: "running", pauseReason: null };
@@ -1277,6 +1464,7 @@ class TaskController {
     // there is no action lifecycle event to close out here, only the queue
     // entry to drop.
     const [item] = this._approvalQueue.splice(index, 1);
+    this._branches?.resolve(item.id, "rejected");
     if (isMcpItem(item)) {
       item.mcp.settle({ allowed: false });
       this._emit();
@@ -1778,6 +1966,9 @@ class TaskController {
         const epoch = this._epoch;
         this._enterActive();
 
+        // An unclear payment order is asked about before any planning happens.
+        if (await this._ensureMandate() === "stop_loop") break;
+
         const pressure = this._memoryMonitor.getPressureLevel();
         if (pressure === "pause" || pressure === "emergency") {
           await this._pauseForMemoryPressure(pressure);
@@ -1833,15 +2024,21 @@ class TaskController {
         }
         this._reusableObservation = null;
         if (this._stopHappenedSince(epoch)) break;
+        // Tier 3 secrets (card, resident registration number, password, one-time code) never reach the planner or the journal.
+        // A screenshot cannot be redacted: a page showing a secret goes to the planner as text only.
+        this._secretOnScreen = hasSecretSurface(observation);
+        observation = applyPrivacyTiers(observation);
         this._lastObservation = observation;
         this._recordNavigation(observation);
+        if (this._isResearchTask()) await this._recordResearchSource(observation);
 
         let customMemory = [];
+        const memoryReads = startTurnMemoryReads({
+          loadMemory: this._memoryStore ? () => this._memoryStore.forContext(observation.url) : undefined,
+          recallActivity: this._activityRecall ? () => this._activityRecall(this._goal.originalRequest ?? "") : undefined,
+        });
         try {
-          if (this._memoryStore) {
-            const memory = await this._memoryStore.forContext(observation.url);
-            customMemory = memory.entries;
-          }
+          customMemory = await memoryReads.memory;
         } catch {
           if (this._stopHappenedSince(epoch)) break;
           if (await this._tryRecover("context_error", "rebuild-context")) continue;
@@ -1851,11 +2048,13 @@ class TaskController {
         if (this._stopHappenedSince(epoch)) break;
         // Context Awareness: pages the user read that match this request. Best
         // effort and untrusted like any memory entry; a failure never pauses work.
+        if (this._branches) {
+          const merged = this._branches.takeMerged();
+          if (merged.length) customMemory = [...customMemory, ...merged];
+        }
         if (this._activityRecall) {
-          try {
-            const recalled = await this._activityRecall(this._goal.originalRequest ?? "");
-            if (Array.isArray(recalled) && recalled.length) customMemory = [...customMemory, ...recalled];
-          } catch { /* the journal is optional */ }
+          const recalled = await memoryReads.activity;
+          if (recalled.length) customMemory = [...customMemory, ...recalled];
           if (this._stopHappenedSince(epoch)) break;
         }
 
@@ -1900,6 +2099,35 @@ class TaskController {
             this._errorUrls.push(observation.url);
             if (this._errorUrls.length > ERROR_URLS_KEPT) this._errorUrls.shift();
           }
+          // An anti-bot challenge is the person's to pass: hand the browser over
+          // before any planner call, never try to click through it.
+          // The first block on a site is routed around by asking the planner for another
+          // source (the challenged URL goes into errorUrls); a repeat, a third site, or any
+          // action other than leaving the page hands the task to the person.
+          this._onCaptchaPage = false;
+          // Looking again at the page the planner was just told to leave is not a second block.
+          // Only the very next observation counts: once a page without a challenge has been
+          // seen, a challenge on that site again is a repeat block.
+          const lookingAgain = this._captchaNudgePending;
+          this._captchaNudgePending = false;
+          if (looksLikeCaptcha(observation?.url, observation?.title)) {
+            let origin = null;
+            try { origin = new URL(observation.url).origin; } catch {}
+            if (origin === null || (this._captchaOrigins.has(origin) && !lookingAgain) || (!this._captchaOrigins.has(origin) && this._captchaOrigins.size >= CAPTCHA_SITES_TRIED)) {
+              await this._pauseWith("captcha");
+              break;
+            }
+            this._captchaOrigins.add(origin);
+            this._onCaptchaPage = true;
+            if (!this._errorUrls.includes(observation.url)) this._errorUrls.push(observation.url);
+          }
+          // A page this task has never been on is real progress: it refills the recovery
+          // budget. Looping among pages already seen never does, so a stuck task stays bounded.
+          if (pageKey !== null && !this._visitedPages.has(pageKey)) {
+            this._visitedPages.add(pageKey);
+            if (this._visitedPages.size > VISITED_PAGES_KEPT) this._visitedPages.delete(this._visitedPages.values().next().value);
+            this._recovery.noteProgress();
+          }
           this._recentPages.push(pageKey);
           if (this._recentPages.length > PAGE_LOOP_WINDOW) this._recentPages.shift();
           const stuckOnOne = pageKey !== null && this._recentPages.filter((k) => k === pageKey).length >= PAGE_LOOP_LIMIT;
@@ -1928,40 +2156,32 @@ class TaskController {
             ? await this._readWorkGoalContext({ ...this._workGoalBinding, taskId: this._goal.taskId })
             : undefined;
           if (this._stopHappenedSince(epoch)) break;
-          if (hasComputerUseAdapter(this._store.taskProfile) && !this._plannerImageInput) {
-            if (typeof this._browser.captureTextObservation !== "function") {
+          // A blank start page has no boxes to read; the planner navigates first, then the next
+          // observation is captured normally.
+          const computerUseReady = hasComputerUseAdapter(this._store.taskProfile) && /^https?:/i.test(observation?.url ?? "");
+          if (computerUseReady) {
+            const imageInput = this._plannerImageInput && !this._secretOnScreen;
+            if ((!imageInput && typeof this._browser.captureTextObservation !== "function") ||
+                (typeof this._browser.captureTextObservation !== "function" && typeof this._browser.captureComputerUseObservation !== "function")) {
               await this._pauseWith("computer_use_unavailable");
               break;
             }
             try {
-              textCapture = await this._browser.captureTextObservation(observation);
-              if (!textCapture?.binding || textCapture.binding.observationId !== observation.id ||
-                  textCapture.binding.taskId !== this._goal.taskId || textCapture.binding.documentEpoch !== observation.documentEpoch ||
-                  typeof textCapture.screenMap?.text !== "string") {
-                throw new Error("invalid screen map binding");
-              }
-              if (textCapture.screenMap.sparse && this._visionAssist) {
+              const captureStartedAt = this._onTiming ? performance.now() : null;
+              const capture = await capturePreferredObservation(this._browser, observation, {
+                taskId: this._goal.taskId, imageInput,
+                lastActionType: this._lastActionType, lastActionStatus: this._lastActionStatus,
+              });
+              textCapture = capture.textCapture; visualCapture = capture.visualCapture;
+              if (typeof textCapture?.screenMap?.text === "string") textCapture = { ...textCapture, screenMap: { ...textCapture.screenMap, text: maskTier3(textCapture.screenMap.text) } };
+              if (this._onTiming) { try { this._onTiming({ operation: "computer_use_capture", elapsedMs: performance.now() - captureStartedAt, route: capture.route, reason: capture.reason }); } catch {} }
+              if (textCapture?.screenMap.sparse && this._visionAssist) {
                 // Best effort: a failed description leaves the plain map.
                 const described = await Promise.resolve(this._visionAssist(observation)).catch(() => null);
                 if (typeof described === "string" && described.trim()) textCapture = { ...textCapture, visionNote: described.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 2048) };
               }
-            } catch {
-              await this._pauseWith("computer_use_capture_failed");
-              break;
-            }
-          } else if (hasComputerUseAdapter(this._store.taskProfile)) {
-            if (typeof this._browser.captureComputerUseObservation !== "function") {
-              await this._pauseWith("computer_use_unavailable");
-              break;
-            }
-            try {
-              visualCapture = await this._browser.captureComputerUseObservation(observation);
-              if (!visualCapture?.binding || visualCapture.binding.observationId !== observation.id ||
-                  visualCapture.binding.taskId !== this._goal.taskId || visualCapture.binding.documentEpoch !== observation.documentEpoch ||
-                  !visualCapture.attachment || typeof visualCapture.attachment.path !== "string" || typeof visualCapture.attachment.dispose !== "function") {
-                throw new Error("invalid screenshot attachment binding");
-              }
-            } catch {
+            } catch (error) {
+              await this._store.append({ type: "note", payload: { kind: "computer_use_capture_error", code: String(error?.code ?? error?.message ?? "unknown").slice(0, 120) } }).catch(() => {});
               await this._pauseWith("computer_use_capture_failed");
               break;
             }
@@ -1973,28 +2193,40 @@ class TaskController {
             : textCapture
               ? { ...observation, computerUse: { ...textCapture.binding, mode: "text" }, screenMap: textCapture.screenMap.text, ...(textCapture.visionNote ? { visionNote: textCapture.visionNote } : {}) }
               : observation;
+          const recoveryFeedback = buildRecoveryFeedback(this._recovery.snapshot());
+          const proposalFeedback = this._proposalFeedbackCode ? buildProposalFeedback(this._proposalFeedbackCode, {
+            taskId: this._goal.taskId, goalVersion: this._goal.goalVersion,
+            basedOnObservationId: observation.id, maxActions: this._maxActionsPerProposal,
+          }) : null;
           context = buildContext({
             goal: this._goal,
             state: {
               criteriaStatus: this.getSnapshot().criteriaStatus,
               segment: { ...this._segment },
               budgets: { ...this._budgets },
+              ...(recoveryFeedback ? { recoveryFeedback } : {}),
+              ...(proposalFeedback ? { proposalFeedback } : {}),
               plannerEffort: this._effectivePlannerEffort(pendingMessages, observation?.url),
               harnessProfile: this._harnessProfile,
               maxActionsPerProposal: this._maxActionsPerProposal,
               ...(this._harnessProfile === "fast" ? { fastMode: true } : {}),
               ...(this._loopHint ? { loopWarning: true } : {}),
+              ...(this._lastActionNote ? { lastAction: this._lastActionNote } : {}),
               ...(this._scrollStreak.count >= 3 ? { scrollStreak: this._scrollStreak.count } : {}),
               ...(this._errorUrls.length > 0 ? { errorUrls: [...this._errorUrls] } : {}),
+              ...(this._finishFeedback ? { finishFeedback: { ...this._finishFeedback } } : {}),
+              ...(this._repeatFeedback ? { repeatFailureFeedback: { ...this._repeatFeedback } } : {}),
               mcp: { enabled: this._mcpAvailableToPlanner(),
                 actions: ["mcp_search", "mcp_describe", "mcp_propose"] },
               ...(this._harnessProfile === "long" ? { goalPersistence: this._goalPersistenceState() } : {}),
+              ...(this._isResearchTask() ? { research: this._researchState() } : {}),
               ...(childPlan ? { childPlan } : {}),
             },
             navigation: { visited: [...this._navigation.visited], frontier: [...this._navigation.frontier] },
             observation: plannerObservation,
             recentEvents: this._store.eventsSinceCheckpoint || [],
             customMemory,
+            strategyGuidance: this._strategyGuidance,
             pendingMessages,
             ...(teamBoard ? { teamBoard } : {}),
             ...(this._workGoalBinding ? { workGoalBinding: this._workGoalBinding, workGoal } : {}),
@@ -2053,15 +2285,29 @@ class TaskController {
           try {
             proposal = await this._nextPlanner(context, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
           } catch (firstError) {
-            // A malformed proposal is a transient model slip, not a broken
-            // planner: retry the same context once (charged as a call).
+            // Repair format against the same observation, but with bounded
+            // host feedback, not the provider's raw error or rejected output.
             if (!PLANNER_RETRYABLE_CODES.includes(firstError?.plannerCode) || this._stopHappenedSince(epoch)) throw firstError;
+            const activeMs = this._budgets.activeMs + (this._activeSince !== null ? this._now() - this._activeSince : 0);
+            if (this._budgets.plannerCallsUsed >= this._goal.limits.maxPlannerCalls || activeMs >= this._goal.limits.maxActiveMs) {
+              await this._pauseWith("budget_exhausted");
+              break;
+            }
+            this._proposalFeedbackCode = firstError.plannerCode;
+            const repairContext = { ...context, progress: { ...context.progress,
+              budgets: { ...this._budgets, plannerCallsUsed: this._budgets.plannerCallsUsed + 1 }, proposalFeedback: buildProposalFeedback(firstError.plannerCode, {
+                taskId: this._goal.taskId, goalVersion: this._goal.goalVersion,
+                basedOnObservationId: context.observation.id, maxActions: this._maxActionsPerProposal,
+              }) } };
+            if (Buffer.byteLength(JSON.stringify(repairContext), "utf8") > contracts.MAX_CONTEXT_PACKET_BYTES) throw firstError;
             this._budgets.plannerCallsUsed += 1;
-            proposal = await this._nextPlanner(context, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
+            proposal = await this._nextPlanner(repairContext, visualCapture ? { attachments: [{ kind: "image", id: visualCapture.attachment.id, path: visualCapture.attachment.path }] } : {});
           }
           if (this._pendingMcpObservation) this._pendingMcpObservation = null;
           this._pendingContextRead = null;
           this._loopHint = false;
+          this._finishFeedback = null;
+          this._repeatFeedback = null;
         } catch (error) {
           if (this._stopHappenedSince(epoch)) break;
           // planner-stdio.js's PlannerTransportError distinguishes "no
@@ -2117,15 +2363,49 @@ class TaskController {
         let validated;
         try {
           validated = validateProposal(proposal, { goal: this._goal, maxActions: this._maxActionsPerProposal });
-        } catch {
+          if (validated.basedOnObservationId !== observation.id) {
+            throw new TaskControllerError("stale_observation", "proposal must reference the current observation");
+          }
+        } catch (error) {
           // An off-goal/stale/malformed proposal is never executed; give the
-          // planner another turn with a fresh observation rather than
-          // silently doing nothing forever.
+          // planner one correction turn with a fresh observation and binding.
+          this._proposalFeedbackCode = buildProposalFeedback(error?.code, {
+            taskId: this._goal.taskId, goalVersion: this._goal.goalVersion,
+            basedOnObservationId: observation.id, maxActions: this._maxActionsPerProposal,
+          }).code;
+          this._rejectedProposals += 1;
+          if (this._rejectedProposals >= 2) {
+            await this._pauseWith("invalid_proposal");
+            break;
+          }
           continue;
+        }
+        this._proposalFeedbackCode = null;
+        this._rejectedProposals = 0;
+
+        if (this._onCaptchaPage && validated.kind === "actions") {
+          const staysOut = validated.actions.every((action) => {
+            if (action.type === "observe") return true;
+            if (action.type !== "navigate" && action.type !== "follow_link") return false;
+            try { return !this._captchaOrigins.has(new URL(describeActionTarget(action, this._lastObservation)).origin); } catch { return false; }
+          });
+          if (!staysOut) {
+            // The planner is told once to leave the challenge page and use another source; only if it
+            // tries to act on the challenge again does the task wait for the person.
+            if (this._captchaNudges < 1) {
+              this._captchaNudges += 1;
+              this._captchaNudgePending = true;
+              this._proposalFeedbackCode = "captcha_page";
+              await this._store.append({ type: "note", payload: { kind: "captcha_page_nudge" } });
+              continue;
+            }
+            await this._pauseWith("captcha");
+            break;
+          }
         }
 
         const coordinateActions = validated.kind === "actions"
-          ? validated.actions.filter((action) => action.type === "click_at" || action.type === "type_at" || action.type === "press_key")
+          ? validated.actions.filter((action) => action.type === "click_at" || action.type === "type_at" || action.type === "press_key" || action.type === "play_loop")
           : [];
         if (coordinateActions.length > 0 && (!hasComputerUseAdapter(this._store.taskProfile) ||
             coordinateActions.length !== 1 || validated.actions.length !== 1 ||
@@ -2150,6 +2430,17 @@ class TaskController {
             }
             continue; // the goal is not met: keep working, the planner is told why via context.progress.goalPersistence
           }
+          // A routine's finish is scripted by the routine, not proposed by a planner, so there is no one to send it back to.
+          if (!this._routineRunner && !completion.complete && this._criteriaStatus.size === 0 && this._finishEvidenceRejections < this._finishEvidenceBudget) {
+            this._finishEvidenceRejections += 1;
+            this._finishFeedback = {
+              authority: "host_finish_not_permission",
+              reason: "no_evidence_recorded",
+              guidance: "finish needs evidence: no criterion has a recorded observation yet. Check that the CURRENT page shows exactly what the goal asks for (the requested item, value or state, not just a related page, a search box or a landing page). If it does, propose one observe with that criterionId, then finish. If it does not, keep working toward it.",
+            };
+            await this._store.append({ type: "note", payload: { kind: "finish_rejected", reason: "no_evidence_recorded", rejections: this._finishEvidenceRejections } });
+            continue;
+          }
           this._leaveActive();
           if (completion.complete) {
             this._task = { state: "completed", pauseReason: null };
@@ -2158,6 +2449,7 @@ class TaskController {
             this._task = { state: "awaiting_verification", pauseReason: null };
           }
           await this._checkpoint();
+          if (this._releaseViewsOnReview && this._task.state === "awaiting_verification") await this._releaseViewsForReview();
           this._emit();
           break;
         }
@@ -2165,7 +2457,17 @@ class TaskController {
         if (validated.kind === "need_user") {
           // The planner's question is what the person needs to answer; keep it
           // (bounded) so the chat can show it instead of a bare "paused".
-          this._needUserReason = typeof validated.reason === "string" && validated.reason.trim() ? validated.reason.trim().slice(0, 600) : null;
+          let reasonText = typeof validated.reason === "string" ? validated.reason.trim() : "";
+          let reasonCap = 600;
+          if (reasonText && this._isResearchTask()) {
+            // A research answer reaches the person only after the host checked its sources.
+            const review = await this._reviewResearchAnswer(reasonText);
+            if (review.action === "retry") continue;
+            reasonText = review.text;
+            reasonCap = RESEARCH_REASON_CAP;
+          }
+          this._needUserReason = reasonText ? reasonText.slice(0, reasonCap) : null;
+          try { console.warn(`[task-controller] planner asked for the user task=${this._goal?.taskId ?? "?"} reason=${JSON.stringify(this._needUserReason)}`); } catch {}
           await this._pauseWith("need_user");
           break;
         }
@@ -2265,6 +2567,148 @@ class TaskController {
     return evidence;
   }
 
+  // The addresses on the person's own machine or network that the person named in their own words:
+  // the agent's page may open only these (private-network.js). A request a model wrote names none.
+  _personNamedPrivateOrigins() {
+    const own = [...(this._requestAuthor === "person" ? [this._goal.originalRequest] : []), ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)];
+    return privateOriginsNamedIn(own.filter((text) => typeof text === "string").join("\n"));
+  }
+
+  // The user's chat request is the payment authorization. Read it once per goal
+  // version: a clear order becomes a single-use mandate, an unclear one pauses the
+  // task with a question, and anything else leaves payments refused. Unattended
+  // runs (routines, schedules) never get one, and a goal version that already paid
+  // never gets a second.
+  async _ensureMandate() {
+    const version = this._goal.goalVersion;
+    if (this._mandateGoalVersion === version) return "ok";
+    this._mandateGoalVersion = version;
+    for (const old of this._mandates) old.revoked = true;
+    const chatText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
+    if (containsTier3(chatText)) {
+      await this._store.append({ type: "note", payload: { kind: "card_in_chat" } });
+      this._needUserReason = "채팅에 카드 번호나 주민등록번호 같은 민감한 정보가 있는 것 같습니다. 이런 정보는 Halo에 알려 주지 말고 화면에서 직접 입력해 주세요. 이미 보낸 정보가 있다면 카드 재발급 등 조치를 권장합니다.";
+      await this._pauseWith("need_user");
+      return "stop_loop";
+    }
+    if (!this._paymentsEnabled) return "ok";
+    if (this._routineRunner || this._goal.trigger) return "ok";
+    if (this._requestAuthor === "model") return "ok";
+    const userText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
+    const verdict = payments.mandateFromUserRequest(userText);
+    if (verdict.kind === "none") return "ok";
+    if (verdict.kind === "ask") {
+      await this._store.append({ type: "note", payload: { kind: "payment_question", reason: verdict.reason } });
+      this._needUserReason = verdict.question;
+      await this._pauseWith("need_user");
+      return "stop_loop";
+    }
+    const paid = (await this._store.getAllEvents()).some((e) => e.type === "note" && e.payload?.kind === "payment_authorized" && e.goalVersion === version);
+    if (paid) return "ok";
+    const mandate = payments.createMandate({ id: randomUUID(), taskId: this._goal.taskId, origin: verdict.origin, currency: verdict.currency, maxAmountMinor: verdict.maxAmountMinor, now: this._monotonicNow(), wallNow: Date.now() });
+    await this._store.append({ type: "note", payload: { kind: "mandate_granted", mandateId: mandate.id, origin: mandate.origin, currency: mandate.currency, maxAmountMinor: mandate.maxAmountMinor, expiresAt: mandate.expiresAt } });
+    this._mandates.push(mandate);
+    return "ok";
+  }
+
+  // Privacy tiers for typing: Tier 3 fields and values are the person's to type; a Tier 2 value
+  // (phone, email) is typed only if the user wrote it in this task's request.
+  // What the host's safety checks (action-safety.js) need to know about the page right now.
+  _safetyContext() {
+    const userText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
+    return { observation: this._lastObservation, screenTargets: this._screenTargets, computerUse: hasComputerUseAdapter(this._store.taskProfile), userText };
+  }
+
+  // Source-grounded research (capability "research"): the host, not the model, decides which sources
+  // an answer may cite. See research-sources.js.
+  _isResearchTask() {
+    return this._store.taskProfile?.capability?.id === "research";
+  }
+
+  async _hydrateResearchLedger() {
+    if (this._researchLedger) return this._researchLedger;
+    const ledger = new research.SourceLedger();
+    let rejections = 0;
+    for (const event of await this._store.getAllEvents()) {
+      if (event.type !== "note") continue;
+      if (event.payload?.kind === "research_source" && typeof event.payload.url === "string") ledger.add({ url: event.payload.url, title: event.payload.title, at: event.payload.at });
+      else if (event.payload?.kind === "research_answer_rejected") rejections += 1;
+    }
+    this._researchLedger = ledger;
+    this._researchRejections = Math.max(this._researchRejections, rejections);
+    return ledger;
+  }
+
+  // Only a page this host actually observed (a real page, not an error page) can become a source.
+  async _recordResearchSource(observation) {
+    const ledger = await this._hydrateResearchLedger();
+    const url = typeof observation?.url === "string" ? observation.url : "";
+    if (!/^https?:\/\//i.test(url) || (Number(observation?.httpStatus) >= 400)) return;
+    const title = typeof observation.title === "string" ? observation.title : "";
+    const at = Date.now();
+    if (!ledger.add({ url, title, at })) return;
+    const entry = ledger.find(url);
+    await this._store.append({ type: "note", payload: { kind: "research_source", url: entry.url, title: entry.title, at } });
+  }
+
+  // What the planner is told: which pages it may cite and why an earlier answer was sent back.
+  _researchState() {
+    const opened = this._researchLedger ? this._researchLedger.list().slice(-12).map((s) => ({ url: s.url.slice(0, 300), title: s.title.slice(0, 80) })) : [];
+    return {
+      requiredIndependentSites: research.MIN_DOMAINS,
+      openedSources: opened,
+      rejectedAnswers: this._researchRejections,
+      ...(this._researchFeedback ? { lastRejection: this._researchFeedback } : {}),
+    };
+  }
+
+  // Returns { action: "retry" } to send the answer back, or { action: "deliver", text } with the text to show.
+  // Answers that cite nothing and follow no browsing are plain questions to the person and pass untouched.
+  async _reviewResearchAnswer(answer) {
+    const ledger = await this._hydrateResearchLedger();
+    if (ledger.size === 0 && research.extractCitedUrls(answer).length === 0) return { action: "deliver", text: answer };
+    const check = research.checkAnswer(answer, ledger);
+    if (check.ok) {
+      await this._store.append({ type: "note", payload: { kind: "research_answer_checked", sources: check.verified.length, sites: check.independentSites } });
+      this._researchFeedback = null;
+      return { action: "deliver", text: answer + research.sourcesBlock(check.verified) };
+    }
+    if (this._researchRejections < research.MAX_REJECTIONS) {
+      this._researchRejections += 1;
+      this._researchFeedback = { reasons: check.reasons, unopenedUrls: check.unverified.slice(0, 5).map((u) => u.slice(0, 200)) };
+      await this._store.append({ type: "note", payload: { kind: "research_answer_rejected", reasons: check.reasons, unopened: check.unverified.length, sites: check.independentSites } });
+      return { action: "retry" };
+    }
+    await this._store.append({ type: "note", payload: { kind: "research_answer_unverified_delivered", reasons: check.reasons, unopened: check.unverified.length, sites: check.independentSites } });
+    return { action: "deliver", text: answer + research.sourcesBlock(check.verified) + research.unverifiedNotice(check) };
+  }
+
+  // The control a payment-like action would press, or null. Only the host's own
+  // reads count: the screen map for coordinate clicks, the last observation for DOM clicks.
+  // pay: the user's order covers this payment; ask: pause with a question;
+  // refuse/null: nobody ordered a payment, the existing gates apply unchanged.
+  async _decidePayment(action, target) {
+    if (!this._paymentsEnabled) return null;
+    if (!target) return null;
+    const observation = this._lastObservation;
+    // Where the money goes: a payment button that submits to another site is judged by that site, not by the page it sits on.
+    const origin = actionTargetOrigin(action, observation);
+    const request = { origin, amount: payments.findPayableAmount(target.name, observation) };
+    const verdict = payments.decidePayment({ mandates: this._mandates, request, now: this._monotonicNow() });
+    if (verdict.decision === "pay") {
+      const m = verdict.mandate;
+      payments.consumeMandate(m); // spent before the journal write: a failed write never hands the use back
+      await this._store.append({ type: "note", payload: { kind: "payment_authorized", mandateId: m.id, origin, currency: m.currency, amountMinor: request.amount.amountMinor, maxAmountMinor: m.maxAmountMinor, control: target.name.slice(0, 80) } });
+      return verdict;
+    }
+    if (verdict.decision === "ask") {
+      await this._store.append({ type: "note", payload: { kind: "payment_question", reason: verdict.reason } });
+      this._needUserReason = verdict.question;
+      await this._pauseWith("need_user");
+    }
+    return verdict;
+  }
+
   async _dispatchActionsBatch(proposal, epoch) {
     if (this._batchReadOnlyActions && proposal.actions.length > 1 && proposal.actions.every((action) => isReadOnlyAction(action.type))) {
       const outcome = await this._dispatchReadOnlyBatch(proposal, epoch);
@@ -2279,6 +2723,36 @@ class TaskController {
       const pressure = this._memoryMonitor.getPressureLevel();
       if (pressure === "pause" || pressure === "emergency") {
         await this._pauseForMemoryPressure(pressure);
+        return "stop_loop";
+      }
+
+      // One pass over the host's safety checks for this action (action-safety.js). An action type nobody
+      // declared there is not run: fail closed rather than skip a check silently.
+      const safety = inspectAction(action, this._safetyContext());
+      if (safety.undeclared) {
+        await this._store.append({ type: "note", payload: { kind: "invalid_action", actionType: String(action?.type).slice(0, 40), errorCode: "action_safety_undeclared" } });
+        continue;
+      }
+      if (this._repeatFailureLimit > 0 && (this._repeatFailures.get(repeatActionKey(action)) ?? 0) >= this._repeatFailureLimit) {
+        this._repeatBlocked += 1;
+        this._repeatFeedback = {
+          note: "repeat_blocked",
+          actionType: action.type,
+          guidance: "This exact action already failed repeatedly with the same error and was not run again. Change the target, the approach or the page, or report need_user.",
+        };
+        await this._store.append({ type: "note", payload: { kind: "repeat_blocked", actionType: action.type, blocked: this._repeatBlocked } });
+        if (this._repeatBlocked >= REPEAT_BLOCK_PAUSE) {
+          await this._pauseWith("no_progress");
+          return "stop_loop";
+        }
+        return "continue";
+      }
+      const privacy = safety.privacy;
+      if (privacy) {
+        // Secrets are typed by the person, never by the agent; nothing of the text is journaled.
+        await this._store.append({ type: "note", payload: { kind: privacy.tier === 3 ? "card_input_blocked" : "personal_input_blocked", tier: privacy.tier, actionType: action.type } });
+        this._needUserReason = privacy.reason;
+        await this._pauseWith("need_user");
         return "stop_loop";
       }
 
@@ -2298,28 +2772,32 @@ class TaskController {
         }
         continue;
       }
+      // A payment button the user ordered in chat, within their cap and on their
+      // site, is let through to the approver alone; an odd one asks the user.
+      const paymentVerdict = await this._decidePayment(action, safety.paymentTarget);
+      if (paymentVerdict?.decision === "ask") return "stop_loop";
+      const paymentOk = paymentVerdict?.decision === "pay";
       // Text mode only (the control under the point is known): a click on a
       // control that moves money or destroys an account is refused whatever the
       // permission mode, lease or approver says. The planner sees the note.
-      if (this._screenTargets && this._screenTargets.observationId === action.observationId &&
-          (action.type === "click_at" || action.type === "type_at") && hasComputerUseAdapter(this._store.taskProfile)) {
-        const hit = resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y));
-        const verdict = classifyTarget(hit, action.type);
-        if (verdict.gate === "deny") {
-          await this._store.append({ type: "note", payload: { kind: "effect_denied", actionType: action.type, effect: verdict.effect, reason: verdict.reason } });
-          if (this._routineRunner) {
-            await this._denyRoutineStep({ decision: "deny", reasons: [verdict.reason] });
-            return "stop_loop";
-          }
-          continue;
+      const verdict = safety.effect;
+      if (verdict && verdict.gate === "deny" && !paymentOk) {
+        await this._store.append({ type: "note", payload: { kind: "effect_denied", actionType: action.type, effect: verdict.effect, reason: verdict.reason } });
+        if (this._routineRunner) {
+          await this._denyRoutineStep({ decision: "deny", reasons: [verdict.reason] });
+          return "stop_loop";
         }
+        continue;
       }
       // Computer use: coordinate clicks, typing and non-Enter keys run on the
       // approver's verdict alone. The mode, lock and one-use screen binding still
       // apply; Enter (which can submit a form) keeps the human gate.
-      const policy = gate.policy.allowed && gate.policy.approval === "human" && isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets)
-        ? { ...gate.policy, approval: "approver" }
-        : gate.policy;
+      const autoRun = gate.policy.allowed && gate.policy.approval === "human" &&
+        (paymentOk || isAutoComputerUseAction(action, this._store.taskProfile, this._screenTargets) || isAutoDomAction(action, this._lastObservation));
+      let policy = autoRun ? { ...gate.policy, approval: "approver" } : gate.policy;
+      // Full mode skips approval for ordinary actions, but a payment click that no order covers
+      // (payments off, no order, other site) goes back to the person instead of becoming a silent purchase.
+      if (policy.approval === "bypass" && !paymentOk && safety.paymentTarget) policy = { ...policy, approval: "human" };
       // Mode-denied actions may be widened by the user, but never for
       // unattended runs or for actions this browser cannot perform.
       const widen = !policy.allowed;
@@ -2395,6 +2873,8 @@ class TaskController {
         });
         this._leaveActive();
         this._task = { state: "awaiting_approval", pauseReason: null };
+        // Independent reads the planner named run on a read-only side surface while the user decides.
+        this._branches?.offer({ approvalId: requestId, steps: proposal?.waitingWork, pendingOrigin: targetOrigin ?? null });
         await this._checkpoint();
         this._emit();
         return "stop_loop";
@@ -2409,6 +2889,7 @@ class TaskController {
       }
 
       const dispatched = await this._dispatchApprovedAndApplyTracked(proposal, descriptor, action, epoch, { widenedBy });
+      if (!dispatched.stale && (autoRun || widenedBy)) this._autoHandled += 1;
       if (dispatched.stale || this._stopHappenedSince(epoch)) return "stop_loop";
       if (this._stopHappenedSince(epoch) || this._task.state !== "running") return "stop_loop";
     }
@@ -2530,8 +3011,39 @@ class TaskController {
   // "cancelled" once action_started may already be durable. A concurrent
   // pause/stop/takeOver instead WAITS for this call's true outcome via
   // _dispatchApprovedAndApplyTracked's entry in _inFlightOps.
+  // Waits out the same-site gap before a page load. Runs before action_started so a
+  // stop during the wait leaves no open action; returns false if a stop happened.
+  async _paceNavigation(action, epoch) {
+    if (!["navigate", "follow_link"].includes(action.type) || this._navIntervalMs <= 0) return true;
+    let origin = null;
+    try { origin = new URL(describeActionTarget(action, this._lastObservation)).origin; } catch { return true; }
+    for (;;) {
+      const wait = (this._lastNavAt.get(origin) ?? 0) + this._navIntervalMs - Date.now();
+      if (wait <= 0) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 250)));
+      if (this._stopHappenedSince(epoch)) return false;
+    }
+    this._lastNavAt.set(origin, Date.now());
+    return true;
+  }
+
+  // The random pause before a click. Runs before action_started, like navigation pacing, so a stop
+  // during the wait leaves no open action; returns false if a stop happened.
+  async _paceClick(action, epoch) {
+    if (!this._clickDelay || (action.type !== "click" && action.type !== "click_at")) return true;
+    const seconds = clickDelaySeconds(this._clickDelay.min, this._clickDelay.max, this._random());
+    await this._sleep(seconds * 1000);
+    return !this._stopHappenedSince(epoch);
+  }
+
   async _dispatchApproved(descriptor, action, epoch, { durable = true, widenedBy = null } = {}) {
     if (this._stopHappenedSince(epoch)) {
+      return { status: "not_dispatched", actionId: null, action, descriptor };
+    }
+    if (!(await this._paceNavigation(action, epoch))) {
+      return { status: "not_dispatched", actionId: null, action, descriptor };
+    }
+    if (!(await this._paceClick(action, epoch))) {
       return { status: "not_dispatched", actionId: null, action, descriptor };
     }
     const actionId = randomUUID();
@@ -2564,6 +3076,16 @@ class TaskController {
     this._budgets.actionsUsed += 1;
     this._lastActionType = action.type;
     this._lastActionStatus = result.status;
+    // What the last action did, in the host's words: "ok" alone left a small
+    // planner unsure a click had worked, so it repeated the same click.
+    if (action.type === "click" || action.type === "click_at") {
+      const el = action.type === "click" ? this._lastObservation?.elements?.find((e) => e.elementId === action.elementId) : null;
+      const hit = action.type === "click_at" && this._screenTargets ? resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y)) : null;
+      const target = el ? `${el.role} ${JSON.stringify(String(el.name ?? "").slice(0, 60))}` : hit ? `${hit.role} ${JSON.stringify(String(hit.name ?? "").slice(0, 60))}` : null;
+      this._lastActionNote = result.status === "ok" ? { type: action.type, target, succeeded: true } : { type: action.type, target, succeeded: false };
+    } else {
+      this._lastActionNote = undefined;
+    }
     this._easyStreak = result.status === "ok" && ["navigate", "follow_link"].includes(action.type) ? this._easyStreak + 1 : 0;
     // durable:false: the NEXT action_started's own durable append (same
     // loop, common case) or the checkpoint at whatever pause/stop follows
@@ -2573,6 +3095,16 @@ class TaskController {
     // sees an open action_started with no outcome and reports
     // execution_uncertain, the same fail-closed result as today; it never
     // reports success for something that did not durably complete.
+    if (process.env.HALO_DEBUG_ACTIONS) {
+      if (result.status !== "ok") console.error("[action-fail]", action.type, JSON.stringify(action).slice(0, 200), result.errorCode);
+      else if (action.type === "click") {
+        const el = this._lastObservation?.elements?.find((e) => e.elementId === action.elementId);
+        console.error("[action-ok] click", action.elementId, el ? `${el.role} ${JSON.stringify(el.name)}` : "unknown element");
+      } else if (action.type === "click_at" || action.type === "type_at") {
+        const hit = this._screenTargets ? resolveTarget(this._screenTargets.targets, Number(action.x), Number(action.y)) : null;
+        console.error("[action-ok]", action.type, `(${action.x},${action.y})`, hit ? `${hit.role} ${JSON.stringify(hit.name)}` : "no mapped control");
+      }
+    }
     await this._store.append({ type: "action_outcome", payload: { actionId, status: result.status } }, { durable: false });
     return { ...result, actionId, action, descriptor };
   }
@@ -2585,6 +3117,15 @@ class TaskController {
     this._reusableObservation = result.action?.type === "observe" && result.status === "ok" && result.observation
       ? result.observation
       : null;
+
+    if (this._repeatFailureLimit > 0 && result.action) {
+      const repeatKey = repeatActionKey(result.action);
+      if (result.status === "failed" && DETERMINISTIC_FAILURES.has(result.errorCode)) {
+        this._repeatFailures.set(repeatKey, (this._repeatFailures.get(repeatKey) ?? 0) + 1);
+      } else if (result.status === "ok") {
+        this._repeatFailures.delete(repeatKey);
+      }
+    }
 
     // Scrolling the same page again and again is a loop even when each scroll
     // reveals slightly different text (so the identical-observation key below
@@ -2658,6 +3199,7 @@ class TaskController {
     }
 
     if (madeProgress) {
+      this._recovery.noteProgress();
       this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
       return;
     }
@@ -2680,6 +3222,15 @@ class TaskController {
       }
     }
   }
+}
+
+// Errors that repeat identically when the same action is run again (the page or target is what is wrong).
+const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found"]);
+const REPEAT_BLOCK_PAUSE = 3;
+// Same action, ignoring the per-observation/per-request ids that change every turn.
+function repeatActionKey(action) {
+  const { observationId, requestId, id, actionId, ...rest } = action ?? {};
+  return JSON.stringify(rest, Object.keys(rest).sort());
 }
 
 module.exports = { TaskController, TaskControllerError };

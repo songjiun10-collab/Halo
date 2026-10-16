@@ -191,3 +191,59 @@ test("concurrent admitNext calls are serialised and never exceed the cap", async
   assert.deepEqual(results.filter(Boolean).sort(), ["t1", "t2"]);
   assert.equal(queue.active.length, 2);
 });
+
+test("a memory-budget denial reclaims memory once and retries admission", async () => {
+  const queue = fakeQueue({ pending: ["t1"] });
+  let reclaims = 0;
+  const admission = {
+    acquired: [], released: [],
+    acquire: async (request) => {
+      admission.acquired.push(request);
+      return reclaims === 0 ? { admitted: false, reason: "memory_budget_exceeded" } : { admitted: true, leaseId: "lease-1" };
+    },
+    release: async (id) => { admission.released.push(id); },
+  };
+  const { core } = makeCore({ queue, admission, options: { reclaimMemory: async () => { reclaims += 1; return true; } } });
+  assert.equal(await core.admitNext(), "t1");
+  assert.equal(reclaims, 1);
+  assert.equal(admission.acquired.length, 2);
+  assert.equal(core.hasLease("t1"), true);
+});
+
+test("reclaim is not attempted for non-memory denials and is not repeated when nothing was freed", async () => {
+  let reclaims = 0;
+  const denied = (reason) => ({ acquire: async () => ({ admitted: false, reason }), release: async () => {} });
+  const a = makeCore({ queue: fakeQueue({ pending: ["t1"] }), admission: denied("duplicate_owner"), options: { reclaimMemory: async () => { reclaims += 1; return true; } } });
+  assert.equal(await a.core.admitNext(), null);
+  assert.equal(reclaims, 0);
+  let acquires = 0;
+  const memory = { acquire: async () => { acquires += 1; return { admitted: false, reason: "memory_budget_exceeded" }; }, release: async () => {} };
+  const b = makeCore({ queue: fakeQueue({ pending: ["t1"] }), admission: memory, options: { reclaimMemory: async () => false } });
+  assert.equal(await b.core.admitNext(), null);
+  assert.equal(acquires, 1, "no retry when nothing was reclaimed");
+});
+
+test("the head of the queue reports why it is waiting; later entries report they are behind it", async () => {
+  const denied = { acquire: async () => ({ admitted: false, reason: "memory_budget_exceeded" }), release: async () => {} };
+  const { core } = makeCore({ queue: fakeQueue({ pending: ["t1", "t2"] }), admission: denied });
+  assert.equal(core.getWaitReason("t1", 1), null, "nothing recorded before an admission attempt");
+  assert.equal(await core.admitNext(), null);
+  assert.equal(core.getWaitReason("t1", 1), "memory_budget_exceeded");
+  assert.equal(core.getWaitReason("t2", 2), "behind_queue");
+});
+
+test("a busy slot reports waiting_for_running_task, and admission clears the reason", async () => {
+  const seq = makeCore({ queue: fakeQueue({ pending: ["t2"], active: ["t1"] }) });
+  assert.equal(await seq.core.admitNext(), null);
+  assert.equal(seq.core.getWaitReason("t2", 1), "waiting_for_running_task");
+  seq.queue.active.length = 0;
+  assert.equal(await seq.core.admitNext(), "t2");
+  assert.equal(seq.core.getWaitReason("t2", 1), null);
+});
+
+test("recovered entries report that they wait for a person", async () => {
+  const { core } = makeCore({ queue: fakeQueue({ pending: ["t1"] }) });
+  core.recoveredBlocked = true;
+  assert.equal(await core.admitNext(), null);
+  assert.equal(core.getWaitReason("t1", 1), "recovered_needs_user");
+});

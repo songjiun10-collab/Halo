@@ -208,6 +208,8 @@ test("concurrent processes cannot reclaim a fresh registry lock as stale", async
     stdio: ["pipe", "pipe", "ignore"],
   }));
   t.after(() => Promise.all(children.map((child) => {
+    // A losing worker exits by itself; writing to its already-closed stdin would raise an unhandled EPIPE.
+    child.stdin.on("error", () => {});
     if (child.exitCode === null) child.stdin.end("close");
     return new Promise((resolve) => {
       if (child.exitCode !== null) return resolve();
@@ -230,7 +232,7 @@ test("concurrent processes cannot reclaim a fresh registry lock as stale", async
   })));
   const winners = outcomes.filter((outcome) => outcome.loaded);
   assert.equal(winners.length, 1);
-  assert.ok(outcomes.filter((outcome) => !outcome.loaded).every((outcome) => outcome.code === "writer_conflict"));
+  assert.ok(outcomes.filter((outcome) => !outcome.loaded).every((outcome) => outcome.code === "writer_conflict"), JSON.stringify(outcomes));
   const finalOwner = JSON.parse(await fsp.readFile(path.join(goalsRoot, "registry.lock"), "utf8"));
   assert.equal(finalOwner.pid, winners[0].pid);
 });

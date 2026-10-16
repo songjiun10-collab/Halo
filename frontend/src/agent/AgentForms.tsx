@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { LIM, agentInput, errText, type AgentApi, type AgentCapability, type AgentRecord, type Avatar as AvatarT, type TeamRecord } from './agent-api'
-import { Avatar, Field, Ic, modelBrand, SHAPES, COLORS, Shape, Stack, type AgentBrand } from './AgentUi'
+import { AGENT_EFFORTS, LIM, agentInput, errText, type AgentApi, type AgentEffort, type AgentCapability, type AgentRecord, type Avatar as AvatarT, type TeamRecord } from './agent-api'
+import { Avatar, Field, Ic, Shape, Stack, type AgentBrand } from './AgentUi'
+import { COLORS, SHAPES, modelBrand } from './agent-visuals'
 import { PLANNER_MODELS } from '../session/claude-models'
 
 function AvatarPicker({ value, onChange }: { value: AvatarT; onChange: (a: AvatarT) => void }) {
@@ -12,7 +13,7 @@ function AvatarPicker({ value, onChange }: { value: AvatarT; onChange: (a: Avata
 const Back = ({ onClick }: { onClick: () => void }) => <button type="button" className="hx-ag__back" onClick={onClick}><Ic d="M15 6l-6 6 6 6" />Agents</button>
 
 export function AgentForm({ api, agent, defaultBrand, onBack, onSaved }: { api: AgentApi; agent?: AgentRecord; defaultBrand?: AgentBrand; onBack: () => void; onSaved: (a: AgentRecord) => void }) {
-  const [f, setF] = useState({ name: agent?.name ?? '', title: agent?.title ?? '', description: agent?.description ?? '', instructions: agent?.instructions ?? '', avatar: agent?.avatar ?? { shape: 'circle', color: 'blue' } as AvatarT, model: agent?.model ?? null as string | null, capabilityId: agent?.capabilityId ?? 'browser' as AgentCapability })
+  const [f, setF] = useState({ name: agent?.name ?? '', title: agent?.title ?? '', description: agent?.description ?? '', instructions: agent?.instructions ?? '', avatar: agent?.avatar ?? { shape: 'circle', color: 'blue' } as AvatarT, model: agent?.model ?? null as string | null, effort: agent?.effort ?? null as AgentEffort | null, capabilityId: agent?.capabilityId ?? 'browser' as AgentCapability })
   const [err, setErr] = useState<string | null>(null), [busy, setBusy] = useState(false)
   const set = <K extends keyof typeof f>(k: K) => (v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }))
   const group = (provider: typeof PLANNER_MODELS[number]['provider']) => PLANNER_MODELS.filter((m) => m.provider === provider).map((m) => <option key={m.id} value={m.id}>{m.label}{m.legacy ? ' (legacy)' : ''}</option>)
@@ -45,6 +46,11 @@ export function AgentForm({ api, agent, defaultBrand, onBack, onSaved }: { api: 
         <optgroup label="Cursor">{group('cursor')}</optgroup>
         <optgroup label="NVIDIA">{group('nvidia')}</optgroup>
         <optgroup label="OpenCode">{group('opencode_cli')}</optgroup>
+      </select></label>
+    <label className="hx-fld"><span className="hx-fld__top"><b>Effort</b><small>Applies to this agent in team chat</small></span>
+      <select className="hx-fld__in" aria-label="Agent effort" value={f.effort ?? ''} onChange={(e) => set('effort')((e.target.value || null) as AgentEffort | null)}>
+        <option value="">Host default</option>
+        {AGENT_EFFORTS.map((level) => <option key={level} value={level}>{level}</option>)}
       </select></label>
     {err ? <p className="hx-ag__err" role="alert">{err}</p> : null}
     <div className="hx-ag__actions"><button type="button" className="hx-agbtn" onClick={onBack}>Cancel</button><button type="button" className="hx-agbtn hx-agbtn--p" disabled={bad || busy} onClick={save}>{agent ? 'Save changes' : 'Create agent'}</button></div></div>

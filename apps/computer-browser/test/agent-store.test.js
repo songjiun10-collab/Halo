@@ -51,9 +51,8 @@ test("agent fields are validated strictly", async () => {
 
 test("only capabilities the registry currently offers can be saved", async () => {
   const store = new AgentStore({ storageRoot: await tempRoot() });
-  for (const capabilityId of ["research"]) {
-    await assert.rejects(store.saveAgent(agentInput({ capabilityId })), { code: "capability_unavailable" });
-  }
+  assert.equal((await store.saveAgent(agentInput({ capabilityId: "research" }))).capabilityId, "research");
+  await assert.rejects(store.saveAgent(agentInput({ capabilityId: "multi_agent" })), { code: "invalid_agent" });
   assert.equal((await store.saveAgent(agentInput({ capabilityId: "browser" }))).capabilityId, "browser");
   assert.equal((await store.saveAgent(agentInput({ capabilityId: "computer_use" }))).capabilityId, "computer_use");
 });
@@ -238,4 +237,13 @@ test("archiving frees an active slot, while total stored records stay bounded", 
     assert.ok(stored <= 20, "total records must stop at maxAgents * 10");
   }
   assert.equal(stored, 20);
+});
+
+test("agent effort is optional, defaults to null and rejects unknown levels", async () => {
+  const store = new AgentStore({ storageRoot: await tempRoot() });
+  const created = await store.saveAgent(agentInput());
+  assert.equal(created.effort, null);
+  const high = await store.saveAgent({ ...agentInput(), id: created.id, effort: "high" });
+  assert.equal(high.effort, "high");
+  await assert.rejects(store.saveAgent({ ...agentInput(), id: created.id, effort: "ultra" }), { code: "invalid_agent" });
 });

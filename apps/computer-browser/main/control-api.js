@@ -2,8 +2,9 @@
 
 const { randomUUID } = require("crypto");
 const { performance } = require("node:perf_hooks");
-const { WebContentsView } = require("electron");
+const { WebContentsView } = require("./desktop-runtime");
 const { MIN_CHROME_HEIGHT } = require("./harness/browser-surfaces");
+const { dispatchBrowserInput } = require("./harness/browser-input");
 
 // The React shell has no fixed side panel, so the user's view fills the page
 // slot the renderer measures, exactly like task surfaces (BrowserSurfaces):
@@ -26,6 +27,14 @@ const { requestDecision } = require("./approver-client");
 const URL_LIKE = /^https?:\/\//i;
 const MAX_PROMPT_LENGTH = 2000;
 const MAX_TIMELINE = 200;
+// Chrome's zoom steps.
+const ZOOM_LEVELS = Object.freeze([0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5]);
+const MAX_FIND_QUERY = 200;
+const DIALOG_TYPES = new Set(["alert", "confirm", "prompt", "beforeunload"]);
+const MAX_DIALOG_TEXT = 500;
+const MAX_PROMPT_ANSWER = 2000;
+// The isolated world find-in-page runs in (any id but 0, the page's own world).
+const FIND_WORLD_ID = 1002;
 const MAX_QUEUE = 50;
 const MAX_METRICS = 500;
 // Pacing floor between agent-initiated (gated) actions ONLY -- never applied
@@ -151,6 +160,11 @@ class ControlApi {
     return () => this._listeners.delete(listener);
   }
 
+  sendSurfaceInput(input) {
+    if (!this._view || this._view.webContents.isDestroyed() || this._inFlightAgentActions.size || ["running", "awaiting_approval"].includes(this._task.state) || this._task.pauseReason === "user_takeover_pending") return false;
+    return dispatchBrowserInput(this._view.webContents, this._view.getBounds(), input);
+  }
+
   _emit() {
     const snapshot = this.getSnapshot();
     for (const listener of this._listeners) {
@@ -164,8 +178,8 @@ class ControlApi {
 
   getSnapshot() {
     return {
-      page: { ...this._page },
-      tabs: this._tabs.map(({ id, title, url }) => ({ id, title, url })),
+      page: { ...this._page, zoom: this._activeTab()?.zoom ?? 1, dialog: this._activeTab()?.dialog ?? null },
+      tabs: this._tabs.map(({ id, title, url, view }) => ({ id, title, url, discarded: !view })),
       activeTabId: this._activeTabId,
       task: { ...this._task },
       // Only public fields cross the IPC boundary. Each queue item also
@@ -178,6 +192,80 @@ class ControlApi {
       })),
       timeline: this._timeline.map((item) => ({ ...item })),
     };
+  }
+
+  _activeTab() {
+    return this._tabs.find((tab) => tab.id === this._activeTabId) ?? null;
+  }
+
+  // Stops the page that is loading. With no page there is nothing to stop.
+  async stopLoading() {
+    if (this._view) this._view.webContents.stop?.();
+    return this.getSnapshot();
+  }
+
+  // Browser zoom for the active tab, in the usual steps. It is the tab's own (a new tab starts at 100%),
+  // and is applied again whenever the tab finishes loading a page, since a navigation resets it.
+  async zoom(action) {
+    if (!["in", "out", "reset"].includes(action)) throw new RangeError("zoom must be in, out or reset");
+    const tab = this._activeTab();
+    if (!tab) return this.getSnapshot();
+    const at = ZOOM_LEVELS.indexOf(tab.zoom ?? 1);
+    const index = action === "reset" ? ZOOM_LEVELS.indexOf(1)
+      : Math.max(0, Math.min(ZOOM_LEVELS.length - 1, (at === -1 ? ZOOM_LEVELS.indexOf(1) : at) + (action === "in" ? 1 : -1)));
+    tab.zoom = ZOOM_LEVELS[index];
+    this._applyZoom(tab);
+    this._emit();
+    return this.getSnapshot();
+  }
+
+  _applyZoom(tab) {
+    const wc = tab.view?.webContents;
+    if (!wc) return;
+    const factor = tab.zoom ?? 1;
+    if (typeof wc.setZoomFactor === "function") { try { wc.setZoomFactor(factor); return; } catch { /* fall through to the page itself */ } }
+    Promise.resolve(wc.executeJavaScript?.(`document.documentElement.style.zoom = ${JSON.stringify(String(factor))}`)).catch(() => {});
+  }
+
+  // Finds plain text on the active page (case-insensitive, wraps around), selecting and scrolling to the match.
+  // It runs in an isolated world, so the page's own scripts never see what the person searched for and
+  // cannot fake the result; the text is one JSON string there, so it can never end the string or run as code.
+  async findInPage(query, { backwards = false } = {}) {
+    if (typeof query !== "string" || query.trim().length === 0 || query.length > MAX_FIND_QUERY) throw new RangeError("find text must be 1 to 200 characters");
+    const wc = this._view && this._view.webContents;
+    if (!wc || typeof wc.executeJavaScriptInIsolatedWorld !== "function") return { found: false, count: 0 };
+    const text = JSON.stringify(query);
+    const script = `(() => { const q = ${text}; const found = window.find(q, false, ${backwards === true}, true, false, false, false);
+      let count = 0; const needle = q.toLowerCase(); const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node && count < 999; node = walker.nextNode()) { const value = (node.nodeValue || "").toLowerCase(); for (let at = value.indexOf(needle); at !== -1; at = value.indexOf(needle, at + needle.length)) count += 1; }
+      return { found: !!found, count }; })()`;
+    try {
+      const result = await wc.executeJavaScriptInIsolatedWorld(FIND_WORLD_ID, [{ code: script }], true);
+      return { found: result?.found === true, count: Number.isInteger(result?.count) ? result.count : 0 };
+    } catch { return { found: false, count: 0 }; }
+  }
+
+  // The person's answer to the dialog waiting on the tab in front: OK/Leave (true) or Cancel/Stay (false), and
+  // for a prompt the text to give the page. A dialog is answered once.
+  async answerDialog(accept, promptText) {
+    if (typeof accept !== "boolean") throw new TypeError("accept must be true or false");
+    if (promptText !== undefined && (typeof promptText !== "string" || promptText.length > MAX_PROMPT_ANSWER)) {
+      throw new RangeError(`the answer must be text of at most ${MAX_PROMPT_ANSWER} characters`);
+    }
+    const tab = this._activeTab();
+    if (!tab?.dialog || !tab.view) throw new Error("there is no dialog waiting on this tab");
+    tab.dialog = null;
+    await tab.view.webContents.answerDialog?.(accept, promptText);
+    this._emit();
+    return this.getSnapshot();
+  }
+
+  async clearFind() {
+    const wc = this._view && this._view.webContents;
+    if (wc && typeof wc.executeJavaScriptInIsolatedWorld === "function") {
+      await Promise.resolve(wc.executeJavaScriptInIsolatedWorld(FIND_WORLD_ID, [{ code: "getSelection().removeAllRanges()" }], true)).catch(() => {});
+    }
+    return true;
   }
 
   _pushTimeline(kind, message, status = "info") {
@@ -222,8 +310,16 @@ class ControlApi {
     return this._createTab();
   }
 
-  _createTab() {
-    if (this._view) this._view.setVisible(false);
+  // Closes a tab's renderer for real: webContents.close() releases it, while
+  // removing the view alone only detaches it.
+  _closeView(view) {
+    this._window.contentView.removeChildView?.(view);
+    const wc = view.webContents;
+    if (typeof wc.close === "function") wc.close();
+    else wc.destroy?.();
+  }
+
+  _buildTabView(tab) {
     const view = new this._WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
     this._window.contentView.addChildView(view);
     view.setVisible(false);
@@ -236,24 +332,83 @@ class ControlApi {
       view.setBounds(this._pendingBounds);
       this._lastBoundsKey = JSON.stringify(this._pendingBounds);
     }
-    const tab = { id: randomUUID(), title: "New tab", url: "", view };
-    this._tabs.push(tab);
-    this._activeTabId = tab.id;
-    this._view = view;
+    tab.view = view;
     const wc = view.webContents;
     wc.on("did-start-navigation", () => { if (this._view === view) this._syncPageState({ loadState: "loading" }); });
     wc.on("did-navigate", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url, loadState: "ready" }); });
     wc.on("did-navigate-in-page", (_e, url) => { tab.url = url; if (this._view === view) this._syncPageState({ url }); });
-    wc.on("did-finish-load", () => { this._onPageVisit?.(wc); });
+    wc.on("did-finish-load", () => { this._onPageVisit?.(wc); if (tab.zoom && tab.zoom !== 1) this._applyZoom(tab); });
+    // A page dialog (alert/confirm/prompt/leave-page) waits for the person (Chromium runtime; Electron shows its
+    // own). The site shown with it is the host's reading of the tab's address, never the page's words.
+    wc.on("javascript-dialog-opening", (info) => {
+      const type = DIALOG_TYPES.has(info?.type) ? info.type : "alert";
+      let origin = "";
+      try { origin = new URL(tab.url).origin; } catch { origin = ""; }
+      tab.dialog = {
+        type,
+        message: typeof info?.message === "string" ? info.message.slice(0, MAX_DIALOG_TEXT) : "",
+        defaultPrompt: typeof info?.defaultPrompt === "string" ? info.defaultPrompt.slice(0, MAX_DIALOG_TEXT) : "",
+        origin,
+      };
+      if (this._view === view) this._emit();
+    });
+    wc.on("javascript-dialog-closed", () => {
+      if (!tab.dialog) return;
+      tab.dialog = null;
+      if (this._view === view) this._emit();
+    });
     wc.on("page-title-updated", (_e, title) => { tab.title = title; if (this._view === view) this._syncPageState({ title }); });
     wc.on("did-fail-load", (_e, code, description) => {
       if (this._view !== view) return;
       if (code !== -3) this._pushTimeline("navigation", `Load failed: ${description}`, "error");
       this._syncPageState({ loadState: "error" });
     });
+    return view;
+  }
+
+  // Idle time counts from the moment a tab stops being the active one.
+  _touchActiveTab() {
+    const active = this._tabs.find((candidate) => candidate.id === this._activeTabId);
+    if (active) active.lastActiveAt = this._now();
+  }
+
+  _createTab() {
+    this._touchActiveTab();
+    if (this._view) this._view.setVisible(false);
+    const tab = { id: randomUUID(), title: "New tab", url: "", view: null, lastActiveAt: this._now(), zoom: 1 };
+    const view = this._buildTabView(tab);
+    this._tabs.push(tab);
+    this._activeTabId = tab.id;
+    this._view = view;
     this._page = { url: tab.url, title: tab.title, loadState: "idle", canGoBack: false, canGoForward: false, hasPage: false };
     this._emit();
     return view;
+  }
+
+  // Frees the renderer of an inactive tab while keeping its record (id, title,
+  // url). selectTab() brings it back by loading the saved url on a new view.
+  discardTab(tabId) {
+    const tab = this._tabs.find((candidate) => candidate.id === tabId);
+    if (!tab || !tab.view || !tab.url) return false;
+    if (tab.id === this._activeTabId || tab.view === this._view) return false;
+    // A muted tab can still report an audio stream; only sound the user can hear protects a tab.
+    const wc = tab.view.webContents;
+    if (wc.isCurrentlyAudible?.() && !wc.isAudioMuted?.()) return false;
+    if (this._approvalQueue.some((item) => item._originTabId === tab.id)) return false;
+    tab.view.setVisible(false);
+    this._closeView(tab.view);
+    tab.view = null;
+    return true;
+  }
+
+  discardIdleTabs(idleMs) {
+    const cutoff = this._now() - idleMs;
+    let count = 0;
+    for (const tab of this._tabs) {
+      if (tab.view && tab.lastActiveAt <= cutoff && this.discardTab(tab.id)) count += 1;
+    }
+    if (count > 0) this._emit();
+    return count;
   }
 
   _syncPageState(patch) {
@@ -356,7 +511,7 @@ class ControlApi {
       throw new TypeError("Only HTTP and HTTPS addresses can be opened");
     }
     if (/\s/.test(input) || !/^(localhost|[\w.-]+\.\w+)(?::\d+)?(?:\/|$)/i.test(input)) {
-      return `https://duckduckgo.com/?q=${encodeURIComponent(input)}`;
+      return `https://www.google.com/search?q=${encodeURIComponent(input)}`;
     }
     const parsed = new URL(`https://${input}`);
     return parsed.href;
@@ -441,10 +596,16 @@ class ControlApi {
   async selectTab(tabId) {
     const tab = this._tabs.find((candidate) => candidate.id === tabId);
     if (!tab) throw new RangeError("Unknown browser tab");
+    if (!tab.view) {
+      this._buildTabView(tab);
+      tab.view.webContents.loadURL(tab.url).catch(() => {});
+    }
     if (this._view !== tab.view) {
+      this._touchActiveTab();
       if (this._view) this._view.setVisible(false);
       this._view = tab.view;
       this._activeTabId = tab.id;
+      tab.lastActiveAt = this._now();
       if (this._pendingBounds) tab.view.setBounds(this._pendingBounds);
       tab.view.setVisible(Boolean(tab.url));
       const wc = tab.view.webContents;
@@ -467,13 +628,11 @@ class ControlApi {
     if (tab.view === this._view) {
       const next = this._tabs[Math.min(index, this._tabs.length - 1)];
       tab.view.setVisible(false);
-      this._window.contentView.removeChildView?.(tab.view);
-      tab.view.webContents.destroy?.();
+      this._closeView(tab.view);
       this._view = null;
       await this.selectTab(next.id);
-    } else {
-      this._window.contentView.removeChildView?.(tab.view);
-      tab.view.webContents.destroy?.();
+    } else if (tab.view) {
+      this._closeView(tab.view);
     }
     this._pushTimeline("navigation", `Closed tab ${tab.title || tab.url || "New tab"}`, "info");
     this._emit();

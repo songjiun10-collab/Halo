@@ -792,7 +792,7 @@ test("a task reloaded after reaching completed reports completed, not paused/rec
 // must reject a stale goalVersion/evidenceId rather than blindly trust
 // whatever the caller (main/ipc.js, ultimately the renderer) sends.
 
-async function driveToAwaitingVerification({ criterionVerification = "user" } = {}) {
+async function driveToAwaitingVerification({ criterionVerification = "user", extraBrowser = {}, releaseViewsOnReview = false } = {}) {
   const { store } = await makeStore({
     originalRequest: "goal needing a human look",
     criteria: [{ id: "c1", text: "human confirms", required: true, verification: criterionVerification }],
@@ -800,6 +800,7 @@ async function driveToAwaitingVerification({ criterionVerification = "user" } = 
   const browser = {
     observe: async () => ({ id: "obs" }),
     execute: async () => ({ status: "ok", evidenceCandidate: { kind: "artifact", observationId: "obs" } }),
+    ...extraBrowser,
   };
   let plannerCalls = 0;
   const planner = {
@@ -811,7 +812,7 @@ async function driveToAwaitingVerification({ criterionVerification = "user" } = 
       return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: "obs", criterionIds: ["c1"], kind: "finish", evidenceIds: [] };
     },
   };
-  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true });
+  const controller = new TaskController({ store, planner, browser, approve: allowApprove(), hostVerifier: () => true, releaseViewsOnReview });
   await controller.start();
   assert.equal(controller.getSnapshot().state, "awaiting_verification");
   const pending = controller.getSnapshot().criteriaStatus.find((c) => c.criterionId === "c1");
@@ -2051,7 +2052,7 @@ test("navigation memory stays bounded: visited and frontier are capped and hrefs
   await store.close();
 });
 
-function goalRun({ profile, criteria, script, store }) {
+function goalRun({ profile, criteria, script, store, finishEvidenceRejections }) {
   // script: array of functions (context) => partial proposal, one per planner turn.
   let turn = 0;
   const contexts = [];
@@ -2067,6 +2068,7 @@ function goalRun({ profile, criteria, script, store }) {
     approve: allowApprove(),
     hostVerifier: () => true,
     harnessProfile: profile,
+    ...(finishEvidenceRejections === undefined ? {} : { finishEvidenceRejections }),
   });
   return { controller, contexts, turns: () => turn };
 }
@@ -2165,6 +2167,139 @@ test("long: a criterion that needs a human keeps the awaiting_verification hando
   assert.equal(snapshot.state, "awaiting_verification");
   assert.equal(turns(), 1);
   await store.close();
+});
+
+test("a finish with no recorded evidence is sent back once with host feedback, then an evidence observe lets it through", async () => {
+  const { store } = await makeStore({ originalRequest: "needs evidence", criteria: [{ id: "reached", text: "show the page", required: true, verification: "user" }] });
+  const { controller, contexts, turns } = goalRun({ profile: "middle", store, finishEvidenceRejections: 1, script: [finish, gatherEvidence, finish] });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "awaiting_verification");
+  assert.equal(turns(), 3, "finish, observe, finish");
+  assert.equal(contexts[0].progress.finishFeedback, undefined);
+  assert.equal(contexts[1].progress.finishFeedback.reason, "no_evidence_recorded");
+  assert.equal(contexts[2].progress.finishFeedback, undefined, "feedback lasts for one turn");
+  await store.close();
+});
+
+test("a second evidence-free finish is accepted once the rejection budget is used, and the default is off", async () => {
+  const one = await makeStore({ originalRequest: "budget", criteria: [{ id: "reached", text: "show the page", required: true, verification: "user" }] });
+  const limited = goalRun({ profile: "middle", store: one.store, finishEvidenceRejections: 1, script: [finish] });
+  assert.equal((await limited.controller.start()).state, "awaiting_verification");
+  assert.equal(limited.turns(), 2, "one rejection, then the same finish is accepted");
+  await one.store.close();
+  const off = await makeStore({ originalRequest: "default off", criteria: [{ id: "reached", text: "show the page", required: true, verification: "user" }] });
+  const unchanged = goalRun({ profile: "middle", store: off.store, script: [finish] });
+  assert.equal((await unchanged.controller.start()).state, "awaiting_verification");
+  assert.equal(unchanged.turns(), 1);
+  await off.store.close();
+});
+
+function repeatRun({ store, repeatFailureLimit, errorCode = "navigation_error", action = { type: "navigate", url: "https://example.test/dead" } }) {
+  const executed = [];
+  const contexts = [];
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [action] };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async (done) => { executed.push(done); return { status: "failed", errorCode }; } },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    ...(repeatFailureLimit === undefined ? {} : { repeatFailureLimit }),
+  });
+  return { controller, executed, contexts };
+}
+
+test("an identical action that failed deterministically twice is not dispatched again, the planner is told, and repeated blocks pause no_progress", async () => {
+  const { store } = await makeStore({ originalRequest: "repeat", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, executed, contexts } = repeatRun({ store, repeatFailureLimit: 2 });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(executed.length, 2, "only the first two attempts reach the browser");
+  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_blocked"), true);
+  await store.close();
+});
+
+function clickDelayRun({ store, action, clickDelayMinSec, clickDelayMaxSec, random, sleeps }) {
+  const executed = [];
+  let turn = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => ({ taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], ...(turn++ === 0 ? { kind: "actions", actions: [action] } : { kind: "finish", evidenceIds: [] }) }) },
+    browser: { observe: async () => ({ id: "obs", url: "https://example.test/", elements: [{ elementId: "1", role: "button", name: "Next" }] }), execute: async (done) => { executed.push(done); return { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    permissionMode: "interact",
+    clickDelayMinSec, clickDelayMaxSec, random,
+    sleep: async (ms) => { sleeps.push(ms); },
+  });
+  return { controller, executed };
+}
+
+test("a click waits a random 0.1 to 0.5 s, to 5 decimals, before it is sent; other actions are not delayed", async () => {
+  // [random roll, expected delay in seconds]; the delay is always a 5-decimal number of seconds.
+  for (const [roll, seconds] of [[0, 0.1], [0.5, 0.3], [0.999999, 0.5], [0.123456789, 0.14938], [0.7777777, 0.41111]]) {
+    const { store } = await makeStore({ originalRequest: "click", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+    const sleeps = [];
+    const { controller, executed } = clickDelayRun({ store, action: { type: "click", elementId: "1" }, clickDelayMinSec: 0.1, clickDelayMaxSec: 0.5, random: () => roll, sleeps });
+    await controller.start();
+    assert.equal(executed.some((a) => a.type === "click"), true);
+    assert.equal(sleeps.length, 1, `roll ${roll}`);
+    assert.ok(Math.abs(sleeps[0] - seconds * 1000) < 1e-6, `roll ${roll}: slept ${sleeps[0]} ms, wanted ${seconds * 1000}`);
+    await store.close();
+  }
+  const { store } = await makeStore({ originalRequest: "scroll", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const sleeps = [];
+  const { controller } = clickDelayRun({ store, action: { type: "scroll", direction: "down" }, clickDelayMinSec: 0.1, clickDelayMaxSec: 0.5, random: () => 0.5, sleeps });
+  await controller.start();
+  assert.deepEqual(sleeps, [], "a scroll is not a click");
+  await store.close();
+});
+
+test("click_at is delayed too, and the delay is off unless the host sets it", async () => {
+  const a = await makeStore({ originalRequest: "click_at", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const sleepsOn = [];
+  const on = clickDelayRun({ store: a.store, action: { type: "click", elementId: "1" }, clickDelayMinSec: 0.1, clickDelayMaxSec: 0.5, random: () => 0.25, sleeps: sleepsOn });
+  assert.equal(await on.controller._paceClick({ type: "click_at", observationId: "obs", x: 0.5, y: 0.5 }, on.controller._epoch), true);
+  assert.deepEqual(sleepsOn, [200]); // 0.1 + 0.25 * 0.4 = 0.2 s
+  assert.equal(await on.controller._paceClick({ type: "type", elementId: "1", text: "a" }, on.controller._epoch), true);
+  assert.deepEqual(sleepsOn, [200], "typing is not delayed");
+  await a.store.close();
+  const b = await makeStore({ originalRequest: "default", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const sleepsOff = [];
+  const off = clickDelayRun({ store: b.store, action: { type: "click", elementId: "1" }, sleeps: sleepsOff });
+  await off.controller.start();
+  assert.deepEqual(sleepsOff, [], "no delay by default");
+  await b.store.close();
+  assert.equal(new TaskController({ store: b.store, planner: {}, browser: {}, approve: allowApprove(), hostVerifier: () => false, clickDelayMinSec: 0.5, clickDelayMaxSec: 0.1 })._clickDelay, null, "a reversed range is ignored");
+});
+
+test("looking for the same text that is not on the page is not dispatched a third time", async () => {
+  const { store } = await makeStore({ originalRequest: "find", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, executed } = repeatRun({ store, repeatFailureLimit: 2, errorCode: "text_not_found", action: { type: "find_text", text: "Add to cart" } });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(executed.length, 2);
+  await store.close();
+});
+
+test("the repeat-failure gate is off by default and ignores non-deterministic errors", async () => {
+  const off = await makeStore({ originalRequest: "off", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 6 } });
+  const a = repeatRun({ store: off.store });
+  await a.controller.start();
+  assert.equal(a.executed.length > 2, true);
+  await off.store.close();
+  const other = await makeStore({ originalRequest: "stale", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 6 } });
+  const b = repeatRun({ store: other.store, repeatFailureLimit: 2, errorCode: "stale_document" });
+  await b.controller.start();
+  assert.equal(b.executed.length > 2, true);
+  await other.store.close();
 });
 
 test("short and middle keep today's behavior: an unmet finish goes to awaiting_verification and the context has no goalPersistence", async () => {
@@ -2789,4 +2924,14 @@ test("only a Multi-agent parent with a host child_plan hook is told it may split
     assert.deepEqual(seen, expected, `${profile} hook=${hook}`);
     await store.close();
   }
+});
+
+test("awaiting_verification frees the browser views once", async () => {
+  let disposed = 0;
+  const { controller, store } = await driveToAwaitingVerification({
+    releaseViewsOnReview: true,
+    extraBrowser: { dispose: async () => { disposed += 1; }, getBrowserSnapshot: () => ({ tabs: [{ url: "https://a.test/", title: "A" }] }) },
+  });
+  assert.equal(disposed, 1);
+  await store.close();
 });

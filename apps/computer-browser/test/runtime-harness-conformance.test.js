@@ -8,7 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
 
 const APP_ROOT = path.resolve(__dirname, "..");
-const HARNESS_NAMES = ["generic-mcp-broker", "mcp-schema-validator", "mcp-schema-worker", "message-port", "message-mailbox", "background-runtime-ui", "background-launch-agent", "recovery-policy", "model-tiers", "context-builder", "nvidia-model-catalog", "screen-map", "effect-classifier", "planner-escalation", "planner-routing", "slack-task-entry", "activity-journal"];
+const { harnessNames: HARNESS_NAMES } = require("./runtime-fixture");
 
 test("harness modules are generated from TypeScript sources", () => {
   for (const name of HARNESS_NAMES) {
@@ -55,6 +55,8 @@ test("harness TypeScript sources compile to the exact CommonJS cohort", (t) => {
   assert.equal(result.status, 0, result.stdout || result.stderr);
   assert.deepEqual(fs.readdirSync(outputDirectory).sort(), HARNESS_NAMES.map((name) => `${name}.js`).sort());
   for (const name of HARNESS_NAMES) {
-    assert.doesNotMatch(fs.readFileSync(path.join(outputDirectory, `${name}.js`), "utf8"), /__esModule/);
+    // importStar helpers may inspect a dependency's marker; these modules must
+    // not define that marker on their own CommonJS export object.
+    assert.doesNotMatch(fs.readFileSync(path.join(outputDirectory, `${name}.js`), "utf8"), /Object\.defineProperty\(exports, ["']__esModule["']/);
   }
 });

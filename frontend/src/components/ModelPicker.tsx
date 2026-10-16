@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { HostSettings } from '../session/api'
 import { activeModel, PLANNER_MODELS, type PlannerModel } from '../session/claude-models'
 import { DEFAULT_EFFORT, EFFORT_LEVELS, effortLabel, type PlannerEffort } from '../session/planner-effort'
+import { readEnabledPlanners } from '../session/enabled-planners'
 import { EffortSlider } from './EffortSlider'
 
 interface Props {
@@ -16,6 +17,8 @@ interface Props {
   defaultView?: 'effort' | 'models'
 }
 
+
+const PROVIDER_NAME = { codex_cli: 'Codex', claude_code: 'Claude', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA', opencode_cli: 'OpenCode' } as const
 
 /** The home form's model picker (design system `hx-mpick`): a pill that opens Model and Effort. */
 export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider, savingEffort, defaultOpen = false, defaultView = 'effort' }: Props) {
@@ -33,7 +36,10 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
 
   // The popover opens upward: keep it below the Task/Agent switch at the top
   // of the home area instead of letting that clip its first rows.
-  useEffect(() => { if (!open) setView(active ? 'effort' : 'models') }, [open, active])
+  const closedView = active ? 'effort' : 'models'
+  const [closedSynced, setClosedSynced] = useState<string | null>(null)
+  if (open && closedSynced !== null) setClosedSynced(null)
+  if (!open && closedSynced !== closedView) { setClosedSynced(closedView); setView(closedView) }
 
   useLayoutEffect(() => {
     if (!open || !ref.current) return
@@ -50,6 +56,8 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape) }
   }, [open])
 
+  const enabledList = open ? readEnabledPlanners() : null
+  const offered = (m: PlannerModel) => !enabledList || enabledList.includes(m.provider) || active?.provider === m.provider
   const isActive = (m: PlannerModel) => active?.id === m.id && active.provider === m.provider
   const option = (m: PlannerModel) => <button type="button" key={m.id} className="hx-mpick__opt" role="radio"
     aria-checked={isActive(m)} data-on={isActive(m) || undefined}
@@ -67,7 +75,7 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
 
   return <div ref={ref} className="hx-mpick" data-open={open || undefined}>
     <button type="button" className="hx-mpick__toggle" aria-haspopup="true" aria-expanded={open} disabled={!settings} onClick={() => setOpen((o) => !o)}>
-      <span>{active ? `${({ codex_cli: 'Codex', claude_code: 'Claude', antigravity: 'Antigravity', cursor: 'Cursor', nvidia: 'NVIDIA', opencode_cli: 'OpenCode' })[active.provider]} ${active.label}` : 'Choose planner'}</span>
+      <span title={active ? `${PROVIDER_NAME[active.provider]} ${active.label}` : undefined}>{active ? active.label : 'Choose planner'}</span>
       <svg className="hx-mpick__chev" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 9l6 6 6-6" /></svg>
     </button>
     {open && settings ? <div className="hx-mpick__pop" data-view={view} style={view === 'models' && maxHeight ? { maxHeight } : undefined}>
@@ -88,17 +96,17 @@ export function ModelPicker({ settings, onSelectModel, onEffort, savingProvider,
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 6l-6 6 6 6" /></svg>Effort
         </button> : null}
         <p>{active ? 'Model' : 'Choose a planner'}</p>
-        {PLANNER_MODELS.filter((m) => m.provider === 'claude_code' && !m.legacy).map(option)}
+        {PLANNER_MODELS.filter((m) => offered(m) && m.provider === 'claude_code' && !m.legacy).map(option)}
         <p>Codex</p>
-        {PLANNER_MODELS.filter((m) => m.provider === 'codex_cli').map(option)}
+        {PLANNER_MODELS.filter((m) => offered(m) && m.provider === 'codex_cli').map(option)}
         <p>Antigravity / Cursor</p>
-        {PLANNER_MODELS.filter((m) => m.provider === 'antigravity' || m.provider === 'cursor').map(option)}
+        {PLANNER_MODELS.filter((m) => offered(m) && (m.provider === 'antigravity' || m.provider === 'cursor')).map(option)}
         <p>NVIDIA</p>
-        {PLANNER_MODELS.filter((m) => m.provider === 'nvidia').map(option)}
+        {PLANNER_MODELS.filter((m) => offered(m) && m.provider === 'nvidia').map(option)}
         <button type="button" className="hx-mpick__fold" aria-expanded={legacyOpen} onClick={() => setLegacyOpen((o) => !o)}>
           Legacy<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 6l6 6-6 6" /></svg>
         </button>
-        {legacyOpen ? PLANNER_MODELS.filter(isClaudeLegacy).map(option) : null}
+        {legacyOpen ? PLANNER_MODELS.filter((m) => offered(m) && isClaudeLegacy(m)).map(option) : null}
       </>}
     </div> : null}
   </div>

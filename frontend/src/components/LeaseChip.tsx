@@ -1,11 +1,8 @@
 import type { LeaseView } from '../session/api'
+import { leaseLabel } from '../session/lease-label'
 
 const host = (origin: string) => { try { return new URL(origin).host } catch { return origin } }
 
-export function leaseLabel(agent: string, lease: LeaseView, now: number) {
-  const minutes = Math.max(1, Math.ceil((lease.expiresAt - now) / 60_000))
-  return `${agent} borrowed: ${lease.action} · ${host(lease.origin)} · ${minutes} min · ${lease.usesLeft} left`
-}
 
 /** Live leases for the active task; clicking one takes it back. */
 export function LeaseChip({ leases, now, agent, onRevoke }: { leases: LeaseView[]; now: number; agent: string; onRevoke: (id: string) => void }) {

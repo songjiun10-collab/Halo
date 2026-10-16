@@ -85,14 +85,9 @@ test("English matching uses whole phrase boundaries and negative cases stay at d
   assert.equal(result.duration.id, "middle");
 });
 
-test("unavailable capabilities fail explicitly and never fall back to Browser", () => {
-  for (const requestedCapabilityProfile of ["research"]) {
-    assert.throws(() => resolveTaskProfile({
-      goalInput: { originalRequest: "Do the work." }, requestedCapabilityProfile,
-    }), (error) => error instanceof TaskProfileRouterError && error.code === "capability_unavailable");
-  }
-  assert.throws(() => resolveTaskProfile({ goalInput: { originalRequest: "Research this carefully." } }),
-    (error) => error instanceof TaskProfileRouterError && error.code === "capability_unavailable");
+test("research resolves as its own capability and never falls back to Browser", () => {
+  assert.equal(resolveTaskProfile({ goalInput: { originalRequest: "Research this carefully." } }).capability.id, "research");
+  assert.equal(resolveTaskProfile({ goalInput: { originalRequest: "Do the work." }, requestedCapabilityProfile: "research" }).capability.id, "research");
   assert.equal(resolveTaskProfile({ goalInput: { originalRequest: "Do this." }, requestedCapabilityProfile: "computer_use" }).capability.id, "computer_use");
 });
 

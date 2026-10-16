@@ -19,7 +19,7 @@
 // This does not excuse skipping real measurement or the pressure response;
 // it is a real, disclosed bound on what polling can promise.
 
-const DEFAULT_LIMIT_BYTES = 1_000_000_000; // decimal 1GB cap -- see class doc
+const DEFAULT_LIMIT_BYTES = 2_000_000_000; // decimal 2GB cap (raised from 1.5GB, itself raised from 1GB: heavy pages like namu.wiki still tripped the pause) -- see class doc
 const CAUTION_FRACTION = 0.7;
 const PAUSE_FRACTION = 0.8;
 const EMERGENCY_FRACTION = 0.9;
@@ -63,7 +63,7 @@ class MemoryMonitor {
       throw new MemoryMonitorError("invalid_field", "limitBytes must be a positive finite number");
     }
     if (limitBytes > DEFAULT_LIMIT_BYTES) {
-      throw new MemoryMonitorError("limit_too_high", `limitBytes ${limitBytes} exceeds the 1,000,000,000-byte hard cap`);
+      throw new MemoryMonitorError("limit_too_high", `limitBytes ${limitBytes} exceeds the 2,000,000,000-byte hard cap`);
     }
     this._limitBytes = limitBytes;
   }
@@ -147,7 +147,7 @@ class MemoryMonitor {
     const degraded = unmeasurable.length > 0;
     this._lastTotalBytes = degraded ? Math.max(totalBytes, this._lastTotalBytes) : totalBytes;
     this._lastSampleDegraded = degraded;
-    this._lastSample = { totalBytes, unmeasurable: [...unmeasurable], sampledAt: this._now() };
+    this._lastSample = { totalBytes, unmeasurable: [...unmeasurable], sampledAt: this._now(), byProcess: byProcess.map(({ label, bytes }) => ({ label, bytes })) };
     return { totalBytes, unmeasurable, byProcess, sampledAt: this._lastSample.sampledAt };
   }
 

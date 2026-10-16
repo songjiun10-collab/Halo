@@ -47,7 +47,7 @@ test('the picker lists exactly the host model allowlist', () => {
 
 test('versioned Opus, Sonnet and Haiku are listed, with legacy models in their own group', () => {
   const html = renderToStaticMarkup(React.createElement(ModelPicker, { settings: { ...settings, plannerModel: 'claude-sonnet-4-5-20250929' }, onSelectModel: () => {}, onEffort: () => {}, defaultOpen: true, defaultView: 'models' }))
-  assert.match(html, /<span>Claude Sonnet 4.5<\/span>/, 'the toggle names the pinned model and version')
+  assert.match(html, /<span title="Claude Sonnet 4.5">Sonnet 4.5<\/span>/, 'the closed toggle shows the short model name, full name on hover')
   for (const label of ['Opus 5.5', 'Sonnet 5.5', 'Haiku 4.5', 'Opus 4.5', 'Opus 4.1', 'Opus 4', 'Sonnet 4', 'Sonnet 3.7', 'Haiku 3.5']) {
     assert.match(html, new RegExp(`<span>${label.replace('.', '\\.')}</span>`), label)
   }
@@ -75,7 +75,7 @@ test('saving a model turns on the Claude planner and pins only an allowlisted id
 test('Codex models mirror the host Codex allowlist and are listed in their own group', () => {
   assert.deepEqual(CODEX_MODELS.map(({ id, label, legacy }) => ({ id, label, legacy })), codexHost.CODEX_MODELS.map(({ id, label, legacy }) => ({ id, label, legacy })))
   const html = renderToStaticMarkup(React.createElement(ModelPicker, { settings: { ...settings, plannerProvider: 'codex_cli', plannerModel: 'gpt-5.6-sol' }, onSelectModel: () => {}, onEffort: () => {}, defaultOpen: true, defaultView: 'models' }))
-  assert.match(html, /<span>Codex GPT-5\.6 Sol<\/span>/)
+  assert.match(html, /<span title="Codex GPT-5\.6 Sol">GPT-5\.6 Sol<\/span>/)
   assert.match(html, /<p>Model<\/p>[\s\S]*Opus 5\.5[\s\S]*<p>Codex<\/p>[\s\S]*GPT-6\.1 Sol[\s\S]*GPT-6 Astra[\s\S]*GPT-6 Sol[\s\S]*GPT-6 Luna[\s\S]*GPT-5\.6 Sol[\s\S]*GPT-5\.6 Terra[\s\S]*GPT-5\.6 Luna[\s\S]*GPT-5\.5<\/span>[\s\S]*>Legacy/)
   assert.match(html, /model-icons\/codex\.png/)
   assert.match(html, /role="radio" aria-checked="true"[^>]*>(?:(?!<\/button>).)*GPT-5\.6 Sol/)

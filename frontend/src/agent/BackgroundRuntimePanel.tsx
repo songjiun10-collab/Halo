@@ -1,5 +1,6 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
-import { BackgroundRuntimeStore, MEMORY_OVERRIDE_WARNING, type BackgroundRuntimeApi, type BackgroundRuntimeState, type MemoryPolicy } from '../session/background-runtime'
+import { useState } from 'react'
+import { useBackgroundRuntime } from './use-background-runtime'
+import { MEMORY_OVERRIDE_WARNING, type BackgroundRuntimeApi, type BackgroundRuntimeState, type MemoryPolicy } from '../session/background-runtime'
 
 const POLICIES: [MemoryPolicy, string, string][] = [
   ['budgeted', 'Budgeted', 'HALO limits parallel work and pauses under memory pressure.'],
@@ -42,12 +43,6 @@ export function RuntimeStatus({ state, onStop, onPolicy, onLaunchAtLogin }: { st
   </div>
 }
 
-export function useBackgroundRuntime() {
-  const [store] = useState(() => new BackgroundRuntimeStore(window.haloBrowser as Partial<BackgroundRuntimeApi> | undefined))
-  const state = useSyncExternalStore(store.subscribe, store.getState)
-  useEffect(() => { const off = store.connect(); void store.refresh(); return off }, [store])
-  return { store, state }
-}
 
 const canSetLaunchAtLogin = () => typeof (window.haloBrowser as Partial<BackgroundRuntimeApi> | undefined)?.setBackgroundLaunchAtLogin === 'function'
 
