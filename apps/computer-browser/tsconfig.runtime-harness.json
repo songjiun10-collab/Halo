@@ -64,6 +64,7 @@
     "runtime-src/main/harness/permission-policy.ts",
     "runtime-src/main/harness/action-gate.ts",
     "runtime-src/main/harness/research-sources.ts",
-    "runtime-src/main/harness/action-safety.ts"
+    "runtime-src/main/harness/action-safety.ts",
+    "runtime-src/main/harness/payment-mandate.ts"
   ]
 }
