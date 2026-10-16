@@ -42,6 +42,16 @@ function selectTasks(rows: Task[], limit?: number): Task[] {
   return limit && limit > 0 ? ok.slice(0, limit) : ok;
 }
 
+// A CAPTCHA page is a dead end for the agent, not a puzzle to solve: step off it to another legitimate
+// entry to the same site (its root, then a web search for the task), at most MAX_REROUTES times a task.
+const MAX_REROUTES = 2;
+function alternateRoute(task: Task, attempt: number): string | null {
+  const site = new URL(task.website);
+  if (attempt === 0) return site.origin + "/";
+  if (attempt === 1) return `https://www.bing.com/search?q=${encodeURIComponent(`site:${site.hostname} ${task.confirmed_task}`.slice(0, 200))}`;
+  return null;
+}
+
 function plannerWorker(model: string): { file: string; args: string[] } {
   const dir = path.resolve(__dirname, "../main/harness/providers");
   return model.startsWith("claude-")
@@ -68,6 +78,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
   await fs.mkdir(path.join(dir, "trajectory"), { recursive: true, mode: 0o700 });
   const history: string[] = [], outcomes: any[] = [], proposals: any[] = [], usages: any[] = [];
   let launched: any, view: any, browser: any, store: any, planner: any, controller: any, timer: any;
+  let reroutes = 0;
   let snapshot: any, errorCode: string | null = null, calls = 0, finalAnswer = "", finalUrl = "", finalTitle = "";
   const started = benchClock.now();
   const worker = plannerWorker(model);
@@ -90,6 +101,12 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
         history.push(`${action.type} ${JSON.stringify(action).slice(0, 300)}`);
         outcomes.push({ step: index, type: action.type, status: result?.status ?? "execution_uncertain", errorCode: result?.errorCode ?? null, wallMs: benchClock.now() - t0 });
         await fs.appendFile(path.join(dir, "steps.jsonl"), JSON.stringify(outcomes.at(-1)) + "\n", { mode: 0o600 });
+      }
+      {
+        let url = "", title = "";
+        try { url = view.webContents.getURL(); title = view.webContents.getTitle?.() ?? ""; } catch { /* page gone */ }
+        const route = looksLikeCaptcha(url, title) ? alternateRoute(task, reroutes) : null;
+        if (route) { reroutes++; history.push(`reroute_from_captcha ${route}`); await execute({ type: "navigate", url: route }, options).catch(() => {}); }
       }
       return result;
     };
@@ -120,7 +137,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
       agent_final_answer: finalAnswer, reference_length: task.reference_length, action_history: history };
     const run = { schemaVersion: 1, benchmark: "Online-Mind2Web", model, benchProfile: profile.name, safetyDisabled: profile.safetyDisabled, harness: "Halo",
       graded: false, success: null, taskId: task.task_id, level: task.level, verdict, state: snapshot?.state ?? "startup_error",
-      pauseReason: snapshot?.pauseReason ?? null, errorCode, finalUrl, wallMs: benchClock.now() - started, plannerCalls: calls,
+      pauseReason: snapshot?.pauseReason ?? null, errorCode, finalUrl, wallMs: benchClock.now() - started, plannerCalls: calls, reroutes,
       usages, budgets: snapshot?.budgets ?? null, actions: outcomes, proposals };
     try {
       await fs.writeFile(path.join(dir, "result.json"), JSON.stringify(result, null, 2), { mode: 0o600 });
@@ -171,5 +188,5 @@ async function main() {
   await fs.writeFile(path.join(output, "summary.json"), JSON.stringify({ manifest, tally, runs }, null, 2), { mode: 0o600 });
   process.stdout.write(JSON.stringify({ event: "bench_finished", output, attempted: runs.length, tally, graded: false }) + "\n");
 }
-module.exports = { selectTasks, plannerWorker, classify, resolveProfile };
+module.exports = { selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile };
 if (require.main === module) main().catch((error: any) => { console.error(error?.message ?? "bench_failed"); process.exitCode = 1; });

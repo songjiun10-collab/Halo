@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { selectTasks, plannerWorker, classify, resolveProfile } = require("../integration/online-mind2web-bench.ts");
+const { selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile } = require("../integration/online-mind2web-bench.ts");
 
 const row = (i, over = {}) => ({ task_id: `t${i}`, confirmed_task: "Find a thing", website: "https://example.test/", reference_length: 5, level: "easy", ...over });
 
@@ -40,4 +40,12 @@ test("safety stays on unless HALO_BENCH_OPEN_UNSAFE=1 is set exactly", () => {
   const open = resolveProfile({ HALO_BENCH_OPEN_UNSAFE: "1" });
   assert.equal(open.safetyDisabled, true);
   assert.equal(open.permissionMode, "full");
+});
+
+test("captcha pages are rerouted to the site root, then a search, then left alone (bounded, no solving)", () => {
+  const task = row(1, { website: "https://shop.example/a/b?x=1", confirmed_task: "Find red shoes" });
+  assert.equal(alternateRoute(task, 0), "https://shop.example/");
+  assert.match(alternateRoute(task, 1), /^https:\/\/www\.bing\.com\/search\?q=site%3Ashop\.example%20Find%20red%20shoes$/);
+  assert.equal(alternateRoute(task, 2), null);
+  assert.equal(MAX_REROUTES, 2);
 });
