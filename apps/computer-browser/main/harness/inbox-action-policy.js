@@ -67,6 +67,8 @@ function authorizeAction(action, context) {
       if (typeof action.messageId !== "string" || !ID_RE.test(action.messageId)) return refuse("bad_message_id");
       if (!context.messageIds.has(action.messageId)) return refuse("message_not_in_batch");
       if (typeof action.body !== "string" || action.body.length === 0 || action.body.length > MAX_TEXT_LENGTH) return refuse("bad_body");
+      // An auto-loaded image or link in a draft is the EchoLeak-style exfiltration path.
+      if (containsLinkOrAddress(action.body)) return refuse("link_in_text");
       return { ok: true };
     default:
       return refuse("action_not_allowed");
