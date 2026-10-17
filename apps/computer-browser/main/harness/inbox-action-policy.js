@@ -33,8 +33,9 @@ const MAX_DIGEST_LINE = 120;
 // bounded length. Replaces instead of refusing, since the line is only shown.
 function digestLine(text) {
   if (typeof text !== "string") return "";
-  const cleaned = normalizeForLinkCheck(text).replace(/\s+/g, " ").trim();
-  const words = cleaned.split(" ").map((word) => (LINK_RE.test(word) ? "[링크 제거]" : word));
+  // Display text keeps its original characters; only the per-word link test normalizes.
+  const cleaned = text.replace(INVISIBLE_RE, "").replace(DEFANG_RE, ".").replace(/\s+/g, " ").trim();
+  const words = cleaned.split(" ").map((word) => (containsLinkOrAddress(word) ? "[링크 제거]" : word));
   const line = words.join(" ");
   return line.length > MAX_DIGEST_LINE ? `${line.slice(0, MAX_DIGEST_LINE - 1)}…` : line;
 }

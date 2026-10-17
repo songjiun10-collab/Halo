@@ -15,7 +15,8 @@ const HIDDEN_STYLE_RE = /(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collap
 const HIDDEN_ATTR_RE = /(?:^|\s)(?:hidden|aria-hidden\s*=\s*["']?true)\b/i;
 const ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'", "&nbsp;": " " };
 
-const clean = (text) => text.replace(INVISIBLE_RE, "").normalize("NFKC");
+// No Unicode normalization here: NFKC rewrites Korean compatibility jamo (the approval letter) into different characters.
+const clean = (text) => text.replace(INVISIBLE_RE, "");
 const decode = (text) => text.replace(/&(?:amp|lt|gt|quot|nbsp|#39);/g, (match) => ENTITIES[match]);
 
 function htmlToVisibleText(html) {

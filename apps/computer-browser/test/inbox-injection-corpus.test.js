@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { authorizeAction, authorizeBatch } = require("../main/harness/inbox-action-policy");
+const { authorizeAction, authorizeBatch, digestLine } = require("../main/harness/inbox-action-policy");
 const { prepareMailForModel } = require("../main/harness/inbox-mail-sanitizer");
 
 // Corpus of basic indirect-injection patterns for a mail assistant. `source` says where the
@@ -126,4 +126,10 @@ test("plain visible content survives unchanged apart from tags", () => {
   assert.equal(hiddenRemoved, 0);
   assert.match(wrapped, /Flight UA 42 lands at 9:40\./);
   assert.match(wrapped, /Gate B12 & baggage 3/);
+});
+
+test("Korean approval letters and text survive sanitizing and the digest line unchanged", () => {
+  const korean = "ㄱ 승인, 주말 약속 ㄱㄱ";
+  assert.match(prepareMailForModel({ text: korean }).wrapped, /ㄱ 승인, 주말 약속 ㄱㄱ/);
+  assert.equal(digestLine(korean), korean);
 });
