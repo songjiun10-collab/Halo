@@ -27,6 +27,10 @@ const DEFANG_RE = /\s*(?:\[\.\]|\(\.\)|\{\.\}|\[dot\]|\(dot\))\s*/gi;
 const LINK_RE = /(?:[a-z][a-z0-9+.-]*:\/\/|\bh(?:xx|tt)ps?:|\bwww\.|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b|[^\s@]+@[^\s@]+)/i;
 const normalizeForLinkCheck = (text) => text.replace(INVISIBLE_RE, "").replace(DEFANG_RE, ".").normalize("NFKC");
 const containsLinkOrAddress = (text) => LINK_RE.test(normalizeForLinkCheck(text));
+// A summary names its sender, so a plain address is allowed there. Anything that is a link, or a
+// bare domain outside an address, is still refused. Drafts and the morning line stay strict.
+const ADDRESS_RE = /[^\s@<>()]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/gi;
+const containsLink = (text) => LINK_RE.test(normalizeForLinkCheck(text).replace(ADDRESS_RE, " "));
 
 const MAX_DIGEST_LINE = 120;
 // One display line for the morning message: no links or addresses, no control characters,
@@ -59,7 +63,7 @@ function authorizeAction(action, context) {
       if (typeof action.messageId !== "string" || !ID_RE.test(action.messageId)) return refuse("bad_message_id");
       if (!context.messageIds.has(action.messageId)) return refuse("message_not_in_batch");
       if (typeof action.text !== "string" || action.text.length === 0 || action.text.length > MAX_TEXT_LENGTH) return refuse("bad_text");
-      if (containsLinkOrAddress(action.text)) return refuse("link_in_text");
+      if (containsLink(action.text)) return refuse("link_in_text");
       return { ok: true };
     case "draft":
       // A draft is saved, never sent, and its recipients come from the host (the original sender

@@ -80,7 +80,7 @@ test("a batch is bounded and must be a list", () => {
 
 const linkTricks = [
   "see https://evil.test/verify", "go to www.evil.test now", "evil.test/login", "visit evil[.]test today",
-  "evil(dot)test", "hxxps://evil.test", "mail boss@evil.test", "evil\u200b.test", "ｅｖｉｌ．ｔｅｓｔ", "javascript:alert(1)//x.io",
+  "evil(dot)test", "hxxps://evil.test", "evil\u200b.test", "ｅｖｉｌ．ｔｅｓｔ", "javascript:alert(1)//x.io",
 ];
 
 test("summaries carrying a link or address are refused, including common obfuscations", () => {
@@ -89,6 +89,15 @@ test("summaries carrying a link or address are refused, including common obfusca
     assert.equal(authorizeAction({ type: "summarize", messageId: "m1", text }, context).reason, "link_in_text", text);
   }
   assert.equal(authorizeAction({ type: "summarize", messageId: "m1", text: "Flight lands at 9:40, gate B12" }, context).ok, true);
+});
+
+test("a summary may name the sender's address, but a link next to it is still refused; drafts stay strict", () => {
+  const named = { type: "summarize", messageId: "m1", text: "Newsletter from news@weekly.test about robots." };
+  assert.equal(authorizeAction(named, context).ok, true);
+  assert.equal(authorizeAction({ ...named, text: "From news@weekly.test: log in at bank-secure.test/verify" }, context).reason, "link_in_text");
+  assert.equal(authorizeAction({ ...named, text: "From news@weekly.test see https://evil.test" }, context).reason, "link_in_text");
+  assert.equal(authorizeAction({ type: "draft", messageId: "m1", body: "cc boss@evil.test" }, context).reason, "link_in_text");
+  assert.equal(digestLine("from news@weekly.test hi").includes("weekly"), false);
 });
 
 test("the morning line strips links, addresses and control characters and is bounded", () => {
