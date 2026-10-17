@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { authorizeAction, authorizeBatch, MAX_ACTIONS_PER_BATCH } = require("../main/harness/inbox-action-policy");
+const { authorizeAction, authorizeBatch, digestLine, containsLinkOrAddress, MAX_ACTIONS_PER_BATCH, MAX_DIGEST_LINE } = require("../main/harness/inbox-action-policy");
 
 // What this proves: the policy refuses what a fooled model would propose. It does NOT prove
 // the model resists the mail. Each case pairs a hostile mail with the action a hijacked
@@ -76,4 +76,27 @@ test("a batch is bounded and must be a list", () => {
   assert.equal(authorizeBatch(new Array(MAX_ACTIONS_PER_BATCH + 1).fill(action), context).reason, "too_many_actions");
   assert.equal(authorizeBatch(action, context).reason, "not_a_list");
   assert.equal(authorizeBatch([], context).ok, true);
+});
+
+const linkTricks = [
+  "see https://evil.test/verify", "go to www.evil.test now", "evil.test/login", "visit evil[.]test today",
+  "evil(dot)test", "hxxps://evil.test", "mail boss@evil.test", "evil\u200b.test", "ｅｖｉｌ．ｔｅｓｔ", "javascript:alert(1)//x.io",
+];
+
+test("summaries carrying a link or address are refused, including common obfuscations", () => {
+  for (const text of linkTricks) {
+    assert.equal(containsLinkOrAddress(text), true, text);
+    assert.equal(authorizeAction({ type: "summarize", messageId: "m1", text }, context).reason, "link_in_text", text);
+  }
+  assert.equal(authorizeAction({ type: "summarize", messageId: "m1", text: "Flight lands at 9:40, gate B12" }, context).ok, true);
+});
+
+test("the morning line strips links, addresses and control characters and is bounded", () => {
+  const line = digestLine("Re: invoice https://evil.test/pay  from boss@evil.test\u202e \u0007 ok");
+  assert.equal(line.includes("evil"), false);
+  assert.equal(/[\u0000-\u001f\u202e]/.test(line), false);
+  assert.match(line, /\[링크 제거\]/);
+  assert.equal(digestLine("x".repeat(500)).length, MAX_DIGEST_LINE);
+  assert.equal(digestLine(undefined), "");
+  for (const text of linkTricks) assert.equal(containsLinkOrAddress(digestLine(text)), containsLinkOrAddress("[링크 제거]"), text);
 });

@@ -19,6 +19,26 @@ const hasExactKeys = (value, keys) => {
 
 const refuse = (reason) => ({ ok: false, reason });
 
+// Best-effort, fail-closed link and address detection. Mail text can carry a phishing link
+// into a summary or the morning message, so those carry none. It is a deny heuristic, not
+// proof: anything it cannot recognize as a link still reaches the user as plain text.
+const INVISIBLE_RE = /[\u0000-\u0008\u000b-\u001f\u007f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g;
+const DEFANG_RE = /\s*(?:\[\.\]|\(\.\)|\{\.\}|\[dot\]|\(dot\))\s*/gi;
+const LINK_RE = /(?:[a-z][a-z0-9+.-]*:\/\/|\bh(?:xx|tt)ps?:|\bwww\.|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b|[^\s@]+@[^\s@]+)/i;
+const normalizeForLinkCheck = (text) => text.replace(INVISIBLE_RE, "").replace(DEFANG_RE, ".").normalize("NFKC");
+const containsLinkOrAddress = (text) => LINK_RE.test(normalizeForLinkCheck(text));
+
+const MAX_DIGEST_LINE = 120;
+// One display line for the morning message: no links or addresses, no control characters,
+// bounded length. Replaces instead of refusing, since the line is only shown.
+function digestLine(text) {
+  if (typeof text !== "string") return "";
+  const cleaned = normalizeForLinkCheck(text).replace(/\s+/g, " ").trim();
+  const words = cleaned.split(" ").map((word) => (LINK_RE.test(word) ? "[링크 제거]" : word));
+  const line = words.join(" ");
+  return line.length > MAX_DIGEST_LINE ? `${line.slice(0, MAX_DIGEST_LINE - 1)}…` : line;
+}
+
 // The host, not the model, supplies the context:
 //   messageIds   Set of message ids in tonight's batch
 //   labels       Set of label names the user already configured
@@ -38,6 +58,7 @@ function authorizeAction(action, context) {
       if (typeof action.messageId !== "string" || !ID_RE.test(action.messageId)) return refuse("bad_message_id");
       if (!context.messageIds.has(action.messageId)) return refuse("message_not_in_batch");
       if (typeof action.text !== "string" || action.text.length === 0 || action.text.length > MAX_TEXT_LENGTH) return refuse("bad_text");
+      if (containsLinkOrAddress(action.text)) return refuse("link_in_text");
       return { ok: true };
     case "draft":
       // A draft is saved, never sent, and its recipients come from the host (the original sender
@@ -62,4 +83,4 @@ function authorizeBatch(actions, context) {
   return firstRefusal ? { ok: false, reason: firstRefusal.reason, results } : { ok: true, results };
 }
 
-module.exports = { authorizeAction, authorizeBatch, MAX_ACTIONS_PER_BATCH };
+module.exports = { authorizeAction, authorizeBatch, digestLine, containsLinkOrAddress, MAX_ACTIONS_PER_BATCH, MAX_DIGEST_LINE };
