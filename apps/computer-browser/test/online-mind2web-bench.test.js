@@ -65,8 +65,8 @@ test("plannerWorker sends vendor/model ids to the NVIDIA worker", () => {
   assert.ok(plannerWorker("claude-haiku-5-5").file.endsWith("claude-code-worker.js"));
 });
 
-test("plannerWorker sends opencode/ ids to the OpenCode worker", () => {
-  const w = plannerWorker("opencode/deepseek-v4.1-flash-free");
+test("plannerWorker sends oc: ids to the OpenCode worker", () => {
+  const w = plannerWorker("oc:nvidia/deepseek-ai/deepseek-v4.1-flash");
   assert.ok(w.file.endsWith("opencode-planner-worker.js"));
-  assert.deepEqual(w.args, ["--model", "opencode/deepseek-v4.1-flash-free"]);
+  assert.deepEqual(w.args, ["--model", "nvidia/deepseek-ai/deepseek-v4.1-flash"]);
 });

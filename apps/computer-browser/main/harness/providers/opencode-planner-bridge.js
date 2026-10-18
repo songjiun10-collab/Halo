@@ -18,8 +18,8 @@ class OpenCodePlannerError extends Error {
 }
 
 const MODEL_ID = "opencode-default";
-// OpenCode-hosted free models the host may select by name; anything else is refused.
-const EXTRA_MODEL_IDS = Object.freeze(["opencode/deepseek-v4.1-flash-free"]);
+// Models the host may select by name through the user's own OpenCode login; anything else is refused.
+const EXTRA_MODEL_IDS = Object.freeze(["nvidia/deepseek-ai/deepseek-v4.1-flash"]);
 const AGENT_ID = "halo-planner";
 const MAX_OUTPUT_BYTES = MAX_CLI_STDOUT_BYTES;
 const ENV_ALLOWLIST = Object.freeze(["PATH", "HOME", "LANG", "TZ", "TMPDIR"]);
@@ -135,7 +135,7 @@ class OpenCodePlannerBridge {
     }
     const room = isRoomTurn(context);
     const prompt = room ? buildRoomPrompt(context, null) : buildPrompt(context, null);
-    const args = Object.freeze(["--standalone", "run", "--format", "json", "--agent", AGENT_ID]);
+    const args = Object.freeze(["run", "--standalone", "--format", "json", "--agent", AGENT_ID]);
 
     return new Promise((resolve, reject) => {
       let settled = false;

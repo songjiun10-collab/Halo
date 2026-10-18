@@ -23,7 +23,8 @@ const { runChecklist, pageIsBlocked } = require("../main/harness/completion-chec
 
 type Task = { task_id: string; confirmed_task: string; website: string; reference_length: number; level: string };
 const EXPECTED_SHA = "7dedf381531d423dc0fc48d21dc1d425655dd75f38b10211a880fa09102f257f";
-const LIMITS = { maxActions: 200, maxPlannerCalls: 100, maxActiveMs: 900000 };
+// HALO_BENCH_MAX_ACTIVE_MS lengthens the per-task clock (Aside's protocol is 900 s); the run records it in run.json.
+const LIMITS = { maxActions: 200, maxPlannerCalls: 100, maxActiveMs: Number(process.env.HALO_BENCH_MAX_ACTIVE_MS) || 900000 };
 const READ_ONLY = new Set(["navigate", "follow_link", "scroll", "observe", "record_evidence"]);
 const allowAll = () => ({ decision: "allow", reasons: ["bench_open_unsafe_profile"] });
 const reviewReadOnly = (d: { action: string }) => READ_ONLY.has(d.action)
@@ -64,7 +65,8 @@ function alternateRoute(task: Task, attempt: number): string | null {
 
 function plannerWorker(model: string): { file: string; args: string[] } {
   const dir = path.resolve(__dirname, "../main/harness/providers");
-  if (model.startsWith("opencode/")) return { file: path.join(dir, "opencode-planner-worker.js"), args: ["--model", model] };
+  // "oc:<model>" runs through the user's own OpenCode login (planner calls are slow there).
+  if (model.startsWith("oc:")) return { file: path.join(dir, "opencode-planner-worker.js"), args: ["--model", model.slice(3)] };
   // "vendor/model" ids (deepseek-ai/deepseek-v4.1-flash) go to the NVIDIA-hosted worker, which reads NVIDIA_API_KEY.
   if (model.includes("/")) return { file: path.join(dir, "nvidia-planner-worker.js"), args: ["--model", model] };
   return model.startsWith("claude-")
@@ -132,8 +134,8 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
       criteria: [{ id: "benchmark", text: task.confirmed_task, required: true, verification: "user" }],
       limits: LIMITS }, { storageRoot: path.join(dir, "halo-store") });
     planner = new PlannerStdioAdapter({ command: process.execPath, args: [worker.file, ...worker.args],
-      cwd: path.resolve(__dirname, ".."), timeoutMs: 120000, onUsage: (usage: any) => usages.push(usage) });
-    controller = new TaskController({ store, browser, permissionMode: profile.permissionMode, harnessProfile: "middle", plannerEffort: "medium",
+      cwd: path.resolve(__dirname, ".."), timeoutMs: Number(process.env.HALO_BENCH_PLANNER_TIMEOUT_MS) || 120000, onUsage: (usage: any) => usages.push(usage) });
+    controller = new TaskController({ store, browser, permissionMode: profile.permissionMode, harnessProfile: "middle", plannerEffort: process.env.HALO_BENCH_EFFORT || "medium",
       finishEvidenceRejections: 1, repeatFailureLimit: 2,
       groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1",
       giveUpRefusals: process.env.HALO_BENCH_NO_GIVE_UP === "1" ? 1000 : 0,
