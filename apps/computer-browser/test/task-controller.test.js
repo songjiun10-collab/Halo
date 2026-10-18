@@ -3012,3 +3012,13 @@ test("completionChecklist hook returns a failing answer twice with feedback, the
   assert.equal(contexts.length, 3);
   assert.equal(contexts[1].progress.repeatFailureFeedback.note, "completion_checklist_failed");
 });
+
+test("completion checklist holds the answer to conditions the task names", () => {
+  const { runChecklist, conditionsIn } = require("../main/harness/completion-checklist");
+  assert.deepEqual(conditionsIn("Find hotels in Chicago under 150 dollars with \"free parking\"").sort(), ["chicago", "free parking"]);
+  const page = { url: "https://h.test/search?city=chicago", title: "Hotels", text: "Hotels in Chicago, 120 per night, free parking" };
+  const ok = runChecklist({ answer: "Hotel X at 120", goalText: "Find hotels in Chicago under 150 dollars with \"free parking\"", observation: page, observedTexts: [page.text], observedUrls: [page.url] });
+  assert.equal(ok.ok, true);
+  const bad = runChecklist({ answer: "Hotel X at 120", goalText: "Find hotels in Chicago under 150 dollars with \"free breakfast\"", observation: page, observedTexts: [page.text], observedUrls: [page.url] });
+  assert.deepEqual(bad.failures.map((f) => f.code), ["condition_not_seen"]);
+});

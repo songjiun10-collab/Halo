@@ -24,8 +24,26 @@ function pageIsBlocked(observation) {
   return BLOCK_TEXT.test(String(observation.text ?? "").slice(0, 600)) && String(observation.text ?? "").length < 1500;
 }
 
+const STOP = new Set(["find","show","search","look","get","what","which","who","when","where","how","list","check","open","go","the","a","an","i","if","on","in","at","for","to","and","or","of","with","from","by","is","are","can","please","browse","tell","compare","view","select","add","book","buy","set","use","do"]);
+
+// Conditions the task names outright: quoted text and capitalised names (numbers are thresholds, not text a page must show). Deterministic, so it
+// misses conditions written in plain words; it only holds the answer to the ones it can see.
+function conditionsIn(goalText) {
+  const text = String(goalText ?? "");
+  const out = new Set();
+  for (const m of text.matchAll(/["\u201c']([^"\u201d']{2,60})["\u201d']/g)) out.add(m[1].toLowerCase());
+  const words = text.split(/\s+/);
+  words.forEach((w, i) => {
+    const clean = w.replace(/[^\p{L}\p{N}-]/gu, "");
+    if (i === 0 || clean.length < 3 || !/^\p{Lu}/u.test(clean) || STOP.has(clean.toLowerCase())) return;
+    if (/^https?:/i.test(w) || /\.\w{2,}$/.test(w)) return;
+    out.add(clean.toLowerCase());
+  });
+  return [...out];
+}
+
 // { ok, failures: [{ code, guidance }] }
-function runChecklist({ answer, goalText = "", observation = null, observedTexts = [] }) {
+function runChecklist({ answer, goalText = "", observation = null, observedTexts = [], observedUrls = [] }) {
   const failures = [];
   const text = typeof answer === "string" ? answer.trim() : "";
   if (!text) failures.push({ code: "answer_empty", guidance: "Report an answer, not an empty message." });
@@ -39,7 +57,12 @@ function runChecklist({ answer, goalText = "", observation = null, observedTexts
       failures.push({ code: "value_not_on_opened_pages", guidance: `These values in the answer appear on no page you opened: ${missing.slice(0, 5).join(", ")}. Open the page that shows them or correct the answer.` });
     }
   }
+  if (text && observedTexts.length > 0) {
+    const haystack = (observedTexts.join("\n") + "\n" + observedUrls.join("\n") + "\n" + (observation?.url ?? "")).toLowerCase().replace(/,/g, "");
+    const unseen = conditionsIn(goalText).filter((c) => !haystack.includes(c.replace(/,/g, "")));
+    if (unseen.length > 0) failures.push({ code: "condition_not_seen", guidance: `The task names ${unseen.slice(0, 5).map((c) => `"${c}"`).join(", ")}, which no page you opened shows. Apply that condition on the site and confirm it on screen before reporting.` });
+  }
   return { ok: failures.length === 0, failures };
 }
 
-module.exports = { runChecklist, pageIsBlocked, numbersIn };
+module.exports = { conditionsIn, runChecklist, pageIsBlocked, numbersIn };

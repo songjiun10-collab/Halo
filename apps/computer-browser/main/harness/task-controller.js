@@ -2486,7 +2486,7 @@ class TaskController {
             answerVerified = review.verified === true;
           }
           if (reasonText && this._completionChecklist) {
-            const check = this._completionChecklist({ answer: reasonText, goalText: this._goal?.originalRequest ?? "", observation: this._lastObservation, observedTexts: [...this._observedTexts.values()] });
+            const check = this._completionChecklist({ answer: reasonText, goalText: this._goal?.originalRequest ?? "", observation: this._lastObservation, observedTexts: [...this._observedTexts.values()], observedUrls: [...this._observedTexts.keys()] });
             if (!check.ok) {
               await this._store.append({ type: "note", payload: { kind: "completion_checklist_failed", codes: check.failures.map((f) => f.code), rejected: this._completionRejected } });
               if (this._completionRejected < 2) {
