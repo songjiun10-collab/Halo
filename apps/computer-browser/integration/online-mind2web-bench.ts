@@ -60,10 +60,12 @@ function plannerWorker(model: string): { file: string; args: string[] } {
 }
 
 // blocked_by_captcha is decided from the final page only (URL/title heuristics the host already uses).
-function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null): string {
+function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null, answered = false): string {
   if (errorCode) return "runner_error";
   if (looksLikeCaptcha(finalUrl, finalTitle)) return "blocked_by_captcha";
   if (snapshot?.state === "completed") return "finished";
+  // A lookup answer arrives as need_user.reason; with an answer recorded the run is "answered", not stopped.
+  if (answered && snapshot?.pauseReason === "need_user") return "answered";
   return `stopped:${snapshot?.pauseReason ?? snapshot?.state ?? "unknown"}`;
 }
 
@@ -117,12 +119,15 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
     planner = new PlannerStdioAdapter({ command: process.execPath, args: [worker.file, ...worker.args],
       cwd: path.resolve(__dirname, ".."), timeoutMs: 120000, onUsage: (usage: any) => usages.push(usage) });
     controller = new TaskController({ store, browser, permissionMode: profile.permissionMode, harnessProfile: "middle", plannerEffort: "medium",
+      finishEvidenceRejections: 1, repeatFailureLimit: 2,
       approve: profile.approve, hostVerifier: () => false,
       planner: { close: () => planner.close(), next: async (context: any, options: any) => {
         calls++;
         const proposal = await planner.next(context, options);
         proposals.push({ call: calls, kind: proposal.kind, actionTypes: (proposal.actions ?? []).map((a: any) => a.type) });
         if (proposal.kind === "finish") finalAnswer = JSON.stringify(proposal).slice(0, 4000);
+        // On develop a lookup answer is delivered as need_user.reason; keep the last one so the run can be judged.
+        if (proposal.kind === "need_user" && typeof proposal.reason === "string") finalAnswer = proposal.reason.slice(0, 4000);
         return proposal;
       } } });
     timer = setTimeout(() => controller.stop().catch(() => {}), LIMITS.maxActiveMs);
@@ -132,7 +137,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
     clearTimeout(timer);
     if (controller) snapshot = controller.getSnapshot();
     try { finalUrl = view?.webContents.getURL() ?? ""; finalTitle = view?.webContents.getTitle?.() ?? ""; } catch { /* page already gone */ }
-    const verdict = classify(snapshot, finalUrl, finalTitle, errorCode);
+    const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0);
     const result = { schema_version: "online-mind2web-v2", task: task.confirmed_task, task_id: task.task_id,
       agent_final_answer: finalAnswer, reference_length: task.reference_length, action_history: history };
     const run = { schemaVersion: 1, benchmark: "Online-Mind2Web", model, benchProfile: profile.name, safetyDisabled: profile.safetyDisabled, harness: "Halo",
