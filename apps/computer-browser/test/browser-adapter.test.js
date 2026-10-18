@@ -1277,3 +1277,13 @@ test("http_get reads a same-site https API, refuses other sites, http, private h
     global.fetch = realFetch;
   }
 });
+
+test("HALO_FULL_PAGE_TEXT=1 widens the default text window", () => {
+  const prev = process.env.HALO_FULL_PAGE_TEXT;
+  process.env.HALO_FULL_PAGE_TEXT = "1";
+  try {
+    const { BrowserAdapter } = require("../main/harness/browser-adapter");
+    const a = new BrowserAdapter({ view: { webContents: { isDestroyed: () => false } } });
+    assert.ok(a._maxTextBytes > 12 * 1024 && a._maxTextBytes < 48 * 1024);
+  } finally { if (prev === undefined) delete process.env.HALO_FULL_PAGE_TEXT; else process.env.HALO_FULL_PAGE_TEXT = prev; }
+});

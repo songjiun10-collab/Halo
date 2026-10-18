@@ -46,6 +46,7 @@ const HEADING_RESERVE = 40; // extra headings kept after MAX_ELEMENTS is reached
 const VIEWPORT_RESERVE = 40;
 const MAX_TEXT_BYTES = 12 * 1024; // section 6: "text 12 KiB"
 // A PDF tab shows nothing to page scripts, so its text comes from the file.
+const FULL_PAGE_TEXT_BYTES = 36 * 1024;
 const MAX_PDF_TEXT_BYTES = 2 * MAX_TEXT_BYTES;
 const { extractPdfText, formatPdfObservationText, looksLikePdfUrl } = require("./pdf-text");
 const { isPrivateHost } = require("./private-network");
@@ -501,7 +502,10 @@ class BrowserAdapter {
     this._pendingInteraction = null;
     this._maxNodesVisited = typeof maxNodesVisited === "number" ? maxNodesVisited : MAX_NODES_VISITED;
     this._maxElements = typeof maxElements === "number" ? maxElements : MAX_ELEMENTS;
-    this._maxTextBytes = typeof maxTextBytes === "number" ? maxTextBytes : MAX_TEXT_BYTES;
+    // HALO_FULL_PAGE_TEXT=1 widens the one-look text window (still well under
+    // the 64 KiB context packet) so the model sees the whole page at once.
+    const envText = process.env.HALO_FULL_PAGE_TEXT === "1" ? FULL_PAGE_TEXT_BYTES : MAX_TEXT_BYTES;
+    this._maxTextBytes = typeof maxTextBytes === "number" ? maxTextBytes : envText;
     // Observation IDs cross task/view boundaries in the host. Per-adapter
     // counters collide (every fresh view starts at obs-0-1), which can bind a
     // visual attachment to another task's observation. Use an unguessable,
