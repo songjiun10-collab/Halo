@@ -3048,3 +3048,45 @@ test("completion checklist treats a Korean report of failure as a give-up", () =
   }
   assert.equal(runChecklist({ answer: "가지와 버섯 레시피는 쿡패드에 있습니다.", goalText: "go", observation: page, observedTexts: ["x"] }).ok, true);
 });
+
+test("the same kind of action (find_text with a new phrase each time) is warned at 3 and not dispatched after 5, even when every call succeeds", async () => {
+  const { store } = await makeStore({ originalRequest: "variants", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const executed = [];
+  const contexts = [];
+  let n = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      n += 1;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "find_text", text: `phrase ${n}` }] };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async (a) => { executed.push(a); return { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    repeatFailureLimit: 2,
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(executed.length >= 5 && executed.length <= 8, true, `executed ${executed.length}`);
+  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_family"), true);
+  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_blocked"), true);
+  await store.close();
+});
+
+test("without repeatFailureLimit the family check is off", async () => {
+  const { store } = await makeStore({ originalRequest: "off", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 8 } });
+  const executed = [];
+  let n = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => { n += 1; return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "find_text", text: `p ${n}` }] }; } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async (a) => { executed.push(a); return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0,
+  });
+  await controller.start();
+  assert.equal(executed.length >= 7, true, `executed ${executed.length}`);
+  await store.close();
+});

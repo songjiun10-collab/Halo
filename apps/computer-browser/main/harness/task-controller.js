@@ -558,6 +558,9 @@ class TaskController {
     this._repeatFailures = new Map();
     this._repeatBlocked = 0;
     this._repeatFeedback = null;
+    // The last actions' families (see actionFamily): the same kind of action over and over is a loop even when
+    // each one differs a little (another search phrase, another passage), so the exact-repeat check misses it.
+    this._familyWindow = [];
     // Benchmark option: how many times a need_user that is not a source-checked answer is sent back before it is honoured.
     this._giveUpRefusals = Number.isInteger(giveUpRefusals) && giveUpRefusals > 0 ? giveUpRefusals : 0;
     this._giveUpRefused = 0;
@@ -2792,6 +2795,21 @@ class TaskController {
         await this._store.append({ type: "note", payload: { kind: "invalid_action", actionType: String(action?.type).slice(0, 40), errorCode: "action_safety_undeclared" } });
         continue;
       }
+      const family = this._repeatFailureLimit > 0 ? actionFamily(action) : null;
+      if (family && this._familyWindow.filter((f) => f === family).length >= FAMILY_BLOCK) {
+        this._repeatBlocked += 1;
+        this._repeatFeedback = {
+          note: "repeat_blocked",
+          actionType: action.type,
+          guidance: `You have used ${family} many times in the last few actions without getting further, so this one was not run. Take a different route: another link or section of the site, a page you have not opened, or report what you found.`,
+        };
+        await this._store.append({ type: "note", payload: { kind: "repeat_blocked", actionType: action.type, family, blocked: this._repeatBlocked } });
+        if (this._repeatBlocked >= REPEAT_BLOCK_PAUSE) {
+          await this._pauseWith("no_progress");
+          return "stop_loop";
+        }
+        return "continue";
+      }
       if (this._repeatFailureLimit > 0 && (this._repeatFailures.get(repeatActionKey(action)) ?? 0) >= this._repeatFailureLimit) {
         this._repeatBlocked += 1;
         this._repeatFeedback = {
@@ -3210,6 +3228,19 @@ class TaskController {
       }
     }
 
+    if (this._repeatFailureLimit > 0 && result.action) {
+      this._familyWindow.push(actionFamily(result.action));
+      if (this._familyWindow.length > FAMILY_WINDOW) this._familyWindow.shift();
+      const family = actionFamily(result.action);
+      if (family && this._familyWindow.filter((f) => f === family).length === FAMILY_WARN && !this._repeatFeedback) {
+        this._repeatFeedback = {
+          note: "repeat_family",
+          actionType: result.action.type,
+          guidance: `You have used ${family} ${FAMILY_WARN} times in the last few actions. If it is not getting you further, change approach now instead of trying another variant.`,
+        };
+      }
+    }
+
     // Scrolling the same page again and again is a loop even when each scroll
     // reveals slightly different text (so the identical-observation key below
     // never repeats): pause instead of burning the whole time budget on it.
@@ -3310,6 +3341,15 @@ class TaskController {
 // Errors that repeat identically when the same action is run again (the page or target is what is wrong).
 const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found", "http_get_not_allowed", "http_get_content_type", "invalid_http_get", "os_denied", "os_unavailable", "invalid_os_action", "os_stopped"]);
 const REPEAT_BLOCK_PAUSE = 3;
+// A kind of action that tends to loop. type is not one: a long form legitimately types many fields.
+const FAMILY_WINDOW = 12;
+const FAMILY_WARN = 3;
+const FAMILY_BLOCK = 5;
+function actionFamily(action) {
+  if (action?.type === "find_text") return "find_text";
+  if (action?.type === "submit_form") return "submit_form";
+  return null;
+}
 // Same action, ignoring the per-observation/per-request ids that change every turn.
 function repeatActionKey(action) {
   const { observationId, requestId, id, actionId, ...rest } = action ?? {};
