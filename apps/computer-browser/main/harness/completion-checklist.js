@@ -44,8 +44,16 @@ function conditionsIn(goalText) {
   return [...out];
 }
 
-// { ok, failures: [{ code, guidance }] }
-function runChecklist({ answer, goalText = "", observation = null, observedTexts = [], observedUrls = [], kind = "answer" }) {
+// Reward scoring (opt-in via minScore). Each satisfied item earns a point; hard failures (empty, gave up,
+// blocked page) always block. With minScore set, the answer is submitted once score >= minScore, and
+// below it the planner is told to investigate more. Without minScore every failure blocks, as before.
+const HARD = new Set(["answer_empty", "answer_gave_up", "final_page_blocked"]);
+const SCORE_MAX = 7;
+function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return null; } }
+function siteKey(host) { const p = host.split("."); return p.slice(-2).join("."); }
+
+// { ok, failures: [{ code, guidance }], score, max }
+function runChecklist({ answer, goalText = "", observation = null, observedTexts = [], observedUrls = [], kind = "answer", minScore = null }) {
   const failures = [];
   const text = typeof answer === "string" ? answer.trim() : "";
   const finishing = kind === "finish";
@@ -66,7 +74,19 @@ function runChecklist({ answer, goalText = "", observation = null, observedTexts
     const unseen = conditionsIn(goalText).filter((c) => !haystack.includes(c.replace(/,/g, "")));
     if (unseen.length > 0) failures.push({ code: "condition_not_seen", guidance: `The task names ${unseen.slice(0, 5).map((c) => `"${c}"`).join(", ")}, which no page you opened shows. Apply that condition on the site and confirm it on screen before reporting.` });
   }
-  return { ok: failures.length === 0, failures };
+  const codes = new Set(failures.map((f) => f.code));
+  const sites = new Set(observedUrls.map(hostOf).filter(Boolean).map(siteKey));
+  const cites = /https?:\/\/\S+/i.test(text);
+  const score = [!codes.has("answer_empty") && (text || finishing) ? 1 : 0, !codes.has("answer_gave_up") ? 1 : 0, !codes.has("final_page_blocked") ? 1 : 0,
+    !codes.has("value_not_on_opened_pages") ? 1 : 0, !codes.has("condition_not_seen") ? 1 : 0, cites || finishing ? 1 : 0, sites.size >= 2 ? 1 : 0].reduce((a, b) => a + b, 0);
+  if (Number.isInteger(minScore) && minScore > 0) {
+    const hard = failures.filter((f) => HARD.has(f.code));
+    if (hard.length > 0) return { ok: false, failures: hard, score, max: SCORE_MAX };
+    if (score >= minScore) return { ok: true, failures: [], score, max: SCORE_MAX };
+    const soft = failures.length > 0 ? failures : [{ code: "score_below_threshold", guidance: "Evidence is thin: cite the page you read and confirm it on a second independent site before answering." }];
+    return { ok: false, failures: soft.map((f) => ({ ...f, guidance: `${f.guidance} (checklist score ${score}/${SCORE_MAX}, need ${minScore}; investigate more)` })), score, max: SCORE_MAX };
+  }
+  return { ok: failures.length === 0, failures, score, max: SCORE_MAX };
 }
 
 module.exports = { conditionsIn, runChecklist, pageIsBlocked, numbersIn };

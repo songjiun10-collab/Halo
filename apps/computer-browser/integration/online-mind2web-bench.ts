@@ -12,6 +12,7 @@
 //   HALO_BENCH_LIMIT=N      only the first N tasks (default: all)
 //   HALO_BENCH_NO_GROUNDING=1 turn off the source check on answers (on by default here: an answer citing a page the run never opened is sent back)
 //   HALO_BENCH_NO_GIVE_UP=1 bench only: a need_user that is not a source-checked answer is sent back, so a stuck task ends on the action/call/time limits
+//   HALO_BENCH_CHECKLIST_MIN_SCORE=N reward scoring: submit once the checklist score (0..7) reaches N, investigate more below it; hard failures (empty, gave up, blocked page) always block
 //   HALO_BENCH_RESUME=<dir> continue an earlier output directory, skipping finished tasks
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -148,7 +149,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
       finishEvidenceRejections: 1, repeatFailureLimit: 2,
       groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1",
       giveUpRefusals: process.env.HALO_BENCH_NO_GIVE_UP === "1" ? 1000 : 0,
-      completionChecklist: process.env.HALO_BENCH_NO_CHECKLIST === "1" ? null : (input: any) => { const r = runChecklist(input); checklistLog.push({ call: calls, codes: r.failures.map((f: any) => f.code) }); return r; },
+      completionChecklist: process.env.HALO_BENCH_NO_CHECKLIST === "1" ? null : (input: any) => { const r = runChecklist({ ...input, minScore: Number(process.env.HALO_BENCH_CHECKLIST_MIN_SCORE) || null }); checklistLog.push({ call: calls, codes: r.failures.map((f: any) => f.code) }); return r; },
       approve: profile.approve, hostVerifier: () => false,
       planner: { close: () => planner.close(), next: async (context: any, options: any) => {
         calls++;
