@@ -12,7 +12,7 @@
 //   HALO_BENCH_LIMIT=N      only the first N tasks (default: all)
 //   HALO_BENCH_NO_GROUNDING=1 turn off the source check on answers (on by default here: an answer citing a page the run never opened is sent back)
 //   HALO_BENCH_NO_GIVE_UP=1 bench only: a need_user that is not a source-checked answer is sent back, so a stuck task ends on the action/call/time limits
-//   HALO_BENCH_CHECKLIST_MIN_SCORE=N reward scoring: submit once the checklist score (0..7) reaches N, investigate more below it; hard failures (empty, gave up, blocked page) always block
+//   HALO_BENCH_CHECKLIST_MIN_SCORE=N reward scoring: submit once the weighted checklist score (0..10) reaches N, investigate more below it; hard failures (empty, gave up, blocked page) always block
 //   HALO_BENCH_RESUME=<dir> continue an earlier output directory, skipping finished tasks
 const fs = require("node:fs/promises");
 const path = require("node:path");

@@ -48,7 +48,9 @@ function conditionsIn(goalText) {
 // blocked page) always block. With minScore set, the answer is submitted once score >= minScore, and
 // below it the planner is told to investigate more. Without minScore every failure blocks, as before.
 const HARD = new Set(["answer_empty", "answer_gave_up", "final_page_blocked"]);
-const SCORE_MAX = 7;
+// Weights per item: the substantive evidence checks count more than form checks.
+const WEIGHTS = { answer: 1, notGaveUp: 1, pageOk: 1, valuesSeen: 3, conditionsSeen: 2, cites: 1, twoSites: 1 };
+const SCORE_MAX = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
 function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return null; } }
 function siteKey(host) { const p = host.split("."); return p.slice(-2).join("."); }
 
@@ -77,8 +79,9 @@ function runChecklist({ answer, goalText = "", observation = null, observedTexts
   const codes = new Set(failures.map((f) => f.code));
   const sites = new Set(observedUrls.map(hostOf).filter(Boolean).map(siteKey));
   const cites = /https?:\/\/\S+/i.test(text);
-  const score = [!codes.has("answer_empty") && (text || finishing) ? 1 : 0, !codes.has("answer_gave_up") ? 1 : 0, !codes.has("final_page_blocked") ? 1 : 0,
-    !codes.has("value_not_on_opened_pages") ? 1 : 0, !codes.has("condition_not_seen") ? 1 : 0, cites || finishing ? 1 : 0, sites.size >= 2 ? 1 : 0].reduce((a, b) => a + b, 0);
+  const score = (!codes.has("answer_empty") && (text || finishing) ? WEIGHTS.answer : 0) + (!codes.has("answer_gave_up") ? WEIGHTS.notGaveUp : 0)
+    + (!codes.has("final_page_blocked") ? WEIGHTS.pageOk : 0) + (!codes.has("value_not_on_opened_pages") ? WEIGHTS.valuesSeen : 0)
+    + (!codes.has("condition_not_seen") ? WEIGHTS.conditionsSeen : 0) + (cites || finishing ? WEIGHTS.cites : 0) + (sites.size >= 2 ? WEIGHTS.twoSites : 0);
   if (Number.isInteger(minScore) && minScore > 0) {
     const hard = failures.filter((f) => HARD.has(f.code));
     if (hard.length > 0) return { ok: false, failures: hard, score, max: SCORE_MAX };
@@ -89,4 +92,4 @@ function runChecklist({ answer, goalText = "", observation = null, observedTexts
   return { ok: failures.length === 0, failures, score, max: SCORE_MAX };
 }
 
-module.exports = { conditionsIn, runChecklist, pageIsBlocked, numbersIn };
+module.exports = { conditionsIn, runChecklist, pageIsBlocked, numbersIn, WEIGHTS, SCORE_MAX };
