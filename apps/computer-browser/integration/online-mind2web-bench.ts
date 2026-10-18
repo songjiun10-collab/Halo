@@ -70,13 +70,13 @@ function plannerWorker(model: string): { file: string; args: string[] } {
 }
 
 // blocked_by_captcha is decided from the final page only (URL/title heuristics the host already uses).
-function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null, answered = false, blockedPage = false): string {
+function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null, answered = false, blockedPage = false, unverified = false): string {
   if (errorCode) return "runner_error";
   if (looksLikeCaptcha(finalUrl, finalTitle)) return "blocked_by_captcha";
   if (snapshot?.state === "completed") return "finished";
   // A lookup answer arrives as need_user.reason; with an answer recorded the run is "answered", not stopped.
   // An answer reported from a block or error page is a blocked run, not an answered one.
-  if (answered && snapshot?.pauseReason === "need_user") return blockedPage ? "blocked_report" : "answered";
+  if (answered && snapshot?.pauseReason === "need_user") return blockedPage ? "blocked_report" : unverified ? "unverified_report" : "answered";
   return `stopped:${snapshot?.pauseReason ?? snapshot?.state ?? "unknown"}`;
 }
 
@@ -152,7 +152,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
     clearTimeout(timer);
     if (controller) snapshot = controller.getSnapshot();
     try { finalUrl = view?.webContents.getURL() ?? ""; finalTitle = view?.webContents.getTitle?.() ?? ""; } catch { /* page already gone */ }
-    const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0, pageIsBlocked({ url: finalUrl, title: finalTitle }));
+    const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0, pageIsBlocked({ url: finalUrl, title: finalTitle }), (checklistLog[checklistLog.length - 1]?.codes.length ?? 0) > 0);
     const result = { schema_version: "online-mind2web-v2", task: task.confirmed_task, task_id: task.task_id,
       agent_final_answer: finalAnswer, reference_length: task.reference_length, action_history: history };
     const run = { schemaVersion: 1, benchmark: "Online-Mind2Web", model, benchProfile: profile.name, noGiveUp: process.env.HALO_BENCH_NO_GIVE_UP === "1", groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1", safetyDisabled: profile.safetyDisabled, harness: "Halo",
