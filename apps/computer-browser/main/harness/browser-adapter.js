@@ -1024,7 +1024,8 @@ class BrowserAdapter {
     // document, so a caller-supplied documentEpoch that no longer matches
     // means the proposal was based on a page that has since navigated away
     // -- reject without executing rather than act on stale context.
-    if (action.type !== "navigate" && documentEpoch != null && documentEpoch !== this._documentEpoch) {
+    // An explicit observe re-reads whatever is loaded now, so a moved page cannot make it act on stale context.
+    if (action.type !== "navigate" && action.type !== "observe" && documentEpoch != null && documentEpoch !== this._documentEpoch) {
       return { status: "cancelled", errorCode: "stale_document" };
     }
 

@@ -444,6 +444,19 @@ test("an older navigate() call that resolves after a newer one has started does 
 // --- documentEpoch staleness: an action referencing an older document must
 // be rejected without executing, not silently acted on.
 
+test("execute(observe) reads the page that is loaded now instead of cancelling on a stale documentEpoch", async () => {
+  const view = makeFakeView({
+    executeJavaScript: async () => ({ url: "https://example.com/", title: "", text: "now", elements: [] }),
+  });
+  const adapter = new BrowserAdapter({ view });
+  await adapter.execute({ type: "navigate", url: "https://example.com" }); // epoch -> 1
+
+  const result = await adapter.execute({ type: "observe" }, { documentEpoch: 0 });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.observation.documentEpoch, adapter.getDocumentEpoch());
+});
+
 test("execute(scroll) rejects a stale documentEpoch without scrolling", async () => {
   let scrolled = false;
   const view = makeFakeView({

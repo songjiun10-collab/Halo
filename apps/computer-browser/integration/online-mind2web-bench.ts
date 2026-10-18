@@ -106,7 +106,9 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
   try {
     const benchProfile = process.env.HALO_BENCH_PROFILE;
     // A dedicated demo profile (no personal accounts). The host still requires an absolute, owned, 0700 directory.
-    launched = await acquireCdpBrowser(benchProfile ? { headless: true, benchProfile: true, profilePath: benchProfile } : { headless: true });
+    // HALO_BENCH_HEADED=1 shows a real window; it needs a full Chromium binary (HALO_CHROMIUM), not headless_shell.
+    const headless = process.env.HALO_BENCH_HEADED !== "1";
+    launched = await acquireCdpBrowser(benchProfile ? { headless, benchProfile: true, profilePath: benchProfile } : { headless });
     view = await openCdpView(launched.wsUrl, { width: 1440, height: 900 });
     browser = new BrowserAdapter({ view, navigationTimeoutMs: 20000 });
     const execute = browser.execute.bind(browser);
