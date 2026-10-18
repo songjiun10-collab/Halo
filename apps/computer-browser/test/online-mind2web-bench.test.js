@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile } = require("../integration/online-mind2web-bench.ts");
+const { selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile, hedgedAnswer } = require("../integration/online-mind2web-bench.ts");
 
 const row = (i, over = {}) => ({ task_id: `t${i}`, confirmed_task: "Find a thing", website: "https://example.test/", reference_length: 5, level: "easy", ...over });
 
@@ -71,4 +71,16 @@ test("plannerWorker sends oc: ids to the OpenCode worker", () => {
   const w = plannerWorker("oc:nvidia/deepseek-ai/deepseek-v4.1-flash");
   assert.ok(w.file.endsWith("opencode-planner-worker.js"));
   assert.deepEqual(w.args, ["--model", "nvidia/deepseek-ai/deepseek-v4.1-flash"]);
+});
+
+test("an answer that admits it is incomplete or asks the user to choose is hedged_answer, not answered", () => {
+  const nu = { state: "paused", pauseReason: "need_user" };
+  assert.equal(hedgedAnswer("증상은 아직 확인하지 못했습니다."), true);
+  assert.equal(hedgedAnswer("어떤 기준으로 할지 정해 주시겠어요?"), true);
+  assert.equal(hedgedAnswer("Let me know which review you prefer, or which would you prefer?"), true);
+  assert.equal(hedgedAnswer("참고: 실제 결제 단계까지는 확인하지 않았습니다."), false, "a caveat on a finished answer is not a refusal");
+  assert.equal(hedgedAnswer("Standard 플랜은 월 $100입니다. 출처: https://example.test/pricing"), false);
+  assert.equal(classify(nu, "https://a.test/", "A", null, true, false, false, true), "hedged_answer");
+  assert.equal(classify(nu, "https://a.test/", "A", null, true, false, false, false), "answered");
+  assert.equal(classify(nu, "https://a.test/", "A", null, true, false, true, true), "unverified_report", "unverified still wins");
 });

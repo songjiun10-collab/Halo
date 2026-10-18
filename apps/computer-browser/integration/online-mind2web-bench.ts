@@ -74,8 +74,13 @@ function plannerWorker(model: string): { file: string; args: string[] } {
     : { file: path.join(dir, "codex-planner-worker.js"), args: ["--model", model] };
 }
 
+// An answer that admits it is incomplete or hands the choice back to the user is not a success claim.
+// Heuristic on the final answer text only (Korean and English); it labels, it never changes the run.
+const HEDGE = /(정해 주시|정해주시|어떻게 할까요|판단할 근거가 부족|완전한 답변을 드리기 어렵|증상은 아직 확인하지 못|which would you prefer|let me know (which|how) )/i;
+function hedgedAnswer(text: string): boolean { return HEDGE.test(String(text || "")); }
+
 // blocked_by_captcha is decided from the final page only (URL/title heuristics the host already uses).
-function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null, answered = false, blockedPage = false, unverified = false): string {
+function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null, answered = false, blockedPage = false, unverified = false, hedged = false): string {
   if (errorCode) return "runner_error";
   if (looksLikeCaptcha(finalUrl, finalTitle)) return "blocked_by_captcha";
   if (snapshot?.state === "completed") return unverified ? "unverified_finish" : "finished";
@@ -83,7 +88,7 @@ function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode
   if (snapshot?.state === "awaiting_verification") return unverified ? "unverified_finish" : "unconfirmed_finish";
   // A lookup answer arrives as need_user.reason; with an answer recorded the run is "answered", not stopped.
   // An answer reported from a block or error page is a blocked run, not an answered one.
-  if (answered && snapshot?.pauseReason === "need_user") return blockedPage ? "blocked_report" : unverified ? "unverified_report" : "answered";
+  if (answered && snapshot?.pauseReason === "need_user") return blockedPage ? "blocked_report" : unverified ? "unverified_report" : hedged ? "hedged_answer" : "answered";
   return `stopped:${snapshot?.pauseReason ?? snapshot?.state ?? "unknown"}`;
 }
 
@@ -161,7 +166,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
     clearTimeout(timer);
     if (controller) snapshot = controller.getSnapshot();
     try { finalUrl = view?.webContents.getURL() ?? ""; finalTitle = view?.webContents.getTitle?.() ?? ""; } catch { /* page already gone */ }
-    const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0, pageIsBlocked({ url: finalUrl, title: finalTitle }), (checklistLog[checklistLog.length - 1]?.codes.length ?? 0) > 0);
+    const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0, pageIsBlocked({ url: finalUrl, title: finalTitle }), (checklistLog[checklistLog.length - 1]?.codes.length ?? 0) > 0, hedgedAnswer(finalAnswer));
     const result = { schema_version: "online-mind2web-v2", task: task.confirmed_task, task_id: task.task_id,
       agent_final_answer: finalAnswer, reference_length: task.reference_length, action_history: history };
     const run = { schemaVersion: 1, benchmark: "Online-Mind2Web", model, benchProfile: profile.name, noGiveUp: process.env.HALO_BENCH_NO_GIVE_UP === "1", groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1", safetyDisabled: profile.safetyDisabled, harness: "Halo",
@@ -217,7 +222,7 @@ async function main() {
   await fs.writeFile(path.join(output, "summary.json"), JSON.stringify({ manifest, tally, runs }, null, 2), { mode: 0o600 });
   process.stdout.write(JSON.stringify({ event: "bench_finished", output, attempted: runs.length, tally, graded: false }) + "\n");
 }
-module.exports = { selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile };
+module.exports = { selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile, hedgedAnswer };
 if (require.main === module) {
   // A run that dies mid-task used to leave no trace; print what killed it.
   process.on("uncaughtException", (error: any) => { console.error("bench_uncaught", error?.stack ?? error); process.exit(1); });
