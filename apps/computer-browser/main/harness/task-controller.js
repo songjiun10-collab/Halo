@@ -1100,14 +1100,14 @@ class TaskController {
   // Bounded self-recovery: a transient failure or a loop gets a couple of
   // automatic retries before the task pauses and asks the person. Never used
   // for waits that belong to the person (need_user, approvals, takeover).
-  async _tryRecover(reason, step) {
+  async _tryRecover(reason, step, detail) {
     const granted = this._recovery.tryConsume(reason);
     if (!granted) return reason === "planner_error" || reason === "no_progress" ? this._tryEscalate(reason) : false;
     // Retry only after its budget charge is durable. A crash before checkpoint
     // replays this complete bounded state from the validated journal tail.
     try {
       await this._store.append({ type: "note", payload: { kind: "recovery", reason, step, attempt: granted.attempt, total: granted.total,
-        recoveryBudget: this._recovery.snapshot() } });
+        recoveryBudget: this._recovery.snapshot(), ...(detail ? { detail } : {}) } });
     } catch {
       return false; // No durable charge: take the caller's normal pause path.
     }
@@ -1135,13 +1135,13 @@ class TaskController {
     return true;
   }
 
-  async _pauseWith(reason) {
+  async _pauseWith(reason, detail) {
     this._leaveActive();
     this._finishFeedback = null;
     this._task = { state: "paused", pauseReason: reason };
     // Pause reasons otherwise live only in the latest checkpoint; keep each one
     // in the journal so "why does it keep pausing" can be answered afterwards.
-    await this._store.append({ type: "note", payload: { kind: "paused", reason } }).catch(() => {});
+    await this._store.append({ type: "note", payload: { kind: "paused", reason, ...(detail ? { detail } : {}) } }).catch(() => {});
     await this._checkpoint();
     this._emit();
   }
@@ -2018,6 +2018,7 @@ class TaskController {
           // not a broken page: wait briefly and observe the settled one. Any
           // other failure, or a page that never settles, still fails closed.
           let failed = false;
+          let observeDetail;
           for (let attempt = 0; ; attempt += 1) {
             try {
               observation = await this._browser.observe({
@@ -2032,13 +2033,14 @@ class TaskController {
                 continue;
               }
               failed = true;
+              observeDetail = `${error?.code || "error"}: ${String(error?.message || "").slice(0, 200)}`;
               break;
             }
           }
           if (this._stopHappenedSince(epoch)) break;
           if (failed) {
-            if (await this._tryRecover("observation_error", "re-observe")) { this._reusableObservation = null; continue; }
-            await this._pauseWith("observation_error");
+            if (await this._tryRecover("observation_error", "re-observe", observeDetail)) { this._reusableObservation = null; continue; }
+            await this._pauseWith("observation_error", observeDetail);
             break;
           }
         }
