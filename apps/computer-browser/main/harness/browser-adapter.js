@@ -1270,7 +1270,7 @@ class BrowserAdapter {
             if (!valid()) return failed("stale_element");
             started = true; HTMLFormElement.prototype.requestSubmit.call(form, submitter);
           } else {
-            const allowed = ["button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "textbox", "searchbox", "combobox"];
+            const allowed = ["button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "option", "textbox", "searchbox", "combobox"];
             if (!allowed.includes(state.nodes[Number(action.elementId)].node.getAttribute("role") || ${JSON.stringify(entry.role)}) ||
                 (node.tagName === "INPUT" && ["file", "password"].includes((node.getAttribute("type") || "").toLowerCase())) || node.hasAttribute("download")) return failed("unsupported_click");
             const info = state.formInfo(node);

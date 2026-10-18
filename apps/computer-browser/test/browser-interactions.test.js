@@ -88,6 +88,17 @@ test("click dispatches on the observed DOM node in an isolated world, once", asy
   assert.deepEqual(p.events, ["click"]);
 });
 
+test("an autocomplete suggestion (role option) can be clicked; roles outside the allowlist still cannot", async () => {
+  const p = page(); p.button.attrs.role = "option";
+  const { action, documentEpoch } = await actionFor(p, "click", "Save");
+  assert.equal((await p.browser.execute(action, { documentEpoch })).status, "ok");
+  assert.deepEqual(p.events, ["click"]);
+  const q = page(); q.button.attrs.role = "heading";
+  const refused = await actionFor(q, "click", "Save");
+  assert.equal((await q.browser.execute(refused.action, { documentEpoch: refused.documentEpoch })).errorCode, "unsupported_click");
+  assert.deepEqual(q.events, []);
+});
+
 test("type uses a native setter and input/change events without evaluating user text", async () => {
   const p = page(), text = '한글 ${globalThis.pwned=true} \\" </script>';
   const { action, documentEpoch } = await actionFor(p, "type", "Title", { text });
