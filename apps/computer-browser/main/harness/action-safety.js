@@ -24,6 +24,7 @@ const SAFETY_DECLARATIONS = Object.freeze({
     observe: Object.freeze(reads("observe")),
     scroll: Object.freeze(reads("scroll")),
     find_text: Object.freeze(reads("find_text (it only scrolls a matching passage into view)")),
+    http_get: Object.freeze(reads("http_get (a keyless, cookieless GET to the same site; it changes nothing)")),
     navigate: Object.freeze(reads("navigate (a payment needs a button press on the page it opens)")),
     follow_link: Object.freeze(reads("follow_link (a link only navigates; the payment press happens on the destination page)")),
     click: Object.freeze({

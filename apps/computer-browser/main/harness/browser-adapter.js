@@ -115,7 +115,22 @@ const MAX_OPTION_LABEL = 120;
 const SHOWN_OPTION_LABEL = 60;
 const INTERACTION_ACTIONS = new Set(["click", "type", "select_option", "submit_form"]);
 const MAX_FIND_TEXT = 200;
-const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find_text", "observe", "click_at", "type_at", "press_key", "play_loop", ...INTERACTION_ACTIONS]);
+// http_get: a keyless, cookieless read of a site's own public API. Bounded in bytes, time and hops.
+const HTTP_GET_MAX_URL = 2000;
+const HTTP_GET_MAX_BYTES = 256 * 1024;
+const HTTP_GET_PLANNER_CHARS = 12 * 1024;
+const HTTP_GET_TIMEOUT_MS = 10000;
+const HTTP_GET_MAX_REDIRECTS = 3;
+const HTTP_GET_TYPES = /^(application\/(json|[\w.+-]+\+json|xml|[\w.+-]+\+xml|ld\+json)|text\/(plain|xml|csv|html))\b/i;
+// Two labels, or three under a country second-level suffix (co.uk, com.au ...): the site a name belongs to.
+function siteOf(hostname) {
+  const labels = String(hostname).toLowerCase().replace(/\.$/, "").split(".");
+  if (labels.length <= 2) return labels.join(".");
+  const second = labels[labels.length - 2];
+  const take = labels[labels.length - 1].length === 2 && ["co", "com", "org", "net", "gov", "ac", "ne", "or", "go"].includes(second) ? 3 : 2;
+  return labels.slice(-take).join(".");
+}
+const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find_text", "http_get", "observe", "click_at", "type_at", "press_key", "play_loop", ...INTERACTION_ACTIONS]);
 
 // Runs in the host's isolated world on every pass of play_loop. For each lane it reads one pixel of the largest
 // canvas (the lane's point is in viewport fractions, like a click) and says whether it is within `tolerance` of the
@@ -1048,6 +1063,8 @@ class BrowserAdapter {
         return this._scroll(action.direction, action.amount);
       case "find_text":
         return this._findText(action.text);
+      case "http_get":
+        return this._httpGet(action.url, { signal });
       case "observe":
         try {
           const observation = await this.observe({ signal });
@@ -1457,6 +1474,69 @@ class BrowserAdapter {
       return { status: "failed", errorCode: "find_text_failed" };
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  // GET a public API of the site the person is on. Same site only (api.x.com from x.com), https only, no
+  // cookies, no credentials, no private addresses, and every redirect is judged again. The reply is data:
+  // it is shown to the planner as untrusted page content and never acted on by the host.
+  async _httpGet(rawUrl, { signal } = {}) {
+    if (typeof rawUrl !== "string" || rawUrl.length === 0 || rawUrl.length > HTTP_GET_MAX_URL) return { status: "failed", errorCode: "invalid_http_get" };
+    const wc = this._view.webContents;
+    let pageHost;
+    try { pageHost = new URL(typeof wc.getURL === "function" ? wc.getURL() : "").hostname; } catch { return { status: "failed", errorCode: "http_get_no_page" }; }
+    const site = siteOf(pageHost);
+    const allowed = (candidate) => candidate.protocol === "https:" && !candidate.username && !candidate.password &&
+      !isPrivateHost(candidate.hostname) && siteOf(candidate.hostname) === site;
+    let target;
+    try { target = new URL(rawUrl); } catch { return { status: "failed", errorCode: "invalid_http_get" }; }
+    if (!allowed(target)) return { status: "failed", errorCode: "http_get_not_allowed" };
+    if (typeof fetch !== "function") return { status: "failed", errorCode: "unsupported_action" };
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (signal) { if (signal.aborted) return { status: "cancelled", errorCode: "aborted" }; signal.addEventListener("abort", onAbort, { once: true }); }
+    const timer = setTimeout(() => controller.abort(), HTTP_GET_TIMEOUT_MS);
+    try {
+      let response;
+      for (let hop = 0; ; hop += 1) {
+        response = await fetch(target.href, {
+          method: "GET", redirect: "manual", credentials: "omit", signal: controller.signal,
+          headers: { accept: "application/json, text/plain;q=0.8, */*;q=0.1" },
+        });
+        if (response.status < 300 || response.status >= 400) break;
+        const location = response.headers.get("location");
+        if (!location || hop >= HTTP_GET_MAX_REDIRECTS) return { status: "failed", errorCode: "http_get_redirect" };
+        let next;
+        try { next = new URL(location, target); } catch { return { status: "failed", errorCode: "http_get_redirect" }; }
+        if (!allowed(next)) return { status: "failed", errorCode: "http_get_not_allowed" };
+        target = next;
+      }
+      const contentType = response.headers.get("content-type") || "";
+      if (!HTTP_GET_TYPES.test(contentType)) return { status: "failed", errorCode: "http_get_content_type" };
+      const chunks = [];
+      let size = 0;
+      let truncated = false;
+      const reader = response.body?.getReader?.();
+      if (!reader) return { status: "failed", errorCode: "http_get_failed" };
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > HTTP_GET_MAX_BYTES) { truncated = true; await reader.cancel().catch(() => {}); break; }
+        chunks.push(value);
+      }
+      const text = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+      const clipped = text.length > HTTP_GET_PLANNER_CHARS;
+      return {
+        status: response.status >= 200 && response.status < 300 ? "ok" : "failed",
+        ...(response.status >= 200 && response.status < 300 ? {} : { errorCode: "http_get_status" }),
+        httpGet: { url: target.href, httpStatus: response.status, contentType: contentType.split(";")[0].trim(), text: text.slice(0, HTTP_GET_PLANNER_CHARS), truncated: truncated || clipped },
+      };
+    } catch (error) {
+      return { status: "failed", errorCode: signal?.aborted ? "aborted" : "http_get_failed" };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
     }
   }
 

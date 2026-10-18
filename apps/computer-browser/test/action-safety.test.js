@@ -31,6 +31,7 @@ const CRAFTED = {
   observe: { type: "observe" },
   scroll: { type: "scroll", direction: "down", amount: 3 },
   find_text: { type: "find_text", text: "Add to cart" },
+  http_get: { type: "http_get", url: "https://api.example.com/v1/items" },
   navigate: { type: "navigate", url: "https://shop.example/checkout" },
   follow_link: { type: "follow_link", elementId: "more" },
   click: { type: "click", elementId: "pay" },

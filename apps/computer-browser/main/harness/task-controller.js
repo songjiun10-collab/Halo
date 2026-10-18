@@ -66,6 +66,9 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
     if (element && typeof element.href === "string") return element.href;
     return typeof action.elementId === "string" ? `element ${action.elementId}` : null;
   }
+  if (action.type === "http_get") {
+    return typeof action.url === "string" ? action.url.slice(0, 300) : null;
+  }
   if (action.type === "find_text") {
     return typeof action.text === "string" ? JSON.stringify(action.text.slice(0, 80)) : null;
   }
@@ -2229,6 +2232,7 @@ class TaskController {
               ...(this._harnessProfile === "fast" ? { fastMode: true } : {}),
               ...(this._loopHint ? { loopWarning: true } : {}),
               ...(this._lastActionNote ? { lastAction: this._lastActionNote } : {}),
+              ...(this._apiResponse ? { apiResponse: this._apiResponse } : {}),
               ...(this._scrollStreak.count >= 3 ? { scrollStreak: this._scrollStreak.count } : {}),
               ...(this._errorUrls.length > 0 ? { errorUrls: [...this._errorUrls] } : {}),
               ...(this._finishFeedback ? { finishFeedback: { ...this._finishFeedback } } : {}),
@@ -3138,6 +3142,22 @@ class TaskController {
     } else {
       this._lastActionNote = undefined;
     }
+    // An API reply is kept for the next planner turn and counts as read text, so the checklist can match
+    // a value to its source. It is page-derived: the planner is told so and the host never acts on it.
+    if (action.type === "http_get" && result.httpGet) {
+      this._apiResponse = { ...result.httpGet, text: String(result.httpGet.text ?? "").slice(0, 12000), authority: "untrusted_page_derived" };
+      this._observedTexts.delete(result.httpGet.url);
+      this._observedTexts.set(result.httpGet.url, String(result.httpGet.text ?? "").slice(0, 20000));
+      if (this._observedTexts.size > 40) this._observedTexts.delete(this._observedTexts.keys().next().value);
+      if (this._isResearchTask() && result.status === "ok") {
+        const ledger = await this._hydrateResearchLedger();
+        if (ledger.add({ url: result.httpGet.url, title: "API response", at: Date.now() })) {
+          await this._store.append({ type: "note", payload: { kind: "research_source", url: result.httpGet.url, title: "API response", at: Date.now() } });
+        }
+      }
+    } else if (action.type !== "http_get") {
+      this._apiResponse = undefined;
+    }
     this._easyStreak = result.status === "ok" && ["navigate", "follow_link"].includes(action.type) ? this._easyStreak + 1 : 0;
     // durable:false: the NEXT action_started's own durable append (same
     // loop, common case) or the checkpoint at whatever pause/stop follows
@@ -3277,7 +3297,7 @@ class TaskController {
 }
 
 // Errors that repeat identically when the same action is run again (the page or target is what is wrong).
-const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found"]);
+const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found", "http_get_not_allowed", "http_get_content_type", "invalid_http_get"]);
 const REPEAT_BLOCK_PAUSE = 3;
 // Same action, ignoring the per-observation/per-request ids that change every turn.
 function repeatActionKey(action) {

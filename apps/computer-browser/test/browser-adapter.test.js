@@ -1237,3 +1237,43 @@ test("section headings stay in the observation after the element cap is full of 
   assert.equal(observation.elements.filter((entry) => entry.role === "link").length, 3);
   assert.ok(observation.elements.some((entry) => entry.role === "heading" && entry.name === "3.1.2. GPT-6 Sol"));
 });
+
+// --- http_get: a keyless, same-site, read-only GET.
+
+test("http_get reads a same-site https API, refuses other sites, http, private hosts and cross-site redirects", async () => {
+  const view = makeFakeView({ executeJavaScript: async () => ({ url: "https://www.discogs.com/", title: "", text: "", elements: [] }) });
+  const adapter = new BrowserAdapter({ view });
+  await adapter.execute({ type: "navigate", url: "https://www.discogs.com/" });
+  view.webContents.getURL = () => "https://www.discogs.com/";
+  const realFetch = global.fetch;
+  const calls = [];
+  const json = (body, init = {}) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" }, ...init });
+  global.fetch = async (url, init) => {
+    calls.push({ url, init });
+    if (url.includes("/redirect-out")) return new Response(null, { status: 302, headers: { location: "https://evil.example.net/x" } });
+    if (url.includes("/redirect-in")) return new Response(null, { status: 302, headers: { location: "https://api.discogs.com/ok" } });
+    if (url.includes("/html-bomb")) return new Response("x", { status: 200, headers: { "content-type": "image/png" } });
+    return json({ hello: "world" });
+  };
+  try {
+    const ok = await adapter.execute({ type: "http_get", url: "https://api.discogs.com/database/search?q=a" });
+    assert.equal(ok.status, "ok");
+    assert.equal(ok.httpGet.httpStatus, 200);
+    assert.match(ok.httpGet.text, /hello/);
+    assert.equal(calls[0].init.credentials, "omit");
+    assert.equal(calls[0].init.redirect, "manual");
+    assert.equal(calls[0].init.method, "GET");
+    for (const url of ["https://api.other.com/x", "http://api.discogs.com/x", "https://127.0.0.1/x", "https://user:pw@api.discogs.com/x", "ftp://api.discogs.com/x"]) {
+      const refused = await adapter.execute({ type: "http_get", url });
+      assert.equal(refused.errorCode, "http_get_not_allowed", url);
+    }
+    const before = calls.length;
+    assert.equal((await adapter.execute({ type: "http_get", url: "https://api.discogs.com/redirect-out" })).errorCode, "http_get_not_allowed");
+    assert.equal((await adapter.execute({ type: "http_get", url: "https://api.discogs.com/redirect-in" })).status, "ok");
+    assert.equal(calls.length, before + 3);
+    assert.equal((await adapter.execute({ type: "http_get", url: "https://api.discogs.com/html-bomb" })).errorCode, "http_get_content_type");
+    assert.equal((await adapter.execute({ type: "http_get", url: "" })).errorCode, "invalid_http_get");
+  } finally {
+    global.fetch = realFetch;
+  }
+});
