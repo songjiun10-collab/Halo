@@ -271,6 +271,7 @@ class TaskController {
     finishEvidenceRejections = 0,
     repeatFailureLimit = 0,
     giveUpRefusals = 0,
+    groundAnswers = false,
     maxRecoveries,
     plannerImageInput = true,
     visionAssist = null,
@@ -554,6 +555,8 @@ class TaskController {
     // Benchmark option: how many times a need_user that is not a source-checked answer is sent back before it is honoured.
     this._giveUpRefusals = Number.isInteger(giveUpRefusals) && giveUpRefusals > 0 ? giveUpRefusals : 0;
     this._giveUpRefused = 0;
+    // Benchmark option: apply the source-checked answer path to every task, not only research ones.
+    this._groundAnswers = groundAnswers === true;
     this._needUserReason = null;
     this._maxRecoveries = maxRecoveries;
     this._proposalFeedbackCode = null;
@@ -2638,7 +2641,7 @@ class TaskController {
   // Source-grounded research (capability "research"): the host, not the model, decides which sources
   // an answer may cite. See research-sources.js.
   _isResearchTask() {
-    return this._store.taskProfile?.capability?.id === "research";
+    return this._groundAnswers || this._store.taskProfile?.capability?.id === "research";
   }
 
   async _hydrateResearchLedger() {

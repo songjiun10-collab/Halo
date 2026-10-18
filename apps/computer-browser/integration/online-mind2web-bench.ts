@@ -10,6 +10,7 @@
 //
 // Run: [HALO_BENCH_PROFILE=/abs/private/demo-profile] [HALO_BENCH_OPEN_UNSAFE=1] HALO_BENCH_MODEL=claude-haiku-5-5 node integration/online-mind2web-bench.ts /abs/Online_Mind2Web.json
 //   HALO_BENCH_LIMIT=N      only the first N tasks (default: all)
+//   HALO_BENCH_NO_GROUNDING=1 turn off the source check on answers (on by default here: an answer citing a page the run never opened is sent back)
 //   HALO_BENCH_NO_GIVE_UP=1 bench only: a need_user that is not a source-checked answer is sent back, so a stuck task ends on the action/call/time limits
 //   HALO_BENCH_RESUME=<dir> continue an earlier output directory, skipping finished tasks
 const fs = require("node:fs/promises");
@@ -128,6 +129,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
       cwd: path.resolve(__dirname, ".."), timeoutMs: 120000, onUsage: (usage: any) => usages.push(usage) });
     controller = new TaskController({ store, browser, permissionMode: profile.permissionMode, harnessProfile: "middle", plannerEffort: "medium",
       finishEvidenceRejections: 1, repeatFailureLimit: 2,
+      groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1",
       giveUpRefusals: process.env.HALO_BENCH_NO_GIVE_UP === "1" ? 1000 : 0,
       approve: profile.approve, hostVerifier: () => false,
       planner: { close: () => planner.close(), next: async (context: any, options: any) => {
@@ -149,7 +151,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
     const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0);
     const result = { schema_version: "online-mind2web-v2", task: task.confirmed_task, task_id: task.task_id,
       agent_final_answer: finalAnswer, reference_length: task.reference_length, action_history: history };
-    const run = { schemaVersion: 1, benchmark: "Online-Mind2Web", model, benchProfile: profile.name, noGiveUp: process.env.HALO_BENCH_NO_GIVE_UP === "1", safetyDisabled: profile.safetyDisabled, harness: "Halo",
+    const run = { schemaVersion: 1, benchmark: "Online-Mind2Web", model, benchProfile: profile.name, noGiveUp: process.env.HALO_BENCH_NO_GIVE_UP === "1", groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1", safetyDisabled: profile.safetyDisabled, harness: "Halo",
       graded: false, success: null, taskId: task.task_id, level: task.level, verdict, state: snapshot?.state ?? "startup_error",
       pauseReason: snapshot?.pauseReason ?? null, errorCode, finalUrl, wallMs: benchClock.now() - started, plannerCalls: calls, reroutes,
       usages, budgets: snapshot?.budgets ?? null, actions: outcomes, proposals };

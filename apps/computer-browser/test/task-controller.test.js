@@ -2224,14 +2224,14 @@ test("an identical action that failed deterministically twice is not dispatched 
   await store.close();
 });
 
-function giveUpRun({ store, giveUpRefusals, turnsBeforeGiveUp = 0 }) {
+function giveUpRun({ store, giveUpRefusals, groundAnswers, reason }) {
   const contexts = [];
   let turn = 0;
   const controller = new TaskController({
     store,
     planner: { next: async (context) => {
       contexts.push(context);
-      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: `blocked ${turn++}` };
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: reason ?? `blocked ${turn++}` };
     } },
     browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
     approve: allowApprove(),
@@ -2239,8 +2239,9 @@ function giveUpRun({ store, giveUpRefusals, turnsBeforeGiveUp = 0 }) {
     harnessProfile: "middle",
     navIntervalMs: 0,
     ...(giveUpRefusals === undefined ? {} : { giveUpRefusals }),
+    ...(groundAnswers === undefined ? {} : { groundAnswers }),
   });
-  return { controller, contexts, turns: () => turn };
+  return { controller, contexts, turns: () => { return contexts.length; } };
 }
 
 test("giveUpRefusals sends an unverified need_user back with feedback until the budget is spent, then honours it", async () => {
@@ -2261,6 +2262,20 @@ test("giveUpRefusals is off by default: the first need_user pauses", async () =>
   assert.equal(snapshot.pauseReason, "need_user");
   assert.equal(turns(), 1);
   await store.close();
+});
+
+test("groundAnswers sends back an answer that cites a page the run never opened, on a task that is not a research task", async () => {
+  const reason = "The price is 5 dollars, see https://never-opened.example/price";
+  const on = await makeStore({ originalRequest: "ground on", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const grounded = giveUpRun({ store: on.store, groundAnswers: true, reason });
+  assert.equal((await grounded.controller.start()).pauseReason, "need_user");
+  assert.equal(grounded.contexts.length > 1, true, "the unsupported answer is sent back before it is delivered");
+  await on.store.close();
+  const off = await makeStore({ originalRequest: "ground off", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const plain = giveUpRun({ store: off.store, reason });
+  assert.equal((await plain.controller.start()).pauseReason, "need_user");
+  assert.equal(plain.contexts.length, 1, "without the option the same answer is delivered at once");
+  await off.store.close();
 });
 
 function clickDelayRun({ store, action, clickDelayMinSec, clickDelayMaxSec, random, sleeps }) {
