@@ -79,6 +79,8 @@ function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode
   if (errorCode) return "runner_error";
   if (looksLikeCaptcha(finalUrl, finalTitle)) return "blocked_by_captcha";
   if (snapshot?.state === "completed") return unverified ? "unverified_finish" : "finished";
+  // The agent declared finish but the host never confirmed the evidence: a finish claim, not a failure and not a verified success.
+  if (snapshot?.state === "awaiting_verification") return unverified ? "unverified_finish" : "unconfirmed_finish";
   // A lookup answer arrives as need_user.reason; with an answer recorded the run is "answered", not stopped.
   // An answer reported from a block or error page is a blocked run, not an answered one.
   if (answered && snapshot?.pauseReason === "need_user") return blockedPage ? "blocked_report" : unverified ? "unverified_report" : "answered";
@@ -214,4 +216,10 @@ async function main() {
   process.stdout.write(JSON.stringify({ event: "bench_finished", output, attempted: runs.length, tally, graded: false }) + "\n");
 }
 module.exports = { selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile };
-if (require.main === module) main().catch((error: any) => { console.error(error?.message ?? "bench_failed"); process.exitCode = 1; });
+if (require.main === module) {
+  // A run that dies mid-task used to leave no trace; print what killed it.
+  process.on("uncaughtException", (error: any) => { console.error("bench_uncaught", error?.stack ?? error); process.exit(1); });
+  process.on("unhandledRejection", (reason: any) => { console.error("bench_unhandled_rejection", reason?.stack ?? reason); process.exit(1); });
+  process.on("exit", (code) => { if (code) console.error(`bench_exit code=${code}`); });
+  main().catch((error: any) => { console.error("bench_failed", error?.stack ?? error?.message ?? error); process.exitCode = 1; });
+}

@@ -30,6 +30,8 @@ test("a task that ends on a CAPTCHA page is labelled blocked_by_captcha, not fai
   assert.equal(classify(nu, "https://a.test/", "A", null, true), "answered");
   assert.equal(classify(nu, "https://a.test/", "A", null, true, false, true), "unverified_report");
   assert.equal(classify(nu, "https://a.test/", "A", null, true, true, true), "blocked_report");
+  assert.equal(classify({ state: "awaiting_verification" }, "https://a.test/", "A", null), "unconfirmed_finish");
+  assert.equal(classify({ state: "awaiting_verification" }, "https://a.test/", "A", null, false, false, true), "unverified_finish");
   assert.equal(classify({ state: "paused", pauseReason: "budget" }, "https://shop.example/", "Shop", null), "stopped:budget");
   assert.equal(classify(null, "", "", "bench_error"), "runner_error");
 });
