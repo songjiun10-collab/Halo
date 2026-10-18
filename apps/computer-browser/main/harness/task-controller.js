@@ -270,6 +270,7 @@ class TaskController {
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     finishEvidenceRejections = 0,
     repeatFailureLimit = 0,
+    giveUpRefusals = 0,
     maxRecoveries,
     plannerImageInput = true,
     visionAssist = null,
@@ -550,6 +551,9 @@ class TaskController {
     this._repeatFailures = new Map();
     this._repeatBlocked = 0;
     this._repeatFeedback = null;
+    // Benchmark option: how many times a need_user that is not a source-checked answer is sent back before it is honoured.
+    this._giveUpRefusals = Number.isInteger(giveUpRefusals) && giveUpRefusals > 0 ? giveUpRefusals : 0;
+    this._giveUpRefused = 0;
     this._needUserReason = null;
     this._maxRecoveries = maxRecoveries;
     this._proposalFeedbackCode = null;
@@ -2459,12 +2463,24 @@ class TaskController {
           // (bounded) so the chat can show it instead of a bare "paused".
           let reasonText = typeof validated.reason === "string" ? validated.reason.trim() : "";
           let reasonCap = 600;
+          let answerVerified = false;
           if (reasonText && this._isResearchTask()) {
             // A research answer reaches the person only after the host checked its sources.
             const review = await this._reviewResearchAnswer(reasonText);
             if (review.action === "retry") continue;
             reasonText = review.text;
             reasonCap = RESEARCH_REASON_CAP;
+            answerVerified = review.verified === true;
+          }
+          if (!answerVerified && this._giveUpRefused < this._giveUpRefusals) {
+            // Nobody is there to help: keep working until the budget or the clock ends the task.
+            this._giveUpRefused += 1;
+            this._repeatFeedback = {
+              note: "give_up_refused",
+              guidance: "No person is available to answer. Do not stop to ask. Try another route, another site or another search, and report need_user only with an answer whose cited pages you opened.",
+            };
+            await this._store.append({ type: "note", payload: { kind: "give_up_refused", refused: this._giveUpRefused } });
+            continue;
           }
           this._needUserReason = reasonText ? reasonText.slice(0, reasonCap) : null;
           try { console.warn(`[task-controller] planner asked for the user task=${this._goal?.taskId ?? "?"} reason=${JSON.stringify(this._needUserReason)}`); } catch {}
@@ -2671,7 +2687,7 @@ class TaskController {
     if (check.ok) {
       await this._store.append({ type: "note", payload: { kind: "research_answer_checked", sources: check.verified.length, sites: check.independentSites } });
       this._researchFeedback = null;
-      return { action: "deliver", text: answer + research.sourcesBlock(check.verified) };
+      return { action: "deliver", verified: true, text: answer + research.sourcesBlock(check.verified) };
     }
     if (this._researchRejections < research.MAX_REJECTIONS) {
       this._researchRejections += 1;

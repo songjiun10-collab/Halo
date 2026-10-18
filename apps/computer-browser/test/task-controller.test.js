@@ -2224,6 +2224,45 @@ test("an identical action that failed deterministically twice is not dispatched 
   await store.close();
 });
 
+function giveUpRun({ store, giveUpRefusals, turnsBeforeGiveUp = 0 }) {
+  const contexts = [];
+  let turn = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: `blocked ${turn++}` };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    ...(giveUpRefusals === undefined ? {} : { giveUpRefusals }),
+  });
+  return { controller, contexts, turns: () => turn };
+}
+
+test("giveUpRefusals sends an unverified need_user back with feedback until the budget is spent, then honours it", async () => {
+  const { store } = await makeStore({ originalRequest: "give up", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, contexts, turns } = giveUpRun({ store, giveUpRefusals: 2 });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.equal(turns(), 3, "two refusals, the third need_user is honoured");
+  assert.equal(contexts.slice(1).every((c) => c.progress.repeatFailureFeedback?.note === "give_up_refused"), true);
+  await store.close();
+});
+
+test("giveUpRefusals is off by default: the first need_user pauses", async () => {
+  const { store } = await makeStore({ originalRequest: "give up default", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, turns } = giveUpRun({ store });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.equal(turns(), 1);
+  await store.close();
+});
+
 function clickDelayRun({ store, action, clickDelayMinSec, clickDelayMaxSec, random, sleeps }) {
   const executed = [];
   let turn = 0;
