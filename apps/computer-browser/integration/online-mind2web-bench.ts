@@ -155,7 +155,8 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
         calls++;
         const proposal = await planner.next(context, options);
         proposals.push({ call: calls, kind: proposal.kind, actionTypes: (proposal.actions ?? []).map((a: any) => a.type) });
-        if (proposal.kind === "finish") finalAnswer = JSON.stringify(proposal).slice(0, 4000);
+        // A finish carries no answer text: record that plainly (with the last real answer, if any) instead of the raw proposal JSON.
+        if (proposal.kind === "finish") finalAnswer = `${finalAnswer && !finalAnswer.startsWith("[finish") ? finalAnswer + "\n" : ""}[finish without answer text; evidence ids: ${(proposal.evidenceIds ?? []).length}]`.slice(0, 4000);
         // On develop a lookup answer is delivered as need_user.reason; keep the last one so the run can be judged.
         if (proposal.kind === "need_user" && typeof proposal.reason === "string") finalAnswer = proposal.reason.slice(0, 4000);
         return proposal;

@@ -9,6 +9,11 @@ const GIVE_UP_ANSWER = /^(i (could not|couldn't|was unable|cannot|can't)|unable 
 // A report that says in its opening that the task was not done (Korean answers included).
 const GIVE_UP_OPENING = /(못했|못한|못합니다|않았습니다|되지 않|할 수 없|알려\s?주시면|알려\s?주세요|could not|couldn't|unable to|cannot)/i;
 
+// An answer that ends by handing the question back to the person (a closing question or a list of options to choose from).
+const ASKS_USER_TAIL = /(할까요|드릴까요|될까요|괜찮을까요|원하시나요|어떻게 진행|진행할까요|would you like|shall i|do you want|should i|which (option|one) )[^]{0,160}\?\s*$/i;
+const OPTION_LIST = /\(1\)[^]{0,400}\(2\)[^]{0,400}\?\s*$/;
+function asksUser(text) { const t = String(text ?? "").trim(); return ASKS_USER_TAIL.test(t.slice(-260)) || OPTION_LIST.test(t.slice(-900)); }
+
 function numbersIn(text) {
   const bare = String(text ?? "").replace(/https?:\/\/\S+/gi, " ");
   const out = new Set();
@@ -47,7 +52,7 @@ function conditionsIn(goalText) {
 // Reward scoring (opt-in via minScore). Each satisfied item earns a point; hard failures (empty, gave up,
 // blocked page) always block. With minScore set, the answer is submitted once score >= minScore, and
 // below it the planner is told to investigate more. Without minScore every failure blocks, as before.
-const HARD = new Set(["answer_empty", "answer_gave_up", "final_page_blocked"]);
+const HARD = new Set(["answer_empty", "answer_gave_up", "final_page_blocked", "answer_asks_user", "official_not_cited"]);
 // Weights per item: the substantive evidence checks count more than form checks.
 const WEIGHTS = { answer: 1, notGaveUp: 1, pageOk: 1, valuesSeen: 3, conditionsSeen: 2, cites: 1, twoSites: 1 };
 const SCORE_MAX = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
@@ -62,6 +67,7 @@ function runChecklist({ answer, goalText = "", observation = null, observedTexts
   if (finishing) { /* a finish carries no answer text: only the page checks apply */ }
   else if (!text) failures.push({ code: "answer_empty", guidance: "Report an answer, not an empty message." });
   else if (GIVE_UP_ANSWER.test(text) || GIVE_UP_OPENING.test(text.slice(0, 200))) failures.push({ code: "answer_gave_up", guidance: "The answer says nothing was found. Try another route, site or search before reporting." });
+  if (text && !finishing && asksUser(text)) failures.push({ code: "answer_asks_user", guidance: "No person is available to answer your question. Choose the most reasonable route yourself, keep working on the site, and report the result, not a question." });
   if (pageIsBlocked(observation)) failures.push({ code: "final_page_blocked", guidance: "The current page is a block, error or challenge page. Leave it and use another route; it is not evidence for an answer." });
   if (text) {
     const seen = observedTexts.join("\n").replace(/,/g, "");
@@ -75,6 +81,12 @@ function runChecklist({ answer, goalText = "", observation = null, observedTexts
     const haystack = (observedTexts.join("\n") + "\n" + observedUrls.join("\n") + "\n" + (observation?.url ?? "")).toLowerCase().replace(/,/g, "");
     const unseen = conditionsIn(goalText).filter((c) => !haystack.includes(c.replace(/,/g, "")));
     if (unseen.length > 0) failures.push({ code: "condition_not_seen", guidance: `The task names ${unseen.slice(0, 5).map((c) => `"${c}"`).join(", ")}, which no page you opened shows. Apply that condition on the site and confirm it on screen before reporting.` });
+  }
+  // The task starts on a site; an answer that cites only other sites never read what that site itself says.
+  const startHost = observedUrls.length > 0 ? hostOf(observedUrls[0]) : null;
+  const citedHosts = [...text.matchAll(/https?:\/\/[^\s)\]>"']+/gi)].map((m) => hostOf(m[0])).filter(Boolean).map(siteKey);
+  if (text && !finishing && startHost && citedHosts.length > 0 && !citedHosts.includes(siteKey(startHost)) && !GIVE_UP_OPENING.test(text.slice(0, 200))) {
+    failures.push({ code: "official_not_cited", guidance: `The answer cites only third-party sites, not ${startHost}. Read the answer on ${startHost} itself: use its own search, menus, sitemap or another path on that site. Only if it truly cannot be read there, state that plainly in the answer.` });
   }
   const codes = new Set(failures.map((f) => f.code));
   const sites = new Set(observedUrls.map(hostOf).filter(Boolean).map(siteKey));
@@ -92,4 +104,4 @@ function runChecklist({ answer, goalText = "", observation = null, observedTexts
   return { ok: failures.length === 0, failures, score, max: SCORE_MAX };
 }
 
-module.exports = { conditionsIn, runChecklist, pageIsBlocked, numbersIn, WEIGHTS, SCORE_MAX };
+module.exports = { asksUser, conditionsIn, runChecklist, pageIsBlocked, numbersIn, WEIGHTS, SCORE_MAX };

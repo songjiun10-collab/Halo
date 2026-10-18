@@ -43,3 +43,18 @@ test("items carry different weights: missing values costs more than missing a se
   assert.equal(noSecondSite.score, SCORE_MAX - WEIGHTS.twoSites);
   assert.ok(wrongValue.score < noSecondSite.score);
 });
+
+test("an answer that hands the question back, or cites only third-party sites, is blocked", () => {
+  const { asksUser } = require("../main/harness/completion-checklist");
+  assert.equal(asksUser("열어본 출처: x. 어떻게 진행할까요? (1) A (2) B (3) C 중 선택해 주세요?"), true);
+  assert.equal(asksUser("Shall I search Amazon instead?"), true);
+  assert.equal(asksUser("가격은 $20입니다. 더 필요하시면 알려 주세요."), false);
+  const seen = ["Plans Standard $100 per month"];
+  const urls = ["https://www.flightaware.com/commercial/aeroapi/", "https://www.softwr.com/software/flightaware"];
+  const third = runChecklist({ answer: "Standard $100 per month (https://www.softwr.com/software/flightaware)", goalText: "compare plans", observedTexts: seen, observedUrls: urls });
+  assert.ok(third.failures.some((f) => f.code === "official_not_cited"));
+  const both = runChecklist({ answer: "Standard $100 per month (https://www.flightaware.com/commercial/aeroapi/)", goalText: "compare plans", observedTexts: seen, observedUrls: urls });
+  assert.ok(!both.failures.some((f) => f.code === "official_not_cited"));
+  const ask = runChecklist({ answer: "확인하지 못했습니다. 진행할까요?", goalText: "x", observedTexts: seen, observedUrls: urls });
+  assert.ok(ask.failures.some((f) => f.code === "answer_asks_user"));
+});
