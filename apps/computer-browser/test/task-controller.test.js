@@ -3030,3 +3030,12 @@ test("completion checklist on a finish checks the page, not an answer", () => {
   const page = { url: "https://a.test/", title: "A", text: "Chicago" };
   assert.equal(runChecklist({ kind: "finish", answer: "", goalText: "Visit Chicago", observation: page, observedTexts: ["Chicago"] }).ok, true);
 });
+
+test("completion checklist reads the model's answer, not the source block the host appends", async () => {
+  const { store } = await makeStore({ originalRequest: "check", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const seen = [];
+  const { controller } = giveUpRun({ store, groundAnswers: true, reason: "plain answer https://a.test/ and https://b.test/", completionChecklist: (input) => { seen.push(input.answer); return { ok: true, failures: [] }; } });
+  await controller.start();
+  assert.ok(seen.length >= 1);
+  assert.ok(seen.every((a) => !a.includes("Sources Halo opened")));
+});

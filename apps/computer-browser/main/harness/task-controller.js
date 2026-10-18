@@ -2488,6 +2488,7 @@ class TaskController {
           let reasonText = typeof validated.reason === "string" ? validated.reason.trim() : "";
           let reasonCap = 600;
           let answerVerified = false;
+          const modelAnswer = reasonText; // the checklist reads what the model wrote, not the host's appended source block
           if (reasonText && this._isResearchTask()) {
             // A research answer reaches the person only after the host checked its sources.
             const review = await this._reviewResearchAnswer(reasonText);
@@ -2497,7 +2498,7 @@ class TaskController {
             answerVerified = review.verified === true;
           }
           if (reasonText && this._completionChecklist) {
-            const check = this._completionChecklist({ answer: reasonText, goalText: this._goal?.originalRequest ?? "", observation: this._lastObservation, observedTexts: [...this._observedTexts.values()], observedUrls: [...this._observedTexts.keys()] });
+            const check = this._completionChecklist({ answer: modelAnswer, goalText: this._goal?.originalRequest ?? "", observation: this._lastObservation, observedTexts: [...this._observedTexts.values()], observedUrls: [...this._observedTexts.keys()] });
             if (!check.ok) {
               await this._store.append({ type: "note", payload: { kind: "completion_checklist_failed", codes: check.failures.map((f) => f.code), rejected: this._completionRejected } });
               if (this._completionRejected < 2) {
