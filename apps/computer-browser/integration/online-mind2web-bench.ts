@@ -48,7 +48,7 @@ const MAX_REROUTES = 2;
 function alternateRoute(task: Task, attempt: number): string | null {
   const site = new URL(task.website);
   if (attempt === 0) return site.origin + "/";
-  if (attempt === 1) return `https://www.bing.com/search?q=${encodeURIComponent(`site:${site.hostname} ${task.confirmed_task}`.slice(0, 200))}`;
+  if (attempt === 1) return `https://search.brave.com/search?q=${encodeURIComponent(`site:${site.hostname} ${task.confirmed_task}`.slice(0, 200))}`;
   return null;
 }
 
