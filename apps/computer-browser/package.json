@@ -15,7 +15,8 @@
     "start:chromium:service": "npm run check:runtime && node tools/start-chromium.js --halo-background-service",
     "test": "npm run check:runtime && node --test",
     "typecheck": "tsc -p tsconfig.audit.json && tsc -p tsconfig.runtime.json --noEmit && tsc -p tsconfig.runtime-harness.json --noEmit && tsc -p tsconfig.runtime-integration.json --noEmit",
-    "test:renderer:e2e": "npm run build && electron integration/phase2-renderer-electron.js"
+    "test:renderer:e2e": "npm run build && electron integration/phase2-renderer-electron.js",
+    "build:os-helper": "swiftc -O -o native/macos-os-helper/halo-os-helper native/macos-os-helper/main.swift"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
