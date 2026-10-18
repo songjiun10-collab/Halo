@@ -64,6 +64,8 @@ function alternateRoute(task: Task, attempt: number): string | null {
 
 function plannerWorker(model: string): { file: string; args: string[] } {
   const dir = path.resolve(__dirname, "../main/harness/providers");
+  // "vendor/model" ids (deepseek-ai/deepseek-v4.1-flash) go to the NVIDIA-hosted worker, which reads NVIDIA_API_KEY.
+  if (model.includes("/")) return { file: path.join(dir, "nvidia-planner-worker.js"), args: ["--model", model] };
   return model.startsWith("claude-")
     ? { file: path.join(dir, "claude-code-worker.js"), args: ["--model", model] }
     : { file: path.join(dir, "codex-planner-worker.js"), args: ["--model", model] };

@@ -57,3 +57,10 @@ test("captcha pages are rerouted to the site root, then a search, then left alon
   assert.equal(alternateRoute(task, 5), null);
   assert.equal(MAX_REROUTES, 5);
 });
+
+test("plannerWorker sends vendor/model ids to the NVIDIA worker", () => {
+  const w = plannerWorker("deepseek-ai/deepseek-v4.1-flash");
+  assert.ok(w.file.endsWith("nvidia-planner-worker.js"));
+  assert.deepEqual(w.args, ["--model", "deepseek-ai/deepseek-v4.1-flash"]);
+  assert.ok(plannerWorker("claude-haiku-5-5").file.endsWith("claude-code-worker.js"));
+});
