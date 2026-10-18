@@ -46,6 +46,9 @@ test("captcha pages are rerouted to the site root, then a search, then left alon
   const task = row(1, { website: "https://shop.example/a/b?x=1", confirmed_task: "Find red shoes" });
   assert.equal(alternateRoute(task, 0), "https://shop.example/");
   assert.match(alternateRoute(task, 1), /^https:\/\/search\.brave\.com\/search\?q=site%3Ashop\.example%20Find%20red%20shoes$/);
-  assert.equal(alternateRoute(task, 2), null);
-  assert.equal(MAX_REROUTES, 2);
+  assert.match(alternateRoute(task, 2), /^https:\/\/html\.duckduckgo\.com\/html\/\?q=site%3Ashop\.example/);
+  assert.match(alternateRoute(task, 3), /^https:\/\/www\.startpage\.com\//);
+  assert.match(alternateRoute(task, 4), /^https:\/\/www\.mojeek\.com\//);
+  assert.equal(alternateRoute(task, 5), null);
+  assert.equal(MAX_REROUTES, 5);
 });

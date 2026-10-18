@@ -44,12 +44,19 @@ function selectTasks(rows: Task[], limit?: number): Task[] {
 
 // A CAPTCHA page is a dead end for the agent, not a puzzle to solve: step off it to another legitimate
 // entry to the same site (its root, then a web search for the task), at most MAX_REROUTES times a task.
-const MAX_REROUTES = 2;
+// Other search engines are separate sites with their own entry; each is tried at most once, in this order.
+const SEARCH_ENGINES = [
+  (q: string) => `https://search.brave.com/search?q=${q}`,
+  (q: string) => `https://html.duckduckgo.com/html/?q=${q}`,
+  (q: string) => `https://www.startpage.com/do/search?q=${q}`,
+  (q: string) => `https://www.mojeek.com/search?q=${q}`,
+];
+const MAX_REROUTES = 1 + SEARCH_ENGINES.length;
 function alternateRoute(task: Task, attempt: number): string | null {
   const site = new URL(task.website);
   if (attempt === 0) return site.origin + "/";
-  if (attempt === 1) return `https://search.brave.com/search?q=${encodeURIComponent(`site:${site.hostname} ${task.confirmed_task}`.slice(0, 200))}`;
-  return null;
+  const engine = SEARCH_ENGINES[attempt - 1];
+  return engine ? engine(encodeURIComponent(`site:${site.hostname} ${task.confirmed_task}`.slice(0, 200))) : null;
 }
 
 function plannerWorker(model: string): { file: string; args: string[] } {
