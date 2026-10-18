@@ -430,6 +430,10 @@ function buildPrompt(context, modelGuidance) {
     "did not get you further, do not try a close variant of it; take a different route instead (another",
     "link, another section of the site, an API the site documents, or a different page).",
     "",
+    ...(process.env.HALO_BENCH_ACCEPT_COOKIES === "1" ? [
+      "The user allows cookies: if a cookie or consent banner blocks the page, choose its accept-all option and continue.",
+      "",
+    ] : []),
     ...(context.progress?.lastAction?.succeeded === true ? [
       `Your last action (${context.progress.lastAction.type}${context.progress.lastAction.target ? ` on ${context.progress.lastAction.target}` : ""}) was delivered and succeeded.`,
       "If that completes the request, propose kind \"finish\" now instead of repeating it.",
