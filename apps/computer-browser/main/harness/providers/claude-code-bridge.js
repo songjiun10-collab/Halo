@@ -419,6 +419,9 @@ function buildPrompt(context, modelGuidance) {
     "navigating straight to a known URL, then following a link you can already see),",
     "put them in one proposal up to the per-task limit instead of one action per call.",
     "Do not navigate back to a page you have already read unless the goal needs it again.",
+    "Minimise repetition: if an action (a find_text with similar words, the same click, the same page)",
+    "did not get you further, do not try a close variant of it; take a different route instead (another",
+    "link, another section of the site, an API the site documents, or a different page).",
     "",
     ...(context.progress?.lastAction?.succeeded === true ? [
       `Your last action (${context.progress.lastAction.type}${context.progress.lastAction.target ? ` on ${context.progress.lastAction.target}` : ""}) was delivered and succeeded.`,
