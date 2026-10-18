@@ -84,6 +84,22 @@ const SAFETY_DECLARATIONS: Readonly<Record<string, Readonly<Record<Check, Declar
     payment: applies("a form submit on a payment control, or of a whole form that holds one, must be covered by an order or wait for the person"),
     effect: notApplicable("form submits rely on the approval gate; Full mode skips that gate by definition"),
   }),
+  os_observe: Object.freeze(reads("os_observe (it only reads the allowed app's window)")),
+  os_click_at: Object.freeze({
+    privacy: notApplicable("a click types no text"),
+    payment: notApplicable("os-policy classifies the control under the point inside OsComputerUse before the backend runs: payment and irreversible names are refused or wait for the person"),
+    effect: notApplicable("os-policy (app allowed list, protected apps, effect classifier) decides inside OsComputerUse; a refused click never reaches the backend"),
+  }),
+  os_type_text: Object.freeze({
+    privacy: notApplicable("os-policy refuses secure fields, and text typed into a terminal waits for the person; destructive commands are refused"),
+    payment: notApplicable("typing text does not press a payment control"),
+    effect: notApplicable("os-policy judges the focused control and the text inside OsComputerUse"),
+  }),
+  os_press_key: Object.freeze({
+    privacy: notApplicable("a single key press carries no text value"),
+    payment: notApplicable("os-policy sends Enter and modifier shortcuts to the person inside OsComputerUse"),
+    effect: notApplicable("os-policy judges the key inside OsComputerUse"),
+  }),
   download: Object.freeze(reads("download (unsupported, denied by the permission policy)")),
 });
 

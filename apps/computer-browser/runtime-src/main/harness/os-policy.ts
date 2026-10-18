@@ -16,14 +16,24 @@ interface OsControlInfo { role: string; name: string; x: number; y: number; w: n
 interface OsDecision { gate: OsGate; reason: string }
 interface OsPolicyOptions { allowedApps: readonly string[]; maxActions?: number; actionsUsed?: number }
 
-// Never touched, even when the person lists them: credentials, system settings, a shell, Halo itself.
+// Never touched, even when the person lists them: credentials, system settings, Halo itself.
 const PROTECTED_BUNDLES = new Set<string>([
-  "com.apple.keychainaccess", "com.apple.systempreferences", "com.apple.Passwords", "com.apple.Terminal",
-  "com.googlecode.iterm2", "com.apple.ScreenSharing", "com.apple.loginwindow", "com.apple.SecurityAgent",
+  "com.apple.keychainaccess", "com.apple.systempreferences", "com.apple.Passwords", "com.apple.ScreenSharing", "com.apple.loginwindow", "com.apple.SecurityAgent",
   "com.apple.Console", "com.apple.ActivityMonitor", "com.1password.1password", "com.agilebits.onepassword7",
   "com.bitwarden.desktop",
 ]);
 const PROTECTED_PREFIXES = Object.freeze(["com.apple.preference", "com.halo.", "com.anthropic."]);
+// A shell runs whatever is typed, so a terminal is allowed only when the person lists it, and then every
+// line typed into it waits for the person. Commands that destroy data, escalate or pipe the network into a
+// shell are refused outright, however the task was phrased.
+const TERMINAL_BUNDLES = new Set<string>(["com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.mitchellh.ghostty", "net.kovidgoyal.kitty"]);
+const DESTRUCTIVE_COMMAND = new RegExp([
+  "\\brm\\s+(?:-[a-z]*[rf][a-z]*\\s+)+",
+  "\\bsudo\\b", "\\bdd\\s+if=", "\\bmkfs\\b", "\\bdiskutil\\s+(?:erase|partition|zero)",
+  "\\b(?:curl|wget)\\b[^|;]*\\|\\s*(?:sudo\\s+)?(?:ba|z)?sh\\b",
+  "\\bchmod\\s+-R\\b", "\\bchown\\s+-R\\b", ">\\s*/dev/(?:sd|disk|rdisk)", ":\\(\\)\\s*\\{",
+  "\\bgit\\s+push\\b[^\\n]*--force", "\\bgit\\s+reset\\s+--hard", "\\bkill(?:all)?\\s+-9\\s+(?:-1|1)\\b", "\\bshutdown\\b", "\\breboot\\b",
+].join("|"), "i");
 const DEFAULT_MAX_ACTIONS = 100;
 
 const isProtected = (bundleId: string): boolean =>
@@ -54,11 +64,15 @@ function clickDecision(window: OsWindowInfo | null | undefined, target: OsContro
 }
 
 // Text typed into the focused control. A secure field or a non-text control is never typed into.
-function typeDecision(window: OsWindowInfo | null | undefined, focused: OsControlInfo | null, options: OsPolicyOptions): OsDecision {
+function typeDecision(window: OsWindowInfo | null | undefined, focused: OsControlInfo | null, options: OsPolicyOptions, text?: unknown): OsDecision {
   const base = windowDecision(window, options);
   if (base.gate !== "auto") return base;
+  if (typeof text === "string" && DESTRUCTIVE_COMMAND.test(text) && TERMINAL_BUNDLES.has(String(window?.bundleId))) {
+    return deny("the text looks like a destructive or privileged shell command");
+  }
   if (!focused) return { gate: "ask", reason: "no focused control is known" };
   if (focused.secure) return deny("the focused control is a secure field");
+  if (TERMINAL_BUNDLES.has(String(window?.bundleId))) return { gate: "ask", reason: "text typed into a terminal is run by the shell" };
   const verdict = classifyTarget(focused, "type_at");
   return { gate: verdict.gate, reason: verdict.reason };
 }
@@ -71,8 +85,8 @@ function keyDecision(window: OsWindowInfo | null | undefined, key: unknown, opti
   if (base.gate !== "auto") return base;
   if (typeof key !== "string" || key.length === 0 || key.length > 32) return deny("the key is not valid");
   if (/^(?:Meta|Cmd|Command|Control|Ctrl|Alt|Option)\+/i.test(key)) return { gate: "ask", reason: "a shortcut with a modifier key" };
-  if (key === "Enter" || key === "Return") return { gate: "ask", reason: "Enter can submit or confirm" };
+  if (key === "Enter" || key === "Return") return { gate: "ask", reason: TERMINAL_BUNDLES.has(String(window?.bundleId)) ? "Enter runs the typed command" : "Enter can submit or confirm" };
   return SAFE_KEYS.has(key) ? { gate: "auto", reason: "movement or editing key" } : { gate: "ask", reason: "a key the host cannot rule out as effect-bearing" };
 }
 
-export = { windowDecision, clickDecision, typeDecision, keyDecision, isProtected };
+export = { windowDecision, clickDecision, typeDecision, keyDecision, isProtected, isTerminal: (bundleId: string): boolean => TERMINAL_BUNDLES.has(bundleId) };

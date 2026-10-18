@@ -251,6 +251,7 @@ class TaskController {
     store,
     planner,
     browser,
+    osComputerUse = null,
     releaseViewsOnReview = false,
     approve,
     hostVerifier,
@@ -414,6 +415,7 @@ class TaskController {
       if (event.payload?.kind === "mcp_call_outcome") this._openMcpCalls.delete(event.payload.requestId);
     }
     this._browser = browser;
+    this._osComputerUse = osComputerUse;
     this._approve = approve;
     this._hostVerifier = hostVerifier;
     // Multi-agent background runtime plan, Task 4: only a PARENT controller
@@ -2233,6 +2235,7 @@ class TaskController {
               ...(this._loopHint ? { loopWarning: true } : {}),
               ...(this._lastActionNote ? { lastAction: this._lastActionNote } : {}),
               ...(this._apiResponse ? { apiResponse: this._apiResponse } : {}),
+              ...(this._osComputerUse ? { os: { enabled: true, ...(this._osObservation ? { observation: this._osObservation } : {}) } } : {}),
               ...(this._scrollStreak.count >= 3 ? { scrollStreak: this._scrollStreak.count } : {}),
               ...(this._errorUrls.length > 0 ? { errorUrls: [...this._errorUrls] } : {}),
               ...(this._finishFeedback ? { finishFeedback: { ...this._finishFeedback } } : {}),
@@ -3115,7 +3118,15 @@ class TaskController {
       // against a page that has since redirected or navigated act on the
       // wrong document instead of failing closed with stale_document.
       const documentEpoch = this._lastObservation ? this._lastObservation.documentEpoch : null;
-      result = await this._browser.execute(action, { signal: undefined, documentEpoch, widenedBy });
+      // Native-app actions go to the OS adapter, which applies its own policy before any backend call.
+      if (typeof action.type === "string" && action.type.startsWith("os_")) {
+        result = !this._osComputerUse ? { status: "failed", errorCode: "os_unavailable" }
+          : action.type === "os_observe" ? await this._osComputerUse.observe()
+            : await this._osComputerUse.execute(action);
+        if (action.type === "os_observe" && result.observation) this._osObservation = result.observation;
+      } else {
+        result = await this._browser.execute(action, { signal: undefined, documentEpoch, widenedBy });
+      }
     } catch {
       // A rejected/timeout response cannot prove that the remote or local
       // browser did not apply the action. Keep action_started open so reload
@@ -3297,7 +3308,7 @@ class TaskController {
 }
 
 // Errors that repeat identically when the same action is run again (the page or target is what is wrong).
-const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found", "http_get_not_allowed", "http_get_content_type", "invalid_http_get"]);
+const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found", "http_get_not_allowed", "http_get_content_type", "invalid_http_get", "os_denied", "os_unavailable", "invalid_os_action"]);
 const REPEAT_BLOCK_PAUSE = 3;
 // Same action, ignoring the per-observation/per-request ids that change every turn.
 function repeatActionKey(action) {

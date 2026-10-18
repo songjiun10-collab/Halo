@@ -785,3 +785,14 @@ test("a Haiku-pinned bridge turns extended thinking off for the CLI; other model
   assert.equal(new ClaudeCodeBridge({ model: "claude-sonnet-5-5" })._buildEnv().MAX_THINKING_TOKENS, undefined);
   assert.equal(new ClaudeCodeBridge()._buildEnv().MAX_THINKING_TOKENS, undefined);
 });
+
+test("buildPrompt: native-app (os_*) actions are documented only when the host enabled OS computer use", () => {
+  const base = makeContext();
+  const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
+  const off = buildPrompt(base, "");
+  const on = buildPrompt({ ...base, progress: { ...base.progress, os: { enabled: true } } }, "");
+  for (const shape of ['{"type": "os_observe"}', '{"type": "os_click_at"', '{"type": "os_type_text"', '{"type": "os_press_key"']) {
+    assert.ok(on.includes(shape), shape);
+    assert.ok(!off.includes(shape), `off: ${shape}`);
+  }
+});

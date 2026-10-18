@@ -74,7 +74,7 @@ class OsComputerUse {
       }
       case "os_type_text": {
         if (typeof action.text !== "string" || action.text.length === 0 || action.text.length > MAX_TYPE_CHARS) return { status: "failed", errorCode: "invalid_os_action" };
-        decision = policy.typeDecision(obs.window, obs.controls.find((c) => c.focused) ?? null, this._options());
+        decision = policy.typeDecision(obs.window, obs.controls.find((c) => c.focused) ?? null, this._options(), action.text);
         run = () => this._backend.typeText(action.text);
         break;
       }
