@@ -93,6 +93,11 @@ test("an autocomplete suggestion (role option) can be clicked; roles outside the
   const { action, documentEpoch } = await actionFor(p, "click", "Save");
   assert.equal((await p.browser.execute(action, { documentEpoch })).status, "ok");
   assert.deepEqual(p.events, ["click"]);
+  for (const role of ["menuitemcheckbox", "menuitemradio", "treeitem"]) {
+    const r = page(); r.button.attrs.role = role;
+    const a = await actionFor(r, "click", "Save");
+    assert.equal((await r.browser.execute(a.action, { documentEpoch: a.documentEpoch })).status, "ok", role);
+  }
   const q = page(); q.button.attrs.role = "heading";
   const refused = await actionFor(q, "click", "Save");
   assert.equal((await q.browser.execute(refused.action, { documentEpoch: refused.documentEpoch })).errorCode, "unsupported_click");
