@@ -3090,3 +3090,28 @@ test("without repeatFailureLimit the family check is off", async () => {
   assert.equal(executed.length >= 7, true, `executed ${executed.length}`);
   await store.close();
 });
+
+for (const [label, action, result, note] of [
+  ["re-opening the same URL", { type: "navigate", url: "https://a.test/page" }, { status: "ok" }, "navigate_repeat"],
+  ["a click the host will not run", { type: "find_text", text: "Fever" }, { status: "failed", errorCode: "unsupported_click" }, "unsupported_click"],
+]) {
+  test(`${label} sends the planner a way out`, async () => {
+    const { store } = await makeStore({ originalRequest: "route", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 4 } });
+    const contexts = [];
+    const controller = new TaskController({
+      store,
+      planner: { next: async (context) => {
+        contexts.push(context);
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [action] };
+      } },
+      browser: { observe: async () => ({ id: "obs" }), execute: async () => result },
+      approve: allowApprove(),
+      hostVerifier: () => false,
+      harnessProfile: "middle",
+      navIntervalMs: 0,
+    });
+    await controller.start();
+    assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === note), true, note);
+    await store.close();
+  });
+}

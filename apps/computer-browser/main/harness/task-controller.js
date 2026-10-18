@@ -3230,6 +3230,19 @@ class TaskController {
       }
     }
 
+    // Dead ends that are the model's to route around: an element the host will not click, and re-opening the page that is already open.
+    if (result.action && !this._repeatFeedback) {
+      if (result.status === "failed" && result.errorCode === "unsupported_click") {
+        this._repeatFeedback = { note: "unsupported_click", actionType: result.action.type, guidance: "That element cannot be clicked (it is not a link or button). Look for a link or button inside or beside it, or open the page by its URL on the same site; do not retry the same click." };
+      } else if (result.action.type === "navigate" && result.status === "ok" && typeof result.action.url === "string") {
+        const navKey = result.action.url.replace(/#.*$/, "");
+        this._navCounts = this._navCounts ?? new Map();
+        const n = (this._navCounts.get(navKey) ?? 0) + 1;
+        this._navCounts.set(navKey, n);
+        if (n >= 2) this._repeatFeedback = { note: "navigate_repeat", actionType: "navigate", guidance: `You already opened ${navKey.slice(0, 120)} ${n} times. Reloading it shows the same page. Use what you already saw on it (scroll, find_text or follow a link on it), or report the answer you have with its source.` };
+      }
+    }
+
     if (this._repeatFailureLimit > 0 && result.action) {
       this._familyWindow.push(actionFamily(result.action));
       if (this._familyWindow.length > FAMILY_WINDOW) this._familyWindow.shift();
