@@ -73,3 +73,14 @@ test("settings select only allowlisted workers and none keeps the planner unavai
       { source: "invalid_provider", command: null, args: [], usageProvider: null }, String(providerId));
   }
 });
+
+test("OpenCode bridge pins a host-allowlisted model into its restricted config and refuses others", () => {
+  const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
+  const { buildOpenCodeEnv, OpenCodePlannerBridge, EXTRA_MODEL_IDS } = require("../main/harness/providers/opencode-planner-bridge");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-test-"));
+  const env = buildOpenCodeEnv({ workDir: dir, model: EXTRA_MODEL_IDS[0] });
+  assert.equal(JSON.parse(env.OPENCODE_CONFIG_CONTENT).model, EXTRA_MODEL_IDS[0]);
+  assert.equal(JSON.parse(env.OPENCODE_CONFIG_CONTENT).permission["*"], "deny");
+  assert.throws(() => new OpenCodePlannerBridge({ command: "/bin/true", model: "opencode/other" }), /allowlisted/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
