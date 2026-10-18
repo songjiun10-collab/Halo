@@ -3022,3 +3022,11 @@ test("completion checklist holds the answer to conditions the task names", () =>
   const bad = runChecklist({ answer: "Hotel X at 120", goalText: "Find hotels in Chicago under 150 dollars with \"free breakfast\"", observation: page, observedTexts: [page.text], observedUrls: [page.url] });
   assert.deepEqual(bad.failures.map((f) => f.code), ["condition_not_seen"]);
 });
+
+test("completion checklist on a finish checks the page, not an answer", () => {
+  const { runChecklist } = require("../main/harness/completion-checklist");
+  const blocked = { url: "https://a.test/", title: "Just a moment...", text: "x" };
+  assert.deepEqual(runChecklist({ kind: "finish", answer: "", goalText: "go", observation: blocked, observedTexts: ["x"] }).failures.map((f) => f.code), ["final_page_blocked"]);
+  const page = { url: "https://a.test/", title: "A", text: "Chicago" };
+  assert.equal(runChecklist({ kind: "finish", answer: "", goalText: "Visit Chicago", observation: page, observedTexts: ["Chicago"] }).ok, true);
+});

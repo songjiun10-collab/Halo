@@ -2447,6 +2447,17 @@ class TaskController {
             }
             continue; // the goal is not met: keep working, the planner is told why via context.progress.goalPersistence
           }
+          if (this._completionChecklist && !this._routineRunner) {
+            const check = this._completionChecklist({ kind: "finish", answer: "", goalText: this._goal?.originalRequest ?? "", observation: this._lastObservation, observedTexts: [...this._observedTexts.values()], observedUrls: [...this._observedTexts.keys()] });
+            if (!check.ok) {
+              await this._store.append({ type: "note", payload: { kind: "completion_checklist_failed", codes: check.failures.map((f) => f.code), rejected: this._completionRejected, on: "finish" } });
+              if (this._completionRejected < 2) {
+                this._completionRejected += 1;
+                this._repeatFeedback = { note: "completion_checklist_failed", guidance: check.failures.map((f) => f.guidance).join(" ") };
+                continue;
+              }
+            }
+          }
           // A routine's finish is scripted by the routine, not proposed by a planner, so there is no one to send it back to.
           if (!this._routineRunner && !completion.complete && this._criteriaStatus.size === 0 && this._finishEvidenceRejections < this._finishEvidenceBudget) {
             this._finishEvidenceRejections += 1;

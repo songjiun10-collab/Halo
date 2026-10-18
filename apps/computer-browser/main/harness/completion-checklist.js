@@ -43,10 +43,12 @@ function conditionsIn(goalText) {
 }
 
 // { ok, failures: [{ code, guidance }] }
-function runChecklist({ answer, goalText = "", observation = null, observedTexts = [], observedUrls = [] }) {
+function runChecklist({ answer, goalText = "", observation = null, observedTexts = [], observedUrls = [], kind = "answer" }) {
   const failures = [];
   const text = typeof answer === "string" ? answer.trim() : "";
-  if (!text) failures.push({ code: "answer_empty", guidance: "Report an answer, not an empty message." });
+  const finishing = kind === "finish";
+  if (finishing) { /* a finish carries no answer text: only the page checks apply */ }
+  else if (!text) failures.push({ code: "answer_empty", guidance: "Report an answer, not an empty message." });
   else if (GIVE_UP_ANSWER.test(text)) failures.push({ code: "answer_gave_up", guidance: "The answer says nothing was found. Try another route, site or search before reporting." });
   if (pageIsBlocked(observation)) failures.push({ code: "final_page_blocked", guidance: "The current page is a block, error or challenge page. Leave it and use another route; it is not evidence for an answer." });
   if (text) {
@@ -57,7 +59,7 @@ function runChecklist({ answer, goalText = "", observation = null, observedTexts
       failures.push({ code: "value_not_on_opened_pages", guidance: `These values in the answer appear on no page you opened: ${missing.slice(0, 5).join(", ")}. Open the page that shows them or correct the answer.` });
     }
   }
-  if (text && observedTexts.length > 0) {
+  if ((text || finishing) && observedTexts.length > 0) {
     const haystack = (observedTexts.join("\n") + "\n" + observedUrls.join("\n") + "\n" + (observation?.url ?? "")).toLowerCase().replace(/,/g, "");
     const unseen = conditionsIn(goalText).filter((c) => !haystack.includes(c.replace(/,/g, "")));
     if (unseen.length > 0) failures.push({ code: "condition_not_seen", guidance: `The task names ${unseen.slice(0, 5).map((c) => `"${c}"`).join(", ")}, which no page you opened shows. Apply that condition on the site and confirm it on screen before reporting.` });

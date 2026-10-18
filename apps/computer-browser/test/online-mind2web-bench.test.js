@@ -25,6 +25,7 @@ test("a task that ends on a CAPTCHA page is labelled blocked_by_captcha, not fai
   assert.equal(classify({ state: "paused", pauseReason: "need_user" }, "https://www.google.com/recaptcha/api2/anchor", "", null), "blocked_by_captcha");
   assert.equal(classify({ state: "paused", pauseReason: "need_user" }, "https://shop.example/", "Are you a robot?", null), "blocked_by_captcha");
   assert.equal(classify({ state: "completed" }, "https://shop.example/cart", "Cart", null), "finished");
+  assert.equal(classify({ state: "completed" }, "https://a.test/", "A", null, false, false, true), "unverified_finish");
   const nu = { state: "paused", pauseReason: "need_user" };
   assert.equal(classify(nu, "https://a.test/", "A", null, true), "answered");
   assert.equal(classify(nu, "https://a.test/", "A", null, true, false, true), "unverified_report");

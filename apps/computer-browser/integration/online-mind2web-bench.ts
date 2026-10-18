@@ -73,7 +73,7 @@ function plannerWorker(model: string): { file: string; args: string[] } {
 function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null, answered = false, blockedPage = false, unverified = false): string {
   if (errorCode) return "runner_error";
   if (looksLikeCaptcha(finalUrl, finalTitle)) return "blocked_by_captcha";
-  if (snapshot?.state === "completed") return "finished";
+  if (snapshot?.state === "completed") return unverified ? "unverified_finish" : "finished";
   // A lookup answer arrives as need_user.reason; with an answer recorded the run is "answered", not stopped.
   // An answer reported from a block or error page is a blocked run, not an answered one.
   if (answered && snapshot?.pauseReason === "need_user") return blockedPage ? "blocked_report" : unverified ? "unverified_report" : "answered";
