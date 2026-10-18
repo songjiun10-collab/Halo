@@ -3039,3 +3039,12 @@ test("completion checklist reads the model's answer, not the source block the ho
   assert.ok(seen.length >= 1);
   assert.ok(seen.every((a) => !a.includes("Sources Halo opened")));
 });
+
+test("completion checklist treats a Korean report of failure as a give-up", () => {
+  const { runChecklist } = require("../main/harness/completion-checklist");
+  const page = { url: "https://a.test/", title: "A", text: "x" };
+  for (const answer of ["요금제 비교는 아직 완료하지 못했습니다.", "MTA 지도 목록을 확인하지 못했습니다. URL을 알려주시면 진행하겠습니다."]) {
+    assert.deepEqual(runChecklist({ answer, goalText: "go", observation: page, observedTexts: ["x"] }).failures.map((f) => f.code), ["answer_gave_up"]);
+  }
+  assert.equal(runChecklist({ answer: "가지와 버섯 레시피는 쿡패드에 있습니다.", goalText: "go", observation: page, observedTexts: ["x"] }).ok, true);
+});

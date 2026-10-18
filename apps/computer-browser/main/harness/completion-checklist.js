@@ -6,6 +6,8 @@ const { looksLikeCaptcha } = require("../../shared/captcha-heuristics");
 
 const BLOCK_TEXT = /access denied|forbidden|request blocked|verify you are human|enable javascript and cookies|unusual traffic|are you a robot|temporarily blocked/i;
 const GIVE_UP_ANSWER = /^(i (could not|couldn't|was unable|cannot|can't)|unable to|sorry|could not find|not found)\b/i;
+// A report that says in its opening that the task was not done (Korean answers included).
+const GIVE_UP_OPENING = /(못했|못한|못합니다|않았습니다|되지 않|할 수 없|알려\s?주시면|알려\s?주세요|could not|couldn't|unable to|cannot)/i;
 
 function numbersIn(text) {
   const bare = String(text ?? "").replace(/https?:\/\/\S+/gi, " ");
@@ -49,7 +51,7 @@ function runChecklist({ answer, goalText = "", observation = null, observedTexts
   const finishing = kind === "finish";
   if (finishing) { /* a finish carries no answer text: only the page checks apply */ }
   else if (!text) failures.push({ code: "answer_empty", guidance: "Report an answer, not an empty message." });
-  else if (GIVE_UP_ANSWER.test(text)) failures.push({ code: "answer_gave_up", guidance: "The answer says nothing was found. Try another route, site or search before reporting." });
+  else if (GIVE_UP_ANSWER.test(text) || GIVE_UP_OPENING.test(text.slice(0, 200))) failures.push({ code: "answer_gave_up", guidance: "The answer says nothing was found. Try another route, site or search before reporting." });
   if (pageIsBlocked(observation)) failures.push({ code: "final_page_blocked", guidance: "The current page is a block, error or challenge page. Leave it and use another route; it is not evidence for an answer." });
   if (text) {
     const seen = observedTexts.join("\n").replace(/,/g, "");
