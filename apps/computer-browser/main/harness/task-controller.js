@@ -3308,7 +3308,7 @@ class TaskController {
 }
 
 // Errors that repeat identically when the same action is run again (the page or target is what is wrong).
-const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found", "http_get_not_allowed", "http_get_content_type", "invalid_http_get", "os_denied", "os_unavailable", "invalid_os_action"]);
+const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found", "http_get_not_allowed", "http_get_content_type", "invalid_http_get", "os_denied", "os_unavailable", "invalid_os_action", "os_stopped"]);
 const REPEAT_BLOCK_PAUSE = 3;
 // Same action, ignoring the per-observation/per-request ids that change every turn.
 function repeatActionKey(action) {

@@ -83,3 +83,19 @@ test("the action limit stops a run", async () => {
   assert.equal((await cu.execute({ type: "os_press_key", observationId: a.id, key: "ArrowDown" })).status, "ok");
   assert.equal((await cu.observe()).errorCode, "os_denied");
 });
+
+test("stop() ends all OS work for good, and a helper user_interrupted stops the run", async () => {
+  const { cu, backend } = make();
+  const o = (await cu.observe()).observation;
+  cu.stop();
+  assert.equal((await cu.execute({ type: "os_press_key", observationId: o.id, key: "Tab" })).errorCode, "os_stopped");
+  assert.equal((await cu.observe()).errorCode, "os_stopped");
+  assert.deepEqual(backend.calls, []);
+
+  const taken = make({}, {});
+  taken.backend.pressKey = async () => { throw Object.assign(new Error("x"), { code: "user_interrupted" }); };
+  const o2 = (await taken.cu.observe()).observation;
+  assert.equal((await taken.cu.execute({ type: "os_press_key", observationId: o2.id, key: "Tab" })).errorCode, "os_stopped");
+  assert.equal(taken.cu.stopped, true);
+  assert.equal((await taken.cu.observe()).errorCode, "os_stopped");
+});

@@ -23,7 +23,12 @@ class OsComputerUse {
     this._journal = journal;
     this._observation = null;
     this._used = 0;
+    this._stopped = false;
   }
+
+  // The person's stop: from now on nothing is observed or driven. There is no way to undo it on this object.
+  stop() { this._stopped = true; this._observation = null; }
+  get stopped() { return this._stopped; }
 
   get actionsUsed() { return this._used; }
 
@@ -31,6 +36,7 @@ class OsComputerUse {
 
   // The planner sees names and titles as data from another app, never as instructions.
   async observe() {
+    if (this._stopped) return { status: "failed", errorCode: "os_stopped" };
     const raw = await this._backend.observe();
     const verdict = policy.windowDecision(raw?.window, this._options());
     if (verdict.gate !== "auto") {
@@ -55,6 +61,7 @@ class OsComputerUse {
   }
 
   async execute(action) {
+    if (this._stopped) return { status: "failed", errorCode: "os_stopped" };
     const obs = this._observation;
     if (!obs || action?.observationId !== obs.id) return { status: "failed", errorCode: "stale_os_observation" };
     // The window the person has in front now must still be the one that was observed.
@@ -96,7 +103,8 @@ class OsComputerUse {
     this._used += 1;
     try {
       await run();
-    } catch {
+    } catch (error) {
+      if (error?.code === "user_interrupted") { this.stop(); return { status: "failed", errorCode: "os_stopped", reason: "the person took over the mouse or keyboard" }; }
       return { status: "uncertain", errorCode: "os_backend_threw" };
     }
     return { status: "ok" };

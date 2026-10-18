@@ -39,6 +39,16 @@ let roleMap: [String: String] = [
     "AXMenuButton": "button", "AXPopUpButton": "combobox", "AXComboBox": "combobox", "AXTab": "tab", "AXSlider": "slider",
 ]
 
+// Failsafe: a person who holds Escape or moves the mouse after the last observation takes control back.
+// Every input command checks this first, and the host stops for good on "user_interrupted".
+var baseline: CGPoint? = nil
+func currentMouse() -> CGPoint? { CGEvent(source: nil)?.location }
+func userInterrupted() -> Bool {
+    if CGEventSource.keyState(.combinedSessionState, key: 53) { return true }
+    if let base = baseline, let now = currentMouse(), hypot(Double(now.x - base.x), Double(now.y - base.y)) > 8 { return true }
+    return false
+}
+
 func frontApp() -> NSRunningApplication? { NSWorkspace.shared.frontmostApplication }
 
 func focusedWindow(_ app: NSRunningApplication) -> AXUIElement? {
@@ -75,6 +85,7 @@ func collect(_ element: AXUIElement, window: CGRect, focused: AXUIElement?, dept
 
 func observe(_ id: Any?) {
     guard AXIsProcessTrusted() else { return fail(id, "accessibility_not_granted") }
+    baseline = currentMouse()
     guard let app = frontApp(), let bundle = app.bundleIdentifier else { return fail(id, "no_front_app") }
     guard let win = focusedWindow(app), let frame = frameOf(win) else { return fail(id, "no_window") }
     let appElement = AXUIElementCreateApplication(app.processIdentifier)
@@ -87,6 +98,7 @@ func observe(_ id: Any?) {
 
 func guardFront(_ request: [String: Any], _ id: Any?) -> (NSRunningApplication, CGRect)? {
     guard AXIsProcessTrusted() else { fail(id, "accessibility_not_granted"); return nil }
+    if userInterrupted() { fail(id, "user_interrupted"); return nil }
     guard let expected = request["bundleId"] as? String, let app = frontApp(), app.bundleIdentifier == expected else { fail(id, "front_app_changed"); return nil }
     guard let win = focusedWindow(app), let frame = frameOf(win) else { fail(id, "no_window"); return nil }
     return (app, frame)
@@ -102,6 +114,7 @@ func click(_ request: [String: Any], _ id: Any?) {
     usleep(60_000)
     post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left))
     post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left))
+    baseline = point
     reply(["id": id as Any, "ok": true])
 }
 
