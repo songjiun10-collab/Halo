@@ -272,6 +272,7 @@ class TaskController {
     repeatFailureLimit = 0,
     giveUpRefusals = 0,
     groundAnswers = false,
+    completionChecklist = null,
     maxRecoveries,
     plannerImageInput = true,
     visionAssist = null,
@@ -557,6 +558,10 @@ class TaskController {
     this._giveUpRefused = 0;
     // Benchmark option: apply the source-checked answer path to every task, not only research ones.
     this._groundAnswers = groundAnswers === true;
+    // Benchmark option: a function ({ answer, goalText, observation, observedTexts }) -> { ok, failures } run on every reported answer.
+    this._completionChecklist = typeof completionChecklist === "function" ? completionChecklist : null;
+    this._completionRejected = 0;
+    this._observedTexts = new Map();
     this._needUserReason = null;
     this._maxRecoveries = maxRecoveries;
     this._proposalFeedbackCode = null;
@@ -2036,6 +2041,11 @@ class TaskController {
         this._secretOnScreen = hasSecretSurface(observation);
         observation = applyPrivacyTiers(observation);
         this._lastObservation = observation;
+        if (this._completionChecklist && typeof observation?.text === "string" && observation.text) {
+          this._observedTexts.delete(observation.url);
+          this._observedTexts.set(observation.url, observation.text.slice(0, 20000));
+          if (this._observedTexts.size > 40) this._observedTexts.delete(this._observedTexts.keys().next().value);
+        }
         this._recordNavigation(observation);
         if (this._isResearchTask()) await this._recordResearchSource(observation);
 
@@ -2474,6 +2484,17 @@ class TaskController {
             reasonText = review.text;
             reasonCap = RESEARCH_REASON_CAP;
             answerVerified = review.verified === true;
+          }
+          if (reasonText && this._completionChecklist) {
+            const check = this._completionChecklist({ answer: reasonText, goalText: this._goal?.originalRequest ?? "", observation: this._lastObservation, observedTexts: [...this._observedTexts.values()] });
+            if (!check.ok) {
+              await this._store.append({ type: "note", payload: { kind: "completion_checklist_failed", codes: check.failures.map((f) => f.code), rejected: this._completionRejected } });
+              if (this._completionRejected < 2) {
+                this._completionRejected += 1;
+                this._repeatFeedback = { note: "completion_checklist_failed", guidance: check.failures.map((f) => f.guidance).join(" ") };
+                continue;
+              }
+            }
           }
           if (!answerVerified && this._giveUpRefused < this._giveUpRefusals) {
             // Nobody is there to help: keep working until the budget or the clock ends the task.

@@ -2224,7 +2224,7 @@ test("an identical action that failed deterministically twice is not dispatched 
   await store.close();
 });
 
-function giveUpRun({ store, giveUpRefusals, groundAnswers, reason }) {
+function giveUpRun({ store, giveUpRefusals, groundAnswers, reason, completionChecklist }) {
   const contexts = [];
   let turn = 0;
   const controller = new TaskController({
@@ -2240,6 +2240,7 @@ function giveUpRun({ store, giveUpRefusals, groundAnswers, reason }) {
     navIntervalMs: 0,
     ...(giveUpRefusals === undefined ? {} : { giveUpRefusals }),
     ...(groundAnswers === undefined ? {} : { groundAnswers }),
+    ...(completionChecklist === undefined ? {} : { completionChecklist }),
   });
   return { controller, contexts, turns: () => { return contexts.length; } };
 }
@@ -2988,4 +2989,26 @@ test("awaiting_verification frees the browser views once", async () => {
   });
   assert.equal(disposed, 1);
   await store.close();
+});
+
+test("completionChecklist sends a failing answer back twice, then delivers it", async () => {
+  const { runChecklist } = require("../main/harness/completion-checklist");
+  const bad = runChecklist({ answer: "The price is 4,321 dollars", goalText: "price?", observation: { url: "https://a.test/", title: "x", text: "price 99" }, observedTexts: ["price 99"] });
+  assert.equal(bad.ok, false);
+  assert.deepEqual(bad.failures.map((f) => f.code), ["value_not_on_opened_pages"]);
+  const blocked = runChecklist({ answer: "42 items", observation: { url: "https://a.test/", title: "Just a moment...", text: "" }, observedTexts: ["42"] });
+  assert.deepEqual(blocked.failures.map((f) => f.code), ["final_page_blocked"]);
+  const good = runChecklist({ answer: "It costs 99", goalText: "price?", observation: { url: "https://a.test/", title: "x", text: "price 99" }, observedTexts: ["price 99"] });
+  assert.equal(good.ok, true);
+});
+
+test("completionChecklist hook returns a failing answer twice with feedback, then lets the third through", async () => {
+  const { store } = await makeStore({ originalRequest: "check", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const seen = [];
+  const { controller, contexts } = giveUpRun({ store, reason: "answer 77", completionChecklist: (input) => { seen.push(input.answer); return { ok: false, failures: [{ code: "x", guidance: "fix it" }] }; } });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.equal(seen.length, 3);
+  assert.equal(contexts.length, 3);
+  assert.equal(contexts[1].progress.repeatFailureFeedback.note, "completion_checklist_failed");
 });
