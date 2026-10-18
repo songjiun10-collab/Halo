@@ -1287,3 +1287,11 @@ test("HALO_FULL_PAGE_TEXT=1 widens the default text window", () => {
     assert.ok(a._maxTextBytes > 12 * 1024 && a._maxTextBytes < 48 * 1024);
   } finally { if (prev === undefined) delete process.env.HALO_FULL_PAGE_TEXT; else process.env.HALO_FULL_PAGE_TEXT = prev; }
 });
+
+test("buildObserveScript flags textTruncated when the page has more text than the budget returns", () => {
+  const paragraphs = Array.from({ length: 30 }, (_, i) => new FakeElement("p", { text: `Paragraph number ${i} with some filler words` }));
+  const long = runObserveScriptAgainst(new FakeElement("body", { children: paragraphs }), { maxTextBytes: 200, maxElements: 2 });
+  assert.equal(long.textTruncated, true);
+  const short = runObserveScriptAgainst(new FakeElement("body", { children: [new FakeElement("p", { text: "tiny" })] }));
+  assert.equal("textTruncated" in short, false);
+});

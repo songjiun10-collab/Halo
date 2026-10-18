@@ -190,6 +190,7 @@ class BrowserAdapterError extends Error {
 // (2026-09-27 follow-up; see test/browser-adapter.test.js's vm-based
 // regression test that runs this exact script string against a fake DOM).
 function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding = null) {
+  const textReserve = Math.min(6 * 1024, Math.floor(maxTextBytes / 4));
   return `(() => {
     const included = new WeakMap();
     const elements = [];
@@ -205,6 +206,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
     };
     const root = document.body || document.documentElement;
     let textBytes = 0;
+    let textTruncated = false;
     let visited = 0;
     const clean = (value, max) => (typeof value === "string" ? value : "").replace(/\\s+/g, " ").trim().slice(0, max);
     const roleOf = (node) => {
@@ -373,12 +375,17 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
           // A visible leaf represented by its accessible name does not also
           // consume the free-text channel. This avoids sending button/link/
           // heading labels twice while preserving unstructured page copy.
-          if (ownText && !(name && name === ownText) && textBytes < ${maxTextBytes}) {
+          if (ownText && !(name && name === ownText)) {
+            // Scrolled: the last TEXT_RESERVE bytes of the text budget are kept for copy that is on screen, so
+            // scrolling to a section brings its text in even when the top of a long page used up the rest.
+            const textCap = scrolled && textBytes >= ${maxTextBytes} - ${textReserve} && !onScreen(node) ? ${maxTextBytes} - ${textReserve} : ${maxTextBytes};
             const encoded = (textParts.length ? " " : "") + ownText;
             const encodedBytes = utf8Length(encoded);
-            if (textBytes + encodedBytes <= ${maxTextBytes}) {
+            if (textBytes < textCap && textBytes + encodedBytes <= textCap) {
               textParts.push(ownText);
               textBytes += encodedBytes;
+            } else {
+              textTruncated = true;
             }
           }
           if (shouldInclude && withinCap) {
@@ -449,6 +456,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       title: document.title || "",
       text: textParts.join(" ").slice(0, ${maxTextBytes}),
       elements,
+      ...(textTruncated ? { textTruncated: true } : {}),
       ...(modal ? { modalOpen: true } : {}),
     };
   })()`;
@@ -845,6 +853,7 @@ class BrowserAdapter {
       ...(playLoop ? { playLoop } : {}),
       // A modal dialog is open: only it (and what contains it) is listed, because the page behind it cannot be used.
       ...(raw.modalOpen === true ? { modalOpen: true } : {}),
+      ...(raw.textTruncated === true ? { textTruncated: true } : {}),
       // Only error responses are surfaced, so ordinary observations stay unchanged.
       ...(this._lastHttpStatus >= 400 ? { httpStatus: this._lastHttpStatus } : {}),
       elements: trimContainerNames(raw.elements.map((el, index) => {
