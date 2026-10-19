@@ -86,11 +86,13 @@ function siteKey(urlOrHost: string): string {
 }
 
 // blocked_by_captcha is decided from the final page only (URL/title heuristics the host already uses).
-function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null, answered = false, blockedPage = false, unverified = false, hedged = false, siteBlocked = false): string {
+function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null, answered = false, blockedPage = false, unverified = false, hedged = false, siteBlocked = false, loadFailed = false): string {
   if (errorCode) return "runner_error";
   if (looksLikeCaptcha(finalUrl, finalTitle)) return "blocked_by_captcha";
   // The task's own site answered every visit with a block/error page and never once loaded: the site refused, not the agent. Counted as a failure, in its own column.
   if (siteBlocked && snapshot?.state !== "completed") return "blocked_by_site";
+  // The run ended on the browser's own error page after repeated failed navigations: the page never loaded (network/protocol error), cause unproven. A failure in its own column, not "no progress".
+  if (loadFailed && snapshot?.state !== "completed") return "load_failed";
   if (snapshot?.state === "completed") return unverified ? "unverified_finish" : "finished";
   // The agent declared finish but the host never confirmed the evidence: a finish claim, not a failure and not a verified success.
   if (snapshot?.state === "awaiting_verification") return unverified ? "unverified_finish" : "unconfirmed_finish";
@@ -193,7 +195,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
     clearTimeout(timer);
     if (controller) snapshot = controller.getSnapshot();
     try { finalUrl = view?.webContents.getURL() ?? ""; finalTitle = view?.webContents.getTitle?.() ?? ""; } catch { /* page already gone */ }
-    const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0, pageIsBlocked({ url: finalUrl, title: finalTitle }), (checklistLog[checklistLog.length - 1]?.codes.length ?? 0) > 0, hedgedAnswer(finalAnswer), siteRefused && !siteLoaded);
+    const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0, pageIsBlocked({ url: finalUrl, title: finalTitle }), (checklistLog[checklistLog.length - 1]?.codes.length ?? 0) > 0, hedgedAnswer(finalAnswer), siteRefused && !siteLoaded, finalUrl.startsWith("chrome-error://") && outcomes.slice(-3).length === 3 && outcomes.slice(-3).every((o: any) => o.errorCode === "navigation_error"));
     const result = { schema_version: "online-mind2web-v2", task: task.confirmed_task, task_id: task.task_id,
       agent_final_answer: finalAnswer, reference_length: task.reference_length, action_history: history };
     const run = { schemaVersion: 1, benchmark: "Online-Mind2Web", model, benchProfile: profile.name, noGiveUp: process.env.HALO_BENCH_NO_GIVE_UP === "1", groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1", safetyDisabled: profile.safetyDisabled, harness: "Halo",

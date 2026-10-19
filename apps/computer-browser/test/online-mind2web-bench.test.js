@@ -94,3 +94,10 @@ test("a task whose own site only ever refused is blocked_by_site, a failure in i
   assert.equal(classify({ state: "completed" }, "https://a.test/", "A", null, false, false, false, false, true), "finished", "a verified completion is not a block");
   assert.equal(classify(nu, "https://shop.example/", "Are you a robot?", null, false, false, false, false, true), "blocked_by_captcha");
 });
+
+test("ending on the browser error page after repeated failed navigations is load_failed, not no_progress", () => {
+  const np = { state: "paused", pauseReason: "no_progress" };
+  assert.equal(classify(np, "chrome-error://chromewebdata/", "", null, false, false, false, false, false, true), "load_failed");
+  assert.equal(classify(np, "https://a.test/", "A", null, false, false, false, false, false, false), "stopped:no_progress");
+  assert.equal(classify({ state: "completed" }, "https://a.test/", "A", null, false, false, false, false, false, true), "finished");
+});
