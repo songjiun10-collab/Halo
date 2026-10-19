@@ -15,7 +15,7 @@ const CLAUDE = Object.freeze({
   }),
   "claude-sonnet-5-5": Object.freeze({
     base: "Sonnet 5.5 is effort-sensitive. Keep browser work bounded to the stated criteria. When the next safe, supported action is clear, propose it instead of checking in for reassurance; ask only for a required missing choice or a genuine blocker. Do not broaden the task.",
-    low: "At low effort, do not stop after part of a multi-criterion task when another safe action is clear. Still collect required evidence before finish.",
+    low: "At low effort, do not stop after part of a multi-criterion task when another safe action is clear. Still collect required evidence before finish. When an opened page shows a link or button for what the task asks, click it rather than guessing another URL. If a site answers with Access Denied or an error page twice, stop trying variants of that address: try one other route to the site's own pages, then report that access was blocked. Do not ask the user to choose a source; report what you verified and what you could not.",
     medium: "At medium effort, continue well-specified criteria without asking permission for ordinary reversible navigation or observation. Do not infer permission for consequential actions.",
     high: "At high effort, spend reasoning on the stated criteria, not extra browsing; stop once host-verifiable evidence is sufficient.",
     xhigh: "At xhigh effort, be especially strict about scope: no exploratory side trips or extra criteria; stop when requested criteria have evidence.",
