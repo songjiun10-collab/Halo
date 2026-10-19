@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile, hedgedAnswer } = require("../integration/online-mind2web-bench.ts");
+const { selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile, hedgedAnswer, siteKey } = require("../integration/online-mind2web-bench.ts");
 
 const row = (i, over = {}) => ({ task_id: `t${i}`, confirmed_task: "Find a thing", website: "https://example.test/", reference_length: 5, level: "easy", ...over });
 
@@ -83,4 +83,14 @@ test("an answer that admits it is incomplete or asks the user to choose is hedge
   assert.equal(classify(nu, "https://a.test/", "A", null, true, false, false, true), "hedged_answer");
   assert.equal(classify(nu, "https://a.test/", "A", null, true, false, false, false), "answered");
   assert.equal(classify(nu, "https://a.test/", "A", null, true, false, true, true), "unverified_report", "unverified still wins");
+});
+
+test("a task whose own site only ever refused is blocked_by_site, a failure in its own column; captcha still wins", () => {
+  const nu = { state: "paused", pauseReason: "need_user" };
+  assert.equal(siteKey("https://new.mta.info/x"), "mta.info");
+  assert.equal(siteKey("www.mta.info"), "mta.info");
+  assert.equal(classify(nu, "https://en.wikipedia.org/wiki/X", "X", null, true, false, true, false, true), "blocked_by_site");
+  assert.equal(classify(nu, "https://a.test/", "A", null, true, false, true, false, false), "unverified_report", "site loaded at least once");
+  assert.equal(classify({ state: "completed" }, "https://a.test/", "A", null, false, false, false, false, true), "finished", "a verified completion is not a block");
+  assert.equal(classify(nu, "https://shop.example/", "Are you a robot?", null, false, false, false, false, true), "blocked_by_captcha");
 });

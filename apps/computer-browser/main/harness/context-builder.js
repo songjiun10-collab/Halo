@@ -111,21 +111,30 @@ function validContextManifest(manifest) {
 // label and address (a logo, a menu shown twice) only needs to be offered once. Applied to what the planner is sent,
 // never to what the host acts on.
 function compactObservation(observation) {
-  if (!contracts.isPlainObject(observation) || !Array.isArray(observation.elements)) return observation;
-  const seenLinks = new Set();
-  const elements = [];
-  for (const element of observation.elements) {
-    if (!contracts.isPlainObject(element)) { elements.push(element); continue; }
-    if (element.role === "link" && typeof element.href === "string") {
-      const key = `${element.name}\u0000${element.href}`;
-      if (seenLinks.has(key)) continue;
-      seenLinks.add(key);
+    if (!contracts.isPlainObject(observation) || !Array.isArray(observation.elements))
+        return observation;
+    const seenLinks = new Set();
+    const elements = [];
+    for (const element of observation.elements) {
+        if (!contracts.isPlainObject(element)) {
+            elements.push(element);
+            continue;
+        }
+        if (element.role === "link" && typeof element.href === "string") {
+            const key = `${element.name}\u0000${element.href}`;
+            if (seenLinks.has(key))
+                continue;
+            seenLinks.add(key);
+        }
+        if (element.parentElementId === null) {
+            const { parentElementId, ...rest } = element;
+            elements.push(rest);
+        }
+        else
+            elements.push(element);
     }
-    if (element.parentElementId === null) { const { parentElementId, ...rest } = element; elements.push(rest); } else elements.push(element);
-  }
-  return { ...observation, elements };
+    return { ...observation, elements };
 }
-
 function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest, strategyGuidance }) {
     contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
     if (!contracts.isPlainObject(state)) {

@@ -80,10 +80,17 @@ function plannerWorker(model: string): { file: string; args: string[] } {
 const HEDGE = /(정해 주시|정해주시|어떻게 할까요|판단할 근거가 부족|완전한 답변을 드리기 어렵|증상은 아직 확인하지 못|which would you prefer|let me know (which|how) )/i;
 function hedgedAnswer(text: string): boolean { return HEDGE.test(String(text || "")); }
 
+// Last two host labels ("new.mta.info" and "www.mta.info" both -> "mta.info"); good enough to tell the task's site from a search engine or wiki.
+function siteKey(urlOrHost: string): string {
+  try { const h = urlOrHost.includes("://") ? new URL(urlOrHost).hostname : urlOrHost; return h.split(".").slice(-2).join("."); } catch { return ""; }
+}
+
 // blocked_by_captcha is decided from the final page only (URL/title heuristics the host already uses).
-function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null, answered = false, blockedPage = false, unverified = false, hedged = false): string {
+function classify(snapshot: any, finalUrl: string, finalTitle: string, errorCode: string | null, answered = false, blockedPage = false, unverified = false, hedged = false, siteBlocked = false): string {
   if (errorCode) return "runner_error";
   if (looksLikeCaptcha(finalUrl, finalTitle)) return "blocked_by_captcha";
+  // The task's own site answered every visit with a block/error page and never once loaded: the site refused, not the agent. Counted as a failure, in its own column.
+  if (siteBlocked && snapshot?.state !== "completed") return "blocked_by_site";
   if (snapshot?.state === "completed") return unverified ? "unverified_finish" : "finished";
   // The agent declared finish but the host never confirmed the evidence: a finish claim, not a failure and not a verified success.
   if (snapshot?.state === "awaiting_verification") return unverified ? "unverified_finish" : "unconfirmed_finish";
@@ -107,6 +114,9 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
   let reroutes = 0;
   let snapshot: any, errorCode: string | null = null, calls = 0, finalAnswer = "", finalUrl = "", finalTitle = "";
   const checklistLog: any[] = [];
+  // What the task's own site did across the run: loaded fine, or only ever refused us. captchaSeen is a flag on any verdict (the run may still finish via another route).
+  const taskSite = siteKey(task.website);
+  let siteLoaded = false, siteRefused = false, captchaSeen = false;
   const started = benchClock.now();
   const worker = plannerWorker(model);
   try {
@@ -163,6 +173,11 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
             await fs.appendFile(process.env.HALO_PROMPT_SIZE_LOG, JSON.stringify({ call: calls, total: size(context), parts }) + "\n");
           } catch { /* measurement must never affect a planning call */ }
         }
+        const seen = context.observation;
+        if (seen?.url) {
+          if (looksLikeCaptcha(seen.url, seen.title ?? "")) captchaSeen = true;
+          if (siteKey(seen.url) === taskSite) { if (pageIsBlocked(seen)) siteRefused = true; else siteLoaded = true; }
+        }
         const proposal = await planner.next(context, options);
         proposals.push({ call: calls, kind: proposal.kind, actionTypes: (proposal.actions ?? []).map((a: any) => a.type) });
         // A finish carries no answer text: record that plainly (with the last real answer, if any) instead of the raw proposal JSON.
@@ -178,12 +193,12 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
     clearTimeout(timer);
     if (controller) snapshot = controller.getSnapshot();
     try { finalUrl = view?.webContents.getURL() ?? ""; finalTitle = view?.webContents.getTitle?.() ?? ""; } catch { /* page already gone */ }
-    const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0, pageIsBlocked({ url: finalUrl, title: finalTitle }), (checklistLog[checklistLog.length - 1]?.codes.length ?? 0) > 0, hedgedAnswer(finalAnswer));
+    const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0, pageIsBlocked({ url: finalUrl, title: finalTitle }), (checklistLog[checklistLog.length - 1]?.codes.length ?? 0) > 0, hedgedAnswer(finalAnswer), siteRefused && !siteLoaded);
     const result = { schema_version: "online-mind2web-v2", task: task.confirmed_task, task_id: task.task_id,
       agent_final_answer: finalAnswer, reference_length: task.reference_length, action_history: history };
     const run = { schemaVersion: 1, benchmark: "Online-Mind2Web", model, benchProfile: profile.name, noGiveUp: process.env.HALO_BENCH_NO_GIVE_UP === "1", groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1", safetyDisabled: profile.safetyDisabled, harness: "Halo",
       graded: false, success: null, taskId: task.task_id, level: task.level, verdict, state: snapshot?.state ?? "startup_error",
-      pauseReason: snapshot?.pauseReason ?? null, errorCode, finalUrl, wallMs: benchClock.now() - started, plannerCalls: calls, reroutes,
+      pauseReason: snapshot?.pauseReason ?? null, errorCode, finalUrl, wallMs: benchClock.now() - started, plannerCalls: calls, reroutes, captchaSeen, siteRefused, siteLoaded,
       usages, budgets: snapshot?.budgets ?? null, actions: outcomes, proposals, checklist: checklistLog };
     try {
       await fs.writeFile(path.join(dir, "result.json"), JSON.stringify(result, null, 2), { mode: 0o600 });
@@ -231,10 +246,11 @@ async function main() {
   }
   const tally: Record<string, number> = {};
   for (const r of runs) tally[r.verdict] = (tally[r.verdict] ?? 0) + 1;
-  await fs.writeFile(path.join(output, "summary.json"), JSON.stringify({ manifest, tally, runs }, null, 2), { mode: 0o600 });
-  process.stdout.write(JSON.stringify({ event: "bench_finished", output, attempted: runs.length, tally, graded: false }) + "\n");
+  const captchaEncountered = runs.filter((r) => r.captchaSeen).length;
+  await fs.writeFile(path.join(output, "summary.json"), JSON.stringify({ manifest, tally, captchaEncountered, runs }, null, 2), { mode: 0o600 });
+  process.stdout.write(JSON.stringify({ event: "bench_finished", output, attempted: runs.length, tally, captchaEncountered, graded: false }) + "\n");
 }
-module.exports = { selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile, hedgedAnswer };
+module.exports = { siteKey, selectTasks, alternateRoute, MAX_REROUTES, plannerWorker, classify, resolveProfile, hedgedAnswer };
 if (require.main === module) {
   // A run that dies mid-task used to leave no trace; print what killed it.
   process.on("uncaughtException", (error: any) => { console.error("bench_uncaught", error?.stack ?? error); process.exit(1); });
