@@ -340,3 +340,19 @@ test("contextManifest is opt-in, keeps the newest refs within 8 KiB, and counts 
   assert.equal(manifest.omittedRefs, 128 - manifest.refs.length);
   assert.throws(() => buildContext({ ...base, contextManifest: { version: 2, refs: [] } }), /contextManifest/);
 });
+
+test("buildContext compacts observation elements: drops null parentElementId and dedupes identical links", () => {
+  const observation = {
+    url: "https://example.com/",
+    elements: [
+      { elementId: "1", role: "link", name: "Home", href: "https://example.com/", parentElementId: null },
+      { elementId: "2", role: "link", name: "Home", href: "https://example.com/", parentElementId: null },
+      { elementId: "3", role: "button", name: "Go", parentElementId: "9" },
+    ],
+  };
+  const packet = buildContext({ goal: makeGoal(), state: makeState(), observation, recentEvents: [] });
+  const els = packet.observation.elements;
+  assert.equal(els.length, 2);
+  assert.equal("parentElementId" in els[0], false);
+  assert.equal(els[1].parentElementId, "9");
+});
