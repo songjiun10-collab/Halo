@@ -88,6 +88,7 @@ test("drives 100 actions across at least 10 injected context-reset segments whil
   };
 
   const controller = new TaskController({
+    pageStallLimit: 0,
     store,
     planner,
     browser,
@@ -2042,9 +2043,9 @@ test("navigation memory stays bounded: visited and frontier are capped and hrefs
     hostVerifier: () => true,
   });
   await controller.start();
-  assert.equal(last.visited.length, 32);
+  assert.equal(last.visited.length, 16);
   assert.equal(last.visited.at(-1), "https://site.test/p39");
-  assert.equal(last.frontier.length, 32);
+  assert.equal(last.frontier.length, 12);
   // Oldest entries are dropped at the cap, and no href ever appears twice.
   assert.equal(new Set(last.frontier.map((entry) => entry.href)).size, last.frontier.length);
   assert.ok(last.frontier.filter((entry) => entry.href === "https://site.test/dup").length <= 1);
@@ -3115,3 +3116,24 @@ for (const [label, action, result, note] of [
     await store.close();
   });
 }
+
+test("many different actions on a page that never changes pause as no_progress instead of burning planning calls", async () => {
+  const { store } = await makeStore({ originalRequest: "stall", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 60 } });
+  let n = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      n += 1;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "navigate", url: `https://a.test/${n}` }] };
+    } },
+    browser: { observe: async () => ({ id: "same", url: "https://a.test/blank", elements: [] }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.ok(n <= 25, `planner was called ${n} times`);
+  await store.close();
+});

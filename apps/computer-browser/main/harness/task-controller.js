@@ -167,7 +167,7 @@ function hasMultiAgentCapability(taskProfile) {
 const GOAL_MAX_REJECTED_FINISHES = 5;
 // A research answer plus the host's own source list is longer than an ordinary reply.
 const RESEARCH_REASON_CAP = 2800;
-const NAV_VISITED_MAX = 32;
+const NAV_VISITED_MAX = 16;
 // Consecutive scrolls on one page after which the task pauses as no_progress.
 const PLANNER_RETRYABLE_CODES = ["invalid_proposal", "invalid_proposal_json"];
 const SCROLL_STREAK_LIMIT = 6;
@@ -186,9 +186,9 @@ const PAGE_LOOP_LIMIT = 8;
 const ERROR_URLS_KEPT = 5;
 const OBSERVE_STALE_RETRIES = 2;
 const OBSERVE_RETRY_DELAY_MS = 400;
-const NAV_FRONTIER_MAX = 32;
+const NAV_FRONTIER_MAX = 12;
 const NAV_URL_MAX_CHARS = 512;
-const NAV_NAME_MAX_CHARS = 80;
+const NAV_NAME_MAX_CHARS = 50;
 const MCP_RESULT_MAX_BYTES = 4096;
 
 function truncateUtf8(text, maxBytes) {
@@ -260,6 +260,7 @@ class TaskController {
     monotonicNow,
     segmentRotationCalls,
     noProgressThreshold,
+    pageStallLimit,
     memoryStore,
     activityRecall,
     strategyGuidance,
@@ -483,6 +484,7 @@ class TaskController {
       : () => Number(process.hrtime.bigint()) / 1_000_000;
     this._segmentRotationCalls =
       typeof segmentRotationCalls === "number" ? segmentRotationCalls : contracts.SEGMENT_ROTATION_CALLS;
+    this._pageStallLimit = typeof pageStallLimit === "number" ? pageStallLimit : PAGE_STALL_LIMIT;
     this._noProgressThreshold =
       typeof noProgressThreshold === "number" ? noProgressThreshold : contracts.NO_PROGRESS_REPLAN_THRESHOLD;
 
@@ -3333,6 +3335,18 @@ class TaskController {
       return;
     }
 
+    // Different actions on a page that never changes (a blank or error page, the same results) evade the identical-action key above
+    // and each one costs a full planning call: stop that stall on its own, after one recovery attempt.
+    const pageKey = observationKey(this._lastObservation);
+    this._pageStall = pageKey === this._pageStall?.key ? { key: pageKey, count: this._pageStall.count + 1 } : { key: pageKey, count: 1 };
+    if (this._pageStallLimit > 0 && this._pageStall.count >= this._pageStallLimit) {
+      this._pageStall = { key: pageKey, count: 0 };
+      await this._store.append({ type: "note", payload: { msg: "page unchanged across many actions; recovering or pausing" } });
+      if (await this._tryRecover("no_progress", "page-stall")) { this._loopHint = true; return; }
+      await this._pauseWith("no_progress");
+      return;
+    }
+
     if (key === this._noProgress.lastKey) {
       this._noProgress.consecutive += 1;
     } else {
@@ -3356,6 +3370,8 @@ class TaskController {
 // Errors that repeat identically when the same action is run again (the page or target is what is wrong).
 const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found", "http_get_not_allowed", "http_get_content_type", "invalid_http_get", "os_denied", "os_unavailable", "invalid_os_action", "os_stopped"]);
 const REPEAT_BLOCK_PAUSE = 3;
+// Consecutive dispatches that leave the observed page identical, whatever the actions were.
+const PAGE_STALL_LIMIT = 10;
 // A kind of action that tends to loop. type is not one: a long form legitimately types many fields.
 const FAMILY_WINDOW = 12;
 const FAMILY_WARN = 3;

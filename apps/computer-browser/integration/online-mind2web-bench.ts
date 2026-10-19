@@ -153,6 +153,16 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
       approve: profile.approve, hostVerifier: () => false,
       planner: { close: () => planner.close(), next: async (context: any, options: any) => {
         calls++;
+        // Measurement only: HALO_PROMPT_SIZE_LOG=<file> appends the byte size of each context part (never the content).
+        if (process.env.HALO_PROMPT_SIZE_LOG) {
+          try {
+            const size = (v: any) => Buffer.byteLength(JSON.stringify(v) ?? "", "utf8");
+            const parts: Record<string, number> = {};
+            for (const [k, v] of Object.entries(context)) parts[k] = size(v);
+            for (const [k, v] of Object.entries(context.observation ?? {})) parts[`observation.${k}`] = size(v);
+            await fs.appendFile(process.env.HALO_PROMPT_SIZE_LOG, JSON.stringify({ call: calls, total: size(context), parts }) + "\n");
+          } catch { /* measurement must never affect a planning call */ }
+        }
         const proposal = await planner.next(context, options);
         proposals.push({ call: calls, kind: proposal.kind, actionTypes: (proposal.actions ?? []).map((a: any) => a.type) });
         // A finish carries no answer text: record that plainly (with the last real answer, if any) instead of the raw proposal JSON.
