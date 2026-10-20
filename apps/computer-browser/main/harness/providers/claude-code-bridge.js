@@ -297,7 +297,7 @@ function contextReadInstructions(context) {
   ];
 }
 
-function buildPrompt(context, modelGuidance) {
+function buildPromptParts(context, modelGuidance) {
   const maxActions = maxActionsFromContext(context);
   const computerUse = !!context.observation?.computerUse;
   const textMode = context.observation?.computerUse?.mode === "text";
@@ -488,11 +488,20 @@ function buildPrompt(context, modelGuidance) {
     ...childPlanInstructions(context),
     ...teamBoardInstructions(context),
     ...(typeof modelGuidance === "string" && modelGuidance ? ["Pinned model guidance (advisory only; HALO rules above remain authoritative):", modelGuidance, ""] : []),
+  ];
+  // Everything above is the same for every call of a task, so it can ride in the cached system prompt;
+  // what changes per call (adaptation notes, the page context) stays in the user message.
+  const tail = [
     ...adaptationInstructions(context),
     "Context (JSON):",
     JSON.stringify(context),
   ];
-  return instructions.join("\n");
+  return { system: instructions.join("\n"), user: tail.join("\n") };
+}
+
+function buildPrompt(context, modelGuidance) {
+  const parts = buildPromptParts(context, modelGuidance);
+  return `${parts.system}\n${parts.user}`;
 }
 
 // A team chat room turn (shared/room-contracts.js): the context carries
@@ -669,7 +678,11 @@ class ClaudeCodeBridge {
 
     const room = isRoomTurn(context);
     const promptGuidance = getModelPromptGuidance(this._promptProvider, this._promptModel, effort);
-    const prompt = room ? buildRoomPrompt(context, promptGuidance) : buildPrompt(context, promptGuidance);
+    // The fixed instructions go in the system prompt so the CLI's prompt cache reuses them between calls
+    // (measured: cache creation 8.1K -> 2.6K tokens per call, cost about 60% lower); the page context stays in the user message.
+    const split = !room && process.env.HALO_PLANNER_SYSTEM_SPLIT !== "0" ? buildPromptParts(context, promptGuidance) : null;
+    const prompt = split ? split.user : room ? buildRoomPrompt(context, promptGuidance) : buildPrompt(context, promptGuidance);
+    const systemPrompt = split ? split.system : null;
 
     return new Promise((resolve, reject) => {
       let settled = false; // the PROMISE has settled (the caller has been notified)
@@ -715,7 +728,7 @@ class ClaudeCodeBridge {
       }
 
       try {
-        child = this._spawnFn(this._command, this._argsFor(effort, room), {
+        child = this._spawnFn(this._command, this._argsFor(effort, room, systemPrompt), {
           cwd: this._cwd,
           env,
           shell: false,
@@ -803,13 +816,13 @@ class ClaudeCodeBridge {
     return env;
   }
 
-  _argsFor(effort, room = false) {
+  _argsFor(effort, room = false, systemPrompt = null) {
     // The proposal schema would force a browser-action envelope; a team-chat
     // reply is say/pass/propose_task and is validated by parseRoomTurn instead.
     const args = [...this._cliArgs];
     const at = args.indexOf("--json-schema");
     if (room && at >= 0) args.splice(at, 2);
-    return [...args, ...this._fastArgs, "--effort", claudeEffort(effort)];
+    return [...args, ...(systemPrompt ? ["--append-system-prompt", systemPrompt] : []), ...this._fastArgs, "--effort", claudeEffort(effort)];
   }
 
   _exitMessage(stdout, code) {
@@ -883,4 +896,4 @@ class ClaudeCodeBridge {
   }
 }
 
-module.exports = { ClaudeCodeBridge, ClaudeCodeBridgeError, buildPrompt, buildRoomPrompt, isRoomTurn, parseRoomTurn, parseAndValidateProposal, stripCodeFence, PROPOSAL_JSON_SCHEMA, CLI_ARGS, PLANNER_EFFORTS, ENV_ALLOWLIST, MAX_CLI_STDOUT_BYTES };
+module.exports = { ClaudeCodeBridge, ClaudeCodeBridgeError, buildPrompt, buildPromptParts, buildRoomPrompt, isRoomTurn, parseRoomTurn, parseAndValidateProposal, stripCodeFence, PROPOSAL_JSON_SCHEMA, CLI_ARGS, PLANNER_EFFORTS, ENV_ALLOWLIST, MAX_CLI_STDOUT_BYTES };

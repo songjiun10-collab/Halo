@@ -1,5 +1,7 @@
 "use strict";
 
+process.env.HALO_PLANNER_SYSTEM_SPLIT = "0"; // this file pins the exact argv; the split has its own tests in claude-code-bridge.test.js
+
 // Planner model selection: a host-owned Claude model allowlist flows
 // settings -> TaskHost pin -> selectPlannerLaunch argv -> worker argv ->
 // ClaudeCodeBridge `--model`. No caller can supply a free-form model string.
