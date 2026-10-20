@@ -2517,7 +2517,8 @@ class TaskController {
             const check = this._completionChecklist({ answer: modelAnswer, goalText: this._goal?.originalRequest ?? "", observation: this._lastObservation, observedTexts: [...this._observedTexts.values()], observedUrls: [...this._observedTexts.keys()] });
             if (!check.ok) {
               await this._store.append({ type: "note", payload: { kind: "completion_checklist_failed", codes: check.failures.map((f) => f.code), rejected: this._completionRejected } });
-              if (this._completionRejected < 2) {
+              // One send-back budget per answer, shared with the source check: two gates must not send the same answer back four times.
+              if (this._completionRejected + this._researchRejections < research.MAX_REJECTIONS) {
                 this._completionRejected += 1;
                 this._repeatFeedback = { note: "completion_checklist_failed", guidance: check.failures.map((f) => f.guidance).join(" ") };
                 continue;
@@ -2741,7 +2742,7 @@ class TaskController {
       this._researchFeedback = null;
       return { action: "deliver", verified: true, text: answer + research.sourcesBlock(check.verified) };
     }
-    if (this._researchRejections < research.MAX_REJECTIONS) {
+    if (this._researchRejections + this._completionRejected < research.MAX_REJECTIONS) {
       this._researchRejections += 1;
       this._researchFeedback = { reasons: check.reasons, unopenedUrls: check.unverified.slice(0, 5).map((u) => u.slice(0, 200)) };
       await this._store.append({ type: "note", payload: { kind: "research_answer_rejected", reasons: check.reasons, unopened: check.unverified.length, sites: check.independentSites } });

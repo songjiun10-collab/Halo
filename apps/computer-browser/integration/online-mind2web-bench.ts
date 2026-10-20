@@ -190,7 +190,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
       } } });
     timer = setTimeout(() => controller.stop().catch(() => {}), LIMITS.maxActiveMs);
     snapshot = await controller.start();
-  } catch (error: any) { errorCode = error?.code ?? "bench_error"; }
+  } catch (error: any) { errorCode = error?.code ?? "bench_error"; console.error("[bench] task error:", error?.stack ?? error); }
   finally {
     clearTimeout(timer);
     if (controller) snapshot = controller.getSnapshot();

@@ -3014,6 +3014,16 @@ test("completionChecklist hook returns a failing answer twice with feedback, the
   assert.equal(contexts[1].progress.repeatFailureFeedback.note, "completion_checklist_failed");
 });
 
+test("the source check and the completion checklist share one send-back budget per answer", async () => {
+  const { store } = await makeStore({ originalRequest: "check", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  // Cites a page that was never opened (the source check sends it back) and always fails the checklist.
+  const { controller, contexts } = giveUpRun({ store, groundAnswers: true, reason: "answer 77 from https://unopened.test/page", completionChecklist: () => ({ ok: false, failures: [{ code: "x", guidance: "fix it" }] }) });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.equal(contexts.length, 3); // two send-backs in total, then the answer goes out
+  await store.close();
+});
+
 test("completion checklist holds the answer to conditions the task names", () => {
   const { runChecklist, conditionsIn } = require("../main/harness/completion-checklist");
   assert.deepEqual(conditionsIn("Find hotels in Chicago under 150 dollars with \"free parking\"").sort(), ["chicago", "free parking"]);
