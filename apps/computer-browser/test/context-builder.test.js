@@ -372,3 +372,28 @@ test("buildContext drops nameless row/cell/list containers and re-parents their 
   assert.equal(out[1].parentElementId, "0");
   assert.equal("parentElementId" in out[3], false, "a child of a dropped root container has no parent left");
 });
+
+test("textFocusQueries: long page text keeps passages matching the goal or a find_text query and marks the omitted runs", () => {
+  const filler = (n, w) => Array.from({ length: n }, (_, i) => `${w}${i} lorem ipsum dolor sit amet consectetur`).join(" ");
+  const text = `Header ${filler(60, "alpha")} The 문서 summary covers pricing details here. ${filler(80, "beta")} Warranty clause appears in this passage. ${filler(60, "gamma")}`;
+  const goal = makeGoal({ originalRequest: "Summarize the pricing details" });
+  const observation = { url: "https://example.com/", text };
+  const off = buildContext({ goal, state: makeState(), observation, recentEvents: [] }).observation.text;
+  assert.equal(off, text, "without the option the text is sent as is");
+  const focused = buildContext({ goal, state: makeState(), observation, recentEvents: [], textFocusQueries: [] }).observation.text;
+  assert.ok(focused.includes("pricing details"));
+  assert.ok(!focused.includes("beta40 "), "an unrelated middle run is replaced");
+  assert.match(focused, /bytes of page text not shown/);
+  assert.ok(focused.startsWith("Header"), "the first chunk stays");
+  assert.ok(Buffer.byteLength(focused) < Buffer.byteLength(text) * 0.6);
+  const withQuery = buildContext({ goal, state: makeState(), observation, recentEvents: [], textFocusQueries: ["warranty clause"] }).observation.text;
+  assert.ok(withQuery.includes("Warranty clause appears"), "a find_text query brings its passage back");
+});
+
+test("textFocusQueries: short text and text where nearly everything matches are left alone", () => {
+  const goal = makeGoal({ originalRequest: "Summarize the pricing details" });
+  const short = { url: "https://example.com/", text: "pricing details are short here" };
+  assert.equal(buildContext({ goal, state: makeState(), observation: short, recentEvents: [], textFocusQueries: [] }).observation.text, short.text);
+  const allMatch = { url: "https://example.com/", text: Array.from({ length: 400 }, () => "pricing details apply").join(" ") };
+  assert.equal(buildContext({ goal, state: makeState(), observation: allMatch, recentEvents: [], textFocusQueries: [] }).observation.text, allMatch.text);
+});

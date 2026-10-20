@@ -42,6 +42,8 @@ interface ContextInput {
   workGoalBinding?: WorkGoalBinding; workGoal?: WorkGoal;
   teamBoard?: TeamBoard | null; contextManifest?: ContextManifest;
   strategyGuidance?: string | null;
+  // When set (even empty), long page text is cut down to the passages that share words with the goal or these find_text queries.
+  textFocusQueries?: string[] | null;
 }
 interface Contracts {
   isPlainObject(value: unknown): value is PlainRecord;
@@ -208,7 +210,53 @@ function dropEmptyContainers(elements: unknown[]): unknown[] {
   return out;
 }
 
-function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest, strategyGuidance }: ContextInput) {
+// Page text is the swing factor in what the planner is sent (3 KB to 30 KB). Above FOCUS_MIN_BYTES, passages that share no
+// word with the goal or with a recent find_text query (and are not next to one that does) are replaced by one marker per
+// omitted run. Nothing is lost for good: a find_text query adds its words to the focus, so the passage comes back on the
+// next observation. The host's own view of the page is untouched.
+const FOCUS_MIN_BYTES = 6 * 1024;
+const FOCUS_CHUNK_CHARS = 320;
+const FOCUS_STOP = new Set(["the", "and", "for", "with", "that", "this", "from", "into", "what", "which", "who", "how", "are", "was", "were", "has", "have", "can", "you", "your", "please", "find", "show", "give", "get", "tell", "all", "any", "not", "its", "their", "there", "about", "page", "site", "website", "web", "search", "look", "check", "using", "use"]);
+function focusTerms(...texts: Array<string | undefined>): string[] {
+  const terms = new Set<string>();
+  for (const text of texts) {
+    for (const word of String(text ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+      const ascii = /^[\x00-\x7f]+$/.test(word);
+      if (word.length < (ascii ? 3 : 2) || FOCUS_STOP.has(word)) continue;
+      terms.add(word);
+    }
+  }
+  return [...terms];
+}
+function focusObservationText(observation: unknown, originalRequest: string, queries: string[] | null | undefined): unknown {
+  if (!queries || !contracts.isPlainObject(observation) || typeof observation.text !== "string") return observation;
+  const text = observation.text;
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes < FOCUS_MIN_BYTES) return observation;
+  const terms = focusTerms(originalRequest, ...queries);
+  if (terms.length === 0) return observation;
+  const chunks: string[] = [];
+  for (let at = 0; at < text.length;) {
+    let end = Math.min(text.length, at + FOCUS_CHUNK_CHARS);
+    if (end < text.length) { const space = text.lastIndexOf(" ", end); if (space > at) end = space; }
+    chunks.push(text.slice(at, end)); at = end;
+  }
+  // A word found in a quarter of the passages (the page's own subject) does not tell passages apart; only rarer ones count.
+  const lowered = chunks.map((c) => c.toLowerCase());
+  const discriminating = terms.filter((t) => { const n = lowered.filter((c) => c.includes(t)).length; return n >= 1 && n <= Math.max(2, chunks.length * 0.25); });
+  if (discriminating.length === 0) return observation;
+  const hit = lowered.map((c) => discriminating.some((t) => c.includes(t)));
+  const keep = chunks.map((_, i) => i === 0 || hit[i] || hit[i - 1] === true || hit[i + 1] === true);
+  const parts: string[] = [];
+  let omittedBytes = 0, kept = 0;
+  const flush = () => { if (omittedBytes > 0) { parts.push(`[... ${omittedBytes} bytes of page text not shown: no passage words match the goal; find_text with words from it brings it back ...]`); omittedBytes = 0; } };
+  chunks.forEach((c, i) => { if (keep[i]) { flush(); parts.push(c); kept += Buffer.byteLength(c, "utf8"); } else omittedBytes += Buffer.byteLength(c, "utf8"); });
+  flush();
+  if (kept >= bytes * 0.85) return observation;
+  return { ...observation, text: parts.join(" ") };
+}
+
+function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest, strategyGuidance, textFocusQueries }: ContextInput) {
   contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
 
   if (!contracts.isPlainObject(state)) {
@@ -247,7 +295,7 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     },
     progress: trustedProgress,
     recentEvents: boundedRecentEvents,
-    observation: observation === undefined ? null : compactObservation(observation),
+    observation: observation === undefined ? null : focusObservationText(compactObservation(observation), goal.originalRequest, textFocusQueries),
     untrustedSummary: modelSummary === undefined ? null : { text: modelSummary, authority: "untrusted_summary" },
     userMemory: { authority: "untrusted_user_memory", entries: customMemory },
     ...(builtinPlaybooks === undefined ? {} : { haloPlaybooks: builtinPlaybooks }),

@@ -533,6 +533,7 @@ class TaskController {
     this._criteriaStatus = new Map(); // criterionId -> {status, evidenceId}
     this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
     this._scrollStreak = { url: null, count: 0 };
+    this._textFocusQueries = []; // recent find_text queries: their words keep matching passages in the planner's page text
     this._recentPages = [];
     this._visitedPages = new Set();
     this._lastNavAt = new Map();
@@ -2258,6 +2259,7 @@ class TaskController {
             recentEvents: this._store.eventsSinceCheckpoint || [],
             customMemory,
             strategyGuidance: this._strategyGuidance,
+            textFocusQueries: process.env.HALO_TEXT_FOCUS === "1" ? [...this._textFocusQueries] : null,
             pendingMessages,
             ...(teamBoard ? { teamBoard } : {}),
             ...(this._workGoalBinding ? { workGoalBinding: this._workGoalBinding, workGoal } : {}),
@@ -3256,6 +3258,10 @@ class TaskController {
           guidance: `You have used ${family} ${FAMILY_WARN} times in the last few actions. If it is not getting you further, change approach now instead of trying another variant.`,
         };
       }
+    }
+
+    if (result.action?.type === "find_text" && typeof result.action.text === "string") {
+      this._textFocusQueries = [...this._textFocusQueries.filter((q) => q !== result.action.text), result.action.text.slice(0, 200)].slice(-4);
     }
 
     // Scrolling the same page again and again is a loop even when each scroll
