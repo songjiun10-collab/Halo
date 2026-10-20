@@ -3103,23 +3103,6 @@ test("a read-only batch [find_text, observe] with a new phrase each time is also
   await store.close();
 });
 
-test("finding the same phrase again on the same page tells the planner it is already in view", async () => {
-  const { store } = await makeStore({ originalRequest: "open the reviews", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 4 } });
-  const contexts = [];
-  const controller = new TaskController({
-    store,
-    planner: { next: async (context) => {
-      contexts.push(context);
-      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "find_text", text: "Reviews (524)" }] };
-    } },
-    browser: { observe: async () => ({ id: "obs", url: "https://a.test/recipe" }), execute: async () => ({ status: "ok" }) },
-    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0,
-  });
-  await controller.start();
-  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "find_text_repeat"), true);
-  await store.close();
-});
-
 test("without repeatFailureLimit the family check is off", async () => {
   const { store } = await makeStore({ originalRequest: "off", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 8 } });
   const executed = [];

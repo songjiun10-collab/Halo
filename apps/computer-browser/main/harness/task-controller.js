@@ -3244,13 +3244,6 @@ class TaskController {
         const n = (this._navCounts.get(navKey) ?? 0) + 1;
         this._navCounts.set(navKey, n);
         if (n >= 2) this._repeatFeedback = { note: "navigate_repeat", actionType: "navigate", guidance: `You already opened ${navKey.slice(0, 120)} ${n} times. Reloading it shows the same page. Use what you already saw on it (scroll, find_text or follow a link on it), or report the answer you have with its source.` };
-      } else if (result.action.type === "find_text" && result.status === "ok" && typeof result.action.text === "string") {
-        // A phrase that was already found on this page is already in view: searching it again changes nothing.
-        const findKey = `${this._lastObservation?.url ?? ""}::${result.action.text.trim().toLowerCase()}`;
-        this._foundTexts = this._foundTexts ?? new Map();
-        const n = (this._foundTexts.get(findKey) ?? 0) + 1;
-        this._foundTexts.set(findKey, n);
-        if (n >= 2) this._repeatFeedback = { note: "find_text_repeat", actionType: "find_text", guidance: `"${result.action.text.slice(0, 80)}" was already found and scrolled into view on this page ${n} times; searching it again shows the same thing. If the page now shows what the request asked for, report it (need_user with the answer and this page as its source); otherwise follow a link or button there instead of searching again.` };
       }
     }
 
