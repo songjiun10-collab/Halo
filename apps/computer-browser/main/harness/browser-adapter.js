@@ -1472,8 +1472,31 @@ class BrowserAdapter {
         count += 1;
         if (!first) first = parent;
       }
-      if (first) first.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
-      return { found: !!first, count };
+      if (first) { first.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" }); return { found: true, count }; }
+      // No single text node holds the whole phrase (it spans tags, or the words are not next to each other):
+      // fall back to the smallest visible element that contains every word of it, and say so.
+      const words = needle.split(" ").filter((w) => w.length >= 2);
+      if (words.length < 2 || !document.body) return { found: false, count: 0 };
+      const norm = (el) => (el.textContent || "").replace(/\\s+/g, " ").toLowerCase();
+      const hasAll = (el) => { const t = norm(el); return words.every((w) => t.includes(w)); };
+      if (!hasAll(document.body)) return { found: false, count: 0 };
+      let node = document.body;
+      for (let descend = true; descend;) {
+        descend = false;
+        for (const child of node.children) {
+          if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(child.tagName)) continue;
+          if (hasAll(child)) { node = child; descend = true; break; }
+        }
+      }
+      for (let el = node; el && el !== document.body; el = el.parentElement) {
+        const box = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        if (box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none") {
+          el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+          return { found: true, count: 1, approx: true };
+        }
+      }
+      return { found: false, count: 0 };
     })()`;
     let timer;
     try {
@@ -1482,7 +1505,7 @@ class BrowserAdapter {
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("find_text timed out")), this._scrollTimeoutMs); }),
       ]);
       if (!found || found.found !== true) return { status: "failed", errorCode: "text_not_found" };
-      return { status: "ok", matchCount: Number.isInteger(found.count) ? found.count : 1 };
+      return { status: "ok", matchCount: Number.isInteger(found.count) ? found.count : 1, ...(found.approx === true ? { matchKind: "all_words_in_element" } : {}) };
     } catch (error) {
       return { status: "failed", errorCode: "find_text_failed" };
     } finally {

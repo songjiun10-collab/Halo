@@ -1295,3 +1295,11 @@ test("buildObserveScript flags textTruncated when the page has more text than th
   const short = runObserveScriptAgainst(new FakeElement("body", { children: [new FakeElement("p", { text: "tiny" })] }));
   assert.equal("textTruncated" in short, false);
 });
+
+test("execute(find_text) reports an all-words match when no single text node held the phrase", async () => {
+  const view = isolatedFindView({
+    executeJavaScript: async (script) => script.includes("__haloFindText") ? { found: true, count: 1, approx: true } : { url: "https://example.com/", title: "", text: "", elements: [] },
+  });
+  const adapter = new BrowserAdapter({ view });
+  assert.deepEqual(await adapter.execute({ type: "find_text", text: "market share Chrome" }), { status: "ok", matchCount: 1, matchKind: "all_words_in_element" });
+});
