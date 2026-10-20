@@ -784,7 +784,7 @@ class ClaudeCodeBridge {
         try {
           const { text: proposalText, usage } = this._readOutput(stdout);
           const proposal = room ? parseRoomTurn(proposalText) : parseAndValidateProposal(proposalText);
-          this._lastUsage = usage;
+          this._lastUsage = usage && split ? { ...usage, contextBytes: Buffer.byteLength(split.user) } : usage;
           settlePromise(resolve, proposal);
         } catch (error) {
           settlePromise(reject, error);

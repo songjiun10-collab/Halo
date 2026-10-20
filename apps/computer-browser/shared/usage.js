@@ -26,6 +26,9 @@ function normalizeUsage(provider, raw) {
     costUsd: Number.isFinite(cost) && cost >= 0 ? Math.min(cost, MAX_COST_USD) : 0,
     durationMs: count(raw.duration_ms ?? raw.durationMs),
   };
+  // Optional diagnostic: bytes of the per-call user message (page-context JSON plus adaptation notes) (not part of totals or the "any" check).
+  const contextBytes = count(raw.contextBytes);
+  if (contextBytes > 0) normalized.contextBytes = contextBytes;
   const any = normalized.inputTokens + normalized.outputTokens + normalized.cacheReadTokens + normalized.cacheCreationTokens + normalized.costUsd + normalized.durationMs;
   return any > 0 ? normalized : null;
 }

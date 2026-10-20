@@ -835,3 +835,20 @@ test("system prompt split: buildPrompt is exactly system + user, and the system 
   assert.notEqual(a.user, b.user);
   assert.equal(buildPrompt(makeContext(), ""), `${buildPromptParts(makeContext(), "").system}\n${buildPromptParts(makeContext(), "").user}`);
 });
+
+test("takeUsage(): with the split on, usage carries contextBytes equal to the stdin message size", async () => {
+  const saved = process.env.HALO_PLANNER_SYSTEM_SPLIT;
+  delete process.env.HALO_PLANNER_SYSTEM_SPLIT;
+  try {
+    const fakeChild = makeFakeChild();
+    const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+    const pending = bridge.start(makeContext());
+    await flush();
+    fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal()), { total_cost_usd: 0.1, usage: { input_tokens: 2, output_tokens: 3 } }));
+    fakeChild.emit("close", 0);
+    await pending;
+    assert.equal(bridge.takeUsage().contextBytes, Buffer.byteLength(fakeChild.stdin.written[0]));
+  } finally {
+    if (saved === undefined) delete process.env.HALO_PLANNER_SYSTEM_SPLIT; else process.env.HALO_PLANNER_SYSTEM_SPLIT = saved;
+  }
+});
