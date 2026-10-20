@@ -2777,6 +2777,30 @@ class TaskController {
     return verdict;
   }
 
+  // Stops an action the planner keeps repeating: the same one that failed the same way too often, or one kind (find_text
+  // with a new phrase each time) used too often lately. Returns null to run it, else the loop outcome after telling the planner.
+  async _repeatGuard(action) {
+    if (!(this._repeatFailureLimit > 0)) return null;
+    const family = actionFamily(action);
+    let guidance = null;
+    let blockedFamily = null;
+    if (family && this._familyWindow.filter((f) => f === family).length >= FAMILY_BLOCK) {
+      blockedFamily = family;
+      guidance = `You have used ${family} many times in the last few actions without getting further, so this one was not run. Take a different route: another link or section of the site, a page you have not opened, or report what you found.`;
+    } else if ((this._repeatFailures.get(repeatActionKey(action)) ?? 0) >= this._repeatFailureLimit) {
+      guidance = "This exact action already failed repeatedly with the same error and was not run again. Change the target, the approach or the page, or report need_user.";
+    }
+    if (!guidance) return null;
+    this._repeatBlocked += 1;
+    this._repeatFeedback = { note: "repeat_blocked", actionType: action.type, guidance };
+    await this._store.append({ type: "note", payload: { kind: "repeat_blocked", actionType: action.type, ...(blockedFamily ? { family: blockedFamily } : {}), blocked: this._repeatBlocked } });
+    if (this._repeatBlocked >= REPEAT_BLOCK_PAUSE) {
+      await this._pauseWith("no_progress");
+      return "stop_loop";
+    }
+    return "continue";
+  }
+
   async _dispatchActionsBatch(proposal, epoch) {
     if (this._batchReadOnlyActions && proposal.actions.length > 1 && proposal.actions.every((action) => isReadOnlyAction(action.type))) {
       const outcome = await this._dispatchReadOnlyBatch(proposal, epoch);
@@ -2801,35 +2825,8 @@ class TaskController {
         await this._store.append({ type: "note", payload: { kind: "invalid_action", actionType: String(action?.type).slice(0, 40), errorCode: "action_safety_undeclared" } });
         continue;
       }
-      const family = this._repeatFailureLimit > 0 ? actionFamily(action) : null;
-      if (family && this._familyWindow.filter((f) => f === family).length >= FAMILY_BLOCK) {
-        this._repeatBlocked += 1;
-        this._repeatFeedback = {
-          note: "repeat_blocked",
-          actionType: action.type,
-          guidance: `You have used ${family} many times in the last few actions without getting further, so this one was not run. Take a different route: another link or section of the site, a page you have not opened, or report what you found.`,
-        };
-        await this._store.append({ type: "note", payload: { kind: "repeat_blocked", actionType: action.type, family, blocked: this._repeatBlocked } });
-        if (this._repeatBlocked >= REPEAT_BLOCK_PAUSE) {
-          await this._pauseWith("no_progress");
-          return "stop_loop";
-        }
-        return "continue";
-      }
-      if (this._repeatFailureLimit > 0 && (this._repeatFailures.get(repeatActionKey(action)) ?? 0) >= this._repeatFailureLimit) {
-        this._repeatBlocked += 1;
-        this._repeatFeedback = {
-          note: "repeat_blocked",
-          actionType: action.type,
-          guidance: "This exact action already failed repeatedly with the same error and was not run again. Change the target, the approach or the page, or report need_user.",
-        };
-        await this._store.append({ type: "note", payload: { kind: "repeat_blocked", actionType: action.type, blocked: this._repeatBlocked } });
-        if (this._repeatBlocked >= REPEAT_BLOCK_PAUSE) {
-          await this._pauseWith("no_progress");
-          return "stop_loop";
-        }
-        return "continue";
-      }
+      const blocked = await this._repeatGuard(action);
+      if (blocked) return blocked;
       const privacy = safety.privacy;
       if (privacy) {
         // Secrets are typed by the person, never by the agent; nothing of the text is journaled.
@@ -3077,6 +3074,9 @@ class TaskController {
         await this._pauseForMemoryPressure(pressure);
         return "stop_loop";
       }
+      // A read-only batch ([find_text, observe]) must not slip past the repeat limits the one-action path enforces.
+      const blocked = await this._repeatGuard(actions[index]);
+      if (blocked) return blocked;
       const descriptor = this._describeAction(actions[index], randomUUID());
       const dispatched = await this._dispatchApprovedAndApplyTracked(proposal, descriptor, actions[index], epoch, {
         durable: index === actions.length - 1,

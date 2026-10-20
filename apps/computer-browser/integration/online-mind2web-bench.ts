@@ -140,7 +140,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
       catch (error: any) { result = { status: "execution_uncertain", errorCode: error?.code ?? "execution_throw" }; throw error; }
       finally {
         history.push(`${action.type} ${JSON.stringify(action).slice(0, 300)}`);
-        outcomes.push({ step: index, type: action.type, status: result?.status ?? "execution_uncertain", errorCode: result?.errorCode ?? null, wallMs: benchClock.now() - t0 });
+        outcomes.push({ step: index, type: action.type, ...(action.type === "find_text" && typeof action.text === "string" ? { query: action.text.slice(0, 120) } : {}), ...(action.type === "navigate" && typeof action.url === "string" ? { url: action.url.slice(0, 200) } : {}), status: result?.status ?? "execution_uncertain", errorCode: result?.errorCode ?? null, wallMs: benchClock.now() - t0 });
         await fs.appendFile(path.join(dir, "steps.jsonl"), JSON.stringify(outcomes.at(-1)) + "\n", { mode: 0o600 });
       }
       {

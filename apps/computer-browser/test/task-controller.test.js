@@ -3077,6 +3077,32 @@ test("the same kind of action (find_text with a new phrase each time) is warned 
   await store.close();
 });
 
+test("a read-only batch [find_text, observe] with a new phrase each time is also held back by the family limit", async () => {
+  const { store } = await makeStore({ originalRequest: "batched variants", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const executed = [];
+  const contexts = [];
+  let n = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      n += 1;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "find_text", text: `phrase ${n}` }, { type: "observe" }] };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async (a) => { executed.push(a.type); return a.type === "find_text" ? { status: "failed", errorCode: "text_not_found" } : { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    repeatFailureLimit: 2,
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(executed.filter((t) => t === "find_text").length >= 5 && executed.filter((t) => t === "find_text").length <= 8, true, `find_text ran ${executed.filter((t) => t === "find_text").length} times`);
+  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_blocked"), true);
+  await store.close();
+});
+
 test("without repeatFailureLimit the family check is off", async () => {
   const { store } = await makeStore({ originalRequest: "off", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 8 } });
   const executed = [];
