@@ -75,7 +75,8 @@ function validatePlannerMcpActions(proposal) {
 // Only pass through what a plain worker process needs to actually run.
 // Never inherit the full parent environment.
 // USER: the claude CLI reads its login from the macOS keychain by account name.
-const ENV_ALLOWLIST = ["PATH", "HOME", "USER", "LANG", "TZ", "TMPDIR"];
+// The two HALO_PLANNER_* entries are plain on/off switches for the planner call (not secrets); the bench sets them per run.
+const ENV_ALLOWLIST = ["PATH", "HOME", "USER", "LANG", "TZ", "TMPDIR", "HALO_PLANNER_SYSTEM_SPLIT", "HALO_PLANNER_NO_THINKING"];
 const SECRET_ENV_PATTERN = /^HALO_(APPROVER|EXECUTOR)_KEY/i;
 
 function buildWorkerEnv(extraEnv) {
