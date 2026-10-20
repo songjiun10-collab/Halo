@@ -157,7 +157,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
       limits: LIMITS }, { storageRoot: path.join(dir, "halo-store") });
     planner = new PlannerStdioAdapter({ command: process.execPath, args: [worker.file, ...worker.args],
       cwd: path.resolve(__dirname, ".."), timeoutMs: Number(process.env.HALO_BENCH_PLANNER_TIMEOUT_MS) || 120000, onUsage: (usage: any) => usages.push(usage) });
-    controller = new TaskController({ store, browser, permissionMode: profile.permissionMode, harnessProfile: "middle", plannerEffort: process.env.HALO_BENCH_EFFORT || "medium",
+    controller = new TaskController({ store, browser, permissionMode: profile.permissionMode, harnessProfile: process.env.HALO_BENCH_HARNESS_PROFILE || "middle", plannerEffort: process.env.HALO_BENCH_EFFORT || "medium",
       finishEvidenceRejections: 1, repeatFailureLimit: 2,
       groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1",
       giveUpRefusals: process.env.HALO_BENCH_NO_GIVE_UP === "1" ? Number(process.env.HALO_BENCH_GIVE_UP_REFUSALS ?? 3) : 0,
@@ -198,7 +198,7 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
     const verdict = classify(snapshot, finalUrl, finalTitle, errorCode, finalAnswer.length > 0, pageIsBlocked({ url: finalUrl, title: finalTitle }), (checklistLog[checklistLog.length - 1]?.codes.length ?? 0) > 0, hedgedAnswer(finalAnswer), siteRefused && !siteLoaded, finalUrl.startsWith("chrome-error://") && outcomes.slice(-3).length === 3 && outcomes.slice(-3).every((o: any) => o.errorCode === "navigation_error"));
     const result = { schema_version: "online-mind2web-v2", task: task.confirmed_task, task_id: task.task_id,
       agent_final_answer: finalAnswer, reference_length: task.reference_length, action_history: history };
-    const run = { schemaVersion: 1, benchmark: "Online-Mind2Web", model, benchProfile: profile.name, noGiveUp: process.env.HALO_BENCH_NO_GIVE_UP === "1", groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1", safetyDisabled: profile.safetyDisabled, harness: "Halo",
+    const run = { schemaVersion: 1, benchmark: "Online-Mind2Web", model, benchProfile: profile.name, noGiveUp: process.env.HALO_BENCH_NO_GIVE_UP === "1", groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1", safetyDisabled: profile.safetyDisabled, harness: "Halo", harnessProfile: process.env.HALO_BENCH_HARNESS_PROFILE || "middle",
       graded: false, success: null, taskId: task.task_id, level: task.level, verdict, state: snapshot?.state ?? "startup_error",
       pauseReason: snapshot?.pauseReason ?? null, errorCode, finalUrl, wallMs: benchClock.now() - started, plannerCalls: calls, reroutes, captchaSeen, siteRefused, siteLoaded,
       usages, budgets: snapshot?.budgets ?? null, actions: outcomes, proposals, checklist: checklistLog };
