@@ -175,7 +175,37 @@ function compactObservation(observation: unknown): unknown {
     }
     if (element.parentElementId === null) { const { parentElementId, ...rest } = element; elements.push(rest); } else elements.push(element);
   }
-  return { ...observation, elements };
+  return { ...observation, elements: dropEmptyContainers(elements) };
+}
+
+// A row/cell/list/listitem with no name and nothing else to act on says nothing the tree below it does not; its
+// children are re-parented to the nearest kept ancestor so the structure of what can be acted on is unchanged.
+const EMPTY_CONTAINER_ROLES = new Set(["row", "cell", "list", "listitem", "generic", "group", "rowgroup", "none", "presentation"]);
+function dropEmptyContainers(elements: unknown[]): unknown[] {
+  const droppable = (e: unknown): e is Record<string, unknown> =>
+    contracts.isPlainObject(e) && typeof e.role === "string" && EMPTY_CONTAINER_ROLES.has(e.role) && (e.name === "" || e.name === undefined) &&
+    Object.keys(e).every((k) => k === "role" || k === "name" || k === "elementId" || k === "parentElementId");
+  const parentOf = new Map<string, unknown>();
+  const dropped = new Set<string>();
+  for (const e of elements) {
+    if (contracts.isPlainObject(e) && typeof e.elementId === "string") parentOf.set(e.elementId, e.parentElementId ?? null);
+    if (droppable(e) && typeof e.elementId === "string") dropped.add(e.elementId);
+  }
+  if (dropped.size === 0) return elements;
+  const keptAncestor = (id: unknown): unknown => {
+    for (let guard = 0; typeof id === "string" && dropped.has(id) && guard < 10000; guard++) id = parentOf.get(id) ?? null;
+    return id ?? null;
+  };
+  const out: unknown[] = [];
+  for (const e of elements) {
+    if (contracts.isPlainObject(e) && typeof e.elementId === "string" && dropped.has(e.elementId)) continue;
+    if (contracts.isPlainObject(e) && typeof e.parentElementId === "string" && dropped.has(e.parentElementId)) {
+      const parent = keptAncestor(e.parentElementId);
+      const { parentElementId, ...rest } = e;
+      out.push(parent === null ? rest : { ...rest, parentElementId: parent });
+    } else out.push(e);
+  }
+  return out;
 }
 
 function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest, strategyGuidance }: ContextInput) {
@@ -285,4 +315,4 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
   return adapt({ ...packet, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: board.parentTaskId, entries: notes } });
 }
 
-export = { ContextError, buildContext };
+export = { ContextError, buildContext, compactObservation };

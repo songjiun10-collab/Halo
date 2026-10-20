@@ -356,3 +356,19 @@ test("buildContext compacts observation elements: drops null parentElementId and
   assert.equal("parentElementId" in els[0], false);
   assert.equal(els[1].parentElementId, "9");
 });
+
+test("buildContext drops nameless row/cell/list containers and re-parents their children to the nearest kept ancestor", () => {
+  const els = [
+    { elementId: "0", role: "table", name: "Results", parentElementId: null },
+    { elementId: "1", role: "row", name: "", parentElementId: "0" },
+    { elementId: "2", role: "cell", name: "", parentElementId: "1" },
+    { elementId: "3", role: "link", name: "Open", href: "https://example.com/a", parentElementId: "2" },
+    { elementId: "4", role: "row", name: "Header row", parentElementId: "0" },
+    { elementId: "5", role: "row", name: "", parentElementId: null },
+    { elementId: "6", role: "button", name: "Go", parentElementId: "5" },
+  ];
+  const out = buildContext({ goal: makeGoal(), state: makeState(), observation: { url: "https://example.com/", elements: els }, recentEvents: [] }).observation.elements;
+  assert.deepEqual(out.map((e) => e.elementId), ["0", "3", "4", "6"]);
+  assert.equal(out[1].parentElementId, "0");
+  assert.equal("parentElementId" in out[3], false, "a child of a dropped root container has no parent left");
+});

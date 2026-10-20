@@ -133,7 +133,42 @@ function compactObservation(observation) {
         else
             elements.push(element);
     }
-    return { ...observation, elements };
+    return { ...observation, elements: dropEmptyContainers(elements) };
+}
+// A row/cell/list/listitem with no name and nothing else to act on says nothing the tree below it does not; its
+// children are re-parented to the nearest kept ancestor so the structure of what can be acted on is unchanged.
+const EMPTY_CONTAINER_ROLES = new Set(["row", "cell", "list", "listitem", "generic", "group", "rowgroup", "none", "presentation"]);
+function dropEmptyContainers(elements) {
+    const droppable = (e) => contracts.isPlainObject(e) && typeof e.role === "string" && EMPTY_CONTAINER_ROLES.has(e.role) && (e.name === "" || e.name === undefined) &&
+        Object.keys(e).every((k) => k === "role" || k === "name" || k === "elementId" || k === "parentElementId");
+    const parentOf = new Map();
+    const dropped = new Set();
+    for (const e of elements) {
+        if (contracts.isPlainObject(e) && typeof e.elementId === "string")
+            parentOf.set(e.elementId, e.parentElementId ?? null);
+        if (droppable(e) && typeof e.elementId === "string")
+            dropped.add(e.elementId);
+    }
+    if (dropped.size === 0)
+        return elements;
+    const keptAncestor = (id) => {
+        for (let guard = 0; typeof id === "string" && dropped.has(id) && guard < 10000; guard++)
+            id = parentOf.get(id) ?? null;
+        return id ?? null;
+    };
+    const out = [];
+    for (const e of elements) {
+        if (contracts.isPlainObject(e) && typeof e.elementId === "string" && dropped.has(e.elementId))
+            continue;
+        if (contracts.isPlainObject(e) && typeof e.parentElementId === "string" && dropped.has(e.parentElementId)) {
+            const parent = keptAncestor(e.parentElementId);
+            const { parentElementId, ...rest } = e;
+            out.push(parent === null ? rest : { ...rest, parentElementId: parent });
+        }
+        else
+            out.push(e);
+    }
+    return out;
 }
 function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest, strategyGuidance }) {
     contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
@@ -240,4 +275,4 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     }
     return adapt({ ...packet, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: board.parentTaskId, entries: notes } });
 }
-module.exports = { ContextError, buildContext };
+module.exports = { ContextError, buildContext, compactObservation };
