@@ -813,13 +813,6 @@ class ClaudeCodeBridge {
   _buildEnv() {
     const env = buildEnv(this._env);
     if (this._noThinking) env.MAX_THINKING_TOKENS = "0";
-    // Opt-in. MAX_THINKING_TOKENS=0 alone does not stop adaptive thinking (measured on Haiku 5.5: about 170-200
-    // thinking tokens per call remained, 218 vs 400 output tokens with the second variable). Off by default
-    // because thinking may help accuracy; turn it on only after a benchmark says it does not.
-    if (process.env.HALO_PLANNER_NO_THINKING === "1") {
-      env.MAX_THINKING_TOKENS = "0";
-      env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING = "1";
-    }
     return env;
   }
 

@@ -924,21 +924,21 @@ test("reports sanitized worker usage to onUsage and never fails a proposal becau
   assert.equal(seen[0].costUsd, 0.01);
 });
 
-test("the planner worker inherits the two HALO_PLANNER_* switches and nothing else from HALO_*", async () => {
-  const saved = { a: process.env.HALO_PLANNER_NO_THINKING, b: process.env.HALO_BENCH_SOMETHING };
-  process.env.HALO_PLANNER_NO_THINKING = "1";
+test("the planner worker inherits HALO_PLANNER_SYSTEM_SPLIT and no other HALO_* variable", async () => {
+  const saved = { a: process.env.HALO_PLANNER_SYSTEM_SPLIT, b: process.env.HALO_BENCH_SOMETHING };
+  process.env.HALO_PLANNER_SYSTEM_SPLIT = "0";
   process.env.HALO_BENCH_SOMETHING = "leak";
   try {
     const child = makeFakeChild();
     let seen;
     const adapter = new PlannerStdioAdapter({ command: "node", timeoutMs: 60_000, spawnFn: (_c, _a, options) => { seen = options.env; return child; } });
     const pending = adapter.next(makeContext()).catch(() => {});
-    assert.equal(seen.HALO_PLANNER_NO_THINKING, "1");
+    assert.equal(seen.HALO_PLANNER_SYSTEM_SPLIT, "0");
     assert.equal("HALO_BENCH_SOMETHING" in seen, false);
     await adapter.close();
     await pending;
   } finally {
-    if (saved.a === undefined) delete process.env.HALO_PLANNER_NO_THINKING; else process.env.HALO_PLANNER_NO_THINKING = saved.a;
+    if (saved.a === undefined) delete process.env.HALO_PLANNER_SYSTEM_SPLIT; else process.env.HALO_PLANNER_SYSTEM_SPLIT = saved.a;
     if (saved.b === undefined) delete process.env.HALO_BENCH_SOMETHING; else process.env.HALO_BENCH_SOMETHING = saved.b;
   }
 });

@@ -835,27 +835,3 @@ test("system prompt split: buildPrompt is exactly system + user, and the system 
   assert.notEqual(a.user, b.user);
   assert.equal(buildPrompt(makeContext(), ""), `${buildPromptParts(makeContext(), "").system}\n${buildPromptParts(makeContext(), "").user}`);
 });
-
-test("HALO_PLANNER_NO_THINKING=1 turns off adaptive thinking for the planner CLI, and is off by default", async () => {
-  const saved = process.env.HALO_PLANNER_NO_THINKING;
-  const envFor = async (value) => {
-    if (value === undefined) delete process.env.HALO_PLANNER_NO_THINKING; else process.env.HALO_PLANNER_NO_THINKING = value;
-    const fakeChild = makeFakeChild();
-    let captured;
-    const bridge = new ClaudeCodeBridge({ spawnFn: (_c, _a, options) => { captured = options.env; return fakeChild; } });
-    const pending = bridge.start(makeContext());
-    fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal())));
-    fakeChild.emit("close", 0);
-    await pending;
-    return captured;
-  };
-  try {
-    const off = await envFor(undefined);
-    assert.equal("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING" in off, false);
-    const on = await envFor("1");
-    assert.equal(on.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING, "1");
-    assert.equal(on.MAX_THINKING_TOKENS, "0");
-  } finally {
-    if (saved === undefined) delete process.env.HALO_PLANNER_NO_THINKING; else process.env.HALO_PLANNER_NO_THINKING = saved;
-  }
-});
