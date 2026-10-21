@@ -139,7 +139,8 @@ function compactObservation(observation) {
 // HALO_CTX_SLIM=1: three more byte savings that change nothing the planner can act on. Tracking query parameters come off
 // links (never truncated, so a copied URL still works), a named container whose only child repeats its name is folded into
 // that child, and navigationHistory keeps the latest visits and the first few frontier links.
-const SLIM = process.env.HALO_CTX_SLIM === "1";
+const SLIM_LEVEL = Number(process.env.HALO_CTX_SLIM) || 0;
+const SLIM = SLIM_LEVEL >= 1;
 const TRACKING_PARAM = /^(utm_|fbclid$|gclid$|msclkid$|mc_[a-z]+$)/i;
 function cleanUrl(href) {
     if (typeof href !== "string" || !href.includes("?"))
@@ -297,6 +298,52 @@ function focusObservationText(observation, originalRequest, queries) {
         return observation;
     return { ...observation, text: parts.join(" ") };
 }
+// HALO_CTX_SLIM=2: above ELEMENT_FOCUS_MIN elements, keep the form controls (capped), every element whose name or address
+// shares a word with the goal or a recent find_text query, and the first ELEMENT_HEAD of the page; the rest are replaced by
+// a count. Like the page text focus, a find_text query adds its words to the focus, so an omitted element comes back on the
+// next observation. Kept elements whose parent was left out are re-parented to the nearest kept ancestor.
+const ELEMENT_FOCUS_MIN = 40;
+const ELEMENT_HEAD = 15;
+const ELEMENT_CONTROL_CAP = 25;
+const CONTROL_ROLES = new Set(["button", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch", "slider", "spinbutton", "option", "tab", "menuitemcheckbox", "menuitemradio", "listbox"]);
+function focusObservationElements(observation, originalRequest, queries) {
+    if (SLIM_LEVEL < 2 || !contracts.isPlainObject(observation) || !Array.isArray(observation.elements) || observation.elements.length <= ELEMENT_FOCUS_MIN)
+        return observation;
+    const terms = focusTerms(originalRequest, ...(queries ?? []));
+    const elements = observation.elements;
+    const keep = new Array(elements.length).fill(false);
+    let controls = 0;
+    elements.forEach((e, i) => {
+        if (!contracts.isPlainObject(e))
+            return void (keep[i] = true);
+        const haystack = `${e.name ?? ""} ${e.href ?? ""}`.toLowerCase();
+        if (i < ELEMENT_HEAD || terms.some((t) => haystack.includes(t)))
+            keep[i] = true;
+        else if (CONTROL_ROLES.has(e.role) && controls < ELEMENT_CONTROL_CAP) {
+            controls++;
+            keep[i] = true;
+        }
+    });
+    const kept = elements.filter((_, i) => keep[i]);
+    const omitted = elements.length - kept.length;
+    if (omitted < 10)
+        return observation;
+    const parentOf = new Map(elements.map((e) => [e?.elementId, e?.parentElementId ?? null]));
+    const keptIds = new Set(kept.map((e) => e?.elementId));
+    const ancestor = (id) => {
+        for (let guard = 0; typeof id === "string" && !keptIds.has(id) && guard < 10000; guard++)
+            id = parentOf.get(id) ?? null;
+        return id ?? null;
+    };
+    const out = kept.map((e) => {
+        if (!contracts.isPlainObject(e) || typeof e.parentElementId !== "string" || keptIds.has(e.parentElementId))
+            return e;
+        const parent = ancestor(e.parentElementId);
+        const { parentElementId, ...rest } = e;
+        return parent === null ? rest : { ...rest, parentElementId: parent };
+    });
+    return { ...observation, elements: out, elementsNotShown: omitted };
+}
 function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest, strategyGuidance, textFocusQueries }) {
     contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
     if (!contracts.isPlainObject(state)) {
@@ -331,7 +378,7 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
         },
         progress: trustedProgress,
         recentEvents: boundedRecentEvents,
-        observation: observation === undefined ? null : focusObservationText(compactObservation(observation), goal.originalRequest, textFocusQueries),
+        observation: observation === undefined ? null : focusObservationElements(focusObservationText(compactObservation(observation), goal.originalRequest, textFocusQueries), goal.originalRequest, textFocusQueries),
         untrustedSummary: modelSummary === undefined ? null : { text: modelSummary, authority: "untrusted_summary" },
         userMemory: { authority: "untrusted_user_memory", entries: customMemory },
         ...(builtinPlaybooks === undefined ? {} : { haloPlaybooks: builtinPlaybooks }),
@@ -404,4 +451,4 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     }
     return adapt({ ...packet, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: board.parentTaskId, entries: notes } });
 }
-module.exports = { ContextError, buildContext, compactObservation };
+module.exports = { ContextError, buildContext, compactObservation, focusObservationElements };

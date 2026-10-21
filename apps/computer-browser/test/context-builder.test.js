@@ -426,3 +426,25 @@ test("HALO_CTX_SLIM drops tracking params and mirrored containers and caps navig
     delete require.cache[modulePath];
   }
 });
+
+test("HALO_CTX_SLIM=2 keeps goal-matching elements, the page head and capped controls, re-parents, and reports the omitted count", () => {
+  const modulePath = require.resolve("../main/harness/context-builder");
+  const elements = [{ role: "navigation", name: "Main", elementId: "0" }];
+  for (let i = 1; i <= 80; i++) elements.push({ role: "link", name: i === 70 ? "Swimsuit sale" : `Item ${i}`, href: `https://a.test/${i}`, elementId: String(i), parentElementId: "0" });
+  elements.push({ role: "listitem", name: "wrap", elementId: "90", parentElementId: "0" }, { role: "link", name: "Swimsuit details", href: "https://a.test/d", elementId: "91", parentElementId: "90" });
+  const original = process.env.HALO_CTX_SLIM;
+  try {
+    process.env.HALO_CTX_SLIM = "2";
+    delete require.cache[modulePath];
+    const goal = makeGoal({ originalRequest: "Find the swimsuit" });
+    const packet = require(modulePath).buildContext({ goal, state: makeState(), observation: { id: "o1", url: "https://a.test/", title: "t", text: "", elements }, recentEvents: [] });
+    const ids = packet.observation.elements.map((e) => e.elementId);
+    assert.ok(ids.includes("70") && ids.includes("91") && ids.includes("0"), "goal-matching elements and the page head are kept");
+    assert.ok(!ids.includes("50"), "unrelated elements past the head are omitted");
+    assert.equal(packet.observation.elementsNotShown, elements.length - ids.length);
+    assert.equal(packet.observation.elements.find((e) => e.elementId === "91").parentElementId, "0", "orphaned child is re-parented to the nearest kept ancestor");
+  } finally {
+    if (original === undefined) delete process.env.HALO_CTX_SLIM; else process.env.HALO_CTX_SLIM = original;
+    delete require.cache[modulePath];
+  }
+});
