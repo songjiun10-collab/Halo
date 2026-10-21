@@ -371,6 +371,28 @@ test("execute(navigate) reports ok and bumps documentEpoch on a genuine successf
   assert.equal(result.evidenceCandidate.sourceUrl, "https://example.com");
 });
 
+test("execute(navigate) waits for a page that draws its content after load before reporting ok", async () => {
+  // medicare.gov/care-compare: the load event fires on an empty shell; the app draws a few seconds later.
+  let probes = 0;
+  const view = makeFakeView({ executeJavaScript: async (script) => {
+    if (script.includes("__haloContentProbe")) { probes += 1; return probes < 3 ? 0 : 40; }
+    return { url: "https://example.com/", title: "", text: "", elements: [] };
+  } });
+  const adapter = new BrowserAdapter({ view, contentPollMs: 1 });
+  const result = await adapter.execute({ type: "navigate", url: "https://example.com" });
+  assert.equal(result.status, "ok");
+  assert.equal(probes, 3, "(the bug) navigate reported ok while the page was still empty");
+});
+
+test("execute(navigate) on a page that stays empty gives up waiting after contentWaitMs and still reports ok", async () => {
+  const view = makeFakeView({ executeJavaScript: async (script) => (script.includes("__haloContentProbe") ? 0 : { url: "https://example.com/", title: "", text: "", elements: [] }) });
+  const adapter = new BrowserAdapter({ view, contentWaitMs: 30, contentPollMs: 5 });
+  const start = Date.now();
+  const result = await adapter.execute({ type: "navigate", url: "https://example.com" });
+  assert.equal(result.status, "ok");
+  assert.ok(Date.now() - start < 500, "an empty page must not hold navigate past the wait");
+});
+
 // --- Timeout: aborts and cleans up rather than hanging or leaking timers.
 
 test("execute(navigate) aborts a hung load, stops it, and reports failed:navigation_timeout", async () => {
@@ -706,6 +728,7 @@ test("execute(follow_link) rejects a stale documentEpoch without re-resolving an
   });
   const adapter = new BrowserAdapter({ view });
   await adapter.execute({ type: "navigate", url: "https://example.com" }); // epoch -> 1
+  observeCalls = 0; // navigate's own content check is not the read under test
 
   const result = await adapter.execute({ type: "follow_link", elementId: "0" }, { documentEpoch: 0 });
 

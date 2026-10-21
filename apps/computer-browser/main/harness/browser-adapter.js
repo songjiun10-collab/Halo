@@ -51,6 +51,12 @@ const MAX_PDF_TEXT_BYTES = 2 * MAX_TEXT_BYTES;
 const { extractPdfText, formatPdfObservationText, looksLikePdfUrl } = require("./pdf-text");
 const { isPrivateHost } = require("./private-network");
 const NAVIGATION_TIMEOUT_MS = 30000; // matches control-api.js's existing bound
+// How long a loaded but still empty page is given to draw itself (see _waitForContent).
+const CONTENT_WAIT_MS = 6000;
+const CONTENT_POLL_MS = 250;
+// Text length plus control count of the page body; 0 means nothing drawn yet.
+const CONTENT_PROBE_SCRIPT = `/* __haloContentProbe */ (() => { const b = document.body; if (!b) return 0;
+  return (b.innerText || "").trim().length + b.querySelectorAll("a[href],button,input,select,textarea").length; })()`;
 const { randomUUID } = require("node:crypto");
 const INTERACTION_WORLD_ID = 1001;
 const MAX_INPUT_BYTES = 4096;
@@ -269,9 +275,15 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       }
       return bytes;
     };
+    // aria-hidden hides a subtree from the planner, except a control a person can plainly see and click: sites
+    // put aria-hidden on panes that stay on screen (medicare.gov's open autocomplete marks its own suggestions and
+    // the Search button), and a person would use them. Text and decoration under aria-hidden stay out.
+    const CONTROL_ROLES = new Set(["button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "treeitem", "textbox", "searchbox", "combobox"]);
     const hidden = (node) => {
+      let ariaHidden = false;
       for (let current = node; current; current = current.parentElement) {
-        if (current.hasAttribute?.("hidden") || current.getAttribute("hidden") !== null || current.getAttribute("aria-hidden") === "true") return true;
+        if (current.hasAttribute?.("hidden") || current.getAttribute("hidden") !== null) return true;
+        if (current.getAttribute("aria-hidden") === "true") ariaHidden = true;
       }
       let display = "";
       if (typeof getComputedStyle === "function") {
@@ -280,6 +292,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
         if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return true;
       }
       if (display !== "contents" && typeof node.getClientRects === "function" && node.getClientRects().length === 0) return true;
+      if (ariaHidden) return !(CONTROL_ROLES.has(roleOf(node)) && visibleOnTop(node));
       return false;
     };
     const formInfo = (node) => {
@@ -310,8 +323,10 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       }
       return false;
     };
-    const onTop = (candidate) => {
-      if (hidden(candidate)) return false;
+    const onTop = (candidate) => !hidden(candidate) && visibleOnTop(candidate);
+    // Not faded out, at least partly in the viewport, and what a click at its centre would hit.
+    const visibleOnTop = (candidate) => {
+      if (typeof document.elementFromPoint !== "function") return false;
       for (let current = candidate; current && current.nodeType === 1; current = current.parentElement || current.getRootNode().host) {
         if (Number(getComputedStyle(current).opacity) === 0) return false;
       }
@@ -476,9 +491,13 @@ class BrowserAdapter {
     permissionMode = "browse",
     assignedOrigin,
     blockPrivateNetwork = false,
+    contentWaitMs = CONTENT_WAIT_MS,
+    contentPollMs = CONTENT_POLL_MS,
   } = {}) {
     if (!view) throw new BrowserAdapterError("invalid_config", "view is required");
     this._view = view;
+    this._contentWaitMs = Number.isFinite(contentWaitMs) && contentWaitMs >= 0 ? contentWaitMs : CONTENT_WAIT_MS;
+    this._contentPollMs = Number.isFinite(contentPollMs) && contentPollMs > 0 ? contentPollMs : CONTENT_POLL_MS;
     this._scrollTimeoutMs = Number.isFinite(scrollTimeoutMs) && scrollTimeoutMs > 0 ? scrollTimeoutMs : 5000;
     if (!PERMISSION_MODES.includes(permissionMode)) throw new BrowserAdapterError("invalid_permission_mode", "permissionMode is invalid");
     this._permissionMode = permissionMode;
@@ -1372,6 +1391,7 @@ class BrowserAdapter {
     if (pin?.violated) {
       return { status: "failed", errorCode: "widened_origin_mismatch" };
     }
+    if (outcome.outcome === "ok" && mySeq === this._navSeq) await this._waitForContent(wc, mySeq);
     // Cross-event isolation: if a NEWER navigate() call has already started
     // since this one's load settled/timed out, this call's result must not
     // retroactively bump the epoch or be reported as authoritative -- the
@@ -1394,6 +1414,28 @@ class BrowserAdapter {
       return { status: "failed", errorCode: "navigation_timeout" };
     }
     return { status: "failed", errorCode: "navigation_error" };
+  }
+
+  // Some pages fire load on an empty shell and draw their content a few
+  // seconds later (medicare.gov/care-compare: nothing at 1.5s, 63 elements at
+  // 4.5s). Observing at load hands the planner a blank page, so wait -- up to
+  // contentWaitMs -- until the body has text or a control. Only an answer of
+  // exactly 0 keeps waiting: an error or any other answer ends the wait, and
+  // a page that stays empty is still reported as loaded.
+  async _waitForContent(wc, mySeq) {
+    const deadline = this._now() + this._contentWaitMs;
+    while (mySeq === this._navSeq && !this._disposed) {
+      let amount;
+      try {
+        amount = typeof wc.executeJavaScriptInIsolatedWorld === "function"
+          ? await wc.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD_ID, [{ code: CONTENT_PROBE_SCRIPT }], false)
+          : await wc.executeJavaScript(CONTENT_PROBE_SCRIPT, true);
+      } catch {
+        return;
+      }
+      if (amount !== 0 || this._now() >= deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, this._contentPollMs));
+    }
   }
 
   // Races loadURL() against a timer, exactly as control-api.js's
