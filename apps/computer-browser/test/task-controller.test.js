@@ -3129,6 +3129,29 @@ test("a read-only batch [find_text, observe] with a new phrase each time is also
   await store.close();
 });
 
+test("observing the same page over and over is held back by the family limit", async () => {
+  const { store } = await makeStore({ originalRequest: "look", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const contexts = [];
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "observe" }] };
+    } },
+    browser: { observe: async () => ({ id: "obs", url: "https://t.test/likes", title: "Likes", text: "post" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    repeatFailureLimit: 2,
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(contexts.length <= 9, true, `planner was asked ${contexts.length} times`);
+  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_blocked"), true);
+  await store.close();
+});
+
 test("without repeatFailureLimit the family check is off", async () => {
   const { store } = await makeStore({ originalRequest: "off", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 8 } });
   const executed = [];

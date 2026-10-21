@@ -3390,6 +3390,8 @@ const FAMILY_BLOCK = 5;
 function actionFamily(action) {
   if (action?.type === "find_text") return "find_text";
   if (action?.type === "submit_form") return "submit_form";
+  // Looking at an unchanged page again changes nothing (tumblr: 21 observes in a row on a page that already showed the answer).
+  if (action?.type === "observe") return "observe";
   return null;
 }
 // Same action, ignoring the per-observation/per-request ids that change every turn.
