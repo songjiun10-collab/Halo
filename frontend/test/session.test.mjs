@@ -367,3 +367,9 @@ test('a task paused on a sign-in page tells the person to sign in and press Resu
   assert.equal(store.getState().messages.at(-1).text, session.LOGIN_REQUIRED_TEXT)
   assert.match(session.LOGIN_REQUIRED_TEXT, /Resume/)
 })
+
+test('a task paused on a human check tells the person to complete it and press Resume', async () => {
+  const { store } = harness({ getTaskDetail: async (id) => ({ taskId: id, goal: goal(id), snapshot: snapshot('paused', { pauseReason: 'captcha' }), active: true }) })
+  await store.selectTask('task')
+  assert.equal(store.getState().messages.at(-1).text, session.CAPTCHA_TEXT)
+})
