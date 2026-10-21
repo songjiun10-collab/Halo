@@ -349,6 +349,43 @@ test("discards a planner response that resolves after stop() was already called"
   await store.close();
 });
 
+test("a task re-attached with a fresh browser reopens the page it was on and tells the planner it is resuming", async () => {
+  const { store, storageRoot } = await makeStore({ originalRequest: "compare prices", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const taskId = store.taskId;
+  // First run: go to a product page, then pause for the person (a closed tab or a restart ends it here).
+  let page = { url: "about:blank", title: "" };
+  let turn = 0;
+  const first = new TaskController({
+    store,
+    planner: { next: async (context) => (++turn === 1
+      ? { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "navigate", url: "https://shop.test/item/42" }] }
+      : { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "which size?" }) },
+    browser: { observe: async () => ({ id: `obs${turn}`, ...page }), execute: async (a) => { if (a.type === "navigate") page = { url: a.url, title: "Item 42" }; return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0,
+  });
+  assert.equal((await first.start()).pauseReason, "need_user");
+  await store.close();
+
+  // Second run: a fresh browser on a blank page.
+  const reloaded = await TaskStore.load(taskId, { storageRoot });
+  let fresh = { url: "about:blank", title: "" };
+  const executed = [];
+  const contexts = [];
+  const second = new TaskController({
+    store: reloaded,
+    planner: { next: async (context) => { contexts.push(context); return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "still need the size" }; } },
+    browser: { getBrowserSnapshot: () => ({ tabs: [{ url: fresh.url }] }), observe: async () => ({ id: "fresh", ...fresh }), execute: async (a) => { executed.push(a); if (a.type === "navigate") fresh = { url: a.url, title: "Item 42" }; return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0,
+  });
+  await second.resume();
+  assert.deepEqual(executed.map((a) => [a.type, a.url]), [["navigate", "https://shop.test/item/42"]]);
+  assert.equal(contexts[0].observation.url, "https://shop.test/item/42");
+  assert.equal(contexts[0].progress.resumedFrom.url, "https://shop.test/item/42");
+  assert.equal(contexts[0].progress.resumedFrom.reopened, true);
+  assert.ok(contexts[0].navigationHistory.visited.includes("https://shop.test/item/42"));
+  await reloaded.close();
+});
+
 test("a task recovered as execution_uncertain requires an explicit confirmed resume and never auto-dispatches", async () => {
   const storageRoot = await mkTempRoot();
   const created = await TaskStore.create({ originalRequest: "goal" }, { storageRoot });

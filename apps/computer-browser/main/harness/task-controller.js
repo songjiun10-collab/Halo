@@ -677,6 +677,15 @@ class TaskController {
       if (checkpointedPayload.budgets) this._budgets = { ...checkpointedPayload.budgets };
       if (checkpointedPayload.segment) this._segment = { ...checkpointedPayload.segment };
       if (checkpointedPayload.criteriaStatus) this._criteriaStatus = new Map(checkpointedPayload.criteriaStatus);
+      // Where the work stood: the page it was on and the pages it had already been through.
+      const resume = checkpointedPayload.resume;
+      if (resume && typeof resume.url === "string" && /^https?:\/\//i.test(resume.url)) this._resumeUrl = resume.url;
+      if (resume?.navigation && Array.isArray(resume.navigation.visited) && Array.isArray(resume.navigation.frontier)) {
+        this._navigation = {
+          visited: resume.navigation.visited.filter((u) => typeof u === "string").slice(-NAV_VISITED_MAX),
+          frontier: resume.navigation.frontier.filter((e) => typeof e?.href === "string").slice(-NAV_FRONTIER_MAX),
+        };
+      }
     }
     if (this._routineRunner && this._routineRun && store.routineRecovery) {
       const recovered = store.routineRecovery;
@@ -1074,6 +1083,30 @@ class TaskController {
     if (nav.frontier.length > NAV_FRONTIER_MAX) nav.frontier.splice(0, nav.frontier.length - NAV_FRONTIER_MAX);
   }
 
+  // The checkpoint's resume point, like a commit: the page the task was on and where it had been.
+  _resumePoint() {
+    const url = typeof this._lastObservation?.url === "string" && /^https?:\/\//i.test(this._lastObservation.url)
+      ? this._lastObservation.url.slice(0, NAV_URL_MAX_CHARS) : (this._resumeUrl ?? null);
+    if (!url && this._navigation.visited.length === 0) return {};
+    return { resume: { url, navigation: { visited: [...this._navigation.visited], frontier: [...this._navigation.frontier] } } };
+  }
+
+  // A task re-attached with a fresh browser (closed tab, restart) starts on a blank page; reopen the
+  // page it was on so the work continues there instead of from the start.
+  async _returnToResumePoint() {
+    const url = this._resumeUrl;
+    this._resumeUrl = null;
+    const current = this._browser.getBrowserSnapshot?.()?.tabs?.[0]?.url;
+    if (typeof current === "string" && /^https?:\/\//i.test(current)) return;
+    let status = "failed";
+    try { status = (await this._browser.execute({ type: "navigate", url }))?.status ?? "failed"; } catch { status = "failed"; }
+    await this._store.append({ type: "note", payload: { kind: "resumed_at", url, status } });
+    this._resumedFrom = {
+      url, reopened: status === "ok", actionsAlreadyUsed: this._budgets.actionsUsed ?? 0,
+      guidance: "This task was interrupted and is resuming. Halo reopened the page it was on; pages already visited are in navigationHistory. Continue from where the work stopped, do not start over.",
+    };
+  }
+
   _enterActive() {
     if (this._activeSince === null) this._activeSince = this._now();
   }
@@ -1093,6 +1126,7 @@ class TaskController {
         budgets: { ...this._budgets },
         segment: { ...this._segment },
         criteriaStatus: [...this._criteriaStatus.entries()],
+        ...this._resumePoint(),
         harnessProfile: this._harnessProfile,
         recoveryBudget: this._recovery.snapshot(),
         plannerEscalations: this._escalations,
@@ -1994,6 +2028,7 @@ class TaskController {
           // failure is not itself a model response or an execution decision.
         }
       }
+      if (this._resumeUrl) await this._returnToResumePoint();
       while (this._task.state === "running") {
         const epoch = this._epoch;
         this._enterActive();
@@ -2250,6 +2285,7 @@ class TaskController {
               maxActionsPerProposal: this._maxActionsPerProposal,
               ...(this._harnessProfile === "fast" ? { fastMode: true } : {}),
               ...(this._loopHint ? { loopWarning: true } : {}),
+              ...(this._resumedFrom ? { resumedFrom: { ...this._resumedFrom } } : {}),
               ...(this._lastActionNote ? { lastAction: this._lastActionNote } : {}),
               ...(this._apiResponse ? { apiResponse: this._apiResponse } : {}),
               ...(this._osComputerUse ? { os: { enabled: true, ...(this._osObservation ? { observation: this._osObservation } : {}) } } : {}),
@@ -2348,6 +2384,7 @@ class TaskController {
           if (this._pendingMcpObservation) this._pendingMcpObservation = null;
           this._pendingContextRead = null;
           this._loopHint = false;
+          this._resumedFrom = null;
           this._finishFeedback = null;
           this._repeatFeedback = null;
         } catch (error) {
