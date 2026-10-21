@@ -2225,7 +2225,7 @@ test("an identical action that failed deterministically twice is not dispatched 
   await store.close();
 });
 
-function giveUpRun({ store, giveUpRefusals, groundAnswers, reason, completionChecklist }) {
+function giveUpRun({ store, giveUpRefusals, groundAnswers, reason, completionChecklist, answerSite, observation }) {
   const contexts = [];
   let turn = 0;
   const controller = new TaskController({
@@ -2234,11 +2234,12 @@ function giveUpRun({ store, giveUpRefusals, groundAnswers, reason, completionChe
       contexts.push(context);
       return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: reason ?? `blocked ${turn++}` };
     } },
-    browser: { observe: async () => ({ id: "obs" }), execute: async () => ({ status: "ok" }) },
+    browser: { observe: async () => ({ id: "obs", ...(observation ?? {}) }), execute: async () => ({ status: "ok" }) },
     approve: allowApprove(),
     hostVerifier: () => false,
     harnessProfile: "middle",
     navIntervalMs: 0,
+    ...(answerSite === undefined ? {} : { answerSite }),
     ...(giveUpRefusals === undefined ? {} : { giveUpRefusals }),
     ...(groundAnswers === undefined ? {} : { groundAnswers }),
     ...(completionChecklist === undefined ? {} : { completionChecklist }),
@@ -3012,6 +3013,21 @@ test("completionChecklist hook returns a failing answer twice with feedback, the
   assert.equal(seen.length, 3);
   assert.equal(contexts.length, 3);
   assert.equal(contexts[1].progress.repeatFailureFeedback.note, "completion_checklist_failed");
+});
+
+test("an answer drawn from the site the task names needs no second site; other answers still do", async () => {
+  const page = { url: "https://www.parkers.co.uk/best-cars/", title: "Best cars", text: "Renault 4 E-Tech" };
+  const reason = "The first car is the Renault 4 E-Tech (https://www.parkers.co.uk/best-cars/)";
+  const named = await makeStore({ originalRequest: "check", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const onSite = giveUpRun({ store: named.store, groundAnswers: true, answerSite: "https://www.parkers.co.uk/", observation: page, reason });
+  assert.equal((await onSite.controller.start()).pauseReason, "need_user");
+  assert.equal(onSite.contexts.length, 1);
+  await named.store.close();
+  const other = await makeStore({ originalRequest: "check", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const offSite = giveUpRun({ store: other.store, groundAnswers: true, answerSite: "https://www.whatcar.com/", observation: page, reason });
+  await offSite.controller.start();
+  assert.equal(offSite.contexts.length, 3); // too_few_sources twice, then delivered unverified
+  await other.store.close();
 });
 
 test("the source check and the completion checklist share one send-back budget per answer", async () => {

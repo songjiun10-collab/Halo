@@ -277,6 +277,7 @@ class TaskController {
     repeatFailureLimit = 0,
     giveUpRefusals = 0,
     groundAnswers = false,
+    answerSite = null,
     completionChecklist = null,
     maxRecoveries,
     plannerImageInput = true,
@@ -569,6 +570,8 @@ class TaskController {
     this._giveUpRefused = 0;
     // Benchmark option: apply the source-checked answer path to every task, not only research ones.
     this._groundAnswers = groundAnswers === true;
+    // The site the task itself names (e.g. "on parkers.co.uk"): an answer drawn from it needs no second site.
+    this._answerSiteDomain = typeof answerSite === "string" ? research.domainOf(answerSite) : null;
     // Benchmark option: a function ({ answer, goalText, observation, observedTexts }) -> { ok, failures } run on every reported answer.
     this._completionChecklist = typeof completionChecklist === "function" ? completionChecklist : null;
     this._completionRejected = 0;
@@ -2736,7 +2739,8 @@ class TaskController {
   async _reviewResearchAnswer(answer) {
     const ledger = await this._hydrateResearchLedger();
     if (ledger.size === 0 && research.extractCitedUrls(answer).length === 0) return { action: "deliver", text: answer };
-    const check = research.checkAnswer(answer, ledger);
+    const fromAnswerSite = this._answerSiteDomain !== null && research.extractCitedUrls(answer).some((u) => research.domainOf(u) === this._answerSiteDomain);
+    const check = research.checkAnswer(answer, ledger, fromAnswerSite ? { minDomains: 1 } : {});
     if (check.ok) {
       await this._store.append({ type: "note", payload: { kind: "research_answer_checked", sources: check.verified.length, sites: check.independentSites } });
       this._researchFeedback = null;
