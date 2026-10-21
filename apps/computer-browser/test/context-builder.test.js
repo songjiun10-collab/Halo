@@ -397,3 +397,32 @@ test("textFocusQueries: short text and text where nearly everything matches are 
   const allMatch = { url: "https://example.com/", text: Array.from({ length: 400 }, () => "pricing details apply").join(" ") };
   assert.equal(buildContext({ goal, state: makeState(), observation: allMatch, recentEvents: [], textFocusQueries: [] }).observation.text, allMatch.text);
 });
+
+test("HALO_CTX_SLIM drops tracking params and mirrored containers and caps navigationHistory, and is off by default", () => {
+  const modulePath = require.resolve("../main/harness/context-builder");
+  const observation = { id: "o1", url: "https://a.test/", title: "t", text: "", elements: [
+    { role: "list", name: "", elementId: "1" },
+    { role: "listitem", name: "Car Specs", elementId: "2", parentElementId: "1" },
+    { role: "menuitem", name: "car specs", href: "https://a.test/specs?utm_source=x&page=2&fbclid=z", elementId: "3", parentElementId: "2" },
+  ] };
+  const navigation = { visited: ["a", "b", "c", "d", "e", "f"], frontier: Array.from({ length: 9 }, (_, i) => ({ href: `https://a.test/${i}?utm_medium=m`, name: `n${i}` })) };
+  const build = () => require(modulePath).buildContext({ goal: makeGoal(), state: {}, observation, recentEvents: [], navigation });
+  const original = process.env.HALO_CTX_SLIM;
+  try {
+    delete process.env.HALO_CTX_SLIM;
+    delete require.cache[modulePath];
+    const plain = build();
+    assert.equal(plain.navigationHistory.frontier.length, 9);
+    assert.match(plain.observation.elements.at(-1).href, /utm_source/);
+    process.env.HALO_CTX_SLIM = "1";
+    delete require.cache[modulePath];
+    const slim = build();
+    assert.deepEqual(slim.navigationHistory.visited, ["c", "d", "e", "f"]);
+    assert.equal(slim.navigationHistory.frontier.length, 6);
+    assert.equal(slim.navigationHistory.frontier[0].href, "https://a.test/0");
+    assert.deepEqual(slim.observation.elements, [{ role: "menuitem", name: "car specs", href: "https://a.test/specs?page=2", elementId: "3" }]);
+  } finally {
+    if (original === undefined) delete process.env.HALO_CTX_SLIM; else process.env.HALO_CTX_SLIM = original;
+    delete require.cache[modulePath];
+  }
+});

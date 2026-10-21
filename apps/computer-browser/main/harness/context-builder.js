@@ -133,7 +133,69 @@ function compactObservation(observation) {
         else
             elements.push(element);
     }
-    return { ...observation, elements: dropEmptyContainers(elements) };
+    const compacted = dropEmptyContainers(elements);
+    return { ...observation, elements: SLIM ? dropMirroredContainers(compacted.map(withCleanHref)) : compacted };
+}
+// HALO_CTX_SLIM=1: three more byte savings that change nothing the planner can act on. Tracking query parameters come off
+// links (never truncated, so a copied URL still works), a named container whose only child repeats its name is folded into
+// that child, and navigationHistory keeps the latest visits and the first few frontier links.
+const SLIM = process.env.HALO_CTX_SLIM === "1";
+const TRACKING_PARAM = /^(utm_|fbclid$|gclid$|msclkid$|mc_[a-z]+$)/i;
+function cleanUrl(href) {
+    if (typeof href !== "string" || !href.includes("?"))
+        return href;
+    try {
+        const url = new URL(href);
+        for (const key of [...url.searchParams.keys()])
+            if (TRACKING_PARAM.test(key))
+                url.searchParams.delete(key);
+        return url.toString();
+    }
+    catch {
+        return href;
+    }
+}
+function withCleanHref(element) {
+    return contracts.isPlainObject(element) && typeof element.href === "string" ? { ...element, href: cleanUrl(element.href) } : element;
+}
+function dropMirroredContainers(elements) {
+    const children = new Map();
+    for (const e of elements)
+        if (contracts.isPlainObject(e) && typeof e.parentElementId === "string") {
+            const list = children.get(e.parentElementId);
+            if (list) list.push(e); else children.set(e.parentElementId, [e]);
+        }
+    const parentOf = new Map();
+    const dropped = new Set();
+    for (const e of elements) {
+        if (!contracts.isPlainObject(e) || typeof e.elementId !== "string")
+            continue;
+        parentOf.set(e.elementId, e.parentElementId ?? null);
+        const only = children.get(e.elementId);
+        if (EMPTY_CONTAINER_ROLES.has(e.role) && typeof e.name === "string" && e.name !== "" && e.href === undefined && only?.length === 1 &&
+            typeof only[0].name === "string" && only[0].name.toLowerCase() === e.name.toLowerCase())
+            dropped.add(e.elementId);
+    }
+    if (dropped.size === 0)
+        return elements;
+    const keptAncestor = (id) => {
+        for (let guard = 0; typeof id === "string" && dropped.has(id) && guard < 10000; guard++)
+            id = parentOf.get(id) ?? null;
+        return id ?? null;
+    };
+    const out = [];
+    for (const e of elements) {
+        if (contracts.isPlainObject(e) && typeof e.elementId === "string" && dropped.has(e.elementId))
+            continue;
+        if (contracts.isPlainObject(e) && typeof e.parentElementId === "string" && dropped.has(e.parentElementId)) {
+            const parent = keptAncestor(e.parentElementId);
+            const { parentElementId, ...rest } = e;
+            out.push(parent === null ? rest : { ...rest, parentElementId: parent });
+        }
+        else
+            out.push(e);
+    }
+    return out;
 }
 // A row/cell/list/listitem with no name and nothing else to act on says nothing the tree below it does not; its
 // children are re-parented to the nearest kept ancestor so the structure of what can be acted on is unchanged.
@@ -275,7 +337,9 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
         ...(builtinPlaybooks === undefined ? {} : { haloPlaybooks: builtinPlaybooks }),
         // Host-recorded, but every URL/name originated in a page the browser
         // loaded, so it is data to consider, never an instruction.
-        navigationHistory: navigation === null ? null : { authority: "untrusted_page_derived", visited: navigation.visited, frontier: navigation.frontier },
+        navigationHistory: navigation === null ? null : SLIM
+            ? { authority: "untrusted_page_derived", visited: navigation.visited.slice(-4), frontier: navigation.frontier.slice(0, 6).map((link) => contracts.isPlainObject(link) ? withCleanHref(link) : link) }
+            : { authority: "untrusted_page_derived", visited: navigation.visited, frontier: navigation.frontier },
         pendingMessages: [],
         ...(boundWorkGoal === undefined ? {} : { workGoal: boundWorkGoal }),
         ...(manifest === undefined ? {} : { contextManifest: manifest }),
