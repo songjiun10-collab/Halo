@@ -15,7 +15,7 @@ process.env.HALO_PLANNER_SYSTEM_SPLIT = "0";
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 
-const { ClaudeCodeBridge, ClaudeCodeBridgeError, buildPrompt, buildPromptParts, CLI_ARGS, ENV_ALLOWLIST, MAX_CLI_STDOUT_BYTES } = require("../main/harness/providers/claude-code-bridge");
+const { ClaudeCodeBridge, ClaudeCodeBridgeError, buildPrompt, buildPromptParts, CLI_ARGS, ENV_ALLOWLIST, HOST_ENV, MAX_CLI_STDOUT_BYTES } = require("../main/harness/providers/claude-code-bridge");
 
 const TASK_ID = "11111111-1111-1111-1111-111111111111";
 
@@ -107,8 +107,10 @@ test("start(): spawns claude with the fixed safety flags, no shell, an env allow
     assert.equal("HALO_APPROVER_KEY" in captured.options.env, false);
     assert.deepEqual(
       Object.keys(captured.options.env).sort(),
-      Object.keys(captured.options.env).filter((k) => ENV_ALLOWLIST.includes(k)).sort(),
+      Object.keys(captured.options.env).filter((k) => ENV_ALLOWLIST.includes(k) || k in HOST_ENV).sort(),
     );
+    // Telemetry on every planner call cost about 2s of CLI startup (measured 3.0-3.4s -> 1.1-1.7s wall for a one-word reply).
+    assert.equal(captured.options.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
 
     assert.deepEqual(captured.args, [...CLI_ARGS, "--effort", "medium"]);
     assert.ok(!captured.args.includes("--bare"), "--bare would defeat reusing the local CLI login");

@@ -98,8 +98,8 @@ async function callAnthropic(body: any, apiKey: string, fetchFn = globalThis.fet
 // The CLI has no `act` tool to call; the structured reply takes its place. Without this note Haiku said it "could not use act".
 const VIA_CLI_NOTE = "Your structured JSON reply IS the `act` tool call: put the one action's fields in it.";
 function callClaudeCode(body: any, { spawnFn = require("node:child_process").spawn, effort = "medium", timeoutMs = 120000 } = {}): Promise<any> {
-  const { ENV_ALLOWLIST } = require("../main/harness/providers/claude-code-bridge");
-  const env: Record<string, string> = {};
+  const { ENV_ALLOWLIST, HOST_ENV } = require("../main/harness/providers/claude-code-bridge");
+  const env: Record<string, string> = { ...HOST_ENV };
   for (const key of ENV_ALLOWLIST) if (process.env[key] !== undefined) env[key] = process.env[key] as string;
   const args = ["-p", "--model", body.model, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
     "--tools", "", "--safe-mode", "--permission-prompts", "none", "--no-session-persistence", "--disable-slash-commands",

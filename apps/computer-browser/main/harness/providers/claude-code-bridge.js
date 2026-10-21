@@ -93,9 +93,12 @@ class ClaudeCodeBridgeError extends Error {
 // an allowlist closes structurally.)
 // USER: the claude CLI reads its login from the macOS keychain by account name.
 const ENV_ALLOWLIST = Object.freeze(["PATH", "HOME", "USER", "LANG", "TZ", "TMPDIR"]);
+// Set by the host on every child, never taken from process.env or an override. Telemetry and other
+// non-essential traffic held each planner call's CLI startup by about 2s (one-word reply: 3.0-3.4s -> 1.1-1.7s wall, n=3).
+const HOST_ENV = Object.freeze({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
 
 function buildEnv(overrides) {
-  const env = {};
+  const env = { ...HOST_ENV };
   for (const key of ENV_ALLOWLIST) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
@@ -900,4 +903,4 @@ class ClaudeCodeBridge {
   }
 }
 
-module.exports = { ClaudeCodeBridge, ClaudeCodeBridgeError, buildPrompt, buildPromptParts, buildRoomPrompt, isRoomTurn, parseRoomTurn, parseAndValidateProposal, stripCodeFence, PROPOSAL_JSON_SCHEMA, CLI_ARGS, PLANNER_EFFORTS, ENV_ALLOWLIST, MAX_CLI_STDOUT_BYTES };
+module.exports = { ClaudeCodeBridge, ClaudeCodeBridgeError, buildPrompt, buildPromptParts, buildRoomPrompt, isRoomTurn, parseRoomTurn, parseAndValidateProposal, stripCodeFence, PROPOSAL_JSON_SCHEMA, CLI_ARGS, PLANNER_EFFORTS, ENV_ALLOWLIST, HOST_ENV, MAX_CLI_STDOUT_BYTES };
