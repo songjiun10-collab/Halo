@@ -395,6 +395,25 @@ test("with a named task site, leaving it is sent back twice, then allowed; the p
   await store.close();
 });
 
+test("a link the task site itself shows may be followed off the site", async () => {
+  const { store } = await makeStore({ originalRequest: "open the lab leader's profile", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const contexts = [], executed = [];
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => { contexts.push(context);
+      return executed.length === 0
+        ? { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "follow_link", elementId: "e9" }] }
+        : { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "done" }; } },
+    browser: { observe: async () => ({ id: `obs${contexts.length}`, url: "https://research.lab.test/team", title: "Team", elements: [{ elementId: "e9", role: "link", name: "Jan", href: "https://jan.example/" }] }),
+      execute: async (a) => { executed.push(a); return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0, answerSite: "https://www.lab.test/",
+  });
+  await controller.start();
+  assert.equal(executed.length, 1);
+  assert.equal(contexts[1].progress.proposalFeedback, undefined);
+  await store.close();
+});
+
 test("a task site that answers with an error page may be left at once", async () => {
   const { store } = await makeStore({ originalRequest: "weather for 10019", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
   const { controller, contexts, executed } = siteFirstRun({ store, page: { url: "https://www.theweathernetwork.com/", title: "Access denied", httpStatus: 403, elements: [] } });

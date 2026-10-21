@@ -2522,6 +2522,9 @@ class TaskController {
           const siteFailed = Number(here?.httpStatus) >= 400 || String(here?.url ?? "").startsWith("chrome-error://") || looksLikeCaptcha(here?.url, here?.title);
           const leaves = validated.actions.some((action) => {
             if (action.type !== "navigate" && action.type !== "follow_link") return false;
+            // A link the task site itself shows is the site's own answer (nvidia's lab page links its
+            // leader's profile on jankautz.com); only typed URLs and links found elsewhere are held back.
+            if (action.type === "follow_link" && research.domainOf(here?.url) === this._answerSiteDomain) return false;
             const domain = research.domainOf(describeActionTarget(action, this._lastObservation));
             return domain !== null && domain !== this._answerSiteDomain;
           });
