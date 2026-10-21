@@ -81,6 +81,38 @@ test("a page loop is warned about and given another chance before pausing", asyn
   assert.ok(warnings.length > 12, `paused without recovering after ${warnings.length} turns`);
 });
 
+test("a form that fills in and shows results without changing the URL is progress, not a page loop", async () => {
+  // medicare.gov care-compare: type a ZIP, pick the suggestion, Search -- the results render at the same URL.
+  const warnings = [];
+  let n = 0;
+  const planner = { next: async (context) => {
+    warnings.push(context.progress.loopWarning === true);
+    if (warnings.length >= 11) return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "done" };
+    return actions(context, { type: "observe" });
+  } };
+  const browser = {
+    supportsAction: () => true,
+    observe: async () => { n += 1; return { id: `o${n}`, url: "https://page.test/compare?providerType=NursingHome", text: "t", elements: Array.from({ length: n }, (_, i) => ({ id: `e${i}`, role: "link", name: `Facility ${i}` })) }; },
+    execute: async () => ({ status: "ok" }),
+  };
+  const { controller } = await make(planner, browser);
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.ok(!warnings.includes(true), "a page whose controls keep changing was called a loop");
+});
+
+test("text churn alone on an unchanged page is still a loop", async () => {
+  const warnings = [];
+  let n = 0;
+  const planner = { next: async (context) => { warnings.push(context.progress.loopWarning === true); return actions(context, { type: "observe" }); } };
+  const elements = [{ id: "e1", role: "button", name: "Search" }];
+  const browser = { supportsAction: () => true, observe: async () => { n += 1; return { id: `o${n}`, url: "https://page.test/list", text: `ad ${n}`, elements }; }, execute: async () => ({ status: "ok" }) };
+  const { controller } = await make(planner, browser);
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.ok(warnings.includes(true));
+});
+
 test("need_user is never auto-recovered", async () => {
   let calls = 0;
   const planner = { next: async (context) => { calls += 1; return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "hi" }; } };

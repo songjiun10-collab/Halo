@@ -105,6 +105,23 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
   return null;
 }
 
+// The page-loop key: the URL plus the page's controls (role and name), not its text.
+// Search forms and result lists often render at the same URL (medicare.gov care-compare
+// shows 27 results without leaving ?providerType=NursingHome), and the URL alone called
+// that progress a loop. Text is left out because ads and clocks change it on a page that
+// is really stuck.
+function pageLoopKey(observation) {
+  let key;
+  try { const u = new URL(observation?.url); key = u.origin + u.pathname + u.search; } catch { return null; }
+  const elements = Array.isArray(observation?.elements) ? observation.elements : [];
+  let hash = 5381;
+  for (const element of elements) {
+    const part = `${element?.role ?? ""}:${element?.name ?? ""}|`;
+    for (let i = 0; i < part.length; i += 1) hash = ((hash * 33) ^ part.charCodeAt(i)) >>> 0;
+  }
+  return `${key}#${elements.length}:${hash.toString(36)}`;
+}
+
 function observationKey(observation) {
   // A comparison key for no-progress detection, not a cryptographic hash --
   // it only needs to be deterministic and cheap to compare. The real
@@ -2231,9 +2248,10 @@ class TaskController {
             if (this._visitedPages.size > VISITED_PAGES_KEPT) this._visitedPages.delete(this._visitedPages.values().next().value);
             this._recovery.noteProgress();
           }
-          this._recentPages.push(pageKey);
+          const loopKey = pageLoopKey(observation);
+          this._recentPages.push(loopKey);
           if (this._recentPages.length > PAGE_LOOP_WINDOW) this._recentPages.shift();
-          const stuckOnOne = pageKey !== null && this._recentPages.filter((k) => k === pageKey).length >= PAGE_LOOP_LIMIT;
+          const stuckOnOne = loopKey !== null && this._recentPages.filter((k) => k === loopKey).length >= PAGE_LOOP_LIMIT;
           // Cycling among a few pages for a whole window is the same loop (parkers went round
           // best-cars -> top-buys -> one review page for 78 planner calls).
           const bouncing = this._recentPages.length === PAGE_LOOP_WINDOW && !this._recentPages.includes(null)
