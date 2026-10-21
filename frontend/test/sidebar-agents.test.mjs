@@ -82,16 +82,18 @@ test('the home screen opens in Agent mode when the sidebar asked for an agent vi
   assert.equal(nav.homeModeFor('agent'), 'agent')
 })
 
-test('the workspace sidebar orders Bookmarks, Agents, Chats, Tabs as in the Design System-7 mock', async () => {
+test('the workspace sidebar orders Agents, Chats, Tabs, then Bookmarks as in the Halo for Chromium mock', async () => {
   const { WorkspaceSidebar } = await vite.ssrLoadModule('/src/components/WorkspaceSidebar.tsx')
   const html = renderToStaticMarkup(React.createElement(WorkspaceSidebar, {
     tasks: [], activeTaskId: null, open: true, onNewTask: noop, onSelectTask: noop,
-    tabs: [{ id: 'home', title: 'New tab' }], activeTabId: 'home', onSelectTab: noop, onOpenUrl: noop,
+    tabs: [{ id: 'home', title: 'New tab' }], activeTabId: 'home', onSelectTab: noop, onOpenUrl: noop, onSettings: noop,
     agents: React.createElement('p', { id: 'agents-slot' }, 'slot'),
   }))
   const at = (text) => html.indexOf(text)
-  assert.ok(at('Bookmarks') >= 0 && at('Bookmarks') < at('agents-slot'))
+  assert.ok(at('Search tabs &amp; chats') >= 0 && at('Search tabs &amp; chats') < at('agents-slot'))
   assert.ok(at('agents-slot') < at('Chats'))
   assert.ok(at('Chats') < at('>Tabs<'))
-  assert.ok(at('>Tabs<') < at('hx-sidebar__foot'))
+  assert.ok(at('>Tabs<') < at('Bookmarks'))
+  assert.ok(at('Bookmarks') < at('hx-sidebar__foot'))
+  assert.ok(at('hx-sidebar__foot') < at('aria-label="Settings"'))
 })

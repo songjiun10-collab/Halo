@@ -3,9 +3,9 @@ export type TabLayout = 'horizontal' | 'vertical'
 
 export const TAB_LAYOUT_KEY = 'halo.tabLayout'
 
-/** Anything unreadable falls back to the strip, which is how Halo has always looked. */
+/** Tabs live in the sidebar (Halo for Chromium); only an explicit choice brings the strip back. */
 export function parseTabLayout(raw: unknown): TabLayout {
-  return raw === 'vertical' ? 'vertical' : 'horizontal'
+  return raw === 'horizontal' ? 'horizontal' : 'vertical'
 }
 
 export function otherTabLayout(layout: TabLayout): TabLayout {
@@ -13,7 +13,7 @@ export function otherTabLayout(layout: TabLayout): TabLayout {
 }
 
 export function loadTabLayout(storage: Pick<Storage, 'getItem'> | undefined = globalThis.localStorage): TabLayout {
-  try { return parseTabLayout(storage?.getItem(TAB_LAYOUT_KEY)) } catch { return 'horizontal' }
+  try { return parseTabLayout(storage?.getItem(TAB_LAYOUT_KEY)) } catch { return 'vertical' }
 }
 
 export function saveTabLayout(layout: TabLayout, storage: Pick<Storage, 'setItem'> | undefined = globalThis.localStorage) {

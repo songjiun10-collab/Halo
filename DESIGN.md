@@ -1,50 +1,51 @@
 ---
 # gstack: design-md-format=spec
 name: Halo
-description: A quiet near-black browser where agents work in a visible workspace beside your tabs, and the only color is a small signal that something needs you.
+description: A light, glassy browser where agents work beside your tabs in one sidebar, the page sits in a clean white card, and blue appears only when Halo is involved.
 colors:
-  backdrop: "#0c0e0d"
-  chrome: "#0c0e0d"
-  toolbar: "#151816"
-  sidebar: "#151816"
-  surface: "#151816"
-  hover: "#1d201e"
-  well: "#292d2a"
-  border: "#292d2a"
-  border-strong: "#666d67"
-  text: "#e7e8e4"
-  text-muted: "#858c86"
-  primary: "#e7e8e4"
-  on-primary: "#0c0e0d"
+  window-wash: "linear-gradient(160deg, #dfe6f5, #e6dcf0 70%, #f0dfe3) + radial #a8c7fa / #c58bff / #ffb98a"
+  sidebar: "#ffffffa6"
+  card: "#fcfcfd"
+  surface: "#ffffff"
+  well: "#f1f2f4"
+  segment: "#eef0f3"
+  hover: "#0000000a"
+  line: "#0000001a"
+  line-soft: "#0000000f"
+  text: "#16181d"
+  text-row: "#2a2e36"
+  text-2: "#4d525c"
+  text-3: "#8b909a"
+  primary: "#16181d"
+  on-primary: "#ffffff"
   accent: "#a8c7fa"
-  accent-on-site: "#3b6fc4"
-  on-accent: "#ffffff"
-  warning: "#b99752"
+  accent-strong: "#2f6fd6"
+  halo-on-bg: "#e8f0fe"
+  halo-on-text: "#1f55b0"
+  warning: "#b26a00"
   error: "#c86a64"
   success: "#72a982"
-  site-bg: "#f8fafc"
-  site-text: "#0f172a"
 typography:
   display:
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif"
-    fontWeight: 600
-    fontSize: 1.125rem
-    letterSpacing: -0.01em
+    fontFamily: "'Halo Display', 'Geist', -apple-system, BlinkMacSystemFont, system-ui, sans-serif"
+    letterSpacing: 0.06em
+    use: "The Halo wordmark and the Halo pill only"
   body:
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif"
-    fontSize: 0.8125rem
+    fontFamily: "'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', system-ui, sans-serif"
+    fontSize: 13px
     lineHeight: 1.45
   label:
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif"
-    fontSize: 0.6875rem
-    letterSpacing: 0.02em
+    fontSize: 11.5px
   mono:
     fontFamily: "'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace"
     fontFeature: tnum
 rounded:
-  sm: 4px
-  md: 8px
-  lg: 12px
+  control: 8px
+  row: 9px
+  card: 12px
+  composer: 18px
+  home-bar: 24px
+  home-card: 16px
   full: 9999px
 spacing:
   xs: 4px
@@ -53,99 +54,100 @@ spacing:
   lg: 24px
   xl: 32px
 components:
-  button-primary:
-    backgroundColor: "{colors.primary}"
-    textColor: "{colors.on-primary}"
-    rounded: "{rounded.md}"
-  input:
-    borderColor: "{colors.border-strong}"
-    rounded: "{rounded.sm}"
-  panel:
-    backgroundColor: "{colors.sidebar}"
-    rounded: "{rounded.lg}"
-  nav-link:
-    textColor: "{colors.text}"
+  sidebar: { width: 248px, background: "{colors.sidebar}", blur: "36px saturate(1.6)" }
+  main-card: { margin: "8px 8px 8px 0", rounded: "{rounded.card}", background: "{colors.card}", shadow: "0 0 0 1px #0000001a, 0 12px 40px #0002" }
+  toolbar: { height: 48px, border-bottom: "{colors.line-soft}" }
+  omnibox: { height: 34px, rounded: 10px, background: "{colors.well}", focus: "#fff + 2px {colors.accent} ring" }
+  halo-pill: { height: 30px, rounded: 15px, font: display, on: "{colors.halo-on-bg} / {colors.halo-on-text}" }
+  agent-panel: { width: 380px, background: "{colors.card}", border-left: "{colors.line-soft}", header: 46px }
+  send-button: { size: 28px, rounded: full, background: "{colors.primary}" }
 ---
 
 # Halo
 
 ## Overview
 
-**Creative North Star:** A workbench with the lights low. Tabs are the bench you already know; agents are tools laid out beside them where you can see what each one is doing, and the room only gets louder when a tool needs your hand.
+**Source:** Halo Design System, "Halo for Chromium" mock (`Halo Chromium.html`). The shipped implementation is `frontend/src/styles/chromium.css`, loaded last over `app.css` and `design-system/*`. When this file and the code disagree, fix one of them; do not let both drift.
+
+**Creative North Star:** A bright desk by a window. The page sits on a clean white card; everything Halo adds (tabs, chats, agents) lives in one frosted sidebar on the left and one docked panel on the right. The room is calm until Halo is involved, and then the only blue in the chrome lights up.
 
 **Product context:** Halo is a Chromium-based desktop browser with built-in AI agents. The first users are people who already left a mainstream browser because its agent stalled, hit CAPTCHAs, or ate memory. Beta is a limited public release in January.
 
-**Mode per surface:** Operate (tabs, toolbar, agent panel, approvals). Read (activity log, task results). The web page itself is the site's own surface and is never restyled.
+**Mode per surface:** Operate (sidebar, toolbar, agent panel, approvals). Read (activity log, task results). The web page itself is the site's own surface and is never restyled; it keeps the OS light/dark preference (`main/page-theme.js`), independent of the light chrome.
 
-**Memorable thing:** Agents live next to tabs, not behind a chat box. If someone remembers one thing, it is the sidebar with two honest halves: Tabs and Agents.
+**Memorable thing:** One sidebar holds Agents, Chats and Tabs together, and the Halo pill in the toolbar opens the agent beside the page, not over it.
 
 **Key characteristics:**
-- Near-black with a faint green cast; flat layers separated by 1px lines, not shadows.
-- Color is rare. Ice blue means Halo (brand, focus). Amber means it needs you. Red means blocked. Green means done.
-- Tabs area keeps parity with Chrome and Arc muscle memory. The Agents area is where Halo is allowed to be new.
-- Trust is visible: every agent action is in the log, and anything irreversible stops at an approval sheet.
+- Light chrome on real glass: the window is translucent (vibrancy stays on), washed with a soft pastel gradient; the sidebar is frosted white over it.
+- The page and home live in a white card with a 12px radius and a soft shadow; the toolbar is part of that card.
+- Blue means Halo. It appears on the Halo pill only while its panel is open, on focus rings, and on the active-agent dot. Buttons are near-black, never blue.
+- Status colors are small: a dot, glyph or short text. Amber means it needs you, red means blocked, green means done.
 
 ## Colors
 
-**Strategy:** Restrained. Neutrals plus one brand hue; status colors are small and desaturated.
-**Light or dark:** Dark chrome, decided by use scene: long sessions, often in a dim room or alongside a code editor, with the page inside the viewport staying light or dark as the site chooses. A light chrome theme exists behind `data-theme="light"` and must pass the same contrast checks; dark is the default and the one we design against.
+**Strategy:** Restrained neutrals on a pastel glass wash, one brand hue. Light chrome only (`data-theme="light"` is forced in `main.tsx`); there is no dark chrome theme in this direction.
 
-Neutrals derive from `backdrop` (#0c0e0d) in small steps (`toolbar`/`sidebar` → `hover` → `well`). The primary action is neutral (`primary` is the foreground tone), so blue is never mistaken for a button color and stays free to mean "Halo". `accent` is for brand marks, focus rings and the active-agent dot only. `accent-on-site` is the deepened ice used when a Halo element sits on a light web page. Status colors appear only as dots, glyphs, short text, or a 2px bar; `error` is never a filled surface. Text on `backdrop`, panels and hover meets 4.5:1 (muted) and 11:1 (primary); control edges (`border-strong`) meet 3:1.
+Text steps are `text` (#16181d) for primary, `text-row` (#2a2e36) for sidebar rows, `text-2` (#4d525c) for secondary and icons, `text-3` (#8b909a) for group labels, placeholders and meta. Wells (`well` #f1f2f4, `segment` #eef0f3) carry the omnibox and segmented controls; hover is `#0000000a`. Lines are black at 6–10% alpha, never solid grey. The primary action is the near-black `primary` with white text (send buttons). `accent` (#a8c7fa) is for focus rings; the open Halo pill uses `#e8f0fe` with `#1f55b0` text. Text on `card`, `surface` and the sidebar meets 4.5:1 for `text-2` and above; `text-3` is used only for non-essential meta and placeholders.
 
 ## Typography
 
-Halo is browser chrome: it should feel native on each OS, so the UI uses the platform system sans stack (SF Pro on macOS, Segoe UI Variable on Windows). That is a deliberate exception to "pick a real typeface": in Operate mode on a native shell, matching the OS is the quality bar, and it costs no load time. Hierarchy comes from size and weight steps, not from a display face. Monospace (SF Mono / JetBrains Mono fallback, tabular numbers) is used only for URLs, selectors, amounts and log detail, so anything "machine" reads as machine. Marketing surfaces, when they exist, may take a distinct display face; none is chosen yet and no font is pending verification for the app.
-
-The older `design-system/halo/MASTER.md` named JetBrains Mono headings and IBM Plex Sans; the shipped `frontend/src/styles/tokens.css` does not use them. The code wins. MASTER.md should be treated as superseded by this file.
+Body text is Geist with the platform system sans as fallback. The renderer's CSP (`style-src 'self'`) blocks Google Fonts, so until a Geist file is bundled locally the UI renders in the system font (SF Pro on macOS). Halo Display (bundled at `frontend/src/styles/fonts/HaloDisplay.ttf`) is reserved for the Halo wordmark and the Halo pill, with 0.06em tracking; it is never used for body text or headings. Monospace (tabular numbers) is used only for URLs, selectors, amounts and log detail.
 
 ## Layout
 
-Window: tab strip, toolbar, then a two-part sidebar and the page viewport. The sidebar has two stacked regions with an explicit divider: Tabs (vertical or compact tabs, Chrome/Arc parity) and Agents (running, waiting-for-you, finished). Density is high (comfortable at 13px body, 4px base grid). Agents rows show state first (a status dot), then goal, then elapsed time; long goals truncate with a tooltip, never wrap the row. The first viewport after launch shows a normal browser, not a landing page.
+The window is a horizontal row: sidebar (248px), then the main card (margin 8px 8px 8px 0).
+
+- **Sidebar:** a 48px top row (traffic lights on the left on macOS, New tab and Hide sidebar on the right; the row is a drag region), a 32px search field ("Search tabs & chats"), then a scroll area with Agents, Chats, Tabs and Bookmarks in that order, and a footer with the saved-task count and Settings. Tabs are vertical by default (in the sidebar); the horizontal strip remains only as an explicit opt-in.
+- **Main card:** the 48px toolbar (back, forward, reload, omnibox, Halo pill, Share, Show all tabs, Activity), then the page body. When the sidebar is hidden the toolbar gains "Show sidebar" and Settings buttons, and on macOS leaves 80px for the traffic lights.
+- **Agent panel:** docked inside the card on the right, 380px (330px under 1120px). The native page view cannot draw under DOM overlays, so while the panel is open the page shows as a snapshot; this is a known limitation, not a design choice.
+- **Home:** centered column up to 820px: a faded 64px Halo mark, the home bar (Search/Ask segmented control, Tab key toggles), then Chats/Routines and a 3-column card grid (2 under 1120px, 1 under 680px).
+- **Responsive:** under 680px the sidebar hides and the card takes the full window with an 8px inset.
 
 ## Elevation & Depth
 
-Depth is mostly flat: 1px `border` lines between layers. Three glass materials exist and only these may float over the page: chrome (top bar), floating (activity, chat, notice, toast, tab overview), and critical (approval sheet). Material identity comes from opacity (94–96% near-black), with a small blur (10–20px) only for edge texture. Shadows have an offset (`0 -12px 24px` raised, 1px window outline). No zero-offset colored glow, no halo behind content.
+Three layers only: the translucent window wash, the frosted sidebar (`blur(36px) saturate(1.6)`), and the white card with `0 0 0 1px #0000001a, 0 12px 40px #0002`. Inside the card, depth is flat: 1px soft lines and white raised controls (`0 1px 2px #0000001f, 0 0 0 .5px #0000000f` for a selected sidebar row or segment). Popovers and the approval sheet float with a soft shadow; nothing uses a colored glow. Glass vibrancy stays on; it is part of the material, not decoration to trade for performance.
 
 ## Shapes
 
-4px for controls and inputs, 8px for buttons and tabs, 12px for panels and sheets, full radius only for status dots and avatars. Nested radius = outer radius − gap. Not everything is rounded the same amount.
+8px for icon buttons, 9px for sidebar rows and the search field, 10px for the omnibox, 12px for the main card, 16px for home cards, 18px for the chat composer, 24px for the home bar, full radius for pills, segmented controls, the send button and status dots.
 
 ## Components
 
-- **Tab:** selected tab joins the toolbar color; hover uses `hover`; close button appears on hover/focus; focus-visible ring is `accent`.
-- **Agent row:** status dot (accent running, warning waiting, success done, error blocked), goal text, elapsed. Waiting-for-you rows sort to the top.
-- **Approval sheet:** critical glass, names the exact action and target (site, amount, currency). Primary = approve (neutral fill), secondary = decline. For payments it shows the cap and the page total side by side. Irreversible actions are never approved by default.
-- **Activity log:** mono for detail, one line per action, newest at the bottom, errors marked with a 2px `error` bar plus text.
-- **Inputs:** `border-strong` edge, `accent` focus ring, label above, error text below in `error`.
-- **States for every component:** hover, focus-visible, active, disabled, loading, empty, error, and long content are all designed. Empty Agents area says what an agent can do and offers one example task; it is not a blank panel.
+- **Sidebar row:** 32px min height, 13px, `text-row`. Hover fills `hover`; selected is white with the raised shadow. Favicons sit in an 18px white tile.
+- **Halo pill:** ring mark plus "Halo" in Halo Display. Transparent at rest, `#e8f0fe`/`#1f55b0` while the panel is open; the badge counts work that needs you.
+- **Omnibox:** `well` at rest, white with a 2px `accent` ring on focus.
+- **Home bar:** white, 24px radius, a 56px input row with a `Tab ⇄` hint and the Search/Ask segmented control; in Ask mode a tools row adds lock chips, the model picker and a 28px near-black send button.
+- **Chat composer:** a white 18px pill, input on top, model picker, mic and send below. User messages are `segment` bubbles with a `16px 16px 4px 16px` radius; agent messages are plain text.
+- **Approval sheet:** names the exact action and target (site, amount, currency). Primary = approve (near-black), secondary = decline. Irreversible actions are never approved by default.
+- **States for every component:** hover, focus-visible, active, disabled, loading, empty, error, and long content are all designed.
 
 ## Do's and Don'ts
 
-- Do keep Tabs behaviour identical to what Chrome/Arc users expect; put novelty only in Agents.
+- Do keep Tabs behaviour identical to what Chrome/Arc users expect; put novelty in Agents and Chats.
 - Do show agent state with a dot plus a text label; color never carries meaning alone.
-- Do keep the page viewport untouched; Halo UI floats around or over it only through the three glass materials.
+- Do keep the page viewport untouched; Halo UI lives in the sidebar, the toolbar and the docked panel.
 - Do keep payment and approval copy literal: site, amount, currency, and what happens next.
 - Do keep motion under 300ms; exits shorter than enters.
 - Don't use blue as a button fill; blue means Halo.
-- Don't add gradient backgrounds, glow, or card-inside-card layouts.
-- Don't use emoji or mascots as status or decoration.
-- Don't fill a surface with `error` or `warning`; use a dot, glyph, short text, or 2px bar.
+- Don't put card-inside-card layouts inside the main card.
+- Don't fill a surface with `error` or `warning`.
+- Don't turn off vibrancy or make the window wash opaque.
 - Don't make the agent a floating chat bubble that covers the page by default.
 
 ## Motion
 
-- **Approach:** minimal-functional
-- **Easing:** enter `cubic-bezier(0.23, 1, 0.32, 1)` (strong ease-out), exit ease-in, move ease-in-out
+- **Easing:** enter `cubic-bezier(0.23, 1, 0.32, 1)`, exit ease-in, move ease-in-out.
 - **Duration:** press 160ms, enter 220ms, exit 150ms; nothing over 300ms. Respect `prefers-reduced-motion` by replacing movement with opacity.
-- **The one authored moment:** when an agent finishes a task or asks for approval, its row's status dot settles into its new color (a single 220ms transition) and the row moves to its sorted position. Nothing else animates for its own sake.
+- **The one authored moment:** when an agent finishes a task or asks for approval, its status dot settles into its new color (220ms) and the row moves to its sorted position.
 
 ## Decisions Log
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
-| 2026-10-13 | Initial DESIGN.md created from shipped `tokens.css` plus product context | Code is the source of truth; `design-system/halo/MASTER.md` (JetBrains Mono / IBM Plex Sans, graphite tones) was an earlier direction and is superseded |
-| 2026-10-13 | Dark chrome by default | Long sessions beside editors; page keeps site's own theme |
-| 2026-10-13 | System font stack for UI | Native shell, Operate mode; mono only for machine detail |
-| 2026-10-13 | Neutral primary button, blue reserved for Halo | Keeps brand hue meaningful (running/focus) |
-| 2026-10-13 | Tabs parity, Agents novelty | Adoption risk is in the tab muscle memory; differentiation is in the agent workspace |
-| 2026-10-13 | No preview or outside voices run | User unavailable to review; the system documents already-shipped tokens, so nothing new needed visual approval. Revisit if marketing surfaces are designed |
+| 2026-10-13 | Initial DESIGN.md created from shipped `tokens.css` plus product context | Code is the source of truth; `design-system/halo/MASTER.md` was an earlier direction and is superseded |
+| 2026-10-13 | Dark chrome by default, system font, no gradients | Long sessions beside editors (superseded 2026-10-21) |
+| 2026-10-13 | Neutral primary button, blue reserved for Halo | Keeps brand hue meaningful; still in force |
+| 2026-10-13 | Tabs parity, Agents novelty | Adoption risk is in tab muscle memory; still in force |
+| 2026-10-21 | Adopt the Halo Design System "Halo for Chromium" UI as-is: light chrome, pastel glass wash, Geist + Halo Display, one sidebar with Agents/Chats/Tabs, vertical tabs by default, docked 380px agent panel | Founder chose "새 디자인 그대로" over keeping the dark direction; the earlier UI and backend felt unintegrated |
+| 2026-10-21 | Geist falls back to the system font for now | Renderer CSP blocks Google Fonts; bundling a local Geist file is a follow-up |
+| 2026-10-21 | Character avatars are allowed in the agent area by the new design | The mock uses them; not yet implemented in the renderer |
