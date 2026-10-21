@@ -158,6 +158,17 @@ function isAutoDomAction(action, observation) {
   return classifyTarget(target, action.type === "type" ? "type_at" : "click_at").gate === "auto";
 }
 
+// A page asking for a password: a visible password field on a page that says it is a sign-in page, or on a
+// small page that is mostly the form. A site-wide header login box on an ordinary page does not count.
+const SIGN_IN_WORDS = /log\s*-?\s*in|sign\s*-?\s*in|signin|login|auth|로그인|ログイン/i;
+function looksLikeSignIn(observation) {
+  const elements = Array.isArray(observation?.elements) ? observation.elements : [];
+  if (!elements.some((el) => el?.inputType === "password" && !el.disabled)) return false;
+  const where = `${observation?.url ?? ""} ${observation?.title ?? ""}`;
+  return SIGN_IN_WORDS.test(where) || elements.length <= SIGN_IN_SMALL_PAGE;
+}
+const SIGN_IN_SMALL_PAGE = 40;
+
 function hasMultiAgentCapability(taskProfile) {
   return ["multi_agent", "multi_agent_computer_use"].includes(taskProfile?.capability?.id);
 }
@@ -279,6 +290,7 @@ class TaskController {
     groundAnswers = false,
     answerSite = null,
     finalRefresh = false,
+    pauseOnLogin = false,
     completionChecklist = null,
     maxRecoveries,
     plannerImageInput = true,
@@ -558,6 +570,9 @@ class TaskController {
     this._finishEvidenceRejections = 0;
     // Before a finish counts, reload the final page and look again: "done" must survive a refresh.
     this._finalRefresh = finalRefresh === true;
+    // A sign-in page is the person's: pause and hand it over, then continue on the same page after Resume.
+    this._pauseOnLogin = pauseOnLogin === true;
+    this._loginHandedOff = new Set();
     this._finalRefreshRejected = false;
     this._finalCheck = null;
     this._finishFeedback = null;
@@ -2194,6 +2209,17 @@ class TaskController {
             this._captchaOrigins.add(origin);
             this._onCaptchaPage = true;
             if (!this._errorUrls.includes(observation.url)) this._errorUrls.push(observation.url);
+          }
+          if (this._pauseOnLogin && looksLikeSignIn(observation)) {
+            let origin = null;
+            try { origin = new URL(observation.url).origin; } catch {}
+            // Once the person resumed on this site, trust them: a page that still shows a password field is theirs to judge.
+            if (origin !== null && !this._loginHandedOff.has(origin)) {
+              this._loginHandedOff.add(origin);
+              await this._store.append({ type: "note", payload: { kind: "login_required", url: String(observation.url).slice(0, 2048) } });
+              await this._pauseWith("login_required");
+              break;
+            }
           }
           // A page this task has never been on is real progress: it refills the recovery
           // budget. Looping among pages already seen never does, so a stuck task stays bounded.

@@ -90,7 +90,7 @@ function TaskButton({ task, active, onClick, child }: { task: TaskSummary; activ
       <span className="hx-sidebar__fav" aria-hidden="true">{task.originalRequest.trim().slice(0, 1) || '·'}</span>
       <span className="hx-sidebar__task-copy">
         <span className="hx-sidebar__task-title">{task.originalRequest}</span>
-        <small className="hx-sidebar__task-state">{task.state === 'paused' && task.pauseReason === 'need_user' ? 'Needs your reply' : task.state === 'paused' && task.pauseReason === 'captcha' ? 'Needs you to pass a check' : task.state === 'queued' ? waitReasonLabel(task.waitReason) ?? stateLabel[task.state] : stateLabel[task.state]}</small>
+        <small className="hx-sidebar__task-state">{task.state === 'paused' && task.pauseReason === 'need_user' ? 'Needs your reply' : task.state === 'paused' && task.pauseReason === 'captcha' ? 'Needs you to pass a check' : task.state === 'paused' && task.pauseReason === 'login_required' ? 'Needs you to sign in' : task.state === 'queued' ? waitReasonLabel(task.waitReason) ?? stateLabel[task.state] : stateLabel[task.state]}</small>
       </span>
     </button>
   )

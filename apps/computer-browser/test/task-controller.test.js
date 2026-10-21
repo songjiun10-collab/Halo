@@ -3083,6 +3083,54 @@ test("without finalRefresh a finish does not reload anything", async () => {
   await store.close();
 });
 
+function loginRun({ store, pages, pauseOnLogin = true }) {
+  const contexts = [];
+  let shown = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => { contexts.push(context); return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "done looking" }; } },
+    browser: { observe: async () => ({ id: `obs${shown}`, ...pages[Math.min(shown++, pages.length - 1)] }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0, pauseOnLogin,
+  });
+  return { controller, contexts };
+}
+const passwordField = { elementId: "e2", role: "textbox", name: "Password", inputType: "password" };
+const signInPage = { url: "https://mail.test/login", title: "Sign in", elements: [{ elementId: "e1", role: "textbox", name: "Email", inputType: "email" }, passwordField] };
+
+test("a sign-in page pauses for the person before any planning, and Resume continues on the same page", async () => {
+  const { store } = await makeStore({ originalRequest: "read my latest mail", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const inbox = { url: "https://mail.test/inbox", title: "Inbox", elements: [] };
+  const { controller, contexts } = loginRun({ store, pages: [signInPage, inbox] });
+  const paused = await controller.start();
+  assert.equal(paused.pauseReason, "login_required");
+  assert.equal(contexts.length, 0, "no planner call is spent on the sign-in page");
+  await controller.resume(); // the person signed in on the task's own browser
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0].observation.url, "https://mail.test/inbox");
+  await store.close();
+});
+
+test("after the person resumed on a site, its sign-in page does not pause again", async () => {
+  const { store } = await makeStore({ originalRequest: "x", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, contexts } = loginRun({ store, pages: [signInPage] });
+  assert.equal((await controller.start()).pauseReason, "login_required");
+  const after = await controller.resume();
+  assert.equal(contexts.length, 1);
+  assert.equal(after.pauseReason, "need_user");
+  await store.close();
+});
+
+test("a header login box on an ordinary large page, or pauseOnLogin off, does not pause", async () => {
+  const filler = Array.from({ length: 60 }, (_, i) => ({ elementId: `l${i}`, role: "link", name: `Story ${i}` }));
+  const news = { url: "https://news.test/world", title: "World news", elements: [...filler, passwordField] };
+  const a = await makeStore({ originalRequest: "x", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  assert.equal((await loginRun({ store: a.store, pages: [news] }).controller.start()).pauseReason, "need_user");
+  await a.store.close();
+  const b = await makeStore({ originalRequest: "x", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  assert.equal((await loginRun({ store: b.store, pages: [signInPage], pauseOnLogin: false }).controller.start()).pauseReason, "need_user");
+  await b.store.close();
+});
+
 test("awaiting_verification frees the browser views once", async () => {
   let disposed = 0;
   const { controller, store } = await driveToAwaitingVerification({
