@@ -195,6 +195,7 @@ const SAME_SITE_NAV_INTERVAL_MS = 1500;
 // Sites that may show a human check before the task is handed to the person.
 const CAPTCHA_SITES_TRIED = 4;
 const PAGE_LOOP_LIMIT = 8;
+const PAGE_CYCLE_MAX_PAGES = 3;
 const ERROR_URLS_KEPT = 5;
 const OBSERVE_STALE_RETRIES = 2;
 const OBSERVE_RETRY_DELAY_MS = 400;
@@ -2233,9 +2234,10 @@ class TaskController {
           this._recentPages.push(pageKey);
           if (this._recentPages.length > PAGE_LOOP_WINDOW) this._recentPages.shift();
           const stuckOnOne = pageKey !== null && this._recentPages.filter((k) => k === pageKey).length >= PAGE_LOOP_LIMIT;
-          // Bouncing between two pages for a whole window is the same loop.
+          // Cycling among a few pages for a whole window is the same loop (parkers went round
+          // best-cars -> top-buys -> one review page for 78 planner calls).
           const bouncing = this._recentPages.length === PAGE_LOOP_WINDOW && !this._recentPages.includes(null)
-            && new Set(this._recentPages).size <= 2;
+            && new Set(this._recentPages).size <= PAGE_CYCLE_MAX_PAGES;
           if (stuckOnOne || bouncing) {
             if (await this._tryRecover("no_progress", "page-loop-warning")) {
               this._recentPages = [];

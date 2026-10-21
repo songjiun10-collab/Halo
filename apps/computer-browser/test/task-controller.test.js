@@ -349,6 +349,25 @@ test("discards a planner response that resolves after stop() was already called"
   await store.close();
 });
 
+test("going round three pages of one site is caught as a loop, not only bouncing between two", async () => {
+  const { store } = await makeStore({ originalRequest: "find the ownership cost", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const pages = ["https://cars.test/best", "https://cars.test/top", "https://cars.test/review"];
+  const contexts = [];
+  let here = pages[0];
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => { contexts.push(context);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions",
+        actions: [{ type: "navigate", url: pages[contexts.length % 3] }] }; } },
+    browser: { observe: async () => ({ id: `obs${contexts.length}`, url: here, title: here, elements: [] }), execute: async (a) => { here = a.url; return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0, budgets: { maxPlannerCalls: 100 },
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.ok(contexts.length <= 40, `stopped after ${contexts.length} planner calls`);
+  await store.close();
+});
+
 function siteFirstRun({ store, page, answerSite = "https://www.theweathernetwork.com/" }) {
   const contexts = [], executed = [];
   let here = { ...page };
