@@ -2983,6 +2983,69 @@ test("only a Multi-agent parent with a host child_plan hook is told it may split
   }
 });
 
+function finishRun({ store, pages, finalRefresh = true }) {
+  const contexts = [];
+  const executed = [];
+  let shown = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "finish", evidenceIds: [] };
+    } },
+    // pages[i] is what the i-th observe sees; the last entry repeats.
+    browser: { observe: async () => ({ id: `obs${shown}`, ...pages[Math.min(shown++, pages.length - 1)] }), execute: async (a) => { executed.push(a); return { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    finalRefresh,
+  });
+  return { controller, contexts, executed };
+}
+
+test("finalRefresh reloads the final page before a finish counts and reports what it saw", async () => {
+  const { store } = await makeStore({ originalRequest: "save it", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const done = { url: "https://shop.test/saved", title: "Saved", text: "Saved" };
+  const { controller, contexts, executed } = finishRun({ store, pages: [done] });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "awaiting_verification", JSON.stringify(snapshot.pauseReason));
+  assert.equal(contexts.length, 1);
+  assert.deepEqual(executed.map((a) => [a.type, a.url]), [["navigate", "https://shop.test/saved"]]);
+  assert.equal(snapshot.finalCheck.url, "https://shop.test/saved");
+  assert.equal(snapshot.finalCheck.problem, null);
+  await store.close();
+});
+
+test("a finish whose page does not survive a reload is sent back once, then never reported as completed", async () => {
+  const { store } = await makeStore({ originalRequest: "save it", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const done = { url: "https://shop.test/saved", title: "Saved", text: "Saved" };
+  const gone = { url: "https://shop.test/cart", title: "Cart", text: "Your cart is empty" };
+  const moved = finishRun({ store, pages: [done, gone] });
+  await moved.controller.start();
+  assert.equal(moved.contexts.length, 2);
+  assert.equal(moved.contexts[1].progress.repeatFailureFeedback.note, "final_refresh_failed");
+  assert.match(moved.contexts[1].progress.repeatFailureFeedback.guidance, /different page/);
+  await store.close();
+  // A page that keeps failing after the one send-back is handed to the person for review, flagged.
+  const second = await makeStore({ originalRequest: "save it", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const broken = finishRun({ store: second.store, pages: [done, { ...done, httpStatus: 500 }] });
+  const snapshot = await broken.controller.start();
+  assert.equal(broken.contexts.length, 2);
+  assert.equal(snapshot.state, "awaiting_verification");
+  assert.equal(snapshot.finalCheck.problem, "error_page");
+  await second.store.close();
+});
+
+test("without finalRefresh a finish does not reload anything", async () => {
+  const { store } = await makeStore({ originalRequest: "save it", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, executed } = finishRun({ store, pages: [{ url: "https://shop.test/saved", title: "Saved" }], finalRefresh: false });
+  const snapshot = await controller.start();
+  assert.equal(executed.length, 0);
+  assert.equal(snapshot.finalCheck, undefined);
+  await store.close();
+});
+
 test("awaiting_verification frees the browser views once", async () => {
   let disposed = 0;
   const { controller, store } = await driveToAwaitingVerification({

@@ -556,6 +556,7 @@ async function createHarnessHost(socketPath, hostWindow) {
   const surfaces = new BrowserSurfaces(hostWindow, { isUserControlled: (taskId) => taskHost.canUseTaskBrowser(taskId) });
   taskHost = new TaskHost({
     releaseViewsOnReview: true,
+    finalRefresh: true,
     storageRoot: path.join(app.getPath("userData"), "harness-tasks"),
     makeBrowser: makeHarnessBrowser(surfaces, agentViewportHost),
     makeChildBrowser: makeChildHarnessBrowser,

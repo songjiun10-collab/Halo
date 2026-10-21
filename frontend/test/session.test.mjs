@@ -355,3 +355,8 @@ test('a task waiting behind a recovered one names the task to resume first inste
   await settle()
   assert.equal(store.getState().error, 'Waiting in line behind “Old work”. Open it to resume it first, or start a new task.')
 })
+
+test('a reloaded final page is shown to the person, and a failed reload says the result is not confirmed', () => {
+  assert.equal(session.describeFinalCheck({ url: 'https://shop.test/saved', title: 'Saved', checkedAt: '2026-10-21T00:00:00Z', problem: null }), 'Reloaded the final page to check the result: Saved (https://shop.test/saved).')
+  assert.match(session.describeFinalCheck({ url: 'https://shop.test/cart', title: 'Cart', checkedAt: '2026-10-21T00:00:00Z', problem: 'redirected' }), /^Not confirmed: .*different page/)
+})

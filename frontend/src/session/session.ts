@@ -56,7 +56,7 @@ function derive(s: SessionState): SessionState {
       : s.tabs,
     activeTabId: s.activeTaskId ? (s.browser?.activeTabId ?? '') : s.activeTabId,
     approval: head && s.activeTaskId ? { taskId: s.activeTaskId, id: head.id, action: head.summary || head.action, request: head.action, createdAt: head.createdAt, widen: !!head.widen, leaseOffer: head.leaseOffer ?? null } : undefined,
-    messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text })), ...(snapshot?.pauseReason === 'need_user' ? [{ from: 'claude' as const, text: snapshot.needUserReason || 'The agent paused and needs your input to continue.' }] : [])] : [],
+    messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text })), ...(snapshot?.pauseReason === 'need_user' ? [{ from: 'claude' as const, text: snapshot.needUserReason || 'The agent paused and needs your input to continue.' }] : []), ...(snapshot?.finalCheck && ['awaiting_verification', 'completed'].includes(snapshot.state) ? [{ from: 'claude' as const, text: describeFinalCheck(snapshot.finalCheck) }] : [])] : [],
     timeline: s.journal.map(describeEvent),
   }
 }
@@ -405,3 +405,10 @@ export class SessionStore {
     catch (error) { this.failure(error); return false }
   }
 }
+
+const FINAL_CHECK_PROBLEM = { refresh_failed: 'could not be loaded again', error_page: 'came back as an error page', blocked: 'came back as a bot check', redirected: 'sent the browser to a different page' } as const
+
+// What Halo saw when it reloaded the final page, so "done" is not taken on the agent's word.
+export const describeFinalCheck = (check: NonNullable<TaskSnapshot['finalCheck']>) => check.problem
+  ? `Not confirmed: after reloading, the final page ${FINAL_CHECK_PROBLEM[check.problem]} (${check.url}). Check it before relying on this result.`
+  : `Reloaded the final page to check the result: ${check.title || check.url} (${check.url}).`

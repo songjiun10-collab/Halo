@@ -278,6 +278,7 @@ class TaskController {
     giveUpRefusals = 0,
     groundAnswers = false,
     answerSite = null,
+    finalRefresh = false,
     completionChecklist = null,
     maxRecoveries,
     plannerImageInput = true,
@@ -555,6 +556,10 @@ class TaskController {
     // (measured in the compare20 runs: 10 of 15 Haiku finishes had no evidence observe, and all 3 plainly wrong ones were among them).
     this._finishEvidenceBudget = Number.isInteger(finishEvidenceRejections) && finishEvidenceRejections >= 0 ? finishEvidenceRejections : 0;
     this._finishEvidenceRejections = 0;
+    // Before a finish counts, reload the final page and look again: "done" must survive a refresh.
+    this._finalRefresh = finalRefresh === true;
+    this._finalRefreshRejected = false;
+    this._finalCheck = null;
     this._finishFeedback = null;
     // An identical action that already failed this many times with a deterministic error is not dispatched again
     // (compare20: 16 identical failing navigates, 12 identical failing selects). 0 = off.
@@ -751,6 +756,7 @@ class TaskController {
       branches: this._branches ? this._branches.list() : [],
       approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor, widen, leaseOffer }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null, widen: !!widen, leaseOffer: leaseOffer ?? null })),
       ...(this._task.pauseReason === "need_user" && this._needUserReason ? { needUserReason: this._needUserReason } : {}),
+      ...(this._finalCheck ? { finalCheck: { ...this._finalCheck } } : {}),
       leases: this._terminal()
         ? []
         : this._leases.filter((l) => isLeaseLive(l, this._monotonicNow())).map(({ id, action, origin, expiresAt, usesLeft }) => ({ id, action, origin, expiresAt, usesLeft })),
@@ -2488,8 +2494,17 @@ class TaskController {
             await this._store.append({ type: "note", payload: { kind: "finish_rejected", reason: "no_evidence_recorded", rejections: this._finishEvidenceRejections } });
             continue;
           }
+          let refreshProblem = null;
+          if (this._finalRefresh && !this._routineRunner) {
+            refreshProblem = await this._refreshBeforeFinish();
+            if (refreshProblem && !this._finalRefreshRejected) {
+              this._finalRefreshRejected = true;
+              this._repeatFeedback = { note: "final_refresh_failed", guidance: `After reloading the final page it ${REFRESH_PROBLEM_TEXT[refreshProblem]}. The result is not in place yet: find out what happened and finish it, or report what is missing with need_user.` };
+              continue;
+            }
+          }
           this._leaveActive();
-          if (completion.complete) {
+          if (completion.complete && !refreshProblem) {
             this._task = { state: "completed", pauseReason: null };
             await this._revokeAllLeases("task_ended");
           } else {
@@ -2689,6 +2704,29 @@ class TaskController {
   _safetyContext() {
     const userText = [this._goal.originalRequest, ...this._goal.amendments.filter((a) => a.authority === "user").map((a) => a.text)].filter((t) => typeof t === "string").join("\n");
     return { observation: this._lastObservation, screenTargets: this._screenTargets, computerUse: hasComputerUseAdapter(this._store.taskProfile), userText };
+  }
+
+  // Reloads the page the task ended on and observes it again. Returns null when it still loads as the
+  // same page, or why it does not: the person sees this re-checked page, not the model's word.
+  async _refreshBeforeFinish() {
+    const before = this._lastObservation;
+    const url = typeof before?.url === "string" ? before.url : "";
+    if (!/^https?:\/\//i.test(url)) return null;
+    let after = null;
+    try {
+      const result = await this._browser.execute({ type: "navigate", url });
+      if (result?.status === "ok") after = await this._browser.observe();
+    } catch { after = null; }
+    const afterUrl = typeof after?.url === "string" ? after.url : "";
+    const problem = !after ? "refresh_failed"
+      : (Number(after.httpStatus) >= 400 || afterUrl.startsWith("chrome-error://")) ? "error_page"
+      : looksLikeCaptcha(afterUrl, after.title) ? "blocked"
+      : research.normalizeUrl(afterUrl) !== research.normalizeUrl(url) ? "redirected"
+      : null;
+    if (after) this._lastObservation = after;
+    this._finalCheck = { url: (afterUrl || url).slice(0, 2048), title: String(after?.title ?? "").slice(0, 200), checkedAt: new Date().toISOString(), problem };
+    await this._store.append({ type: "note", payload: { kind: "final_refresh", ...this._finalCheck } });
+    return problem;
   }
 
   // Source-grounded research (capability "research"): the host, not the model, decides which sources
@@ -3383,6 +3421,12 @@ const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", 
 const REPEAT_BLOCK_PAUSE = 3;
 // Consecutive dispatches that leave the observed page identical, whatever the actions were.
 const PAGE_STALL_LIMIT = 10;
+const REFRESH_PROBLEM_TEXT = {
+  refresh_failed: "could not be loaded again",
+  error_page: "came back as an error page",
+  blocked: "came back as a bot check",
+  redirected: "sent the browser to a different page",
+};
 // A kind of action that tends to loop. type is not one: a long form legitimately types many fields.
 const FAMILY_WINDOW = 12;
 const FAMILY_WARN = 3;
