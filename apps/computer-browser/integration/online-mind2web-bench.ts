@@ -159,6 +159,8 @@ async function runTask(task: Task, output: string, model: string, profile: Retur
       cwd: path.resolve(__dirname, ".."), timeoutMs: Number(process.env.HALO_BENCH_PLANNER_TIMEOUT_MS) || 120000, onUsage: (usage: any) => usages.push(usage) });
     controller = new TaskController({ store, browser, permissionMode: profile.permissionMode, harnessProfile: process.env.HALO_BENCH_HARNESS_PROFILE || "middle", plannerEffort: process.env.HALO_BENCH_EFFORT || "medium",
       finishEvidenceRejections: 1, repeatFailureLimit: 2,
+      // On in the app (main/index.js); off here unless a run compares it.
+      finalRefresh: process.env.HALO_BENCH_FINAL_REFRESH === "1",
       groundAnswers: process.env.HALO_BENCH_NO_GROUNDING !== "1", answerSite: task.website,
       giveUpRefusals: process.env.HALO_BENCH_NO_GIVE_UP === "1" ? Number(process.env.HALO_BENCH_GIVE_UP_REFUSALS ?? 3) : 0,
       completionChecklist: process.env.HALO_BENCH_NO_CHECKLIST === "1" ? null : (input: any) => { const r = runChecklist({ ...input, minScore: Number(process.env.HALO_BENCH_CHECKLIST_MIN_SCORE) || null }); checklistLog.push({ call: calls, codes: r.failures.map((f: any) => f.code) }); return r; },
