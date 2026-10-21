@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { parseAction, runLoop, callAnthropic } = require("../integration/vanilla-mind2web-bench.ts");
+const { parseAction, runLoop, callAnthropic, callClaudeCode } = require("../integration/vanilla-mind2web-bench.ts");
 
 const fakeView = () => {
   const events = [];
@@ -61,4 +61,27 @@ test("callAnthropic retries a 429 once then returns, and fails fast on 401", asy
   const ok = await callAnthropic({}, "k", async () => (++n === 1 ? { ok: false, status: 429 } : { ok: true, json: async () => ({ ok: 1 }) }));
   assert.deepEqual(ok, { ok: 1 });
   await assert.rejects(callAnthropic({}, "k", async () => ({ ok: false, status: 401 })), { code: "model_http_401" });
+});
+
+test("the claude-code route sends the screenshot as an image block, runs with no tools, and returns the act input", async () => {
+  const { EventEmitter } = require("node:events");
+  const { PassThrough } = require("node:stream");
+  let seen;
+  const spawnFn = (command, args) => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough(); child.kill = () => {};
+    let input = "";
+    child.stdin = { end: (line) => { input = line; seen = { command, args, message: JSON.parse(input) };
+      child.stdout.end(JSON.stringify({ type: "result", is_error: false, structured_output: { type: "click", x: 3, y: 4 }, usage: { input_tokens: 2, cache_read_input_tokens: 100, output_tokens: 9 } }) + "\n");
+      setImmediate(() => child.emit("close", 0)); } };
+    return child;
+  };
+  const content = [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "eA==" } }, { type: "text", text: "TASK: x" }];
+  const reply = await callClaudeCode({ model: "claude-haiku-5-5", system: "sys", messages: [{ role: "user", content }] }, { spawnFn });
+  assert.deepEqual(reply.content[0].input, { type: "click", x: 3, y: 4 });
+  assert.deepEqual(reply.usage, { input_tokens: 102, output_tokens: 9 });
+  assert.equal(seen.command, "claude");
+  assert.equal(seen.args[seen.args.indexOf("--tools") + 1], "");
+  assert.ok(seen.args.includes("--safe-mode"));
+  assert.equal(seen.message.message.content[0].type, "image");
 });

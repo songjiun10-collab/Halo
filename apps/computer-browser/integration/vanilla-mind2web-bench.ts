@@ -91,6 +91,38 @@ async function callAnthropic(body: any, apiKey: string, fetchFn = globalThis.fet
   }
 }
 
+// Same model through the local Claude Code login instead of an API key (HALO_BENCH_VIA=claude-code), so both
+// arms reach Haiku the same way. Same flags as the HALO planner bridge (no tools, safe mode, no session), the
+// screenshot goes in as an image block, and the act schema is enforced with --json-schema. Returns the shape of
+// a Messages API reply so runLoop does not care which route it took.
+// The CLI has no `act` tool to call; the structured reply takes its place. Without this note Haiku said it "could not use act".
+const VIA_CLI_NOTE = "Your structured JSON reply IS the `act` tool call: put the one action's fields in it.";
+function callClaudeCode(body: any, { spawnFn = require("node:child_process").spawn, effort = "medium", timeoutMs = 120000 } = {}): Promise<any> {
+  const { ENV_ALLOWLIST } = require("../main/harness/providers/claude-code-bridge");
+  const env: Record<string, string> = {};
+  for (const key of ENV_ALLOWLIST) if (process.env[key] !== undefined) env[key] = process.env[key] as string;
+  const args = ["-p", "--model", body.model, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+    "--tools", "", "--safe-mode", "--permission-prompts", "none", "--no-session-persistence", "--disable-slash-commands",
+    "--json-schema", JSON.stringify(ACT_TOOL.input_schema), "--append-system-prompt", `${body.system} ${VIA_CLI_NOTE}`, "--effort", effort];
+  return new Promise((resolve, reject) => {
+    const child = spawnFn("claude", args, { env, shell: false, stdio: ["pipe", "pipe", "ignore"] });
+    let out = "";
+    const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already gone */ } }, timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { out += chunk; });
+    child.on("error", () => { clearTimeout(timer); reject(Object.assign(new Error("model_spawn_failed"), { code: "model_spawn_failed" })); });
+    child.on("close", (code: number | null) => {
+      clearTimeout(timer);
+      const result = out.split("\n").map((line) => { try { return JSON.parse(line); } catch { return null; } }).find((m) => m?.type === "result");
+      if (code !== 0 || !result || result.is_error) return reject(Object.assign(new Error("model_cli_error"), { code: code === null ? "model_timeout" : "model_cli_error" }));
+      const u = result.usage ?? {};
+      resolve({ content: result.structured_output ? [{ type: "tool_use", name: "act", input: result.structured_output }] : [],
+        usage: { input_tokens: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), output_tokens: u.output_tokens ?? 0 } });
+    });
+    child.stdin.end(JSON.stringify({ type: "user", message: body.messages[0] }) + "\n");
+  });
+}
+
 // The loop, with the model call injected so it can be tested without a network or a browser.
 async function runLoop({ view, task, model, callModel, record, now = () => benchClock.now(), limits = LIMITS }: any) {
   const history: string[] = [], usages: any[] = [], steps: any[] = [];
@@ -129,7 +161,7 @@ async function runLoop({ view, task, model, callModel, record, now = () => bench
   return { history, usages, steps, finalAnswer, finished, errorCode, calls, wallMs: now() - started };
 }
 
-async function runTask(task: Task, output: string, model: string, apiKey: string) {
+async function runTask(task: Task, output: string, model: string, callModel: (body: any) => Promise<any>) {
   const { acquireCdpBrowser } = require("../main/harness/cdp-browser-host");
   const { openCdpView } = require("../main/harness/cdp-web-contents");
   const dir = path.join(output, task.task_id);
@@ -140,7 +172,7 @@ async function runTask(task: Task, output: string, model: string, apiKey: string
     launched = await acquireCdpBrowser(benchProfile ? { headless: true, benchProfile: true, profilePath: benchProfile } : { headless: true });
     view = await openCdpView(launched.wsUrl, VIEWPORT);
     await view.webContents.loadURL(task.website);
-    loop = await runLoop({ view, task, model, callModel: (body: any) => callAnthropic(body, apiKey),
+    loop = await runLoop({ view, task, model, callModel,
       record: {
         screenshot: (i: number, image: any) => fs.writeFile(path.join(dir, "trajectory", `${String(i).padStart(4, "0")}.png`), image.toPNG(), { flag: "wx", mode: 0o600 }),
         step: (s: any) => fs.appendFile(path.join(dir, "steps.jsonl"), JSON.stringify(s) + "\n", { mode: 0o600 }),
@@ -171,8 +203,11 @@ async function runTask(task: Task, output: string, model: string, apiKey: string
 async function main() {
   const dataset = process.argv[2];
   if (!dataset || !path.isAbsolute(dataset)) throw new Error("absolute_dataset_path_required");
+  const via = process.env.HALO_BENCH_VIA === "claude-code" ? "claude-code" : "api";
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("anthropic_api_key_required");
+  if (via === "api" && !apiKey) throw new Error("anthropic_api_key_required");
+  const effort = process.env.HALO_BENCH_EFFORT || "medium";
+  const callModel = via === "claude-code" ? (body: any) => callClaudeCode(body, { effort }) : (body: any) => callAnthropic(body, apiKey as string);
   const bytes = await fs.readFile(dataset);
   const unofficial = process.env.HALO_BENCH_UNOFFICIAL_TASKS === "1";
   const digest = nodeCrypto.createHash("sha256").update(bytes).digest("hex");
@@ -182,18 +217,18 @@ async function main() {
   const output = process.env.HALO_BENCH_RESUME ?? await fs.mkdtemp(path.join(os.homedir(), "Downloads", "vanilla-mind2web-bench-"));
   await fs.mkdir(output, { recursive: true, mode: 0o700 });
   const manifest = { schemaVersion: 1, arm: "vanilla", datasetSha256: digest, datasetSource: unofficial ? "unofficial_rebuilt_task_list" : "official", taskCount: tasks.length,
-    model, concurrency: 1, limits: LIMITS, viewport: VIEWPORT, graded: false, output,
+    model, via, ...(via === "claude-code" ? { effort } : {}), concurrency: 1, limits: LIMITS, viewport: VIEWPORT, graded: false, output,
     note: "no harness: no safety gates, no approver, no contract, no captcha reroute; ungraded" };
   await fs.writeFile(path.join(output, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
   process.stdout.write(JSON.stringify({ event: "bench_started", ...manifest }) + "\n");
   const tally: Record<string, number> = {};
   for (const task of tasks) {
     const done = path.join(output, task.task_id, "run.json");
-    const run = await fs.access(done).then(() => true, () => false) ? JSON.parse(await fs.readFile(done, "utf8")) : await runTask(task, output, model, apiKey);
+    const run = await fs.access(done).then(() => true, () => false) ? JSON.parse(await fs.readFile(done, "utf8")) : await runTask(task, output, model, callModel);
     tally[run.verdict] = (tally[run.verdict] ?? 0) + 1;
   }
   await fs.writeFile(path.join(output, "summary.json"), JSON.stringify({ manifest, tally }, null, 2), { mode: 0o600 });
   process.stdout.write(JSON.stringify({ event: "bench_finished", output, attempted: tasks.length, tally, graded: false }) + "\n");
 }
-module.exports = { parseAction, runLoop, callAnthropic, SYSTEM, ACT_TOOL, LIMITS };
+module.exports = { parseAction, runLoop, callAnthropic, callClaudeCode, SYSTEM, ACT_TOOL, LIMITS };
 if (require.main === module) main().catch((error: any) => { console.error(error?.message ?? "bench_failed"); process.exitCode = 1; });
