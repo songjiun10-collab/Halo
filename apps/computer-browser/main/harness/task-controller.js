@@ -160,6 +160,7 @@ function isAutoDomAction(action, observation) {
 
 // A page asking for a password: a visible password field on a page that says it is a sign-in page, or on a
 // small page that is mostly the form. A site-wide header login box on an ordinary page does not count.
+const SITE_FIRST_SEND_BACKS = 2;
 const SIGN_IN_WORDS = /log\s*-?\s*in|sign\s*-?\s*in|signin|login|auth|로그인|ログイン/i;
 function looksLikeSignIn(observation) {
   const elements = Array.isArray(observation?.elements) ? observation.elements : [];
@@ -592,6 +593,7 @@ class TaskController {
     this._groundAnswers = groundAnswers === true;
     // The site the task itself names (e.g. "on parkers.co.uk"): an answer drawn from it needs no second site.
     this._answerSiteDomain = typeof answerSite === "string" ? research.domainOf(answerSite) : null;
+    this._siteFirstSendBacks = 0;
     // Benchmark option: a function ({ answer, goalText, observation, observedTexts }) -> { ok, failures } run on every reported answer.
     this._completionChecklist = typeof completionChecklist === "function" ? completionChecklist : null;
     this._completionRejected = 0;
@@ -2312,6 +2314,7 @@ class TaskController {
               ...(this._harnessProfile === "fast" ? { fastMode: true } : {}),
               ...(this._loopHint ? { loopWarning: true } : {}),
               ...(this._resumedFrom ? { resumedFrom: { ...this._resumedFrom } } : {}),
+              ...(this._answerSiteDomain !== null ? { taskSite: { domain: this._answerSiteDomain, rule: "The task is about this site. Work on it first: its search, menus, filters and its own URLs. Go to another site only if this one errors, blocks you, or clearly does not have it." } } : {}),
               ...(this._lastActionNote ? { lastAction: this._lastActionNote } : {}),
               ...(this._apiResponse ? { apiResponse: this._apiResponse } : {}),
               ...(this._osComputerUse ? { os: { enabled: true, ...(this._osObservation ? { observation: this._osObservation } : {}) } } : {}),
@@ -2506,6 +2509,25 @@ class TaskController {
             }
             await this._pauseWith("captcha");
             break;
+          }
+        }
+
+        // The task names a site: going elsewhere is sent back (at most SITE_FIRST_SEND_BACKS times) unless the
+        // site's own page is an error, block or challenge. Online-Mind2Web logs left a working site after a few
+        // tries (weathernetwork -> weather.gov) and the answer from the other site did not count.
+        if (this._answerSiteDomain !== null && validated.kind === "actions" && this._siteFirstSendBacks < SITE_FIRST_SEND_BACKS) {
+          const here = this._lastObservation;
+          const siteFailed = Number(here?.httpStatus) >= 400 || String(here?.url ?? "").startsWith("chrome-error://") || looksLikeCaptcha(here?.url, here?.title);
+          const leaves = validated.actions.some((action) => {
+            if (action.type !== "navigate" && action.type !== "follow_link") return false;
+            const domain = research.domainOf(describeActionTarget(action, this._lastObservation));
+            return domain !== null && domain !== this._answerSiteDomain;
+          });
+          if (leaves && !siteFailed) {
+            this._siteFirstSendBacks += 1;
+            this._proposalFeedbackCode = "stay_on_task_site";
+            await this._store.append({ type: "note", payload: { kind: "site_first_sent_back", site: this._answerSiteDomain } });
+            continue;
           }
         }
 
