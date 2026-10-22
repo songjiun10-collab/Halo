@@ -100,6 +100,18 @@ async function writeExclusiveDurable(filePath, contents) {
   } finally { await handle.close(); }
 }
 
+// Publishes a complete file at filePath or fails with EEXIST. A plain O_EXCL create
+// is visible while still empty, so a concurrent reader would misreport it as corrupt.
+async function writeExclusiveAtomic(filePath, contents) {
+  const temporaryPath = `${filePath}.tmp-${crypto.randomUUID()}`;
+  try {
+    await writeExclusiveDurable(temporaryPath, contents);
+    await fsp.link(temporaryPath, filePath);
+  } finally {
+    await fsp.unlink(temporaryPath).catch((error) => { if (error.code !== "ENOENT") throw error; });
+  }
+}
+
 async function syncDirectory(dirPath) {
   const handle = await fsp.open(dirPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
@@ -152,7 +164,7 @@ async function acquireLock(dirPath, fileName) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     await assertNoOtherReclaimer(dirPath, fileName);
     try {
-      await writeExclusiveDurable(lockPath, JSON.stringify(owner));
+      await writeExclusiveAtomic(lockPath, JSON.stringify(owner));
       await syncDirectory(dirPath);
       // A reclaimer may have started between the preflight and O_EXCL create.
       // It will only remove the exact stale token it inspected; do not proceed

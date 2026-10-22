@@ -66,6 +66,9 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
     if (element && typeof element.href === "string") return element.href;
     return typeof action.elementId === "string" ? `element ${action.elementId}` : null;
   }
+  if (action.type === "http_get") {
+    return typeof action.url === "string" ? action.url.slice(0, 300) : null;
+  }
   if (action.type === "find_text") {
     return typeof action.text === "string" ? JSON.stringify(action.text.slice(0, 80)) : null;
   }
@@ -100,6 +103,23 @@ function describeActionTarget(action, lastObservation, screenTargets = null) {
     return action.type === "type_at" ? `screenshot ${lastObservation?.id || action.observationId} ${point}${where}; insert ${JSON.stringify(action.text)}` : `screenshot ${lastObservation?.id || action.observationId} ${point}${where}`;
   }
   return null;
+}
+
+// The page-loop key: the URL plus the page's controls (role and name), not its text.
+// Search forms and result lists often render at the same URL (medicare.gov care-compare
+// shows 27 results without leaving ?providerType=NursingHome), and the URL alone called
+// that progress a loop. Text is left out because ads and clocks change it on a page that
+// is really stuck.
+function pageLoopKey(observation) {
+  let key;
+  try { const u = new URL(observation?.url); key = u.origin + u.pathname + u.search; } catch { return null; }
+  const elements = Array.isArray(observation?.elements) ? observation.elements : [];
+  let hash = 5381;
+  for (const element of elements) {
+    const part = `${element?.role ?? ""}:${element?.name ?? ""}|`;
+    for (let i = 0; i < part.length; i += 1) hash = ((hash * 33) ^ part.charCodeAt(i)) >>> 0;
+  }
+  return `${key}#${elements.length}:${hash.toString(36)}`;
 }
 
 function observationKey(observation) {
@@ -155,6 +175,18 @@ function isAutoDomAction(action, observation) {
   return classifyTarget(target, action.type === "type" ? "type_at" : "click_at").gate === "auto";
 }
 
+// A page asking for a password: a visible password field on a page that says it is a sign-in page, or on a
+// small page that is mostly the form. A site-wide header login box on an ordinary page does not count.
+const SITE_FIRST_SEND_BACKS = 2;
+const SIGN_IN_WORDS = /log\s*-?\s*in|sign\s*-?\s*in|signin|login|auth|로그인|ログイン/i;
+function looksLikeSignIn(observation) {
+  const elements = Array.isArray(observation?.elements) ? observation.elements : [];
+  if (!elements.some((el) => el?.inputType === "password" && !el.disabled)) return false;
+  const where = `${observation?.url ?? ""} ${observation?.title ?? ""}`;
+  return SIGN_IN_WORDS.test(where) || elements.length <= SIGN_IN_SMALL_PAGE;
+}
+const SIGN_IN_SMALL_PAGE = 40;
+
 function hasMultiAgentCapability(taskProfile) {
   return ["multi_agent", "multi_agent_computer_use"].includes(taskProfile?.capability?.id);
 }
@@ -164,7 +196,7 @@ function hasMultiAgentCapability(taskProfile) {
 const GOAL_MAX_REJECTED_FINISHES = 5;
 // A research answer plus the host's own source list is longer than an ordinary reply.
 const RESEARCH_REASON_CAP = 2800;
-const NAV_VISITED_MAX = 32;
+const NAV_VISITED_MAX = 16;
 // Consecutive scrolls on one page after which the task pauses as no_progress.
 const PLANNER_RETRYABLE_CODES = ["invalid_proposal", "invalid_proposal_json"];
 const SCROLL_STREAK_LIMIT = 6;
@@ -180,12 +212,13 @@ const SAME_SITE_NAV_INTERVAL_MS = 1500;
 // Sites that may show a human check before the task is handed to the person.
 const CAPTCHA_SITES_TRIED = 4;
 const PAGE_LOOP_LIMIT = 8;
+const PAGE_CYCLE_MAX_PAGES = 3;
 const ERROR_URLS_KEPT = 5;
 const OBSERVE_STALE_RETRIES = 2;
 const OBSERVE_RETRY_DELAY_MS = 400;
-const NAV_FRONTIER_MAX = 32;
+const NAV_FRONTIER_MAX = 12;
 const NAV_URL_MAX_CHARS = 512;
-const NAV_NAME_MAX_CHARS = 80;
+const NAV_NAME_MAX_CHARS = 50;
 const MCP_RESULT_MAX_BYTES = 4096;
 
 function truncateUtf8(text, maxBytes) {
@@ -248,6 +281,7 @@ class TaskController {
     store,
     planner,
     browser,
+    osComputerUse = null,
     releaseViewsOnReview = false,
     approve,
     hostVerifier,
@@ -256,6 +290,7 @@ class TaskController {
     monotonicNow,
     segmentRotationCalls,
     noProgressThreshold,
+    pageStallLimit,
     memoryStore,
     activityRecall,
     strategyGuidance,
@@ -270,6 +305,12 @@ class TaskController {
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     finishEvidenceRejections = 0,
     repeatFailureLimit = 0,
+    giveUpRefusals = 0,
+    groundAnswers = false,
+    answerSite = null,
+    finalRefresh = false,
+    pauseOnLogin = false,
+    completionChecklist = null,
     maxRecoveries,
     plannerImageInput = true,
     visionAssist = null,
@@ -408,6 +449,7 @@ class TaskController {
       if (event.payload?.kind === "mcp_call_outcome") this._openMcpCalls.delete(event.payload.requestId);
     }
     this._browser = browser;
+    this._osComputerUse = osComputerUse;
     this._approve = approve;
     this._hostVerifier = hostVerifier;
     // Multi-agent background runtime plan, Task 4: only a PARENT controller
@@ -475,6 +517,7 @@ class TaskController {
       : () => Number(process.hrtime.bigint()) / 1_000_000;
     this._segmentRotationCalls =
       typeof segmentRotationCalls === "number" ? segmentRotationCalls : contracts.SEGMENT_ROTATION_CALLS;
+    this._pageStallLimit = typeof pageStallLimit === "number" ? pageStallLimit : PAGE_STALL_LIMIT;
     this._noProgressThreshold =
       typeof noProgressThreshold === "number" ? noProgressThreshold : contracts.NO_PROGRESS_REPLAN_THRESHOLD;
 
@@ -523,6 +566,7 @@ class TaskController {
     this._criteriaStatus = new Map(); // criterionId -> {status, evidenceId}
     this._noProgress = { lastKey: null, consecutive: 0, hasReplannedOnce: false };
     this._scrollStreak = { url: null, count: 0 };
+    this._textFocusQueries = []; // recent find_text queries: their words keep matching passages in the planner's page text
     this._recentPages = [];
     this._visitedPages = new Set();
     this._lastNavAt = new Map();
@@ -543,6 +587,13 @@ class TaskController {
     // (measured in the compare20 runs: 10 of 15 Haiku finishes had no evidence observe, and all 3 plainly wrong ones were among them).
     this._finishEvidenceBudget = Number.isInteger(finishEvidenceRejections) && finishEvidenceRejections >= 0 ? finishEvidenceRejections : 0;
     this._finishEvidenceRejections = 0;
+    // Before a finish counts, reload the final page and look again: "done" must survive a refresh.
+    this._finalRefresh = finalRefresh === true;
+    // A sign-in page is the person's: pause and hand it over, then continue on the same page after Resume.
+    this._pauseOnLogin = pauseOnLogin === true;
+    this._loginHandedOff = new Set();
+    this._finalRefreshRejected = false;
+    this._finalCheck = null;
     this._finishFeedback = null;
     // An identical action that already failed this many times with a deterministic error is not dispatched again
     // (compare20: 16 identical failing navigates, 12 identical failing selects). 0 = off.
@@ -550,6 +601,21 @@ class TaskController {
     this._repeatFailures = new Map();
     this._repeatBlocked = 0;
     this._repeatFeedback = null;
+    // The last actions' families (see actionFamily): the same kind of action over and over is a loop even when
+    // each one differs a little (another search phrase, another passage), so the exact-repeat check misses it.
+    this._familyWindow = [];
+    // Benchmark option: how many times a need_user that is not a source-checked answer is sent back before it is honoured.
+    this._giveUpRefusals = Number.isInteger(giveUpRefusals) && giveUpRefusals > 0 ? giveUpRefusals : 0;
+    this._giveUpRefused = 0;
+    // Benchmark option: apply the source-checked answer path to every task, not only research ones.
+    this._groundAnswers = groundAnswers === true;
+    // The site the task itself names (e.g. "on parkers.co.uk"): an answer drawn from it needs no second site.
+    this._answerSiteDomain = typeof answerSite === "string" ? research.domainOf(answerSite) : null;
+    this._siteFirstSendBacks = 0;
+    // Benchmark option: a function ({ answer, goalText, observation, observedTexts }) -> { ok, failures } run on every reported answer.
+    this._completionChecklist = typeof completionChecklist === "function" ? completionChecklist : null;
+    this._completionRejected = 0;
+    this._observedTexts = new Map();
     this._needUserReason = null;
     this._maxRecoveries = maxRecoveries;
     this._proposalFeedbackCode = null;
@@ -646,6 +712,15 @@ class TaskController {
       if (checkpointedPayload.budgets) this._budgets = { ...checkpointedPayload.budgets };
       if (checkpointedPayload.segment) this._segment = { ...checkpointedPayload.segment };
       if (checkpointedPayload.criteriaStatus) this._criteriaStatus = new Map(checkpointedPayload.criteriaStatus);
+      // Where the work stood: the page it was on and the pages it had already been through.
+      const resume = checkpointedPayload.resume;
+      if (resume && typeof resume.url === "string" && /^https?:\/\//i.test(resume.url)) this._resumeUrl = resume.url;
+      if (resume?.navigation && Array.isArray(resume.navigation.visited) && Array.isArray(resume.navigation.frontier)) {
+        this._navigation = {
+          visited: resume.navigation.visited.filter((u) => typeof u === "string").slice(-NAV_VISITED_MAX),
+          frontier: resume.navigation.frontier.filter((e) => typeof e?.href === "string").slice(-NAV_FRONTIER_MAX),
+        };
+      }
     }
     if (this._routineRunner && this._routineRun && store.routineRecovery) {
       const recovered = store.routineRecovery;
@@ -725,6 +800,7 @@ class TaskController {
       branches: this._branches ? this._branches.list() : [],
       approvalQueue: this._approvalQueue.map(({ id, summary, actionType, createdAt, descriptor, widen, leaseOffer }) => ({ id, summary, action: actionType, createdAt, target: descriptor?.target ?? null, widen: !!widen, leaseOffer: leaseOffer ?? null })),
       ...(this._task.pauseReason === "need_user" && this._needUserReason ? { needUserReason: this._needUserReason } : {}),
+      ...(this._finalCheck ? { finalCheck: { ...this._finalCheck } } : {}),
       leases: this._terminal()
         ? []
         : this._leases.filter((l) => isLeaseLive(l, this._monotonicNow())).map(({ id, action, origin, expiresAt, usesLeft }) => ({ id, action, origin, expiresAt, usesLeft })),
@@ -1042,6 +1118,30 @@ class TaskController {
     if (nav.frontier.length > NAV_FRONTIER_MAX) nav.frontier.splice(0, nav.frontier.length - NAV_FRONTIER_MAX);
   }
 
+  // The checkpoint's resume point, like a commit: the page the task was on and where it had been.
+  _resumePoint() {
+    const url = typeof this._lastObservation?.url === "string" && /^https?:\/\//i.test(this._lastObservation.url)
+      ? this._lastObservation.url.slice(0, NAV_URL_MAX_CHARS) : (this._resumeUrl ?? null);
+    if (!url && this._navigation.visited.length === 0) return {};
+    return { resume: { url, navigation: { visited: [...this._navigation.visited], frontier: [...this._navigation.frontier] } } };
+  }
+
+  // A task re-attached with a fresh browser (closed tab, restart) starts on a blank page; reopen the
+  // page it was on so the work continues there instead of from the start.
+  async _returnToResumePoint() {
+    const url = this._resumeUrl;
+    this._resumeUrl = null;
+    const current = this._browser.getBrowserSnapshot?.()?.tabs?.[0]?.url;
+    if (typeof current === "string" && /^https?:\/\//i.test(current)) return;
+    let status = "failed";
+    try { status = (await this._browser.execute({ type: "navigate", url }))?.status ?? "failed"; } catch { status = "failed"; }
+    await this._store.append({ type: "note", payload: { kind: "resumed_at", url, status } });
+    this._resumedFrom = {
+      url, reopened: status === "ok", actionsAlreadyUsed: this._budgets.actionsUsed ?? 0,
+      guidance: "This task was interrupted and is resuming. Halo reopened the page it was on; pages already visited are in navigationHistory. Continue from where the work stopped, do not start over.",
+    };
+  }
+
   _enterActive() {
     if (this._activeSince === null) this._activeSince = this._now();
   }
@@ -1061,6 +1161,7 @@ class TaskController {
         budgets: { ...this._budgets },
         segment: { ...this._segment },
         criteriaStatus: [...this._criteriaStatus.entries()],
+        ...this._resumePoint(),
         harnessProfile: this._harnessProfile,
         recoveryBudget: this._recovery.snapshot(),
         plannerEscalations: this._escalations,
@@ -1080,14 +1181,14 @@ class TaskController {
   // Bounded self-recovery: a transient failure or a loop gets a couple of
   // automatic retries before the task pauses and asks the person. Never used
   // for waits that belong to the person (need_user, approvals, takeover).
-  async _tryRecover(reason, step) {
+  async _tryRecover(reason, step, detail) {
     const granted = this._recovery.tryConsume(reason);
     if (!granted) return reason === "planner_error" || reason === "no_progress" ? this._tryEscalate(reason) : false;
     // Retry only after its budget charge is durable. A crash before checkpoint
     // replays this complete bounded state from the validated journal tail.
     try {
       await this._store.append({ type: "note", payload: { kind: "recovery", reason, step, attempt: granted.attempt, total: granted.total,
-        recoveryBudget: this._recovery.snapshot() } });
+        recoveryBudget: this._recovery.snapshot(), ...(detail ? { detail } : {}) } });
     } catch {
       return false; // No durable charge: take the caller's normal pause path.
     }
@@ -1115,13 +1216,13 @@ class TaskController {
     return true;
   }
 
-  async _pauseWith(reason) {
+  async _pauseWith(reason, detail) {
     this._leaveActive();
     this._finishFeedback = null;
     this._task = { state: "paused", pauseReason: reason };
     // Pause reasons otherwise live only in the latest checkpoint; keep each one
     // in the journal so "why does it keep pausing" can be answered afterwards.
-    await this._store.append({ type: "note", payload: { kind: "paused", reason } }).catch(() => {});
+    await this._store.append({ type: "note", payload: { kind: "paused", reason, ...(detail ? { detail } : {}) } }).catch(() => {});
     await this._checkpoint();
     this._emit();
   }
@@ -1962,6 +2063,7 @@ class TaskController {
           // failure is not itself a model response or an execution decision.
         }
       }
+      if (this._resumeUrl) await this._returnToResumePoint();
       while (this._task.state === "running") {
         const epoch = this._epoch;
         this._enterActive();
@@ -1998,6 +2100,7 @@ class TaskController {
           // not a broken page: wait briefly and observe the settled one. Any
           // other failure, or a page that never settles, still fails closed.
           let failed = false;
+          let observeDetail;
           for (let attempt = 0; ; attempt += 1) {
             try {
               observation = await this._browser.observe({
@@ -2012,13 +2115,14 @@ class TaskController {
                 continue;
               }
               failed = true;
+              observeDetail = `${error?.code || "error"}: ${String(error?.message || "").slice(0, 200)}`;
               break;
             }
           }
           if (this._stopHappenedSince(epoch)) break;
           if (failed) {
-            if (await this._tryRecover("observation_error", "re-observe")) { this._reusableObservation = null; continue; }
-            await this._pauseWith("observation_error");
+            if (await this._tryRecover("observation_error", "re-observe", observeDetail)) { this._reusableObservation = null; continue; }
+            await this._pauseWith("observation_error", observeDetail);
             break;
           }
         }
@@ -2029,6 +2133,11 @@ class TaskController {
         this._secretOnScreen = hasSecretSurface(observation);
         observation = applyPrivacyTiers(observation);
         this._lastObservation = observation;
+        if (this._completionChecklist && typeof observation?.text === "string" && observation.text) {
+          this._observedTexts.delete(observation.url);
+          this._observedTexts.set(observation.url, observation.text.slice(0, 20000));
+          if (this._observedTexts.size > 40) this._observedTexts.delete(this._observedTexts.keys().next().value);
+        }
         this._recordNavigation(observation);
         if (this._isResearchTask()) await this._recordResearchSource(observation);
 
@@ -2121,6 +2230,17 @@ class TaskController {
             this._onCaptchaPage = true;
             if (!this._errorUrls.includes(observation.url)) this._errorUrls.push(observation.url);
           }
+          if (this._pauseOnLogin && looksLikeSignIn(observation)) {
+            let origin = null;
+            try { origin = new URL(observation.url).origin; } catch {}
+            // Once the person resumed on this site, trust them: a page that still shows a password field is theirs to judge.
+            if (origin !== null && !this._loginHandedOff.has(origin)) {
+              this._loginHandedOff.add(origin);
+              await this._store.append({ type: "note", payload: { kind: "login_required", url: String(observation.url).slice(0, 2048) } });
+              await this._pauseWith("login_required");
+              break;
+            }
+          }
           // A page this task has never been on is real progress: it refills the recovery
           // budget. Looping among pages already seen never does, so a stuck task stays bounded.
           if (pageKey !== null && !this._visitedPages.has(pageKey)) {
@@ -2128,12 +2248,14 @@ class TaskController {
             if (this._visitedPages.size > VISITED_PAGES_KEPT) this._visitedPages.delete(this._visitedPages.values().next().value);
             this._recovery.noteProgress();
           }
-          this._recentPages.push(pageKey);
+          const loopKey = pageLoopKey(observation);
+          this._recentPages.push(loopKey);
           if (this._recentPages.length > PAGE_LOOP_WINDOW) this._recentPages.shift();
-          const stuckOnOne = pageKey !== null && this._recentPages.filter((k) => k === pageKey).length >= PAGE_LOOP_LIMIT;
-          // Bouncing between two pages for a whole window is the same loop.
+          const stuckOnOne = loopKey !== null && this._recentPages.filter((k) => k === loopKey).length >= PAGE_LOOP_LIMIT;
+          // Cycling among a few pages for a whole window is the same loop (parkers went round
+          // best-cars -> top-buys -> one review page for 78 planner calls).
           const bouncing = this._recentPages.length === PAGE_LOOP_WINDOW && !this._recentPages.includes(null)
-            && new Set(this._recentPages).size <= 2;
+            && new Set(this._recentPages).size <= PAGE_CYCLE_MAX_PAGES;
           if (stuckOnOne || bouncing) {
             if (await this._tryRecover("no_progress", "page-loop-warning")) {
               this._recentPages = [];
@@ -2211,7 +2333,11 @@ class TaskController {
               maxActionsPerProposal: this._maxActionsPerProposal,
               ...(this._harnessProfile === "fast" ? { fastMode: true } : {}),
               ...(this._loopHint ? { loopWarning: true } : {}),
+              ...(this._resumedFrom ? { resumedFrom: { ...this._resumedFrom } } : {}),
+              ...(this._answerSiteDomain !== null ? { taskSite: { domain: this._answerSiteDomain, rule: "The task is about this site. Work on it first: its search, menus, filters and its own URLs. Go to another site only if this one errors, blocks you, or clearly does not have it." } } : {}),
               ...(this._lastActionNote ? { lastAction: this._lastActionNote } : {}),
+              ...(this._apiResponse ? { apiResponse: this._apiResponse } : {}),
+              ...(this._osComputerUse ? { os: { enabled: true, ...(this._osObservation ? { observation: this._osObservation } : {}) } } : {}),
               ...(this._scrollStreak.count >= 3 ? { scrollStreak: this._scrollStreak.count } : {}),
               ...(this._errorUrls.length > 0 ? { errorUrls: [...this._errorUrls] } : {}),
               ...(this._finishFeedback ? { finishFeedback: { ...this._finishFeedback } } : {}),
@@ -2227,6 +2353,7 @@ class TaskController {
             recentEvents: this._store.eventsSinceCheckpoint || [],
             customMemory,
             strategyGuidance: this._strategyGuidance,
+            textFocusQueries: process.env.HALO_TEXT_FOCUS === "1" ? [...this._textFocusQueries] : null,
             pendingMessages,
             ...(teamBoard ? { teamBoard } : {}),
             ...(this._workGoalBinding ? { workGoalBinding: this._workGoalBinding, workGoal } : {}),
@@ -2306,6 +2433,7 @@ class TaskController {
           if (this._pendingMcpObservation) this._pendingMcpObservation = null;
           this._pendingContextRead = null;
           this._loopHint = false;
+          this._resumedFrom = null;
           this._finishFeedback = null;
           this._repeatFeedback = null;
         } catch (error) {
@@ -2404,6 +2532,28 @@ class TaskController {
           }
         }
 
+        // The task names a site: going elsewhere is sent back (at most SITE_FIRST_SEND_BACKS times) unless the
+        // site's own page is an error, block or challenge. Online-Mind2Web logs left a working site after a few
+        // tries (weathernetwork -> weather.gov) and the answer from the other site did not count.
+        if (this._answerSiteDomain !== null && validated.kind === "actions" && this._siteFirstSendBacks < SITE_FIRST_SEND_BACKS) {
+          const here = this._lastObservation;
+          const siteFailed = Number(here?.httpStatus) >= 400 || String(here?.url ?? "").startsWith("chrome-error://") || looksLikeCaptcha(here?.url, here?.title);
+          const leaves = validated.actions.some((action) => {
+            if (action.type !== "navigate" && action.type !== "follow_link") return false;
+            // A link the task site itself shows is the site's own answer (nvidia's lab page links its
+            // leader's profile on jankautz.com); only typed URLs and links found elsewhere are held back.
+            if (action.type === "follow_link" && research.domainOf(here?.url) === this._answerSiteDomain) return false;
+            const domain = research.domainOf(describeActionTarget(action, this._lastObservation));
+            return domain !== null && domain !== this._answerSiteDomain;
+          });
+          if (leaves && !siteFailed) {
+            this._siteFirstSendBacks += 1;
+            this._proposalFeedbackCode = "stay_on_task_site";
+            await this._store.append({ type: "note", payload: { kind: "site_first_sent_back", site: this._answerSiteDomain } });
+            continue;
+          }
+        }
+
         const coordinateActions = validated.kind === "actions"
           ? validated.actions.filter((action) => action.type === "click_at" || action.type === "type_at" || action.type === "press_key" || action.type === "play_loop")
           : [];
@@ -2430,6 +2580,17 @@ class TaskController {
             }
             continue; // the goal is not met: keep working, the planner is told why via context.progress.goalPersistence
           }
+          if (this._completionChecklist && !this._routineRunner) {
+            const check = this._completionChecklist({ kind: "finish", answer: "", goalText: this._goal?.originalRequest ?? "", observation: this._lastObservation, observedTexts: [...this._observedTexts.values()], observedUrls: [...this._observedTexts.keys()] });
+            if (!check.ok) {
+              await this._store.append({ type: "note", payload: { kind: "completion_checklist_failed", codes: check.failures.map((f) => f.code), rejected: this._completionRejected, on: "finish" } });
+              if (this._completionRejected < 2) {
+                this._completionRejected += 1;
+                this._repeatFeedback = { note: "completion_checklist_failed", guidance: check.failures.map((f) => f.guidance).join(" ") };
+                continue;
+              }
+            }
+          }
           // A routine's finish is scripted by the routine, not proposed by a planner, so there is no one to send it back to.
           if (!this._routineRunner && !completion.complete && this._criteriaStatus.size === 0 && this._finishEvidenceRejections < this._finishEvidenceBudget) {
             this._finishEvidenceRejections += 1;
@@ -2441,8 +2602,17 @@ class TaskController {
             await this._store.append({ type: "note", payload: { kind: "finish_rejected", reason: "no_evidence_recorded", rejections: this._finishEvidenceRejections } });
             continue;
           }
+          let refreshProblem = null;
+          if (this._finalRefresh && !this._routineRunner) {
+            refreshProblem = await this._refreshBeforeFinish();
+            if (refreshProblem && !this._finalRefreshRejected) {
+              this._finalRefreshRejected = true;
+              this._repeatFeedback = { note: "final_refresh_failed", guidance: `After reloading the final page it ${REFRESH_PROBLEM_TEXT[refreshProblem]}. The result is not in place yet: find out what happened and finish it, or report what is missing with need_user.` };
+              continue;
+            }
+          }
           this._leaveActive();
-          if (completion.complete) {
+          if (completion.complete && !refreshProblem) {
             this._task = { state: "completed", pauseReason: null };
             await this._revokeAllLeases("task_ended");
           } else {
@@ -2459,12 +2629,37 @@ class TaskController {
           // (bounded) so the chat can show it instead of a bare "paused".
           let reasonText = typeof validated.reason === "string" ? validated.reason.trim() : "";
           let reasonCap = 600;
+          let answerVerified = false;
+          const modelAnswer = reasonText; // the checklist reads what the model wrote, not the host's appended source block
           if (reasonText && this._isResearchTask()) {
             // A research answer reaches the person only after the host checked its sources.
             const review = await this._reviewResearchAnswer(reasonText);
             if (review.action === "retry") continue;
             reasonText = review.text;
             reasonCap = RESEARCH_REASON_CAP;
+            answerVerified = review.verified === true;
+          }
+          if (reasonText && this._completionChecklist) {
+            const check = this._completionChecklist({ answer: modelAnswer, goalText: this._goal?.originalRequest ?? "", observation: this._lastObservation, observedTexts: [...this._observedTexts.values()], observedUrls: [...this._observedTexts.keys()] });
+            if (!check.ok) {
+              await this._store.append({ type: "note", payload: { kind: "completion_checklist_failed", codes: check.failures.map((f) => f.code), rejected: this._completionRejected } });
+              // One send-back budget per answer, shared with the source check: two gates must not send the same answer back four times.
+              if (this._completionRejected + this._researchRejections < research.MAX_REJECTIONS) {
+                this._completionRejected += 1;
+                this._repeatFeedback = { note: "completion_checklist_failed", guidance: check.failures.map((f) => f.guidance).join(" ") };
+                continue;
+              }
+            }
+          }
+          if (!answerVerified && this._giveUpRefused < this._giveUpRefusals) {
+            // Nobody is there to help: keep working until the budget or the clock ends the task.
+            this._giveUpRefused += 1;
+            this._repeatFeedback = {
+              note: "give_up_refused",
+              guidance: "No person is available to answer. Do not stop to ask. Try another route, another site or another search, and report need_user only with an answer whose cited pages you opened.",
+            };
+            await this._store.append({ type: "note", payload: { kind: "give_up_refused", refused: this._giveUpRefused } });
+            continue;
           }
           this._needUserReason = reasonText ? reasonText.slice(0, reasonCap) : null;
           try { console.warn(`[task-controller] planner asked for the user task=${this._goal?.taskId ?? "?"} reason=${JSON.stringify(this._needUserReason)}`); } catch {}
@@ -2619,10 +2814,33 @@ class TaskController {
     return { observation: this._lastObservation, screenTargets: this._screenTargets, computerUse: hasComputerUseAdapter(this._store.taskProfile), userText };
   }
 
+  // Reloads the page the task ended on and observes it again. Returns null when it still loads as the
+  // same page, or why it does not: the person sees this re-checked page, not the model's word.
+  async _refreshBeforeFinish() {
+    const before = this._lastObservation;
+    const url = typeof before?.url === "string" ? before.url : "";
+    if (!/^https?:\/\//i.test(url)) return null;
+    let after = null;
+    try {
+      const result = await this._browser.execute({ type: "navigate", url });
+      if (result?.status === "ok") after = await this._browser.observe();
+    } catch { after = null; }
+    const afterUrl = typeof after?.url === "string" ? after.url : "";
+    const problem = !after ? "refresh_failed"
+      : (Number(after.httpStatus) >= 400 || afterUrl.startsWith("chrome-error://")) ? "error_page"
+      : looksLikeCaptcha(afterUrl, after.title) ? "blocked"
+      : research.normalizeUrl(afterUrl) !== research.normalizeUrl(url) ? "redirected"
+      : null;
+    if (after) this._lastObservation = after;
+    this._finalCheck = { url: (afterUrl || url).slice(0, 2048), title: String(after?.title ?? "").slice(0, 200), checkedAt: new Date().toISOString(), problem };
+    await this._store.append({ type: "note", payload: { kind: "final_refresh", ...this._finalCheck } });
+    return problem;
+  }
+
   // Source-grounded research (capability "research"): the host, not the model, decides which sources
   // an answer may cite. See research-sources.js.
   _isResearchTask() {
-    return this._store.taskProfile?.capability?.id === "research";
+    return this._groundAnswers || this._store.taskProfile?.capability?.id === "research";
   }
 
   async _hydrateResearchLedger() {
@@ -2667,13 +2885,14 @@ class TaskController {
   async _reviewResearchAnswer(answer) {
     const ledger = await this._hydrateResearchLedger();
     if (ledger.size === 0 && research.extractCitedUrls(answer).length === 0) return { action: "deliver", text: answer };
-    const check = research.checkAnswer(answer, ledger);
+    const fromAnswerSite = this._answerSiteDomain !== null && research.extractCitedUrls(answer).some((u) => research.domainOf(u) === this._answerSiteDomain);
+    const check = research.checkAnswer(answer, ledger, fromAnswerSite ? { minDomains: 1 } : {});
     if (check.ok) {
       await this._store.append({ type: "note", payload: { kind: "research_answer_checked", sources: check.verified.length, sites: check.independentSites } });
       this._researchFeedback = null;
-      return { action: "deliver", text: answer + research.sourcesBlock(check.verified) };
+      return { action: "deliver", verified: true, text: answer + research.sourcesBlock(check.verified) };
     }
-    if (this._researchRejections < research.MAX_REJECTIONS) {
+    if (this._researchRejections + this._completionRejected < research.MAX_REJECTIONS) {
       this._researchRejections += 1;
       this._researchFeedback = { reasons: check.reasons, unopenedUrls: check.unverified.slice(0, 5).map((u) => u.slice(0, 200)) };
       await this._store.append({ type: "note", payload: { kind: "research_answer_rejected", reasons: check.reasons, unopened: check.unverified.length, sites: check.independentSites } });
@@ -2709,6 +2928,30 @@ class TaskController {
     return verdict;
   }
 
+  // Stops an action the planner keeps repeating: the same one that failed the same way too often, or one kind (find_text
+  // with a new phrase each time) used too often lately. Returns null to run it, else the loop outcome after telling the planner.
+  async _repeatGuard(action) {
+    if (!(this._repeatFailureLimit > 0)) return null;
+    const family = actionFamily(action);
+    let guidance = null;
+    let blockedFamily = null;
+    if (family && this._familyWindow.filter((f) => f === family).length >= FAMILY_BLOCK) {
+      blockedFamily = family;
+      guidance = `You have used ${family} many times in the last few actions without getting further, so this one was not run. Take a different route: another link or section of the site, a page you have not opened, or report what you found.`;
+    } else if ((this._repeatFailures.get(repeatActionKey(action)) ?? 0) >= this._repeatFailureLimit) {
+      guidance = "This exact action already failed repeatedly with the same error and was not run again. Change the target, the approach or the page, or report need_user.";
+    }
+    if (!guidance) return null;
+    this._repeatBlocked += 1;
+    this._repeatFeedback = { note: "repeat_blocked", actionType: action.type, guidance };
+    await this._store.append({ type: "note", payload: { kind: "repeat_blocked", actionType: action.type, ...(blockedFamily ? { family: blockedFamily } : {}), blocked: this._repeatBlocked } });
+    if (this._repeatBlocked >= REPEAT_BLOCK_PAUSE) {
+      await this._pauseWith("no_progress");
+      return "stop_loop";
+    }
+    return "continue";
+  }
+
   async _dispatchActionsBatch(proposal, epoch) {
     if (this._batchReadOnlyActions && proposal.actions.length > 1 && proposal.actions.every((action) => isReadOnlyAction(action.type))) {
       const outcome = await this._dispatchReadOnlyBatch(proposal, epoch);
@@ -2733,20 +2976,8 @@ class TaskController {
         await this._store.append({ type: "note", payload: { kind: "invalid_action", actionType: String(action?.type).slice(0, 40), errorCode: "action_safety_undeclared" } });
         continue;
       }
-      if (this._repeatFailureLimit > 0 && (this._repeatFailures.get(repeatActionKey(action)) ?? 0) >= this._repeatFailureLimit) {
-        this._repeatBlocked += 1;
-        this._repeatFeedback = {
-          note: "repeat_blocked",
-          actionType: action.type,
-          guidance: "This exact action already failed repeatedly with the same error and was not run again. Change the target, the approach or the page, or report need_user.",
-        };
-        await this._store.append({ type: "note", payload: { kind: "repeat_blocked", actionType: action.type, blocked: this._repeatBlocked } });
-        if (this._repeatBlocked >= REPEAT_BLOCK_PAUSE) {
-          await this._pauseWith("no_progress");
-          return "stop_loop";
-        }
-        return "continue";
-      }
+      const blocked = await this._repeatGuard(action);
+      if (blocked) return blocked;
       const privacy = safety.privacy;
       if (privacy) {
         // Secrets are typed by the person, never by the agent; nothing of the text is journaled.
@@ -2994,6 +3225,9 @@ class TaskController {
         await this._pauseForMemoryPressure(pressure);
         return "stop_loop";
       }
+      // A read-only batch ([find_text, observe]) must not slip past the repeat limits the one-action path enforces.
+      const blocked = await this._repeatGuard(actions[index]);
+      if (blocked) return blocked;
       const descriptor = this._describeAction(actions[index], randomUUID());
       const dispatched = await this._dispatchApprovedAndApplyTracked(proposal, descriptor, actions[index], epoch, {
         durable: index === actions.length - 1,
@@ -3059,7 +3293,15 @@ class TaskController {
       // against a page that has since redirected or navigated act on the
       // wrong document instead of failing closed with stale_document.
       const documentEpoch = this._lastObservation ? this._lastObservation.documentEpoch : null;
-      result = await this._browser.execute(action, { signal: undefined, documentEpoch, widenedBy });
+      // Native-app actions go to the OS adapter, which applies its own policy before any backend call.
+      if (typeof action.type === "string" && action.type.startsWith("os_")) {
+        result = !this._osComputerUse ? { status: "failed", errorCode: "os_unavailable" }
+          : action.type === "os_observe" ? await this._osComputerUse.observe()
+            : await this._osComputerUse.execute(action);
+        if (action.type === "os_observe" && result.observation) this._osObservation = result.observation;
+      } else {
+        result = await this._browser.execute(action, { signal: undefined, documentEpoch, widenedBy });
+      }
     } catch {
       // A rejected/timeout response cannot prove that the remote or local
       // browser did not apply the action. Keep action_started open so reload
@@ -3085,6 +3327,22 @@ class TaskController {
       this._lastActionNote = result.status === "ok" ? { type: action.type, target, succeeded: true } : { type: action.type, target, succeeded: false };
     } else {
       this._lastActionNote = undefined;
+    }
+    // An API reply is kept for the next planner turn and counts as read text, so the checklist can match
+    // a value to its source. It is page-derived: the planner is told so and the host never acts on it.
+    if (action.type === "http_get" && result.httpGet) {
+      this._apiResponse = { ...result.httpGet, text: String(result.httpGet.text ?? "").slice(0, 12000), authority: "untrusted_page_derived" };
+      this._observedTexts.delete(result.httpGet.url);
+      this._observedTexts.set(result.httpGet.url, String(result.httpGet.text ?? "").slice(0, 20000));
+      if (this._observedTexts.size > 40) this._observedTexts.delete(this._observedTexts.keys().next().value);
+      if (this._isResearchTask() && result.status === "ok") {
+        const ledger = await this._hydrateResearchLedger();
+        if (ledger.add({ url: result.httpGet.url, title: "API response", at: Date.now() })) {
+          await this._store.append({ type: "note", payload: { kind: "research_source", url: result.httpGet.url, title: "API response", at: Date.now() } });
+        }
+      }
+    } else if (action.type !== "http_get") {
+      this._apiResponse = undefined;
     }
     this._easyStreak = result.status === "ok" && ["navigate", "follow_link"].includes(action.type) ? this._easyStreak + 1 : 0;
     // durable:false: the NEXT action_started's own durable append (same
@@ -3125,6 +3383,36 @@ class TaskController {
       } else if (result.status === "ok") {
         this._repeatFailures.delete(repeatKey);
       }
+    }
+
+    // Dead ends that are the model's to route around: an element the host will not click, and re-opening the page that is already open.
+    if (result.action && !this._repeatFeedback) {
+      if (result.status === "failed" && result.errorCode === "unsupported_click") {
+        this._repeatFeedback = { note: "unsupported_click", actionType: result.action.type, guidance: "That element cannot be clicked (it is not a link or button). Look for a link or button inside or beside it, or open the page by its URL on the same site; do not retry the same click." };
+      } else if (result.action.type === "navigate" && result.status === "ok" && typeof result.action.url === "string") {
+        const navKey = result.action.url.replace(/#.*$/, "");
+        this._navCounts = this._navCounts ?? new Map();
+        const n = (this._navCounts.get(navKey) ?? 0) + 1;
+        this._navCounts.set(navKey, n);
+        if (n >= 2) this._repeatFeedback = { note: "navigate_repeat", actionType: "navigate", guidance: `You already opened ${navKey.slice(0, 120)} ${n} times. Reloading it shows the same page. Use what you already saw on it (scroll, find_text or follow a link on it), or report the answer you have with its source.` };
+      }
+    }
+
+    if (this._repeatFailureLimit > 0 && result.action) {
+      this._familyWindow.push(actionFamily(result.action));
+      if (this._familyWindow.length > FAMILY_WINDOW) this._familyWindow.shift();
+      const family = actionFamily(result.action);
+      if (family && this._familyWindow.filter((f) => f === family).length === FAMILY_WARN && !this._repeatFeedback) {
+        this._repeatFeedback = {
+          note: "repeat_family",
+          actionType: result.action.type,
+          guidance: `You have used ${family} ${FAMILY_WARN} times in the last few actions. If it is not getting you further, change approach now instead of trying another variant.`,
+        };
+      }
+    }
+
+    if (result.action?.type === "find_text" && typeof result.action.text === "string") {
+      this._textFocusQueries = [...this._textFocusQueries.filter((q) => q !== result.action.text), result.action.text.slice(0, 200)].slice(-4);
     }
 
     // Scrolling the same page again and again is a loop even when each scroll
@@ -3204,6 +3492,18 @@ class TaskController {
       return;
     }
 
+    // Different actions on a page that never changes (a blank or error page, the same results) evade the identical-action key above
+    // and each one costs a full planning call: stop that stall on its own, after one recovery attempt.
+    const pageKey = observationKey(this._lastObservation);
+    this._pageStall = pageKey === this._pageStall?.key ? { key: pageKey, count: this._pageStall.count + 1 } : { key: pageKey, count: 1 };
+    if (this._pageStallLimit > 0 && this._pageStall.count >= this._pageStallLimit) {
+      this._pageStall = { key: pageKey, count: 0 };
+      await this._store.append({ type: "note", payload: { msg: "page unchanged across many actions; recovering or pausing" } });
+      if (await this._tryRecover("no_progress", "page-stall")) { this._loopHint = true; return; }
+      await this._pauseWith("no_progress");
+      return;
+    }
+
     if (key === this._noProgress.lastKey) {
       this._noProgress.consecutive += 1;
     } else {
@@ -3225,8 +3525,27 @@ class TaskController {
 }
 
 // Errors that repeat identically when the same action is run again (the page or target is what is wrong).
-const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found"]);
+const DETERMINISTIC_FAILURES = new Set(["navigation_error", "option_not_found", "element_not_found", "locator_not_found", "locator_ambiguous", "not_checkable", "text_not_found", "http_get_not_allowed", "http_get_content_type", "invalid_http_get", "os_denied", "os_unavailable", "invalid_os_action", "os_stopped"]);
 const REPEAT_BLOCK_PAUSE = 3;
+// Consecutive dispatches that leave the observed page identical, whatever the actions were.
+const PAGE_STALL_LIMIT = 10;
+const REFRESH_PROBLEM_TEXT = {
+  refresh_failed: "could not be loaded again",
+  error_page: "came back as an error page",
+  blocked: "came back as a bot check",
+  redirected: "sent the browser to a different page",
+};
+// A kind of action that tends to loop. type is not one: a long form legitimately types many fields.
+const FAMILY_WINDOW = 12;
+const FAMILY_WARN = 3;
+const FAMILY_BLOCK = 5;
+function actionFamily(action) {
+  if (action?.type === "find_text") return "find_text";
+  if (action?.type === "submit_form") return "submit_form";
+  // Looking at an unchanged page again changes nothing (tumblr: 21 observes in a row on a page that already showed the answer).
+  if (action?.type === "observe") return "observe";
+  return null;
+}
 // Same action, ignoring the per-observation/per-request ids that change every turn.
 function repeatActionKey(action) {
   const { observationId, requestId, id, actionId, ...rest } = action ?? {};

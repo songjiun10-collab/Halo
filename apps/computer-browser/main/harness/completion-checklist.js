@@ -1,0 +1,107 @@
+"use strict";
+// Host-side completion checklist. The model proposes an answer; the host checks it against what the
+// browser actually showed before the answer counts as delivered. Each check returns a failure code
+// and a short instruction the planner can act on. Nothing here solves or bypasses a CAPTCHA.
+const { looksLikeCaptcha } = require("../../shared/captcha-heuristics");
+
+const BLOCK_TEXT = /access denied|forbidden|request blocked|verify you are human|enable javascript and cookies|unusual traffic|are you a robot|temporarily blocked/i;
+const GIVE_UP_ANSWER = /^(i (could not|couldn't|was unable|cannot|can't)|unable to|sorry|could not find|not found)\b/i;
+// A report that says in its opening that the task was not done (Korean answers included).
+const GIVE_UP_OPENING = /(못했|못한|못합니다|않았습니다|되지 않|할 수 없|알려\s?주시면|알려\s?주세요|could not|couldn't|unable to|cannot)/i;
+
+// An answer that ends by handing the question back to the person (a closing question or a list of options to choose from).
+const ASKS_USER_TAIL = /(할까요|드릴까요|될까요|괜찮을까요|원하시나요|어떻게 진행|진행할까요|would you like|shall i|do you want|should i|which (option|one) )[^]{0,160}\?\s*$/i;
+const OPTION_LIST = /\(1\)[^]{0,400}\(2\)[^]{0,400}\?\s*$/;
+function asksUser(text) { const t = String(text ?? "").trim(); return ASKS_USER_TAIL.test(t.slice(-260)) || OPTION_LIST.test(t.slice(-900)); }
+
+function numbersIn(text) {
+  const bare = String(text ?? "").replace(/https?:\/\/\S+/gi, " ");
+  const out = new Set();
+  for (const m of bare.matchAll(/\d[\d,]*(?:\.\d+)?/g)) {
+    const n = m[0].replace(/,/g, "");
+    if (n.replace(/\./g, "").length >= 2) out.add(n);
+  }
+  return out;
+}
+
+function pageIsBlocked(observation) {
+  if (!observation) return false;
+  if (looksLikeCaptcha(observation.url ?? "", observation.title ?? "")) return true;
+  if ([403, 429, 503].includes(Number(observation.httpStatus))) return true;
+  return BLOCK_TEXT.test(String(observation.text ?? "").slice(0, 600)) && String(observation.text ?? "").length < 1500;
+}
+
+const STOP = new Set(["find","show","search","look","get","what","which","who","when","where","how","list","check","open","go","the","a","an","i","if","on","in","at","for","to","and","or","of","with","from","by","is","are","can","please","browse","tell","compare","view","select","add","book","buy","set","use","do"]);
+
+// Conditions the task names outright: quoted text and capitalised names (numbers are thresholds, not text a page must show). Deterministic, so it
+// misses conditions written in plain words; it only holds the answer to the ones it can see.
+function conditionsIn(goalText) {
+  const text = String(goalText ?? "");
+  const out = new Set();
+  for (const m of text.matchAll(/["\u201c']([^"\u201d']{2,60})["\u201d']/g)) out.add(m[1].toLowerCase());
+  const words = text.split(/\s+/);
+  words.forEach((w, i) => {
+    const clean = w.replace(/[^\p{L}\p{N}-]/gu, "");
+    if (i === 0 || clean.length < 3 || !/^\p{Lu}/u.test(clean) || STOP.has(clean.toLowerCase())) return;
+    if (/^https?:/i.test(w) || /\.\w{2,}$/.test(w)) return;
+    out.add(clean.toLowerCase());
+  });
+  return [...out];
+}
+
+// Reward scoring (opt-in via minScore). Each satisfied item earns a point; hard failures (empty, gave up,
+// blocked page) always block. With minScore set, the answer is submitted once score >= minScore, and
+// below it the planner is told to investigate more. Without minScore every failure blocks, as before.
+const HARD = new Set(["answer_empty", "answer_gave_up", "final_page_blocked", "answer_asks_user", "official_not_cited"]);
+// Weights per item: the substantive evidence checks count more than form checks.
+const WEIGHTS = { answer: 1, notGaveUp: 1, pageOk: 1, valuesSeen: 3, conditionsSeen: 2, cites: 1, twoSites: 1 };
+const SCORE_MAX = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
+function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return null; } }
+function siteKey(host) { const p = host.split("."); return p.slice(-2).join("."); }
+
+// { ok, failures: [{ code, guidance }], score, max }
+function runChecklist({ answer, goalText = "", observation = null, observedTexts = [], observedUrls = [], kind = "answer", minScore = null }) {
+  const failures = [];
+  const text = typeof answer === "string" ? answer.trim() : "";
+  const finishing = kind === "finish";
+  if (finishing) { /* a finish carries no answer text: only the page checks apply */ }
+  else if (!text) failures.push({ code: "answer_empty", guidance: "Report an answer, not an empty message." });
+  else if (GIVE_UP_ANSWER.test(text) || GIVE_UP_OPENING.test(text.slice(0, 200))) failures.push({ code: "answer_gave_up", guidance: "The answer says nothing was found. Try another route, site or search before reporting." });
+  if (text && !finishing && asksUser(text)) failures.push({ code: "answer_asks_user", guidance: "No person is available to answer your question. Choose the most reasonable route yourself, keep working on the site, and report the result, not a question." });
+  if (pageIsBlocked(observation)) failures.push({ code: "final_page_blocked", guidance: "The current page is a block, error or challenge page. Leave it and use another route; it is not evidence for an answer." });
+  if (text) {
+    const seen = observedTexts.join("\n").replace(/,/g, "");
+    const exempt = numbersIn(goalText);
+    const missing = [...numbersIn(text)].filter((n) => !exempt.has(n) && !seen.includes(n));
+    if (missing.length > 0 && observedTexts.length > 0) {
+      failures.push({ code: "value_not_on_opened_pages", guidance: `These values in the answer appear on no page you opened: ${missing.slice(0, 5).join(", ")}. Open the page that shows them or correct the answer.` });
+    }
+  }
+  if ((text || finishing) && observedTexts.length > 0) {
+    const haystack = (observedTexts.join("\n") + "\n" + observedUrls.join("\n") + "\n" + (observation?.url ?? "")).toLowerCase().replace(/,/g, "");
+    const unseen = conditionsIn(goalText).filter((c) => !haystack.includes(c.replace(/,/g, "")));
+    if (unseen.length > 0) failures.push({ code: "condition_not_seen", guidance: `The task names ${unseen.slice(0, 5).map((c) => `"${c}"`).join(", ")}, which no page you opened shows. Apply that condition on the site and confirm it on screen before reporting.` });
+  }
+  // The task starts on a site; an answer that cites only other sites never read what that site itself says.
+  const startHost = observedUrls.length > 0 ? hostOf(observedUrls[0]) : null;
+  const citedHosts = [...text.matchAll(/https?:\/\/[^\s)\]>"']+/gi)].map((m) => hostOf(m[0])).filter(Boolean).map(siteKey);
+  if (text && !finishing && startHost && citedHosts.length > 0 && !citedHosts.includes(siteKey(startHost)) && !GIVE_UP_OPENING.test(text.slice(0, 200))) {
+    failures.push({ code: "official_not_cited", guidance: `The answer cites only third-party sites, not ${startHost}. Read the answer on ${startHost} itself: use its own search, menus, sitemap or another path on that site. Only if it truly cannot be read there, state that plainly in the answer.` });
+  }
+  const codes = new Set(failures.map((f) => f.code));
+  const sites = new Set(observedUrls.map(hostOf).filter(Boolean).map(siteKey));
+  const cites = /https?:\/\/\S+/i.test(text);
+  const score = (!codes.has("answer_empty") && (text || finishing) ? WEIGHTS.answer : 0) + (!codes.has("answer_gave_up") ? WEIGHTS.notGaveUp : 0)
+    + (!codes.has("final_page_blocked") ? WEIGHTS.pageOk : 0) + (!codes.has("value_not_on_opened_pages") ? WEIGHTS.valuesSeen : 0)
+    + (!codes.has("condition_not_seen") ? WEIGHTS.conditionsSeen : 0) + (cites || finishing ? WEIGHTS.cites : 0) + (sites.size >= 2 ? WEIGHTS.twoSites : 0);
+  if (Number.isInteger(minScore) && minScore > 0) {
+    const hard = failures.filter((f) => HARD.has(f.code));
+    if (hard.length > 0) return { ok: false, failures: hard, score, max: SCORE_MAX };
+    if (score >= minScore) return { ok: true, failures: [], score, max: SCORE_MAX };
+    const soft = failures.length > 0 ? failures : [{ code: "score_below_threshold", guidance: "Evidence is thin: cite the page you read and confirm it on a second independent site before answering." }];
+    return { ok: false, failures: soft.map((f) => ({ ...f, guidance: `${f.guidance} (checklist score ${score}/${SCORE_MAX}, need ${minScore}; investigate more)` })), score, max: SCORE_MAX };
+  }
+  return { ok: failures.length === 0, failures, score, max: SCORE_MAX };
+}
+
+module.exports = { asksUser, conditionsIn, runChecklist, pageIsBlocked, numbersIn, WEIGHTS, SCORE_MAX };

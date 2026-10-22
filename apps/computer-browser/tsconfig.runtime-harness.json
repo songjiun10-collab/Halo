@@ -59,6 +59,7 @@
     "runtime-src/main/harness/computer-use-observation.ts",
     "runtime-src/main/harness/turn-memory-preparation.ts",
     "runtime-src/main/harness/private-network.ts",
+    "runtime-src/main/harness/os-policy.ts",
     "runtime-src/main/harness/card-blind.ts",
     "runtime-src/main/harness/capability-lease.ts",
     "runtime-src/main/harness/permission-policy.ts",

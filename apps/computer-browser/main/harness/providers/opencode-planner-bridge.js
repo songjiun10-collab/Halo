@@ -18,6 +18,8 @@ class OpenCodePlannerError extends Error {
 }
 
 const MODEL_ID = "opencode-default";
+// Models the host may select by name through the user's own OpenCode login; anything else is refused.
+const EXTRA_MODEL_IDS = Object.freeze(["nvidia/deepseek-ai/deepseek-v4.1-flash"]);
 const AGENT_ID = "halo-planner";
 const MAX_OUTPUT_BYTES = MAX_CLI_STDOUT_BYTES;
 const ENV_ALLOWLIST = Object.freeze(["PATH", "HOME", "LANG", "TZ", "TMPDIR"]);
@@ -41,7 +43,7 @@ const RESTRICTED_CONFIG = Object.freeze({
   },
 });
 
-function buildOpenCodeEnv({ workDir, baseEnv = process.env } = {}) {
+function buildOpenCodeEnv({ workDir, baseEnv = process.env, model = MODEL_ID } = {}) {
   if (typeof workDir !== "string" || !path.isAbsolute(workDir)) {
     throw new OpenCodePlannerError("invalid_config", "OpenCode work directory must be an absolute path");
   }
@@ -49,7 +51,7 @@ function buildOpenCodeEnv({ workDir, baseEnv = process.env } = {}) {
   for (const key of ENV_ALLOWLIST) {
     if (typeof baseEnv[key] === "string") env[key] = baseEnv[key];
   }
-  env.OPENCODE_CONFIG_CONTENT = JSON.stringify(RESTRICTED_CONFIG);
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify(model === MODEL_ID ? RESTRICTED_CONFIG : { ...RESTRICTED_CONFIG, model });
   env.OPENCODE_CONFIG_DIR = path.join(workDir, "config");
   env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
   fs.mkdirSync(env.OPENCODE_CONFIG_DIR, { recursive: false, mode: 0o700 });
@@ -104,7 +106,7 @@ function parseOpenCodeEvents(stdout, { room = false } = {}) {
 
 class OpenCodePlannerBridge {
   constructor({ command, model = MODEL_ID, spawnFn } = {}) {
-    if (model !== MODEL_ID) throw new OpenCodePlannerError("invalid_model", "model is not an allowlisted OpenCode model");
+    if (model !== MODEL_ID && !EXTRA_MODEL_IDS.includes(model)) throw new OpenCodePlannerError("invalid_model", "model is not an allowlisted OpenCode model");
     this._command = command ?? resolveOpenCodeCommand();
     this._spawnFn = spawnFn || nodeSpawn;
     this._lastUsage = null;
@@ -114,7 +116,7 @@ class OpenCodePlannerBridge {
     this._workDir = fs.mkdtempSync(path.join(os.tmpdir(), "halo-opencode-planner-"));
     fs.chmodSync(this._workDir, 0o700);
     try {
-      this._env = buildOpenCodeEnv({ workDir: this._workDir });
+      this._env = buildOpenCodeEnv({ workDir: this._workDir, model });
     } catch (error) {
       fs.rmSync(this._workDir, { recursive: true, force: true });
       throw error;
@@ -133,7 +135,7 @@ class OpenCodePlannerBridge {
     }
     const room = isRoomTurn(context);
     const prompt = room ? buildRoomPrompt(context, null) : buildPrompt(context, null);
-    const args = Object.freeze(["--standalone", "run", "--format", "json", "--agent", AGENT_ID]);
+    const args = Object.freeze(["run", "--standalone", "--format", "json", "--agent", AGENT_ID]);
 
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -222,4 +224,4 @@ class OpenCodePlannerBridge {
   }
 }
 
-module.exports = { OpenCodePlannerBridge, OpenCodePlannerError, buildOpenCodeEnv, parseOpenCodeEvents, resolveOpenCodeCommand, RESTRICTED_CONFIG, MODEL_ID, AGENT_ID, MAX_OUTPUT_BYTES };
+module.exports = { OpenCodePlannerBridge, OpenCodePlannerError, buildOpenCodeEnv, parseOpenCodeEvents, resolveOpenCodeCommand, RESTRICTED_CONFIG, MODEL_ID, EXTRA_MODEL_IDS, AGENT_ID, MAX_OUTPUT_BYTES };

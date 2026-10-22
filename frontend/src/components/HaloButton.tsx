@@ -12,7 +12,7 @@ export function HaloButton({ unseen, open, onToggle }: Props) {
   return (
     <button className="hx-halo" aria-label={label} aria-keyshortcuts="Control+Shift+. Meta+Shift+." aria-expanded={open} aria-controls="hx-chat" onClick={onToggle}>
       <HaloMark className="hx-halo__mark" />
-      <span className="hx-halo__tip" aria-hidden="true">{unseen ? `Halo Chat · ${unseen} new` : 'Halo Chat'}</span>
+      <span className="hx-halo__label" aria-hidden="true">Halo</span>
       {unseen > 0 && <span className="hx-halo__badge num" aria-hidden="true">{unseen}</span>}
     </button>
   )

@@ -46,10 +46,17 @@ const HEADING_RESERVE = 40; // extra headings kept after MAX_ELEMENTS is reached
 const VIEWPORT_RESERVE = 40;
 const MAX_TEXT_BYTES = 12 * 1024; // section 6: "text 12 KiB"
 // A PDF tab shows nothing to page scripts, so its text comes from the file.
+const FULL_PAGE_TEXT_BYTES = 36 * 1024;
 const MAX_PDF_TEXT_BYTES = 2 * MAX_TEXT_BYTES;
 const { extractPdfText, formatPdfObservationText, looksLikePdfUrl } = require("./pdf-text");
 const { isPrivateHost } = require("./private-network");
 const NAVIGATION_TIMEOUT_MS = 30000; // matches control-api.js's existing bound
+// How long a loaded but still empty page is given to draw itself (see _waitForContent).
+const CONTENT_WAIT_MS = 6000;
+const CONTENT_POLL_MS = 250;
+// Text length plus control count of the page body; 0 means nothing drawn yet.
+const CONTENT_PROBE_SCRIPT = `/* __haloContentProbe */ (() => { const b = document.body; if (!b) return 0;
+  return (b.innerText || "").trim().length + b.querySelectorAll("a[href],button,input,select,textarea").length; })()`;
 const { randomUUID } = require("node:crypto");
 const INTERACTION_WORLD_ID = 1001;
 const MAX_INPUT_BYTES = 4096;
@@ -115,7 +122,22 @@ const MAX_OPTION_LABEL = 120;
 const SHOWN_OPTION_LABEL = 60;
 const INTERACTION_ACTIONS = new Set(["click", "type", "select_option", "submit_form"]);
 const MAX_FIND_TEXT = 200;
-const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find_text", "observe", "click_at", "type_at", "press_key", "play_loop", ...INTERACTION_ACTIONS]);
+// http_get: a keyless, cookieless read of a site's own public API. Bounded in bytes, time and hops.
+const HTTP_GET_MAX_URL = 2000;
+const HTTP_GET_MAX_BYTES = 256 * 1024;
+const HTTP_GET_PLANNER_CHARS = 12 * 1024;
+const HTTP_GET_TIMEOUT_MS = 10000;
+const HTTP_GET_MAX_REDIRECTS = 3;
+const HTTP_GET_TYPES = /^(application\/(json|[\w.+-]+\+json|xml|[\w.+-]+\+xml|ld\+json)|text\/(plain|xml|csv|html))\b/i;
+// Two labels, or three under a country second-level suffix (co.uk, com.au ...): the site a name belongs to.
+function siteOf(hostname) {
+  const labels = String(hostname).toLowerCase().replace(/\.$/, "").split(".");
+  if (labels.length <= 2) return labels.join(".");
+  const second = labels[labels.length - 2];
+  const take = labels[labels.length - 1].length === 2 && ["co", "com", "org", "net", "gov", "ac", "ne", "or", "go"].includes(second) ? 3 : 2;
+  return labels.slice(-take).join(".");
+}
+const SUPPORTED_ACTIONS = new Set(["navigate", "follow_link", "scroll", "find_text", "http_get", "observe", "click_at", "type_at", "press_key", "play_loop", ...INTERACTION_ACTIONS]);
 
 // Runs in the host's isolated world on every pass of play_loop. For each lane it reads one pixel of the largest
 // canvas (the lane's point is in viewport fractions, like a click) and says whether it is within `tolerance` of the
@@ -174,6 +196,7 @@ class BrowserAdapterError extends Error {
 // (2026-09-27 follow-up; see test/browser-adapter.test.js's vm-based
 // regression test that runs this exact script string against a fake DOM).
 function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding = null) {
+  const textReserve = Math.min(6 * 1024, Math.floor(maxTextBytes / 4));
   return `(() => {
     const included = new WeakMap();
     const elements = [];
@@ -189,6 +212,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
     };
     const root = document.body || document.documentElement;
     let textBytes = 0;
+    let textTruncated = false;
     let visited = 0;
     const clean = (value, max) => (typeof value === "string" ? value : "").replace(/\\s+/g, " ").trim().slice(0, max);
     const roleOf = (node) => {
@@ -251,9 +275,15 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       }
       return bytes;
     };
+    // aria-hidden hides a subtree from the planner, except a control a person can plainly see and click: sites
+    // put aria-hidden on panes that stay on screen (medicare.gov's open autocomplete marks its own suggestions and
+    // the Search button), and a person would use them. Text and decoration under aria-hidden stay out.
+    const CONTROL_ROLES = new Set(["button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "treeitem", "textbox", "searchbox", "combobox"]);
     const hidden = (node) => {
+      let ariaHidden = false;
       for (let current = node; current; current = current.parentElement) {
-        if (current.hasAttribute?.("hidden") || current.getAttribute("hidden") !== null || current.getAttribute("aria-hidden") === "true") return true;
+        if (current.hasAttribute?.("hidden") || current.getAttribute("hidden") !== null) return true;
+        if (current.getAttribute("aria-hidden") === "true") ariaHidden = true;
       }
       let display = "";
       if (typeof getComputedStyle === "function") {
@@ -262,6 +292,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
         if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return true;
       }
       if (display !== "contents" && typeof node.getClientRects === "function" && node.getClientRects().length === 0) return true;
+      if (ariaHidden) return !(CONTROL_ROLES.has(roleOf(node)) && visibleOnTop(node));
       return false;
     };
     const formInfo = (node) => {
@@ -292,8 +323,10 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       }
       return false;
     };
-    const onTop = (candidate) => {
-      if (hidden(candidate)) return false;
+    const onTop = (candidate) => !hidden(candidate) && visibleOnTop(candidate);
+    // Not faded out, at least partly in the viewport, and what a click at its centre would hit.
+    const visibleOnTop = (candidate) => {
+      if (typeof document.elementFromPoint !== "function") return false;
       for (let current = candidate; current && current.nodeType === 1; current = current.parentElement || current.getRootNode().host) {
         if (Number(getComputedStyle(current).opacity) === 0) return false;
       }
@@ -357,12 +390,17 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
           // A visible leaf represented by its accessible name does not also
           // consume the free-text channel. This avoids sending button/link/
           // heading labels twice while preserving unstructured page copy.
-          if (ownText && !(name && name === ownText) && textBytes < ${maxTextBytes}) {
+          if (ownText && !(name && name === ownText)) {
+            // Scrolled: the last TEXT_RESERVE bytes of the text budget are kept for copy that is on screen, so
+            // scrolling to a section brings its text in even when the top of a long page used up the rest.
+            const textCap = scrolled && textBytes >= ${maxTextBytes} - ${textReserve} && !onScreen(node) ? ${maxTextBytes} - ${textReserve} : ${maxTextBytes};
             const encoded = (textParts.length ? " " : "") + ownText;
             const encodedBytes = utf8Length(encoded);
-            if (textBytes + encodedBytes <= ${maxTextBytes}) {
+            if (textBytes < textCap && textBytes + encodedBytes <= textCap) {
               textParts.push(ownText);
               textBytes += encodedBytes;
+            } else {
+              textTruncated = true;
             }
           }
           if (shouldInclude && withinCap) {
@@ -433,6 +471,7 @@ function buildObserveScript(maxNodesVisited, maxElements, maxTextBytes, binding 
       title: document.title || "",
       text: textParts.join(" ").slice(0, ${maxTextBytes}),
       elements,
+      ...(textTruncated ? { textTruncated: true } : {}),
       ...(modal ? { modalOpen: true } : {}),
     };
   })()`;
@@ -452,9 +491,13 @@ class BrowserAdapter {
     permissionMode = "browse",
     assignedOrigin,
     blockPrivateNetwork = false,
+    contentWaitMs = CONTENT_WAIT_MS,
+    contentPollMs = CONTENT_POLL_MS,
   } = {}) {
     if (!view) throw new BrowserAdapterError("invalid_config", "view is required");
     this._view = view;
+    this._contentWaitMs = Number.isFinite(contentWaitMs) && contentWaitMs >= 0 ? contentWaitMs : CONTENT_WAIT_MS;
+    this._contentPollMs = Number.isFinite(contentPollMs) && contentPollMs > 0 ? contentPollMs : CONTENT_POLL_MS;
     this._scrollTimeoutMs = Number.isFinite(scrollTimeoutMs) && scrollTimeoutMs > 0 ? scrollTimeoutMs : 5000;
     if (!PERMISSION_MODES.includes(permissionMode)) throw new BrowserAdapterError("invalid_permission_mode", "permissionMode is invalid");
     this._permissionMode = permissionMode;
@@ -486,7 +529,10 @@ class BrowserAdapter {
     this._pendingInteraction = null;
     this._maxNodesVisited = typeof maxNodesVisited === "number" ? maxNodesVisited : MAX_NODES_VISITED;
     this._maxElements = typeof maxElements === "number" ? maxElements : MAX_ELEMENTS;
-    this._maxTextBytes = typeof maxTextBytes === "number" ? maxTextBytes : MAX_TEXT_BYTES;
+    // HALO_FULL_PAGE_TEXT=1 widens the one-look text window (still well under
+    // the 64 KiB context packet) so the model sees the whole page at once.
+    const envText = process.env.HALO_FULL_PAGE_TEXT === "1" ? FULL_PAGE_TEXT_BYTES : MAX_TEXT_BYTES;
+    this._maxTextBytes = typeof maxTextBytes === "number" ? maxTextBytes : envText;
     // Observation IDs cross task/view boundaries in the host. Per-adapter
     // counters collide (every fresh view starts at obs-0-1), which can bind a
     // visual attachment to another task's observation. Use an unguessable,
@@ -826,6 +872,7 @@ class BrowserAdapter {
       ...(playLoop ? { playLoop } : {}),
       // A modal dialog is open: only it (and what contains it) is listed, because the page behind it cannot be used.
       ...(raw.modalOpen === true ? { modalOpen: true } : {}),
+      ...(raw.textTruncated === true ? { textTruncated: true } : {}),
       // Only error responses are surfaced, so ordinary observations stay unchanged.
       ...(this._lastHttpStatus >= 400 ? { httpStatus: this._lastHttpStatus } : {}),
       elements: trimContainerNames(raw.elements.map((el, index) => {
@@ -1024,7 +1071,8 @@ class BrowserAdapter {
     // document, so a caller-supplied documentEpoch that no longer matches
     // means the proposal was based on a page that has since navigated away
     // -- reject without executing rather than act on stale context.
-    if (action.type !== "navigate" && documentEpoch != null && documentEpoch !== this._documentEpoch) {
+    // An explicit observe re-reads whatever is loaded now, so a moved page cannot make it act on stale context.
+    if (action.type !== "navigate" && action.type !== "observe" && documentEpoch != null && documentEpoch !== this._documentEpoch) {
       return { status: "cancelled", errorCode: "stale_document" };
     }
 
@@ -1047,6 +1095,8 @@ class BrowserAdapter {
         return this._scroll(action.direction, action.amount);
       case "find_text":
         return this._findText(action.text);
+      case "http_get":
+        return this._httpGet(action.url, { signal });
       case "observe":
         try {
           const observation = await this.observe({ signal });
@@ -1270,7 +1320,7 @@ class BrowserAdapter {
             if (!valid()) return failed("stale_element");
             started = true; HTMLFormElement.prototype.requestSubmit.call(form, submitter);
           } else {
-            const allowed = ["button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "textbox", "searchbox", "combobox"];
+            const allowed = ["button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "treeitem", "textbox", "searchbox", "combobox"];
             if (!allowed.includes(state.nodes[Number(action.elementId)].node.getAttribute("role") || ${JSON.stringify(entry.role)}) ||
                 (node.tagName === "INPUT" && ["file", "password"].includes((node.getAttribute("type") || "").toLowerCase())) || node.hasAttribute("download")) return failed("unsupported_click");
             const info = state.formInfo(node);
@@ -1341,6 +1391,7 @@ class BrowserAdapter {
     if (pin?.violated) {
       return { status: "failed", errorCode: "widened_origin_mismatch" };
     }
+    if (outcome.outcome === "ok" && mySeq === this._navSeq) await this._waitForContent(wc, mySeq);
     // Cross-event isolation: if a NEWER navigate() call has already started
     // since this one's load settled/timed out, this call's result must not
     // retroactively bump the epoch or be reported as authoritative -- the
@@ -1363,6 +1414,28 @@ class BrowserAdapter {
       return { status: "failed", errorCode: "navigation_timeout" };
     }
     return { status: "failed", errorCode: "navigation_error" };
+  }
+
+  // Some pages fire load on an empty shell and draw their content a few
+  // seconds later (medicare.gov/care-compare: nothing at 1.5s, 63 elements at
+  // 4.5s). Observing at load hands the planner a blank page, so wait -- up to
+  // contentWaitMs -- until the body has text or a control. Only an answer of
+  // exactly 0 keeps waiting: an error or any other answer ends the wait, and
+  // a page that stays empty is still reported as loaded.
+  async _waitForContent(wc, mySeq) {
+    const deadline = this._now() + this._contentWaitMs;
+    while (mySeq === this._navSeq && !this._disposed) {
+      let amount;
+      try {
+        amount = typeof wc.executeJavaScriptInIsolatedWorld === "function"
+          ? await wc.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD_ID, [{ code: CONTENT_PROBE_SCRIPT }], false)
+          : await wc.executeJavaScript(CONTENT_PROBE_SCRIPT, true);
+      } catch {
+        return;
+      }
+      if (amount !== 0 || this._now() >= deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, this._contentPollMs));
+    }
   }
 
   // Races loadURL() against a timer, exactly as control-api.js's
@@ -1441,8 +1514,31 @@ class BrowserAdapter {
         count += 1;
         if (!first) first = parent;
       }
-      if (first) first.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
-      return { found: !!first, count };
+      if (first) { first.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" }); return { found: true, count }; }
+      // No single text node holds the whole phrase (it spans tags, or the words are not next to each other):
+      // fall back to the smallest visible element that contains every word of it, and say so.
+      const words = needle.split(" ").filter((w) => w.length >= 2);
+      if (words.length < 2 || !document.body) return { found: false, count: 0 };
+      const norm = (el) => (el.textContent || "").replace(/\\s+/g, " ").toLowerCase();
+      const hasAll = (el) => { const t = norm(el); return words.every((w) => t.includes(w)); };
+      if (!hasAll(document.body)) return { found: false, count: 0 };
+      let node = document.body;
+      for (let descend = true; descend;) {
+        descend = false;
+        for (const child of node.children) {
+          if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(child.tagName)) continue;
+          if (hasAll(child)) { node = child; descend = true; break; }
+        }
+      }
+      for (let el = node; el && el !== document.body; el = el.parentElement) {
+        const box = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        if (box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none") {
+          el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+          return { found: true, count: 1, approx: true };
+        }
+      }
+      return { found: false, count: 0 };
     })()`;
     let timer;
     try {
@@ -1451,11 +1547,74 @@ class BrowserAdapter {
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("find_text timed out")), this._scrollTimeoutMs); }),
       ]);
       if (!found || found.found !== true) return { status: "failed", errorCode: "text_not_found" };
-      return { status: "ok", matchCount: Number.isInteger(found.count) ? found.count : 1 };
+      return { status: "ok", matchCount: Number.isInteger(found.count) ? found.count : 1, ...(found.approx === true ? { matchKind: "all_words_in_element" } : {}) };
     } catch (error) {
       return { status: "failed", errorCode: "find_text_failed" };
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  // GET a public API of the site the person is on. Same site only (api.x.com from x.com), https only, no
+  // cookies, no credentials, no private addresses, and every redirect is judged again. The reply is data:
+  // it is shown to the planner as untrusted page content and never acted on by the host.
+  async _httpGet(rawUrl, { signal } = {}) {
+    if (typeof rawUrl !== "string" || rawUrl.length === 0 || rawUrl.length > HTTP_GET_MAX_URL) return { status: "failed", errorCode: "invalid_http_get" };
+    const wc = this._view.webContents;
+    let pageHost;
+    try { pageHost = new URL(typeof wc.getURL === "function" ? wc.getURL() : "").hostname; } catch { return { status: "failed", errorCode: "http_get_no_page" }; }
+    const site = siteOf(pageHost);
+    const allowed = (candidate) => candidate.protocol === "https:" && !candidate.username && !candidate.password &&
+      !isPrivateHost(candidate.hostname) && siteOf(candidate.hostname) === site;
+    let target;
+    try { target = new URL(rawUrl); } catch { return { status: "failed", errorCode: "invalid_http_get" }; }
+    if (!allowed(target)) return { status: "failed", errorCode: "http_get_not_allowed" };
+    if (typeof fetch !== "function") return { status: "failed", errorCode: "unsupported_action" };
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (signal) { if (signal.aborted) return { status: "cancelled", errorCode: "aborted" }; signal.addEventListener("abort", onAbort, { once: true }); }
+    const timer = setTimeout(() => controller.abort(), HTTP_GET_TIMEOUT_MS);
+    try {
+      let response;
+      for (let hop = 0; ; hop += 1) {
+        response = await fetch(target.href, {
+          method: "GET", redirect: "manual", credentials: "omit", signal: controller.signal,
+          headers: { accept: "application/json, text/plain;q=0.8, */*;q=0.1" },
+        });
+        if (response.status < 300 || response.status >= 400) break;
+        const location = response.headers.get("location");
+        if (!location || hop >= HTTP_GET_MAX_REDIRECTS) return { status: "failed", errorCode: "http_get_redirect" };
+        let next;
+        try { next = new URL(location, target); } catch { return { status: "failed", errorCode: "http_get_redirect" }; }
+        if (!allowed(next)) return { status: "failed", errorCode: "http_get_not_allowed" };
+        target = next;
+      }
+      const contentType = response.headers.get("content-type") || "";
+      if (!HTTP_GET_TYPES.test(contentType)) return { status: "failed", errorCode: "http_get_content_type" };
+      const chunks = [];
+      let size = 0;
+      let truncated = false;
+      const reader = response.body?.getReader?.();
+      if (!reader) return { status: "failed", errorCode: "http_get_failed" };
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > HTTP_GET_MAX_BYTES) { truncated = true; await reader.cancel().catch(() => {}); break; }
+        chunks.push(value);
+      }
+      const text = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+      const clipped = text.length > HTTP_GET_PLANNER_CHARS;
+      return {
+        status: response.status >= 200 && response.status < 300 ? "ok" : "failed",
+        ...(response.status >= 200 && response.status < 300 ? {} : { errorCode: "http_get_status" }),
+        httpGet: { url: target.href, httpStatus: response.status, contentType: contentType.split(";")[0].trim(), text: text.slice(0, HTTP_GET_PLANNER_CHARS), truncated: truncated || clipped },
+      };
+    } catch (error) {
+      return { status: "failed", errorCode: signal?.aborted ? "aborted" : "http_get_failed" };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
     }
   }
 

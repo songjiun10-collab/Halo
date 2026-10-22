@@ -421,64 +421,6 @@ export default function App() {
       <h1 className="hx-sr">HALO</h1>
       <p className="hx-sr" role="status" aria-live="polite">{announcement(s, notice)}</p>
       <div className="hx-window">
-        <header className="hx-chrome" inert={overviewOpen || !!approval}>
-          <Toolbar
-            folded={folded}
-            tab={tab}
-            locked={!canNavigate(s)}
-            omniRef={omniRef}
-            onBack={() => void store.navigate({ type: 'back' })}
-            onForward={() => void store.navigate({ type: 'forward' })}
-            onReload={() => void store.reloadPage()}
-            onStop={() => void store.stopPage()}
-            onZoomReset={() => void store.zoomPage('reset')}
-            onShare={onShare}
-            onOverview={toggleOverview}
-            onActivity={toggleActivity}
-            onNavigate={(url) => void store.navigate({ type: 'navigate', url })}
-            onAsk={onSendMessage}
-            onSettings={toggleSettings}
-            sidebarOpen={sidebarOpen}
-            onToggleSidebar={() => setSidebarOpen((open) => !open)}
-            controller={
-              <>
-                <ControllerChip
-                  control={s.control}
-                  finished={s.finished}
-                  recoveryReason={s.recoveryReason}
-                  onTakeOver={() => void store.control('takeOver')}
-                  onResume={() => void store.control('resume', s.recoveryReason === 'execution_uncertain')}
-                  awaitingReview={s.snapshot?.state === 'awaiting_verification' && pendingCriteria(s).length > 0}
-                  onReview={openChat}
-                />
-                <LeaseChip leases={leases} now={leaseNow} agent={AGENT} onRevoke={(id) => void store.revokeLease(id)} />
-              </>
-            }
-              halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
-            />
-          {tab.dialog && !s.activeTaskId && (
-            <PageDialog
-              key={`${tab.id}:${tab.dialog.type}:${tab.dialog.message}`}
-              dialog={tab.dialog}
-              onAnswer={(accept, text) => void store.answerDialog(accept, text)}
-            />
-          )}
-          {findFor === tab.id && !s.activeTaskId && (
-            <FindBar
-              onFind={(query, backwards) => store.findText(query, backwards)}
-              onClose={() => { setFindFor(null); void store.clearFind() }}
-            />
-          )}
-          {tabLayout === 'horizontal' && <TabStrip
-            tabs={tabsForDisplay}
-            activeTabId={tab.id}
-            canClose={(candidate) => !s.activeTaskId && tabsForDisplay.length > 1 && candidate.id !== 'home'}
-            onSelect={(id) => void store.selectBrowserTab(id)}
-            onClose={(id) => void store.closeBrowserTab(id)}
-            canCreate={!s.activeTaskId}
-            onNew={() => { void store.newBrowserTab() }}
-          />}
-        </header>
         <div className="hx-window-row hx-workspace">
           <WorkspaceSidebar
             tasks={s.tasks}
@@ -503,8 +445,69 @@ export default function App() {
             onSelectTab={(id) => void store.selectBrowserTab(id)}
             onOpenUrl={(url) => void store.navigate({ type: 'navigate', url })}
             onNewTab={!s.activeTaskId ? () => { void store.newBrowserTab() } : undefined}
+            onSettings={toggleSettings}
+            onToggleSidebar={() => setSidebarOpen((open) => !open)}
             agents={<SidebarAgents onOpen={(owner) => openAgents({ n: 'detail', owner })} onSeeAll={() => openAgents({ n: 'hub' })} onNew={() => openAgents({ n: 'hub' })} />}
           />
+          <div className="hx-main">
+          <header className="hx-chrome" inert={overviewOpen || !!approval}>
+            <Toolbar
+              folded={folded}
+              tab={tab}
+              locked={!canNavigate(s)}
+              omniRef={omniRef}
+              onBack={() => void store.navigate({ type: 'back' })}
+              onForward={() => void store.navigate({ type: 'forward' })}
+              onReload={() => void store.reloadPage()}
+              onStop={() => void store.stopPage()}
+              onZoomReset={() => void store.zoomPage('reset')}
+              onShare={onShare}
+              onOverview={toggleOverview}
+              onActivity={toggleActivity}
+              onNavigate={(url) => void store.navigate({ type: 'navigate', url })}
+              onAsk={onSendMessage}
+              onSettings={toggleSettings}
+              sidebarOpen={sidebarOpen}
+              onToggleSidebar={() => setSidebarOpen((open) => !open)}
+              controller={
+                <>
+                  <ControllerChip
+                    control={s.control}
+                    finished={s.finished}
+                    recoveryReason={s.recoveryReason}
+                    onTakeOver={() => void store.control('takeOver')}
+                    onResume={() => void store.control('resume', s.recoveryReason === 'execution_uncertain')}
+                    awaitingReview={s.snapshot?.state === 'awaiting_verification' && pendingCriteria(s).length > 0}
+                    onReview={openChat}
+                  />
+                  <LeaseChip leases={leases} now={leaseNow} agent={AGENT} onRevoke={(id) => void store.revokeLease(id)} />
+                </>
+              }
+                halo={<HaloButton unseen={unseen} open={chatOpen} onToggle={toggleChat} />}
+              />
+            {tab.dialog && !s.activeTaskId && (
+              <PageDialog
+                key={`${tab.id}:${tab.dialog.type}:${tab.dialog.message}`}
+                dialog={tab.dialog}
+                onAnswer={(accept, text) => void store.answerDialog(accept, text)}
+              />
+            )}
+            {findFor === tab.id && !s.activeTaskId && (
+              <FindBar
+                onFind={(query, backwards) => store.findText(query, backwards)}
+                onClose={() => { setFindFor(null); void store.clearFind() }}
+              />
+            )}
+            {tabLayout === 'horizontal' && <TabStrip
+              tabs={tabsForDisplay}
+              activeTabId={tab.id}
+              canClose={(candidate) => !s.activeTaskId && tabsForDisplay.length > 1 && candidate.id !== 'home'}
+              onSelect={(id) => void store.selectBrowserTab(id)}
+              onClose={(id) => void store.closeBrowserTab(id)}
+              canCreate={!s.activeTaskId}
+              onNew={() => { void store.newBrowserTab() }}
+            />}
+          </header>
           <div className="hx-content-col">
           <div className="hx-body" inert={overviewOpen}>
             <div className="hx-page" inert={!!approval}>
@@ -571,6 +574,7 @@ export default function App() {
               {toastShown.item && <p className="hx-toast" role="status" data-leaving={toastShown.leaving || undefined}>{toastShown.item}</p>}
             </div>
             {settingsShown.item && !approval && !activityOpen && !chatOpen && !overviewOpen && !helpOpen && <SettingsPanel leaving={settingsShown.leaving} onClose={() => setSettingsOpen(false)} />}
+          </div>
           </div>
           </div>
         </div>

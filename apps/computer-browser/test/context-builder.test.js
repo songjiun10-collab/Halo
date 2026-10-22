@@ -340,3 +340,111 @@ test("contextManifest is opt-in, keeps the newest refs within 8 KiB, and counts 
   assert.equal(manifest.omittedRefs, 128 - manifest.refs.length);
   assert.throws(() => buildContext({ ...base, contextManifest: { version: 2, refs: [] } }), /contextManifest/);
 });
+
+test("buildContext compacts observation elements: drops null parentElementId and dedupes identical links", () => {
+  const observation = {
+    url: "https://example.com/",
+    elements: [
+      { elementId: "1", role: "link", name: "Home", href: "https://example.com/", parentElementId: null },
+      { elementId: "2", role: "link", name: "Home", href: "https://example.com/", parentElementId: null },
+      { elementId: "3", role: "button", name: "Go", parentElementId: "9" },
+    ],
+  };
+  const packet = buildContext({ goal: makeGoal(), state: makeState(), observation, recentEvents: [] });
+  const els = packet.observation.elements;
+  assert.equal(els.length, 2);
+  assert.equal("parentElementId" in els[0], false);
+  assert.equal(els[1].parentElementId, "9");
+});
+
+test("buildContext drops nameless row/cell/list containers and re-parents their children to the nearest kept ancestor", () => {
+  const els = [
+    { elementId: "0", role: "table", name: "Results", parentElementId: null },
+    { elementId: "1", role: "row", name: "", parentElementId: "0" },
+    { elementId: "2", role: "cell", name: "", parentElementId: "1" },
+    { elementId: "3", role: "link", name: "Open", href: "https://example.com/a", parentElementId: "2" },
+    { elementId: "4", role: "row", name: "Header row", parentElementId: "0" },
+    { elementId: "5", role: "row", name: "", parentElementId: null },
+    { elementId: "6", role: "button", name: "Go", parentElementId: "5" },
+  ];
+  const out = buildContext({ goal: makeGoal(), state: makeState(), observation: { url: "https://example.com/", elements: els }, recentEvents: [] }).observation.elements;
+  assert.deepEqual(out.map((e) => e.elementId), ["0", "3", "4", "6"]);
+  assert.equal(out[1].parentElementId, "0");
+  assert.equal("parentElementId" in out[3], false, "a child of a dropped root container has no parent left");
+});
+
+test("textFocusQueries: long page text keeps passages matching the goal or a find_text query and marks the omitted runs", () => {
+  const filler = (n, w) => Array.from({ length: n }, (_, i) => `${w}${i} lorem ipsum dolor sit amet consectetur`).join(" ");
+  const text = `Header ${filler(60, "alpha")} The 문서 summary covers pricing details here. ${filler(80, "beta")} Warranty clause appears in this passage. ${filler(60, "gamma")}`;
+  const goal = makeGoal({ originalRequest: "Summarize the pricing details" });
+  const observation = { url: "https://example.com/", text };
+  const off = buildContext({ goal, state: makeState(), observation, recentEvents: [] }).observation.text;
+  assert.equal(off, text, "without the option the text is sent as is");
+  const focused = buildContext({ goal, state: makeState(), observation, recentEvents: [], textFocusQueries: [] }).observation.text;
+  assert.ok(focused.includes("pricing details"));
+  assert.ok(!focused.includes("beta40 "), "an unrelated middle run is replaced");
+  assert.match(focused, /bytes of page text not shown/);
+  assert.ok(focused.startsWith("Header"), "the first chunk stays");
+  assert.ok(Buffer.byteLength(focused) < Buffer.byteLength(text) * 0.6);
+  const withQuery = buildContext({ goal, state: makeState(), observation, recentEvents: [], textFocusQueries: ["warranty clause"] }).observation.text;
+  assert.ok(withQuery.includes("Warranty clause appears"), "a find_text query brings its passage back");
+});
+
+test("textFocusQueries: short text and text where nearly everything matches are left alone", () => {
+  const goal = makeGoal({ originalRequest: "Summarize the pricing details" });
+  const short = { url: "https://example.com/", text: "pricing details are short here" };
+  assert.equal(buildContext({ goal, state: makeState(), observation: short, recentEvents: [], textFocusQueries: [] }).observation.text, short.text);
+  const allMatch = { url: "https://example.com/", text: Array.from({ length: 400 }, () => "pricing details apply").join(" ") };
+  assert.equal(buildContext({ goal, state: makeState(), observation: allMatch, recentEvents: [], textFocusQueries: [] }).observation.text, allMatch.text);
+});
+
+test("HALO_CTX_SLIM drops tracking params and mirrored containers and caps navigationHistory, and is off by default", () => {
+  const modulePath = require.resolve("../main/harness/context-builder");
+  const observation = { id: "o1", url: "https://a.test/", title: "t", text: "", elements: [
+    { role: "list", name: "", elementId: "1" },
+    { role: "listitem", name: "Car Specs", elementId: "2", parentElementId: "1" },
+    { role: "menuitem", name: "car specs", href: "https://a.test/specs?utm_source=x&page=2&fbclid=z", elementId: "3", parentElementId: "2" },
+  ] };
+  const navigation = { visited: ["a", "b", "c", "d", "e", "f"], frontier: Array.from({ length: 9 }, (_, i) => ({ href: `https://a.test/${i}?utm_medium=m`, name: `n${i}` })) };
+  const build = () => require(modulePath).buildContext({ goal: makeGoal(), state: {}, observation, recentEvents: [], navigation });
+  const original = process.env.HALO_CTX_SLIM;
+  try {
+    delete process.env.HALO_CTX_SLIM;
+    delete require.cache[modulePath];
+    const plain = build();
+    assert.equal(plain.navigationHistory.frontier.length, 9);
+    assert.match(plain.observation.elements.at(-1).href, /utm_source/);
+    process.env.HALO_CTX_SLIM = "1";
+    delete require.cache[modulePath];
+    const slim = build();
+    assert.deepEqual(slim.navigationHistory.visited, ["c", "d", "e", "f"]);
+    assert.equal(slim.navigationHistory.frontier.length, 6);
+    assert.equal(slim.navigationHistory.frontier[0].href, "https://a.test/0");
+    assert.deepEqual(slim.observation.elements, [{ role: "menuitem", name: "car specs", href: "https://a.test/specs?page=2", elementId: "3" }]);
+  } finally {
+    if (original === undefined) delete process.env.HALO_CTX_SLIM; else process.env.HALO_CTX_SLIM = original;
+    delete require.cache[modulePath];
+  }
+});
+
+test("HALO_CTX_SLIM=2 keeps goal-matching elements, the page head and capped controls, re-parents, and reports the omitted count", () => {
+  const modulePath = require.resolve("../main/harness/context-builder");
+  const elements = [{ role: "navigation", name: "Main", elementId: "0" }];
+  for (let i = 1; i <= 80; i++) elements.push({ role: "link", name: i === 70 ? "Swimsuit sale" : `Item ${i}`, href: `https://a.test/${i}`, elementId: String(i), parentElementId: "0" });
+  elements.push({ role: "listitem", name: "wrap", elementId: "90", parentElementId: "0" }, { role: "link", name: "Swimsuit details", href: "https://a.test/d", elementId: "91", parentElementId: "90" });
+  const original = process.env.HALO_CTX_SLIM;
+  try {
+    process.env.HALO_CTX_SLIM = "2";
+    delete require.cache[modulePath];
+    const goal = makeGoal({ originalRequest: "Find the swimsuit" });
+    const packet = require(modulePath).buildContext({ goal, state: makeState(), observation: { id: "o1", url: "https://a.test/", title: "t", text: "", elements }, recentEvents: [] });
+    const ids = packet.observation.elements.map((e) => e.elementId);
+    assert.ok(ids.includes("70") && ids.includes("91") && ids.includes("0"), "goal-matching elements and the page head are kept");
+    assert.ok(!ids.includes("50"), "unrelated elements past the head are omitted");
+    assert.equal(packet.observation.elementsNotShown, elements.length - ids.length);
+    assert.equal(packet.observation.elements.find((e) => e.elementId === "91").parentElementId, "0", "orphaned child is re-parented to the nearest kept ancestor");
+  } finally {
+    if (original === undefined) delete process.env.HALO_CTX_SLIM; else process.env.HALO_CTX_SLIM = original;
+    delete require.cache[modulePath];
+  }
+});

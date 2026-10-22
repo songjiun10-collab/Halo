@@ -355,3 +355,21 @@ test('a task waiting behind a recovered one names the task to resume first inste
   await settle()
   assert.equal(store.getState().error, 'Waiting in line behind “Old work”. Open it to resume it first, or start a new task.')
 })
+
+test('a reloaded final page is shown to the person, and a failed reload says the result is not confirmed', () => {
+  assert.equal(session.describeFinalCheck({ url: 'https://shop.test/saved', title: 'Saved', checkedAt: '2026-10-21T00:00:00Z', problem: null }), 'Reloaded the final page to check the result: Saved (https://shop.test/saved).')
+  assert.match(session.describeFinalCheck({ url: 'https://shop.test/cart', title: 'Cart', checkedAt: '2026-10-21T00:00:00Z', problem: 'redirected' }), /^Not confirmed: .*different page/)
+})
+
+test('a task paused on a sign-in page tells the person to sign in and press Resume', async () => {
+  const { store } = harness({ getTaskDetail: async (id) => ({ taskId: id, goal: goal(id), snapshot: snapshot('paused', { pauseReason: 'login_required' }), active: true }) })
+  await store.selectTask('task')
+  assert.equal(store.getState().messages.at(-1).text, session.LOGIN_REQUIRED_TEXT)
+  assert.match(session.LOGIN_REQUIRED_TEXT, /Resume/)
+})
+
+test('a task paused on a human check tells the person to complete it and press Resume', async () => {
+  const { store } = harness({ getTaskDetail: async (id) => ({ taskId: id, goal: goal(id), snapshot: snapshot('paused', { pauseReason: 'captcha' }), active: true }) })
+  await store.selectTask('task')
+  assert.equal(store.getState().messages.at(-1).text, session.CAPTCHA_TEXT)
+})

@@ -76,7 +76,7 @@ export function HomeScreen({ activeTask, onSelectTab, onSubmit, onNavigate }: Pr
     <div className="hx-home">
       <HaloMark className="hx-home__mark" />
       <form
-        className="hx-home__form"
+        className="hx-home__form hx-home__bar"
         onSubmit={(e) => {
           e.preventDefault()
           if (query === 'ask') {
@@ -88,21 +88,32 @@ export function HomeScreen({ activeTask, onSelectTab, onSubmit, onNavigate }: Pr
           }
         }}
       >
-        <input
-          className="hx-home__input"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder={query === 'ask' ? 'Ask Halo anything…' : 'Search or type a URL'}
-          aria-label={query === 'ask' ? 'What should the agent do?' : 'Search or type a URL'}
-        />
-        <div className="hx-seg" role="group" aria-label="Search or ask">
-          <button type="button" aria-pressed={query === 'search'} onClick={() => setQuery('search')}>Search</button>
-          <button type="button" aria-pressed={query === 'ask'} onClick={() => setQuery('ask')}>Ask</button>
+        <div className="hx-home__brow">
+          <input
+            className="hx-home__input"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            // Tab flips Search and Ask, as the hint beside the field says.
+            onKeyDown={(e) => { if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); setQuery(query === 'ask' ? 'search' : 'ask') } }}
+            placeholder={query === 'ask' ? 'Ask Halo a task' : 'Search or type a URL'}
+            aria-label={query === 'ask' ? 'What should the agent do?' : 'Search or type a URL'}
+            autoComplete="off"
+          />
+          <kbd className="hx-home__kbd" aria-hidden="true">Tab ⇄</kbd>
+          <div className="hx-seg" role="group" aria-label="Search or ask">
+            <button type="button" aria-pressed={query === 'search'} onClick={() => setQuery('search')}>Search</button>
+            <button type="button" aria-pressed={query === 'ask'} onClick={() => setQuery('ask')}>Ask</button>
+          </div>
         </div>
-        {query === 'ask' && <ModelPicker settings={settings} onSelectModel={(id) => void selectModel(id)} onEffort={(effort) => void selectEffort(effort)} savingProvider={savingProvider} savingEffort={savingEffort} />}
-        <button className="hx-btn hx-btn--primary hx-btn--compact" type="submit" disabled={!value.trim()} aria-label={query === 'ask' ? 'Send' : 'Go'}><Up /></button>
+        {query === 'ask' && (
+          <div className="hx-home__tools">
+            <LockChips value={lockChips} onChange={setLockChips} />
+            <span className="hx-home__sp" />
+            <ModelPicker settings={settings} onSelectModel={(id) => void selectModel(id)} onEffort={(effort) => void selectEffort(effort)} savingProvider={savingProvider} savingEffort={savingEffort} />
+            <button className="hx-home__send" type="submit" disabled={!value.trim()} aria-label="Send"><Up /></button>
+          </div>
+        )}
       </form>
-      {query === 'ask' && <LockChips value={lockChips} onChange={setLockChips} />}
       {(providerError || effortError) && (
         <p className="hx-home__provider-status" role="alert">{providerError ? 'Could not update provider preference.' : 'Could not update effort.'}</p>
       )}

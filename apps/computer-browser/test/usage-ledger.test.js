@@ -84,3 +84,12 @@ test("display-only limits report remaining/exceeded, validate input, persist, an
   assert.equal(reloaded.summary().limits.claude.limit.tokens, 1000);
   assert.equal(reloaded.summary().byProvider.claude.inputTokens, 600);
 });
+
+test("normalizeUsage keeps an optional contextBytes diagnostic without changing totals", () => {
+  const { normalizeUsage, emptyTotals, addUsage } = require("../shared/usage");
+  const u = normalizeUsage("claude", { input_tokens: 2, output_tokens: 10, contextBytes: 12345 });
+  assert.equal(u.contextBytes, 12345);
+  assert.equal("contextBytes" in normalizeUsage("claude", { input_tokens: 2 }), false);
+  assert.equal(normalizeUsage("claude", { contextBytes: 99 }), null);
+  assert.equal("contextBytes" in addUsage(emptyTotals(), u), false);
+});

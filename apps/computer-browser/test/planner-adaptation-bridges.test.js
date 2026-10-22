@@ -1,6 +1,7 @@
 "use strict";
 
 const test = require("node:test");
+process.env.HALO_PLANNER_SYSTEM_SPLIT = "0"; // these tests read the whole prompt from stdin
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const { buildContext } = require("../main/harness/context-builder");

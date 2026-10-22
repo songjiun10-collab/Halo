@@ -363,6 +363,48 @@ test("an open modal dialog is what the planner sees: the inert page behind it is
   await adapter.dispose();
 });
 
+test("controls a person can see and click are listed even under a stray aria-hidden; hidden decoration and covered controls stay out", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
+  // Shaped after medicare.gov/care-compare: the open autocomplete marks the search pane, the header, and even its
+  // own menu aria-hidden="true", yet all of it stays on screen, so the planner never saw the suggestion or Search.
+  const page = `<title>care</title><header aria-hidden="true"><a href="/login">Log in</a></header>
+    <main><div class="pane" aria-hidden="true"><input aria-label="My Location" value="96817">
+      <div class="menu" aria-hidden="true"><ul role="listbox"><li role="option" aria-selected="false">Honolulu, HI 96817</li></ul></div>
+      <button>Search</button><p>Decorative note</p></div>
+      <div aria-hidden="true"><svg width="20" height="20"><rect width="20" height="20"/></svg><span>icon text</span></div>
+      <div aria-hidden="true" style="position:relative"><button id="covered">Covered</button>
+        <div style="position:absolute;inset:0;background:white"></div></div></main>`;
+  const server = http.createServer((request, response) => { response.setHeader("content-type", "text/html; charset=utf-8"); response.end(page); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "halo-cdp-ariahidden-"));
+  const chrome = spawn(CHROMIUM, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []), "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+  let view;
+  t.after(async () => {
+    try { view?.closeConnection(); } catch { /* ignore */ }
+    await stopChromium(chrome);
+    await new Promise((resolve) => server.close(resolve));
+    removeProfile(profile);
+  });
+  const wsUrl = await new Promise((resolve, reject) => {
+    let buffer = "";
+    const timer = setTimeout(() => reject(new Error("Chromium did not report a DevTools endpoint")), 30000);
+    chrome.stderr.on("data", (chunk) => { buffer += chunk; const match = /DevTools listening on (ws:\/\/\S+)/.exec(buffer); if (match) { clearTimeout(timer); resolve(match[1]); } });
+    chrome.on("exit", () => reject(new Error("Chromium exited early")));
+  });
+  view = await openCdpView(wsUrl, { width: 1000, height: 700 });
+  const adapter = new BrowserAdapter({ view, permissionMode: "full" });
+  assert.equal((await adapter.execute({ type: "navigate", url: `${base}/` })).status, "ok");
+  const seen = await adapter.observe();
+  const names = seen.elements.map((element) => element.name);
+  for (const name of ["Log in", "My Location", "Honolulu, HI 96817", "Search"]) assert.ok(names.includes(name), `(the bug) ${name} is on screen but was not listed`);
+  assert.equal(names.includes("Covered"), false, "a control covered by another element is not one a person can click");
+  assert.equal(names.includes("Decorative note"), false, "aria-hidden text is still left out");
+  assert.doesNotMatch(seen.text, /icon text|Decorative note/, "aria-hidden copy stays out of the text");
+  const option = seen.elements.find((element) => element.name === "Honolulu, HI 96817");
+  assert.equal((await adapter.execute({ type: "click", elementId: option.elementId }, { documentEpoch: seen.documentEpoch })).status, "ok", "a listed control can be clicked");
+  await adapter.dispose();
+});
+
 test("on the person's own tab a dialog waits for the person: it is reported, answered once, and the page carries on", { skip: !CHROMIUM && "no Chromium binary", timeout: 90000 }, async (t) => {
   const server = http.createServer((request, response) => { response.setHeader("content-type", "text/html"); response.end("<title>ask</title><p>page</p>"); });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

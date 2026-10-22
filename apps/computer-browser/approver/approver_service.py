@@ -30,7 +30,8 @@ from halo.policy import decide  # noqa: E402
 from halo.safety_cases import Event, evaluate_trace  # noqa: E402
 
 VALID_ACTIONS = {"click", "type", "submit_form", "navigate", "download", "follow_link", "scroll", "observe",
-                 "find_text", "select_option", "click_at", "type_at", "press_key", "play_loop"}
+                 "find_text", "http_get", "select_option", "click_at", "type_at", "press_key", "play_loop",
+                 "os_observe", "os_click_at", "os_type_text", "os_press_key"}
 VALID_SOURCES = {"user_prompt", "page_content"}
 VALID_PROVENANCE = {"trusted", "untrusted"}
 
@@ -90,6 +91,14 @@ _ACTION_MAPPING = {
     # request. tests/test_computer_browser_approver.py now fails whenever the
     # harness's ACTIONS list and this table drift apart.
     "find_text": ("read", None),
+    # 2026-10-18: keyless same-site GET of a public API; changes nothing.
+    "http_get": ("read", None),
+    # 2026-10-18: native-app actions. os-policy (allowed apps, protected apps, effect gate) runs in the
+    # host before the backend; the approver sees them like the browser coordinate actions.
+    "os_observe": ("read", None),
+    "os_click_at": ("read", None),
+    "os_type_text": ("read", None),
+    "os_press_key": ("read", None),
     "select_option": ("read", None),
     "click_at": ("read", None),
     "type_at": ("read", None),

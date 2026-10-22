@@ -52,7 +52,7 @@ export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onRel
   return (
     <div className="hx-toolbar" data-folded={folded || undefined}>
       <div className="hx-nav hx-nav--lead">
-        <button className="hx-icbtn" aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} aria-pressed={sidebarOpen} title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} onClick={onToggleSidebar}><Sidebar /></button>
+        {sidebarOpen ? null : <button className="hx-icbtn" aria-label="Show sidebar" aria-pressed={false} title="Show sidebar" onClick={onToggleSidebar}><Sidebar /></button>}
         <button className="hx-icbtn" aria-label="Back" aria-keyshortcuts="Alt+ArrowLeft" disabled={locked || !tab.canGoBack} onClick={onBack}><Back /></button>
         <button className="hx-icbtn" aria-label="Forward" aria-keyshortcuts="Alt+ArrowRight" disabled={locked || !tab.canGoForward} onClick={onForward}><Forward /></button>
         {tab.loading && onStop
@@ -76,13 +76,13 @@ export function Toolbar({ tab, folded, locked, omniRef, onBack, onForward, onRel
         ) : null}
         {controller}
       </div>
+      {halo}
       <div className="hx-nav">
         <button className="hx-icbtn" aria-label="Share" aria-keyshortcuts="Control+Shift+S Meta+Shift+S" title="Share" aria-disabled={url.startsWith('halo://') || undefined} onClick={onShare}><Share /></button>
         <button className="hx-icbtn" aria-label="Show all tabs" aria-keyshortcuts="Control+Shift+A Meta+Shift+A" title="Show all tabs" onClick={onOverview}><Tabs /></button>
         <button className="hx-icbtn" aria-label="View task activity" title="View task activity" onClick={onActivity}><ActivityLog /></button>
-        <button className="hx-icbtn" aria-label="Settings" aria-keyshortcuts="Control+Comma Meta+Comma" title="Settings" onClick={onSettings}><Gear /></button>
+        {sidebarOpen ? null : <button className="hx-icbtn" aria-label="Settings" aria-keyshortcuts="Control+Comma Meta+Comma" title="Settings" onClick={onSettings}><Gear /></button>}
       </div>
-      {halo}
     </div>
   )
 }

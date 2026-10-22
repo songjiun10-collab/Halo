@@ -15,7 +15,7 @@ const CLAUDE = Object.freeze({
   }),
   "claude-sonnet-5-5": Object.freeze({
     base: "Sonnet 5.5 is effort-sensitive. Keep browser work bounded to the stated criteria. When the next safe, supported action is clear, propose it instead of checking in for reassurance; ask only for a required missing choice or a genuine blocker. Do not broaden the task.",
-    low: "At low effort, do not stop after part of a multi-criterion task when another safe action is clear. Still collect required evidence before finish.",
+    low: "At low effort, do not stop after part of a multi-criterion task when another safe action is clear. Still collect required evidence before finish. When an opened page shows a link or button for what the task asks, click it rather than guessing another URL. If a site answers with Access Denied or an error page twice, stop trying variants of that address: try one other route to the site's own pages, then report that access was blocked. Do not ask the user to choose a source; report what you verified and what you could not.",
     medium: "At medium effort, continue well-specified criteria without asking permission for ordinary reversible navigation or observation. Do not infer permission for consequential actions.",
     high: "At high effort, spend reasoning on the stated criteria, not extra browsing; stop once host-verifiable evidence is sufficient.",
     xhigh: "At xhigh effort, be especially strict about scope: no exploratory side trips or extra criteria; stop when requested criteria have evidence.",
@@ -79,12 +79,17 @@ const NVIDIA = Object.freeze({
   "nvidia/nemotron-3-super-120b-a12b": "Nemotron 3 Super is the agentic-work option: ground each bounded proposal in the goal and current observation, and distinguish action dispatch from host-verified completion. For a lookup or question, put the answer itself (the facts you found on the page) in the need_user reason; never end it by asking the person to confirm they can see the page or that you are right, and use need_user for a question only when a required choice or access is missing.",
 });
 
+const SONNET_LOW_RULES = "When an opened page shows a link or button for what the task asks, click it rather than guessing another URL. If a site answers with Access Denied or an error page twice, stop trying variants of that address: try one other route to the site's own pages, then report that access was blocked. Do not ask the user to choose a source; report what you verified and what you could not.";
+
 const EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 function getModelPromptGuidance(provider, model, effort = "medium") {
   if (provider === "claude") {
     const profile = CLAUDE[model];
     if (!profile) return null;
-    return `${profile.base} ${profile[EFFORTS.includes(effort) ? effort : "medium"]}`;
+    const level = EFFORTS.includes(effort) ? effort : "medium";
+    // A/B switch: give Sonnet's medium effort the blocked-site and click-don't-guess rules that only low carried.
+    const extra = model === "claude-sonnet-5-5" && level === "medium" && process.env.HALO_SONNET_MEDIUM_LOW_RULES === "1" ? ` ${SONNET_LOW_RULES}` : "";
+    return `${profile.base} ${profile[level]}${extra}`;
   }
   if (provider === "codex") return CODEX[model] || null;
   if (provider === "nvidia") return NVIDIA[model] || null;

@@ -92,6 +92,8 @@ class TaskHost {
   constructor({
     storageRoot,
     releaseViewsOnReview = false,
+    finalRefresh = false,
+    pauseOnLogin = false,
     makeBrowser,
     makePlanner,
     makeChildBrowser,
@@ -152,6 +154,8 @@ class TaskHost {
     }
 
     this._releaseViewsOnReview = releaseViewsOnReview === true;
+    this._finalRefresh = finalRefresh === true;
+    this._pauseOnLogin = pauseOnLogin === true;
     this._storageRoot = storageRoot;
     this._captureAgentFrame = captureAgentFrame;
     this._captureTaskFrame = captureTaskFrame;
@@ -534,6 +538,8 @@ class TaskHost {
       planner,
       browser,
       releaseViewsOnReview: this._releaseViewsOnReview,
+      finalRefresh: this._finalRefresh,
+      pauseOnLogin: this._pauseOnLogin,
       harnessProfile,
       // Measured in the compare20 runs: a finish with no recorded evidence is sent back once, and an action that
       // failed twice with the same deterministic error is not run a third time.

@@ -371,6 +371,28 @@ test("execute(navigate) reports ok and bumps documentEpoch on a genuine successf
   assert.equal(result.evidenceCandidate.sourceUrl, "https://example.com");
 });
 
+test("execute(navigate) waits for a page that draws its content after load before reporting ok", async () => {
+  // medicare.gov/care-compare: the load event fires on an empty shell; the app draws a few seconds later.
+  let probes = 0;
+  const view = makeFakeView({ executeJavaScript: async (script) => {
+    if (script.includes("__haloContentProbe")) { probes += 1; return probes < 3 ? 0 : 40; }
+    return { url: "https://example.com/", title: "", text: "", elements: [] };
+  } });
+  const adapter = new BrowserAdapter({ view, contentPollMs: 1 });
+  const result = await adapter.execute({ type: "navigate", url: "https://example.com" });
+  assert.equal(result.status, "ok");
+  assert.equal(probes, 3, "(the bug) navigate reported ok while the page was still empty");
+});
+
+test("execute(navigate) on a page that stays empty gives up waiting after contentWaitMs and still reports ok", async () => {
+  const view = makeFakeView({ executeJavaScript: async (script) => (script.includes("__haloContentProbe") ? 0 : { url: "https://example.com/", title: "", text: "", elements: [] }) });
+  const adapter = new BrowserAdapter({ view, contentWaitMs: 30, contentPollMs: 5 });
+  const start = Date.now();
+  const result = await adapter.execute({ type: "navigate", url: "https://example.com" });
+  assert.equal(result.status, "ok");
+  assert.ok(Date.now() - start < 500, "an empty page must not hold navigate past the wait");
+});
+
 // --- Timeout: aborts and cleans up rather than hanging or leaking timers.
 
 test("execute(navigate) aborts a hung load, stops it, and reports failed:navigation_timeout", async () => {
@@ -443,6 +465,19 @@ test("an older navigate() call that resolves after a newer one has started does 
 
 // --- documentEpoch staleness: an action referencing an older document must
 // be rejected without executing, not silently acted on.
+
+test("execute(observe) reads the page that is loaded now instead of cancelling on a stale documentEpoch", async () => {
+  const view = makeFakeView({
+    executeJavaScript: async () => ({ url: "https://example.com/", title: "", text: "now", elements: [] }),
+  });
+  const adapter = new BrowserAdapter({ view });
+  await adapter.execute({ type: "navigate", url: "https://example.com" }); // epoch -> 1
+
+  const result = await adapter.execute({ type: "observe" }, { documentEpoch: 0 });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.observation.documentEpoch, adapter.getDocumentEpoch());
+});
 
 test("execute(scroll) rejects a stale documentEpoch without scrolling", async () => {
   let scrolled = false;
@@ -693,6 +728,7 @@ test("execute(follow_link) rejects a stale documentEpoch without re-resolving an
   });
   const adapter = new BrowserAdapter({ view });
   await adapter.execute({ type: "navigate", url: "https://example.com" }); // epoch -> 1
+  observeCalls = 0; // navigate's own content check is not the read under test
 
   const result = await adapter.execute({ type: "follow_link", elementId: "0" }, { documentEpoch: 0 });
 
@@ -1223,4 +1259,70 @@ test("section headings stay in the observation after the element cap is full of 
   const observation = runObserveScriptAgainst(new FakeElement("body", { children: [...links, heading] }), { maxElements: 3 });
   assert.equal(observation.elements.filter((entry) => entry.role === "link").length, 3);
   assert.ok(observation.elements.some((entry) => entry.role === "heading" && entry.name === "3.1.2. GPT-6 Sol"));
+});
+
+// --- http_get: a keyless, same-site, read-only GET.
+
+test("http_get reads a same-site https API, refuses other sites, http, private hosts and cross-site redirects", async () => {
+  const view = makeFakeView({ executeJavaScript: async () => ({ url: "https://www.discogs.com/", title: "", text: "", elements: [] }) });
+  const adapter = new BrowserAdapter({ view });
+  await adapter.execute({ type: "navigate", url: "https://www.discogs.com/" });
+  view.webContents.getURL = () => "https://www.discogs.com/";
+  const realFetch = global.fetch;
+  const calls = [];
+  const json = (body, init = {}) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" }, ...init });
+  global.fetch = async (url, init) => {
+    calls.push({ url, init });
+    if (url.includes("/redirect-out")) return new Response(null, { status: 302, headers: { location: "https://evil.example.net/x" } });
+    if (url.includes("/redirect-in")) return new Response(null, { status: 302, headers: { location: "https://api.discogs.com/ok" } });
+    if (url.includes("/html-bomb")) return new Response("x", { status: 200, headers: { "content-type": "image/png" } });
+    return json({ hello: "world" });
+  };
+  try {
+    const ok = await adapter.execute({ type: "http_get", url: "https://api.discogs.com/database/search?q=a" });
+    assert.equal(ok.status, "ok");
+    assert.equal(ok.httpGet.httpStatus, 200);
+    assert.match(ok.httpGet.text, /hello/);
+    assert.equal(calls[0].init.credentials, "omit");
+    assert.equal(calls[0].init.redirect, "manual");
+    assert.equal(calls[0].init.method, "GET");
+    for (const url of ["https://api.other.com/x", "http://api.discogs.com/x", "https://127.0.0.1/x", "https://user:pw@api.discogs.com/x", "ftp://api.discogs.com/x"]) {
+      const refused = await adapter.execute({ type: "http_get", url });
+      assert.equal(refused.errorCode, "http_get_not_allowed", url);
+    }
+    const before = calls.length;
+    assert.equal((await adapter.execute({ type: "http_get", url: "https://api.discogs.com/redirect-out" })).errorCode, "http_get_not_allowed");
+    assert.equal((await adapter.execute({ type: "http_get", url: "https://api.discogs.com/redirect-in" })).status, "ok");
+    assert.equal(calls.length, before + 3);
+    assert.equal((await adapter.execute({ type: "http_get", url: "https://api.discogs.com/html-bomb" })).errorCode, "http_get_content_type");
+    assert.equal((await adapter.execute({ type: "http_get", url: "" })).errorCode, "invalid_http_get");
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test("HALO_FULL_PAGE_TEXT=1 widens the default text window", () => {
+  const prev = process.env.HALO_FULL_PAGE_TEXT;
+  process.env.HALO_FULL_PAGE_TEXT = "1";
+  try {
+    const { BrowserAdapter } = require("../main/harness/browser-adapter");
+    const a = new BrowserAdapter({ view: { webContents: { isDestroyed: () => false } } });
+    assert.ok(a._maxTextBytes > 12 * 1024 && a._maxTextBytes < 48 * 1024);
+  } finally { if (prev === undefined) delete process.env.HALO_FULL_PAGE_TEXT; else process.env.HALO_FULL_PAGE_TEXT = prev; }
+});
+
+test("buildObserveScript flags textTruncated when the page has more text than the budget returns", () => {
+  const paragraphs = Array.from({ length: 30 }, (_, i) => new FakeElement("p", { text: `Paragraph number ${i} with some filler words` }));
+  const long = runObserveScriptAgainst(new FakeElement("body", { children: paragraphs }), { maxTextBytes: 200, maxElements: 2 });
+  assert.equal(long.textTruncated, true);
+  const short = runObserveScriptAgainst(new FakeElement("body", { children: [new FakeElement("p", { text: "tiny" })] }));
+  assert.equal("textTruncated" in short, false);
+});
+
+test("execute(find_text) reports an all-words match when no single text node held the phrase", async () => {
+  const view = isolatedFindView({
+    executeJavaScript: async (script) => script.includes("__haloFindText") ? { found: true, count: 1, approx: true } : { url: "https://example.com/", title: "", text: "", elements: [] },
+  });
+  const adapter = new BrowserAdapter({ view });
+  assert.deepEqual(await adapter.execute({ type: "find_text", text: "market share Chrome" }), { status: "ok", matchCount: 1, matchKind: "all_words_in_element" });
 });

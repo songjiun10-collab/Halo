@@ -2,7 +2,7 @@ import { waitReasonLabel } from '../session/wait-reason'
 import { BrandIcon } from './BrandIcon'
 import { brandFor } from './brand-for'
 import { useEffect, useState, type ReactNode } from 'react'
-import { Close, Plus } from './Icons'
+import { Close, Gear, Plus, Sidebar } from './Icons'
 import type { TabActivity } from '../session/types'
 import type { TabLayout } from '../session/tab-layout'
 import { groupOf, type TabGroups } from '../session/tab-groups'
@@ -34,8 +34,10 @@ interface Props {
   onUngroupAll?: () => void
   onToggleGroup?: (groupId: string) => void
   onRenameGroup?: (groupId: string, name: string) => void
-  /** Agents and Teams, listed after the tasks. */
+  /** Agents and Teams, listed first. */
   agents?: ReactNode
+  onSettings?: () => void
+  onToggleSidebar?: () => void
 }
 
 const stateLabel: Record<TaskSummary['state'], string> = {
@@ -90,13 +92,17 @@ function TaskButton({ task, active, onClick, child }: { task: TaskSummary; activ
       <span className="hx-sidebar__fav" aria-hidden="true">{task.originalRequest.trim().slice(0, 1) || '·'}</span>
       <span className="hx-sidebar__task-copy">
         <span className="hx-sidebar__task-title">{task.originalRequest}</span>
-        <small className="hx-sidebar__task-state">{task.state === 'paused' && task.pauseReason === 'need_user' ? 'Needs your reply' : task.state === 'paused' && task.pauseReason === 'captcha' ? 'Needs you to pass a check' : task.state === 'queued' ? waitReasonLabel(task.waitReason) ?? stateLabel[task.state] : stateLabel[task.state]}</small>
+        <small className="hx-sidebar__task-state">{task.state === 'paused' && task.pauseReason === 'need_user' ? 'Needs your reply' : task.state === 'paused' && task.pauseReason === 'captcha' ? 'Needs you to pass a check' : task.state === 'paused' && task.pauseReason === 'login_required' ? 'Needs you to sign in' : task.state === 'queued' ? waitReasonLabel(task.waitReason) ?? stateLabel[task.state] : stateLabel[task.state]}</small>
       </span>
     </button>
   )
 }
 
-export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, tabs, activeTabId, onSelectTab, onOpenUrl, onNewTab, onCloseTab, tabLayout = 'horizontal', onToggleTabLayout, groups = [], onCreateGroup, onAddToGroup, onRemoveFromGroup, onUngroup, onUngroupAll, onToggleGroup, onRenameGroup, agents }: Props) {
+export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, onSelectTask, tabs, activeTabId, onSelectTab, onOpenUrl, onNewTab, onCloseTab, tabLayout = 'horizontal', onToggleTabLayout, groups = [], onCreateGroup, onAddToGroup, onRemoveFromGroup, onUngroup, onUngroupAll, onToggleGroup, onRenameGroup, agents, onSettings, onToggleSidebar }: Props) {
+  // One box filters tabs and chats by title, like the Halo for Chromium sidebar.
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
+  const hit = (text: string | undefined) => !needle || (text ?? '').toLowerCase().includes(needle)
   const [pins, setPins] = useStored<Shortcut[]>('halo.shortcuts', [])
   const [adding, setAdding] = useState(false)
   const shown = pins.filter((pin) => pin && typeof pin === 'object')
@@ -117,7 +123,7 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
   const [showAll, setShowAll] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const filed = new Set(projects.flatMap((project) => project.taskIds))
-  const loose = tasks.filter((task) => !filed.has(task.taskId))
+  const loose = tasks.filter((task) => !filed.has(task.taskId) && hit(task.originalRequest))
   const active = loose.filter((task) => task.active || ['queued', 'running', 'awaiting_approval', 'awaiting_verification', 'paused'].includes(task.state))
   const recent = loose.filter((task) => !active.includes(task))
   const byId = new Map(tasks.map((task) => [task.taskId, task]))
@@ -174,7 +180,7 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
       {onNewTab ? (
         <button type="button" className="hx-sidebar__item hx-sidebar__new" onClick={onNewTab}><Plus /><span>New Tab</span></button>
       ) : null}
-      {tabs.filter((tab) => !groupedIds.has(tab.id)).map((tab) => tabRow(tab))}
+      {tabs.filter((tab) => !groupedIds.has(tab.id) && (hit(tab.title) || hit(tab.url))).map((tab) => tabRow(tab))}
       {groups.map((group) => (
         <div key={group.id} className="hx-sidebar__group" data-collapsed={group.collapsed || undefined}>
           <div className="hx-sidebar__group-head">
@@ -200,31 +206,15 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
   ) : undefined)
   return (
     <aside className="hx-sidebar" data-open={open} aria-label="Workspace" inert={inert}>
-      {tabLayout === 'vertical' ? tabsSection : null}
-      {section('bookmarks', 'Bookmarks', (
-        <>
-          <div className="hx-scs" aria-label="Shortcuts">
-            {shown.length < MAX_SHORTCUTS && (
-              <button type="button" className="hx-sc hx-sc--empty" aria-label="Add shortcut" onClick={() => setAdding(true)}>+</button>
-            )}
-            {shown.map((pin, i) => (
-              <button type="button" key={pin.url + i} className="hx-sc" title={`${pin.label} (right-click to remove)`} aria-label={pin.label}
-                onClick={() => onOpenUrl(pin.url)} onContextMenu={(e) => { e.preventDefault(); setPins(shown.filter((_, j) => j !== i)) }}>{brandFor(pin.label) ? <BrandIcon host={pin.label} size={28} /> : pin.label[0]?.toUpperCase()}</button>
-            ))}
-          </div>
-          {adding && (
-            <input className="hx-sc__input" autoFocus placeholder="Site address, then Enter" aria-label="Shortcut address"
-              onBlur={() => setAdding(false)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') setAdding(false)
-                if (e.key !== 'Enter') return
-                const next = toShortcut(e.currentTarget.value)
-                if (next) setPins([...shown, next])
-                setAdding(false)
-              }} />
-          )}
-        </>
-      ))}
+      <div className="hx-sidebar__top">
+        {onNewTab ? <button type="button" className="hx-icbtn" aria-label="New tab" title="New tab" onClick={onNewTab}><Plus /></button> : null}
+        {onToggleSidebar ? <button type="button" className="hx-icbtn" aria-label={open ? 'Hide sidebar' : 'Show sidebar'} aria-pressed={open} title={open ? 'Hide sidebar' : 'Show sidebar'} onClick={onToggleSidebar}><Sidebar /></button> : null}
+      </div>
+      <label className="hx-sidebar__find">
+        <span className="hx-sr">Search tabs and chats</span>
+        <input type="search" placeholder="Search tabs & chats" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setQuery('') }} />
+      </label>
+      <div className="hx-sidebar__scroll">
       {agents ? <div className="hx-sidebar__agents">{agents}</div> : null}
       {section('chats', 'Chats', (
         <>
@@ -256,8 +246,36 @@ export function WorkspaceSidebar({ tasks, activeTaskId, open, inert, onNewTask, 
           ) : null}
         </>
       ), <button type="button" className="hx-sidebar__add" aria-label="New project folder" onClick={addProject}>+</button>)}
-      {tabLayout === 'horizontal' ? tabsSection : null}
-      <div className="hx-sidebar__foot"><span>{tasks.length} saved {tasks.length === 1 ? 'task' : 'tasks'}</span></div>
+      {tabsSection}
+      {section('bookmarks', 'Bookmarks', (
+        <>
+          <div className="hx-scs" aria-label="Shortcuts">
+            {shown.length < MAX_SHORTCUTS && (
+              <button type="button" className="hx-sc hx-sc--empty" aria-label="Add shortcut" onClick={() => setAdding(true)}>+</button>
+            )}
+            {shown.map((pin, i) => (
+              <button type="button" key={pin.url + i} className="hx-sc" title={`${pin.label} (right-click to remove)`} aria-label={pin.label}
+                onClick={() => onOpenUrl(pin.url)} onContextMenu={(e) => { e.preventDefault(); setPins(shown.filter((_, j) => j !== i)) }}>{brandFor(pin.label) ? <BrandIcon host={pin.label} size={28} /> : pin.label[0]?.toUpperCase()}</button>
+            ))}
+          </div>
+          {adding && (
+            <input className="hx-sc__input" autoFocus placeholder="Site address, then Enter" aria-label="Shortcut address"
+              onBlur={() => setAdding(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setAdding(false)
+                if (e.key !== 'Enter') return
+                const next = toShortcut(e.currentTarget.value)
+                if (next) setPins([...shown, next])
+                setAdding(false)
+              }} />
+          )}
+        </>
+      ))}
+      </div>
+      <div className="hx-sidebar__foot">
+        <span>{tasks.length} saved {tasks.length === 1 ? 'task' : 'tasks'}</span>
+        {onSettings ? <button type="button" className="hx-icbtn" aria-label="Settings" title="Settings" onClick={onSettings}><Gear /></button> : null}
+      </div>
     </aside>
   )
 }

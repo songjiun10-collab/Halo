@@ -91,13 +91,14 @@ test("most recent turns staying on one page pause as no_progress even when the a
 
 test("a hub page revisited between different pages does not trip the page-loop guard", async () => {
   let turn = 0, n = 0;
-  const pages = ["https://hub.test/list", "https://hub.test/item1", "https://hub.test/list", "https://hub.test/item2"];
+  // The hub comes back between item pages that keep changing; only three pages in a cycle is a loop.
+  const pageAt = (index) => (index % 2 === 0 ? "https://hub.test/list" : `https://hub.test/item${index}`);
   const planner = { next: async (context) => {
     turn += 1;
     if (turn > 20) return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "scroll", direction: "down", amount: 1 }] };
     return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "observe" }] };
   } };
-  const browser = { supportsAction: () => true, observe: async () => { n += 1; return { id: `o${n}`, url: pages[n % pages.length], text: `t${n}`, elements: [] }; }, execute: async () => ({ status: "ok" }) };
+  const browser = { supportsAction: () => true, observe: async () => { n += 1; return { id: `o${n}`, url: pageAt(n), text: `t${n}`, elements: [] }; }, execute: async () => ({ status: "ok" }) };
   const snapshot = await (await make(planner, browser)).start();
   assert.ok(turn > 12, `guard fired early after ${turn} turns (${snapshot.pauseReason})`);
 });

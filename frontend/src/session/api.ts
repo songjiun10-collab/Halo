@@ -38,6 +38,8 @@ export interface TaskSnapshot {
   pauseReason: string | null
   /** The agent's question when it paused with need_user. */
   needUserReason?: string
+  /** The final page as Halo reloaded and re-read it before accepting "done"; problem is null when it still loaded as the same page. */
+  finalCheck?: { url: string; title: string; checkedAt: string; problem: 'refresh_failed' | 'error_page' | 'blocked' | 'redirected' | null }
   goalVersion: number
   budgets: Record<string, number>
   segment: Record<string, unknown>

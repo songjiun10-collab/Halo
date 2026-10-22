@@ -8,10 +8,14 @@
 // these tests.
 
 const test = require("node:test");
+
+// The older tests below read the whole prompt from stdin; they run with the system-prompt split off.
+// The split itself is covered by the tests at the end of this file.
+process.env.HALO_PLANNER_SYSTEM_SPLIT = "0";
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 
-const { ClaudeCodeBridge, ClaudeCodeBridgeError, CLI_ARGS, ENV_ALLOWLIST, MAX_CLI_STDOUT_BYTES } = require("../main/harness/providers/claude-code-bridge");
+const { ClaudeCodeBridge, ClaudeCodeBridgeError, buildPrompt, buildPromptParts, CLI_ARGS, ENV_ALLOWLIST, HOST_ENV, MAX_CLI_STDOUT_BYTES } = require("../main/harness/providers/claude-code-bridge");
 
 const TASK_ID = "11111111-1111-1111-1111-111111111111";
 
@@ -103,8 +107,10 @@ test("start(): spawns claude with the fixed safety flags, no shell, an env allow
     assert.equal("HALO_APPROVER_KEY" in captured.options.env, false);
     assert.deepEqual(
       Object.keys(captured.options.env).sort(),
-      Object.keys(captured.options.env).filter((k) => ENV_ALLOWLIST.includes(k)).sort(),
+      Object.keys(captured.options.env).filter((k) => ENV_ALLOWLIST.includes(k) || k in HOST_ENV).sort(),
     );
+    // Telemetry on every planner call cost about 2s of CLI startup (measured 3.0-3.4s -> 1.1-1.7s wall for a one-word reply).
+    assert.equal(captured.options.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
 
     assert.deepEqual(captured.args, [...CLI_ARGS, "--effort", "medium"]);
     assert.ok(!captured.args.includes("--bare"), "--bare would defeat reusing the local CLI login");
@@ -784,4 +790,67 @@ test("a Haiku-pinned bridge turns extended thinking off for the CLI; other model
   assert.equal(haiku._buildEnv().MAX_THINKING_TOKENS, "0");
   assert.equal(new ClaudeCodeBridge({ model: "claude-sonnet-5-5" })._buildEnv().MAX_THINKING_TOKENS, undefined);
   assert.equal(new ClaudeCodeBridge()._buildEnv().MAX_THINKING_TOKENS, undefined);
+});
+
+test("buildPrompt: native-app (os_*) actions are documented only when the host enabled OS computer use", () => {
+  const base = makeContext();
+  const { buildPrompt } = require("../main/harness/providers/claude-code-bridge");
+  const off = buildPrompt(base, "");
+  const on = buildPrompt({ ...base, progress: { ...base.progress, os: { enabled: true } } }, "");
+  for (const shape of ['{"type": "os_observe"}', '{"type": "os_click_at"', '{"type": "os_type_text"', '{"type": "os_press_key"']) {
+    assert.ok(on.includes(shape), shape);
+    assert.ok(!off.includes(shape), `off: ${shape}`);
+  }
+});
+
+test("system prompt split: fixed instructions travel as --append-system-prompt, page context stays on stdin, never on argv", async () => {
+  const saved = process.env.HALO_PLANNER_SYSTEM_SPLIT;
+  delete process.env.HALO_PLANNER_SYSTEM_SPLIT;
+  try {
+    const fakeChild = makeFakeChild();
+    let captured;
+    const bridge = new ClaudeCodeBridge({ spawnFn: (_command, args) => { captured = args; return fakeChild; } });
+    const pending = bridge.start(makeContext({ observation: { id: "obs-1", url: "https://example.test/", elements: [], text: "PAGE-SECRET-TEXT" } }));
+    const at = captured.indexOf("--append-system-prompt");
+    assert.ok(at > 0, "the instructions go in the system prompt");
+    const system = captured[at + 1];
+    assert.ok(system.startsWith("You are the planning component"));
+    assert.ok(!system.includes(TASK_ID) && !system.includes("PAGE-SECRET-TEXT"), "no task data or page text in argv");
+    assert.ok(!captured.some((a, i) => i !== at + 1 && a.includes("PAGE-SECRET-TEXT")));
+    const stdin = fakeChild.stdin.written[0];
+    assert.ok(stdin.includes(TASK_ID) && stdin.includes("PAGE-SECRET-TEXT") && stdin.includes("Context (JSON):"));
+    assert.ok(!stdin.includes("You are the planning component"), "the fixed instructions are not sent twice");
+    // The fixed argv is untouched, only the system prompt is added.
+    assert.deepEqual(captured.filter((_, i) => i !== at && i !== at + 1), [...CLI_ARGS, "--effort", "medium"]);
+    fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal())));
+    fakeChild.emit("close", 0);
+    assert.deepEqual(await pending, validProposal());
+  } finally {
+    if (saved === undefined) delete process.env.HALO_PLANNER_SYSTEM_SPLIT; else process.env.HALO_PLANNER_SYSTEM_SPLIT = saved;
+  }
+});
+
+test("system prompt split: buildPrompt is exactly system + user, and the system part is the same for different page contexts", () => {
+  const a = buildPromptParts(makeContext({ observation: { id: "o1", url: "https://a.test/", elements: [] } }), "");
+  const b = buildPromptParts(makeContext({ observation: { id: "o2", url: "https://b.test/", elements: [{ elementId: "1", role: "link", name: "x" }] } }), "");
+  assert.equal(a.system, b.system, "an identical system prompt is what lets the CLI cache it between calls");
+  assert.notEqual(a.user, b.user);
+  assert.equal(buildPrompt(makeContext(), ""), `${buildPromptParts(makeContext(), "").system}\n${buildPromptParts(makeContext(), "").user}`);
+});
+
+test("takeUsage(): with the split on, usage carries contextBytes equal to the stdin message size", async () => {
+  const saved = process.env.HALO_PLANNER_SYSTEM_SPLIT;
+  delete process.env.HALO_PLANNER_SYSTEM_SPLIT;
+  try {
+    const fakeChild = makeFakeChild();
+    const bridge = new ClaudeCodeBridge({ spawnFn: () => fakeChild });
+    const pending = bridge.start(makeContext());
+    await flush();
+    fakeChild.stdout.emit("data", cliEnvelope(JSON.stringify(validProposal()), { total_cost_usd: 0.1, usage: { input_tokens: 2, output_tokens: 3 } }));
+    fakeChild.emit("close", 0);
+    await pending;
+    assert.equal(bridge.takeUsage().contextBytes, Buffer.byteLength(fakeChild.stdin.written[0]));
+  } finally {
+    if (saved === undefined) delete process.env.HALO_PLANNER_SYSTEM_SPLIT; else process.env.HALO_PLANNER_SYSTEM_SPLIT = saved;
+  }
 });

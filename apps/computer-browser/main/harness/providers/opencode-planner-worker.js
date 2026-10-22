@@ -1,11 +1,11 @@
 "use strict";
 
 const { createWorkerLoop } = require("./claude-code-worker");
-const { OpenCodePlannerBridge, MODEL_ID } = require("./opencode-planner-bridge");
+const { OpenCodePlannerBridge, MODEL_ID, EXTRA_MODEL_IDS } = require("./opencode-planner-bridge");
 
 function parseOpenCodeWorkerArgs(argv) {
   if (argv.length === 0) return { model: MODEL_ID };
-  if (argv.length === 2 && argv[0] === "--model" && argv[1] === MODEL_ID) return { model: MODEL_ID };
+  if (argv.length === 2 && argv[0] === "--model" && (argv[1] === MODEL_ID || EXTRA_MODEL_IDS.includes(argv[1]))) return { model: argv[1] };
   throw new Error("worker accepts only the host-pinned OpenCode default model; fast mode is unsupported");
 }
 

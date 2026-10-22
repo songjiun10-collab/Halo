@@ -88,6 +88,7 @@ test("drives 100 actions across at least 10 injected context-reset segments whil
   };
 
   const controller = new TaskController({
+    pageStallLimit: 0,
     store,
     planner,
     browser,
@@ -346,6 +347,117 @@ test("discards a planner response that resolves after stop() was already called"
   assert.equal(controller.getSnapshot().state, "stopped");
   assert.equal(controller.getSnapshot().budgets.actionsUsed, 0);
   await store.close();
+});
+
+test("going round three pages of one site is caught as a loop, not only bouncing between two", async () => {
+  const { store } = await makeStore({ originalRequest: "find the ownership cost", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const pages = ["https://cars.test/best", "https://cars.test/top", "https://cars.test/review"];
+  const contexts = [];
+  let here = pages[0];
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => { contexts.push(context);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions",
+        actions: [{ type: "navigate", url: pages[contexts.length % 3] }] }; } },
+    browser: { observe: async () => ({ id: `obs${contexts.length}`, url: here, title: here, elements: [] }), execute: async (a) => { here = a.url; return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0, budgets: { maxPlannerCalls: 100 },
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.ok(contexts.length <= 40, `stopped after ${contexts.length} planner calls`);
+  await store.close();
+});
+
+function siteFirstRun({ store, page, answerSite = "https://www.theweathernetwork.com/" }) {
+  const contexts = [], executed = [];
+  let here = { ...page };
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => { contexts.push(context);
+      return executed.length === 0
+        ? { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "navigate", url: "https://forecast.weather.gov/zipcity.php?inputstring=10019" }] }
+        : { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "done" }; } },
+    browser: { observe: async () => ({ id: `obs${contexts.length}`, ...here }), execute: async (a) => { executed.push(a); if (a.type === "navigate") here = { url: a.url, title: "NWS" }; return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0, answerSite,
+  });
+  return { controller, contexts, executed };
+}
+
+test("with a named task site, leaving it is sent back twice, then allowed; the planner is told the site", async () => {
+  const { store } = await makeStore({ originalRequest: "weather for 10019", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, contexts, executed } = siteFirstRun({ store, page: { url: "https://www.theweathernetwork.com/us/search?q=10019", title: "Search", elements: [] } });
+  await controller.start();
+  assert.equal(contexts[0].progress.taskSite.domain, "theweathernetwork.com");
+  assert.equal(contexts[1].progress.proposalFeedback.code, "stay_on_task_site");
+  assert.equal(contexts[2].progress.proposalFeedback.code, "stay_on_task_site");
+  assert.equal(executed.filter((a) => a.type === "navigate").length, 1, "the third try goes through");
+  assert.equal(contexts.length, 4);
+  await store.close();
+});
+
+test("a link the task site itself shows may be followed off the site", async () => {
+  const { store } = await makeStore({ originalRequest: "open the lab leader's profile", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const contexts = [], executed = [];
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => { contexts.push(context);
+      return executed.length === 0
+        ? { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "follow_link", elementId: "e9" }] }
+        : { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "done" }; } },
+    browser: { observe: async () => ({ id: `obs${contexts.length}`, url: "https://research.lab.test/team", title: "Team", elements: [{ elementId: "e9", role: "link", name: "Jan", href: "https://jan.example/" }] }),
+      execute: async (a) => { executed.push(a); return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0, answerSite: "https://www.lab.test/",
+  });
+  await controller.start();
+  assert.equal(executed.length, 1);
+  assert.equal(contexts[1].progress.proposalFeedback, undefined);
+  await store.close();
+});
+
+test("a task site that answers with an error page may be left at once", async () => {
+  const { store } = await makeStore({ originalRequest: "weather for 10019", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, contexts, executed } = siteFirstRun({ store, page: { url: "https://www.theweathernetwork.com/", title: "Access denied", httpStatus: 403, elements: [] } });
+  await controller.start();
+  assert.equal(executed.length, 1);
+  assert.equal(contexts[1].progress.proposalFeedback, undefined);
+  await store.close();
+});
+
+test("a task re-attached with a fresh browser reopens the page it was on and tells the planner it is resuming", async () => {
+  const { store, storageRoot } = await makeStore({ originalRequest: "compare prices", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const taskId = store.taskId;
+  // First run: go to a product page, then pause for the person (a closed tab or a restart ends it here).
+  let page = { url: "about:blank", title: "" };
+  let turn = 0;
+  const first = new TaskController({
+    store,
+    planner: { next: async (context) => (++turn === 1
+      ? { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "navigate", url: "https://shop.test/item/42" }] }
+      : { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "which size?" }) },
+    browser: { observe: async () => ({ id: `obs${turn}`, ...page }), execute: async (a) => { if (a.type === "navigate") page = { url: a.url, title: "Item 42" }; return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0,
+  });
+  assert.equal((await first.start()).pauseReason, "need_user");
+  await store.close();
+
+  // Second run: a fresh browser on a blank page.
+  const reloaded = await TaskStore.load(taskId, { storageRoot });
+  let fresh = { url: "about:blank", title: "" };
+  const executed = [];
+  const contexts = [];
+  const second = new TaskController({
+    store: reloaded,
+    planner: { next: async (context) => { contexts.push(context); return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "still need the size" }; } },
+    browser: { getBrowserSnapshot: () => ({ tabs: [{ url: fresh.url }] }), observe: async () => ({ id: "fresh", ...fresh }), execute: async (a) => { executed.push(a); if (a.type === "navigate") fresh = { url: a.url, title: "Item 42" }; return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0,
+  });
+  await second.resume();
+  assert.deepEqual(executed.map((a) => [a.type, a.url]), [["navigate", "https://shop.test/item/42"]]);
+  assert.equal(contexts[0].observation.url, "https://shop.test/item/42");
+  assert.equal(contexts[0].progress.resumedFrom.url, "https://shop.test/item/42");
+  assert.equal(contexts[0].progress.resumedFrom.reopened, true);
+  assert.ok(contexts[0].navigationHistory.visited.includes("https://shop.test/item/42"));
+  await reloaded.close();
 });
 
 test("a task recovered as execution_uncertain requires an explicit confirmed resume and never auto-dispatches", async () => {
@@ -2042,9 +2154,9 @@ test("navigation memory stays bounded: visited and frontier are capped and hrefs
     hostVerifier: () => true,
   });
   await controller.start();
-  assert.equal(last.visited.length, 32);
+  assert.equal(last.visited.length, 16);
   assert.equal(last.visited.at(-1), "https://site.test/p39");
-  assert.equal(last.frontier.length, 32);
+  assert.equal(last.frontier.length, 12);
   // Oldest entries are dropped at the cap, and no href ever appears twice.
   assert.equal(new Set(last.frontier.map((entry) => entry.href)).size, last.frontier.length);
   assert.ok(last.frontier.filter((entry) => entry.href === "https://site.test/dup").length <= 1);
@@ -2222,6 +2334,62 @@ test("an identical action that failed deterministically twice is not dispatched 
   assert.equal(executed.length, 2, "only the first two attempts reach the browser");
   assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_blocked"), true);
   await store.close();
+});
+
+function giveUpRun({ store, giveUpRefusals, groundAnswers, reason, completionChecklist, answerSite, observation }) {
+  const contexts = [];
+  let turn = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: reason ?? `blocked ${turn++}` };
+    } },
+    browser: { observe: async () => ({ id: "obs", ...(observation ?? {}) }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    ...(answerSite === undefined ? {} : { answerSite }),
+    ...(giveUpRefusals === undefined ? {} : { giveUpRefusals }),
+    ...(groundAnswers === undefined ? {} : { groundAnswers }),
+    ...(completionChecklist === undefined ? {} : { completionChecklist }),
+  });
+  return { controller, contexts, turns: () => { return contexts.length; } };
+}
+
+test("giveUpRefusals sends an unverified need_user back with feedback until the budget is spent, then honours it", async () => {
+  const { store } = await makeStore({ originalRequest: "give up", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, contexts, turns } = giveUpRun({ store, giveUpRefusals: 2 });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "paused");
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.equal(turns(), 3, "two refusals, the third need_user is honoured");
+  assert.equal(contexts.slice(1).every((c) => c.progress.repeatFailureFeedback?.note === "give_up_refused"), true);
+  await store.close();
+});
+
+test("giveUpRefusals is off by default: the first need_user pauses", async () => {
+  const { store } = await makeStore({ originalRequest: "give up default", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, turns } = giveUpRun({ store });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.equal(turns(), 1);
+  await store.close();
+});
+
+test("groundAnswers sends back an answer that cites a page the run never opened, on a task that is not a research task", async () => {
+  const reason = "The price is 5 dollars, see https://never-opened.example/price";
+  const on = await makeStore({ originalRequest: "ground on", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const grounded = giveUpRun({ store: on.store, groundAnswers: true, reason });
+  assert.equal((await grounded.controller.start()).pauseReason, "need_user");
+  assert.equal(grounded.contexts.length > 1, true, "the unsupported answer is sent back before it is delivered");
+  await on.store.close();
+  const off = await makeStore({ originalRequest: "ground off", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const plain = giveUpRun({ store: off.store, reason });
+  assert.equal((await plain.controller.start()).pauseReason, "need_user");
+  assert.equal(plain.contexts.length, 1, "without the option the same answer is delivered at once");
+  await off.store.close();
 });
 
 function clickDelayRun({ store, action, clickDelayMinSec, clickDelayMaxSec, random, sleeps }) {
@@ -2926,6 +3094,117 @@ test("only a Multi-agent parent with a host child_plan hook is told it may split
   }
 });
 
+function finishRun({ store, pages, finalRefresh = true }) {
+  const contexts = [];
+  const executed = [];
+  let shown = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "finish", evidenceIds: [] };
+    } },
+    // pages[i] is what the i-th observe sees; the last entry repeats.
+    browser: { observe: async () => ({ id: `obs${shown}`, ...pages[Math.min(shown++, pages.length - 1)] }), execute: async (a) => { executed.push(a); return { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    finalRefresh,
+  });
+  return { controller, contexts, executed };
+}
+
+test("finalRefresh reloads the final page before a finish counts and reports what it saw", async () => {
+  const { store } = await makeStore({ originalRequest: "save it", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const done = { url: "https://shop.test/saved", title: "Saved", text: "Saved" };
+  const { controller, contexts, executed } = finishRun({ store, pages: [done] });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.state, "awaiting_verification", JSON.stringify(snapshot.pauseReason));
+  assert.equal(contexts.length, 1);
+  assert.deepEqual(executed.map((a) => [a.type, a.url]), [["navigate", "https://shop.test/saved"]]);
+  assert.equal(snapshot.finalCheck.url, "https://shop.test/saved");
+  assert.equal(snapshot.finalCheck.problem, null);
+  await store.close();
+});
+
+test("a finish whose page does not survive a reload is sent back once, then never reported as completed", async () => {
+  const { store } = await makeStore({ originalRequest: "save it", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const done = { url: "https://shop.test/saved", title: "Saved", text: "Saved" };
+  const gone = { url: "https://shop.test/cart", title: "Cart", text: "Your cart is empty" };
+  const moved = finishRun({ store, pages: [done, gone] });
+  await moved.controller.start();
+  assert.equal(moved.contexts.length, 2);
+  assert.equal(moved.contexts[1].progress.repeatFailureFeedback.note, "final_refresh_failed");
+  assert.match(moved.contexts[1].progress.repeatFailureFeedback.guidance, /different page/);
+  await store.close();
+  // A page that keeps failing after the one send-back is handed to the person for review, flagged.
+  const second = await makeStore({ originalRequest: "save it", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const broken = finishRun({ store: second.store, pages: [done, { ...done, httpStatus: 500 }] });
+  const snapshot = await broken.controller.start();
+  assert.equal(broken.contexts.length, 2);
+  assert.equal(snapshot.state, "awaiting_verification");
+  assert.equal(snapshot.finalCheck.problem, "error_page");
+  await second.store.close();
+});
+
+test("without finalRefresh a finish does not reload anything", async () => {
+  const { store } = await makeStore({ originalRequest: "save it", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, executed } = finishRun({ store, pages: [{ url: "https://shop.test/saved", title: "Saved" }], finalRefresh: false });
+  const snapshot = await controller.start();
+  assert.equal(executed.length, 0);
+  assert.equal(snapshot.finalCheck, undefined);
+  await store.close();
+});
+
+function loginRun({ store, pages, pauseOnLogin = true }) {
+  const contexts = [];
+  let shown = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => { contexts.push(context); return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "need_user", reason: "done looking" }; } },
+    browser: { observe: async () => ({ id: `obs${shown}`, ...pages[Math.min(shown++, pages.length - 1)] }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0, pauseOnLogin,
+  });
+  return { controller, contexts };
+}
+const passwordField = { elementId: "e2", role: "textbox", name: "Password", inputType: "password" };
+const signInPage = { url: "https://mail.test/login", title: "Sign in", elements: [{ elementId: "e1", role: "textbox", name: "Email", inputType: "email" }, passwordField] };
+
+test("a sign-in page pauses for the person before any planning, and Resume continues on the same page", async () => {
+  const { store } = await makeStore({ originalRequest: "read my latest mail", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const inbox = { url: "https://mail.test/inbox", title: "Inbox", elements: [] };
+  const { controller, contexts } = loginRun({ store, pages: [signInPage, inbox] });
+  const paused = await controller.start();
+  assert.equal(paused.pauseReason, "login_required");
+  assert.equal(contexts.length, 0, "no planner call is spent on the sign-in page");
+  await controller.resume(); // the person signed in on the task's own browser
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0].observation.url, "https://mail.test/inbox");
+  await store.close();
+});
+
+test("after the person resumed on a site, its sign-in page does not pause again", async () => {
+  const { store } = await makeStore({ originalRequest: "x", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const { controller, contexts } = loginRun({ store, pages: [signInPage] });
+  assert.equal((await controller.start()).pauseReason, "login_required");
+  const after = await controller.resume();
+  assert.equal(contexts.length, 1);
+  assert.equal(after.pauseReason, "need_user");
+  await store.close();
+});
+
+test("a header login box on an ordinary large page, or pauseOnLogin off, does not pause", async () => {
+  const filler = Array.from({ length: 60 }, (_, i) => ({ elementId: `l${i}`, role: "link", name: `Story ${i}` }));
+  const news = { url: "https://news.test/world", title: "World news", elements: [...filler, passwordField] };
+  const a = await makeStore({ originalRequest: "x", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  assert.equal((await loginRun({ store: a.store, pages: [news] }).controller.start()).pauseReason, "need_user");
+  await a.store.close();
+  const b = await makeStore({ originalRequest: "x", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  assert.equal((await loginRun({ store: b.store, pages: [signInPage], pauseOnLogin: false }).controller.start()).pauseReason, "need_user");
+  await b.store.close();
+});
+
 test("awaiting_verification frees the browser views once", async () => {
   let disposed = 0;
   const { controller, store } = await driveToAwaitingVerification({
@@ -2933,5 +3212,225 @@ test("awaiting_verification frees the browser views once", async () => {
     extraBrowser: { dispose: async () => { disposed += 1; }, getBrowserSnapshot: () => ({ tabs: [{ url: "https://a.test/", title: "A" }] }) },
   });
   assert.equal(disposed, 1);
+  await store.close();
+});
+
+test("completionChecklist sends a failing answer back twice, then delivers it", async () => {
+  const { runChecklist } = require("../main/harness/completion-checklist");
+  const bad = runChecklist({ answer: "The price is 4,321 dollars", goalText: "price?", observation: { url: "https://a.test/", title: "x", text: "price 99" }, observedTexts: ["price 99"] });
+  assert.equal(bad.ok, false);
+  assert.deepEqual(bad.failures.map((f) => f.code), ["value_not_on_opened_pages"]);
+  const blocked = runChecklist({ answer: "42 items", observation: { url: "https://a.test/", title: "Just a moment...", text: "" }, observedTexts: ["42"] });
+  assert.deepEqual(blocked.failures.map((f) => f.code), ["final_page_blocked"]);
+  const good = runChecklist({ answer: "It costs 99", goalText: "price?", observation: { url: "https://a.test/", title: "x", text: "price 99" }, observedTexts: ["price 99"] });
+  assert.equal(good.ok, true);
+});
+
+test("completionChecklist hook returns a failing answer twice with feedback, then lets the third through", async () => {
+  const { store } = await makeStore({ originalRequest: "check", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const seen = [];
+  const { controller, contexts } = giveUpRun({ store, reason: "answer 77", completionChecklist: (input) => { seen.push(input.answer); return { ok: false, failures: [{ code: "x", guidance: "fix it" }] }; } });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.equal(seen.length, 3);
+  assert.equal(contexts.length, 3);
+  assert.equal(contexts[1].progress.repeatFailureFeedback.note, "completion_checklist_failed");
+});
+
+test("an answer drawn from the site the task names needs no second site; other answers still do", async () => {
+  const page = { url: "https://www.parkers.co.uk/best-cars/", title: "Best cars", text: "Renault 4 E-Tech" };
+  const reason = "The first car is the Renault 4 E-Tech (https://www.parkers.co.uk/best-cars/)";
+  const named = await makeStore({ originalRequest: "check", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const onSite = giveUpRun({ store: named.store, groundAnswers: true, answerSite: "https://www.parkers.co.uk/", observation: page, reason });
+  assert.equal((await onSite.controller.start()).pauseReason, "need_user");
+  assert.equal(onSite.contexts.length, 1);
+  await named.store.close();
+  const other = await makeStore({ originalRequest: "check", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const offSite = giveUpRun({ store: other.store, groundAnswers: true, answerSite: "https://www.whatcar.com/", observation: page, reason });
+  await offSite.controller.start();
+  assert.equal(offSite.contexts.length, 3); // too_few_sources twice, then delivered unverified
+  await other.store.close();
+});
+
+test("the source check and the completion checklist share one send-back budget per answer", async () => {
+  const { store } = await makeStore({ originalRequest: "check", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  // Cites a page that was never opened (the source check sends it back) and always fails the checklist.
+  const { controller, contexts } = giveUpRun({ store, groundAnswers: true, reason: "answer 77 from https://unopened.test/page", completionChecklist: () => ({ ok: false, failures: [{ code: "x", guidance: "fix it" }] }) });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "need_user");
+  assert.equal(contexts.length, 3); // two send-backs in total, then the answer goes out
+  await store.close();
+});
+
+test("completion checklist holds the answer to conditions the task names", () => {
+  const { runChecklist, conditionsIn } = require("../main/harness/completion-checklist");
+  assert.deepEqual(conditionsIn("Find hotels in Chicago under 150 dollars with \"free parking\"").sort(), ["chicago", "free parking"]);
+  const page = { url: "https://h.test/search?city=chicago", title: "Hotels", text: "Hotels in Chicago, 120 per night, free parking" };
+  const ok = runChecklist({ answer: "Hotel X at 120", goalText: "Find hotels in Chicago under 150 dollars with \"free parking\"", observation: page, observedTexts: [page.text], observedUrls: [page.url] });
+  assert.equal(ok.ok, true);
+  const bad = runChecklist({ answer: "Hotel X at 120", goalText: "Find hotels in Chicago under 150 dollars with \"free breakfast\"", observation: page, observedTexts: [page.text], observedUrls: [page.url] });
+  assert.deepEqual(bad.failures.map((f) => f.code), ["condition_not_seen"]);
+});
+
+test("completion checklist on a finish checks the page, not an answer", () => {
+  const { runChecklist } = require("../main/harness/completion-checklist");
+  const blocked = { url: "https://a.test/", title: "Just a moment...", text: "x" };
+  assert.deepEqual(runChecklist({ kind: "finish", answer: "", goalText: "go", observation: blocked, observedTexts: ["x"] }).failures.map((f) => f.code), ["final_page_blocked"]);
+  const page = { url: "https://a.test/", title: "A", text: "Chicago" };
+  assert.equal(runChecklist({ kind: "finish", answer: "", goalText: "Visit Chicago", observation: page, observedTexts: ["Chicago"] }).ok, true);
+});
+
+test("completion checklist reads the model's answer, not the source block the host appends", async () => {
+  const { store } = await makeStore({ originalRequest: "check", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const seen = [];
+  const { controller } = giveUpRun({ store, groundAnswers: true, reason: "plain answer https://a.test/ and https://b.test/", completionChecklist: (input) => { seen.push(input.answer); return { ok: true, failures: [] }; } });
+  await controller.start();
+  assert.ok(seen.length >= 1);
+  assert.ok(seen.every((a) => !a.includes("Sources Halo opened")));
+});
+
+test("completion checklist treats a Korean report of failure as a give-up", () => {
+  const { runChecklist } = require("../main/harness/completion-checklist");
+  const page = { url: "https://a.test/", title: "A", text: "x" };
+  for (const answer of ["요금제 비교는 아직 완료하지 못했습니다.", "MTA 지도 목록을 확인하지 못했습니다. URL을 알려주시면 진행하겠습니다."]) {
+    assert.deepEqual(runChecklist({ answer, goalText: "go", observation: page, observedTexts: ["x"] }).failures.map((f) => f.code), ["answer_gave_up"]);
+  }
+  assert.equal(runChecklist({ answer: "가지와 버섯 레시피는 쿡패드에 있습니다.", goalText: "go", observation: page, observedTexts: ["x"] }).ok, true);
+});
+
+test("the same kind of action (find_text with a new phrase each time) is warned at 3 and not dispatched after 5, even when every call succeeds", async () => {
+  const { store } = await makeStore({ originalRequest: "variants", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const executed = [];
+  const contexts = [];
+  let n = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      n += 1;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "find_text", text: `phrase ${n}` }] };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async (a) => { executed.push(a); return { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    repeatFailureLimit: 2,
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(executed.length >= 5 && executed.length <= 8, true, `executed ${executed.length}`);
+  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_family"), true);
+  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_blocked"), true);
+  await store.close();
+});
+
+test("a read-only batch [find_text, observe] with a new phrase each time is also held back by the family limit", async () => {
+  const { store } = await makeStore({ originalRequest: "batched variants", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const executed = [];
+  const contexts = [];
+  let n = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      n += 1;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "find_text", text: `phrase ${n}` }, { type: "observe" }] };
+    } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async (a) => { executed.push(a.type); return a.type === "find_text" ? { status: "failed", errorCode: "text_not_found" } : { status: "ok" }; } },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    repeatFailureLimit: 2,
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(executed.filter((t) => t === "find_text").length >= 5 && executed.filter((t) => t === "find_text").length <= 8, true, `find_text ran ${executed.filter((t) => t === "find_text").length} times`);
+  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_blocked"), true);
+  await store.close();
+});
+
+test("observing the same page over and over is held back by the family limit", async () => {
+  const { store } = await makeStore({ originalRequest: "look", criteria: [{ id: "c", text: "x", required: true, verification: "user" }] });
+  const contexts = [];
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      contexts.push(context);
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "observe" }] };
+    } },
+    browser: { observe: async () => ({ id: "obs", url: "https://t.test/likes", title: "Likes", text: "post" }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+    repeatFailureLimit: 2,
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.equal(contexts.length <= 9, true, `planner was asked ${contexts.length} times`);
+  assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === "repeat_blocked"), true);
+  await store.close();
+});
+
+test("without repeatFailureLimit the family check is off", async () => {
+  const { store } = await makeStore({ originalRequest: "off", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 8 } });
+  const executed = [];
+  let n = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => { n += 1; return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "find_text", text: `p ${n}` }] }; } },
+    browser: { observe: async () => ({ id: "obs" }), execute: async (a) => { executed.push(a); return { status: "ok" }; } },
+    approve: allowApprove(), hostVerifier: () => false, harnessProfile: "middle", navIntervalMs: 0,
+  });
+  await controller.start();
+  assert.equal(executed.length >= 7, true, `executed ${executed.length}`);
+  await store.close();
+});
+
+for (const [label, action, result, note] of [
+  ["re-opening the same URL", { type: "navigate", url: "https://a.test/page" }, { status: "ok" }, "navigate_repeat"],
+  ["a click the host will not run", { type: "find_text", text: "Fever" }, { status: "failed", errorCode: "unsupported_click" }, "unsupported_click"],
+]) {
+  test(`${label} sends the planner a way out`, async () => {
+    const { store } = await makeStore({ originalRequest: "route", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 4 } });
+    const contexts = [];
+    const controller = new TaskController({
+      store,
+      planner: { next: async (context) => {
+        contexts.push(context);
+        return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [action] };
+      } },
+      browser: { observe: async () => ({ id: "obs" }), execute: async () => result },
+      approve: allowApprove(),
+      hostVerifier: () => false,
+      harnessProfile: "middle",
+      navIntervalMs: 0,
+    });
+    await controller.start();
+    assert.equal(contexts.some((c) => c.progress.repeatFailureFeedback?.note === note), true, note);
+    await store.close();
+  });
+}
+
+test("many different actions on a page that never changes pause as no_progress instead of burning planning calls", async () => {
+  const { store } = await makeStore({ originalRequest: "stall", criteria: [{ id: "c", text: "x", required: true, verification: "user" }], limits: { maxActions: 60 } });
+  let n = 0;
+  const controller = new TaskController({
+    store,
+    planner: { next: async (context) => {
+      n += 1;
+      return { taskId: context.taskId, goalVersion: context.goalVersion, basedOnObservationId: context.observation.id, criterionIds: [], kind: "actions", actions: [{ type: "navigate", url: `https://a.test/${n}` }] };
+    } },
+    browser: { observe: async () => ({ id: "same", url: "https://a.test/blank", elements: [] }), execute: async () => ({ status: "ok" }) },
+    approve: allowApprove(),
+    hostVerifier: () => false,
+    harnessProfile: "middle",
+    navIntervalMs: 0,
+  });
+  const snapshot = await controller.start();
+  assert.equal(snapshot.pauseReason, "no_progress");
+  assert.ok(n <= 25, `planner was called ${n} times`);
   await store.close();
 });

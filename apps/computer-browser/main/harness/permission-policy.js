@@ -10,12 +10,13 @@ class PermissionPolicyError extends Error {
 }
 const PERMISSION_MODES = Object.freeze(["observe", "browse", "interact", "full"]);
 const ACTIONS = Object.freeze([
-    "observe", "scroll", "find_text", "navigate", "follow_link", "click", "type", "select_option", "click_at", "type_at", "press_key", "play_loop", "submit_form", "download",
+    "observe", "scroll", "find_text", "http_get", "navigate", "follow_link", "click", "type", "select_option", "click_at", "type_at", "press_key", "play_loop", "submit_form", "download",
+    "os_observe", "os_click_at", "os_type_text", "os_press_key",
 ]);
 const ACTION_SET = new Set(ACTIONS);
 const READ_ONLY = new Set(["observe", "scroll", "find_text"]);
-const BROWSE_ACTIONS = new Set([...READ_ONLY, "navigate", "follow_link"]);
-const INTERACT_ACTIONS = new Set(["click", "type", "select_option", "click_at", "type_at", "press_key", "play_loop"]);
+const BROWSE_ACTIONS = new Set([...READ_ONLY, "navigate", "follow_link", "http_get"]);
+const INTERACT_ACTIONS = new Set(["click", "type", "select_option", "click_at", "type_at", "press_key", "play_loop", "os_observe", "os_click_at", "os_type_text", "os_press_key"]);
 const FULL_ACTIONS = new Set([...BROWSE_ACTIONS, ...INTERACT_ACTIONS, "submit_form"]);
 function evaluateActionPolicy(mode, action) {
     if (!PERMISSION_MODES.includes(mode)) {

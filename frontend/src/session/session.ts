@@ -45,7 +45,7 @@ function derive(s: SessionState): SessionState {
   const snapshot = s.snapshot
   const head = snapshot?.approvalQueue[0]
   const state = snapshot?.state
-  const activity: TabActivity | undefined = state === 'running' ? 'working' : state === 'awaiting_approval' || state === 'awaiting_verification' ? 'waiting' : state === 'paused' ? (snapshot?.pauseReason === 'need_user' ? 'waiting' : 'paused') : state === 'completed' || state === 'stopped' ? 'done' : undefined
+  const activity: TabActivity | undefined = state === 'running' ? 'working' : state === 'awaiting_approval' || state === 'awaiting_verification' ? 'waiting' : state === 'paused' ? (snapshot?.pauseReason === 'need_user' || snapshot?.pauseReason === 'login_required' ? 'waiting' : 'paused') : state === 'completed' || state === 'stopped' ? 'done' : undefined
   return {
     ...s,
     task: s.goal?.originalRequest ?? s.tasks.find((t) => t.taskId === s.activeTaskId)?.originalRequest ?? '',
@@ -56,7 +56,7 @@ function derive(s: SessionState): SessionState {
       : s.tabs,
     activeTabId: s.activeTaskId ? (s.browser?.activeTabId ?? '') : s.activeTabId,
     approval: head && s.activeTaskId ? { taskId: s.activeTaskId, id: head.id, action: head.summary || head.action, request: head.action, createdAt: head.createdAt, widen: !!head.widen, leaseOffer: head.leaseOffer ?? null } : undefined,
-    messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text })), ...(snapshot?.pauseReason === 'need_user' ? [{ from: 'claude' as const, text: snapshot.needUserReason || 'The agent paused and needs your input to continue.' }] : [])] : [],
+    messages: s.goal ? [{ from: 'you', text: s.goal.originalRequest }, ...s.goal.amendments.map((m) => ({ from: 'you' as const, text: m.text })), ...(snapshot?.pauseReason === 'need_user' ? [{ from: 'claude' as const, text: snapshot.needUserReason || 'The agent paused and needs your input to continue.' }] : []), ...(snapshot?.pauseReason === 'login_required' ? [{ from: 'claude' as const, text: LOGIN_REQUIRED_TEXT }] : []), ...(snapshot?.pauseReason === 'captcha' ? [{ from: 'claude' as const, text: CAPTCHA_TEXT }] : []), ...(snapshot?.finalCheck && ['awaiting_verification', 'completed'].includes(snapshot.state) ? [{ from: 'claude' as const, text: describeFinalCheck(snapshot.finalCheck) }] : [])] : [],
     timeline: s.journal.map(describeEvent),
   }
 }
@@ -405,3 +405,14 @@ export class SessionStore {
     catch (error) { this.failure(error); return false }
   }
 }
+
+const FINAL_CHECK_PROBLEM = { refresh_failed: 'could not be loaded again', error_page: 'came back as an error page', blocked: 'came back as a bot check', redirected: 'sent the browser to a different page' } as const
+
+// What Halo saw when it reloaded the final page, so "done" is not taken on the agent's word.
+export const LOGIN_REQUIRED_TEXT = 'This page needs you to sign in. Sign in in the task\'s browser, then press Resume — Halo continues from this page. Halo never types your password.'
+
+export const CAPTCHA_TEXT = 'This page is asking for a human check. Halo does not solve these. Complete it in the page shown here, then press Resume — Halo continues from this page.'
+
+export const describeFinalCheck = (check: NonNullable<TaskSnapshot['finalCheck']>) => check.problem
+  ? `Not confirmed: after reloading, the final page ${FINAL_CHECK_PROBLEM[check.problem]} (${check.url}). Check it before relying on this result.`
+  : `Reloaded the final page to check the result: ${check.title || check.url} (${check.url}).`
