@@ -128,7 +128,9 @@ test("the bridge runs codex exec locked down, with the prompt on stdin and only 
     r.child.stdout.emit("data", `${JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, cached_input_tokens: 2, output_tokens: 3 } })}\n`);
     r.child.emit("close", 0);
     assert.deepEqual(await r.pending, PROPOSAL);
-    assert.deepEqual(bridge.takeUsage(), { provider: "codex", inputTokens: 10, outputTokens: 3, cacheReadTokens: 2, cacheCreationTokens: 0, costUsd: 0, durationMs: 0 });
+    const { contextBytes, ...usage } = bridge.takeUsage();
+    assert.ok(contextBytes > 0, "the per-call user message size is recorded");
+    assert.deepEqual(usage, { provider: "codex", inputTokens: 10, outputTokens: 3, cacheReadTokens: 2, cacheCreationTokens: 0, costUsd: 0, durationMs: 0 });
   } finally {
     if (savedKey === undefined) delete process.env.HALO_APPROVER_KEY; else process.env.HALO_APPROVER_KEY = savedKey;
     await bridge.close();
