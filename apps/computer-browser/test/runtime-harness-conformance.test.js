@@ -22,7 +22,7 @@ test("harness modules are generated from TypeScript sources", () => {
 
 test("generated harness modules keep their exact CommonJS export surface", () => {
   const context = require("../main/harness/context-builder");
-  assert.deepEqual(Object.keys(context), ["ContextError", "buildContext", "compactObservation"]);
+  assert.deepEqual(Object.keys(context), ["ContextError", "buildContext", "compactObservation", "focusObservationElements"]);
   const contextError = new context.ContextError("context_limit", "large packet");
   assert.deepEqual(Object.keys(contextError), ["name", "code"]);
   const broker = require("../main/harness/generic-mcp-broker");

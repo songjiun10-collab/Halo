@@ -164,7 +164,10 @@ function dropMirroredContainers(elements) {
     for (const e of elements)
         if (contracts.isPlainObject(e) && typeof e.parentElementId === "string") {
             const list = children.get(e.parentElementId);
-            if (list) list.push(e); else children.set(e.parentElementId, [e]);
+            if (list)
+                list.push(e);
+            else
+                children.set(e.parentElementId, [e]);
         }
     const parentOf = new Map();
     const dropped = new Set();

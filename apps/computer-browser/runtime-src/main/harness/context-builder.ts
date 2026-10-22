@@ -177,7 +177,57 @@ function compactObservation(observation: unknown): unknown {
     }
     if (element.parentElementId === null) { const { parentElementId, ...rest } = element; elements.push(rest); } else elements.push(element);
   }
-  return { ...observation, elements: dropEmptyContainers(elements) };
+  const compacted = dropEmptyContainers(elements);
+  return { ...observation, elements: SLIM ? dropMirroredContainers(compacted.map(withCleanHref)) : compacted };
+}
+
+// HALO_CTX_SLIM=1: three more byte savings that change nothing the planner can act on. Tracking query parameters come off
+// links (never truncated, so a copied URL still works), a named container whose only child repeats its name is folded into
+// that child, and navigationHistory keeps the latest visits and the first few frontier links.
+const SLIM_LEVEL = Number(process.env.HALO_CTX_SLIM) || 0;
+const SLIM = SLIM_LEVEL >= 1;
+const TRACKING_PARAM = /^(utm_|fbclid$|gclid$|msclkid$|mc_[a-z]+$)/i;
+function cleanUrl(href: string): string {
+  if (typeof href !== "string" || !href.includes("?")) return href;
+  try {
+    const url = new URL(href);
+    for (const key of [...url.searchParams.keys()]) if (TRACKING_PARAM.test(key)) url.searchParams.delete(key);
+    return url.toString();
+  } catch { return href; }
+}
+function withCleanHref(element: unknown): unknown {
+  return contracts.isPlainObject(element) && typeof element.href === "string" ? { ...element, href: cleanUrl(element.href) } : element;
+}
+function dropMirroredContainers(elements: unknown[]): unknown[] {
+  const children = new Map<string, PlainRecord[]>();
+  for (const e of elements) if (contracts.isPlainObject(e) && typeof e.parentElementId === "string") {
+    const list = children.get(e.parentElementId);
+    if (list) list.push(e); else children.set(e.parentElementId, [e]);
+  }
+  const parentOf = new Map<string, unknown>();
+  const dropped = new Set<string>();
+  for (const e of elements) {
+    if (!contracts.isPlainObject(e) || typeof e.elementId !== "string") continue;
+    parentOf.set(e.elementId, e.parentElementId ?? null);
+    const only = children.get(e.elementId);
+    if (EMPTY_CONTAINER_ROLES.has(e.role as string) && typeof e.name === "string" && e.name !== "" && e.href === undefined && only?.length === 1 &&
+      typeof only[0].name === "string" && only[0].name.toLowerCase() === e.name.toLowerCase()) dropped.add(e.elementId);
+  }
+  if (dropped.size === 0) return elements;
+  const keptAncestor = (id: unknown): unknown => {
+    for (let guard = 0; typeof id === "string" && dropped.has(id) && guard < 10000; guard++) id = parentOf.get(id) ?? null;
+    return id ?? null;
+  };
+  const out: unknown[] = [];
+  for (const e of elements) {
+    if (contracts.isPlainObject(e) && typeof e.elementId === "string" && dropped.has(e.elementId)) continue;
+    if (contracts.isPlainObject(e) && typeof e.parentElementId === "string" && dropped.has(e.parentElementId)) {
+      const parent = keptAncestor(e.parentElementId);
+      const { parentElementId, ...rest } = e;
+      out.push(parent === null ? rest : { ...rest, parentElementId: parent });
+    } else out.push(e);
+  }
+  return out;
 }
 
 // A row/cell/list/listitem with no name and nothing else to act on says nothing the tree below it does not; its
@@ -256,6 +306,44 @@ function focusObservationText(observation: unknown, originalRequest: string, que
   return { ...observation, text: parts.join(" ") };
 }
 
+// HALO_CTX_SLIM=2: above ELEMENT_FOCUS_MIN elements, keep the form controls (capped), every element whose name or address
+// shares a word with the goal or a recent find_text query, and the first ELEMENT_HEAD of the page; the rest are replaced by
+// a count. Like the page text focus, a find_text query adds its words to the focus, so an omitted element comes back on the
+// next observation. Kept elements whose parent was left out are re-parented to the nearest kept ancestor.
+const ELEMENT_FOCUS_MIN = 40;
+const ELEMENT_HEAD = 15;
+const ELEMENT_CONTROL_CAP = 25;
+const CONTROL_ROLES = new Set(["button", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch", "slider", "spinbutton", "option", "tab", "menuitemcheckbox", "menuitemradio", "listbox"]);
+function focusObservationElements(observation: unknown, originalRequest: string, queries: string[] | null | undefined): unknown {
+  if (SLIM_LEVEL < 2 || !contracts.isPlainObject(observation) || !Array.isArray(observation.elements) || observation.elements.length <= ELEMENT_FOCUS_MIN) return observation;
+  const terms = focusTerms(originalRequest, ...(queries ?? []));
+  const elements = observation.elements as unknown[];
+  const keep = new Array<boolean>(elements.length).fill(false);
+  let controls = 0;
+  elements.forEach((e, i) => {
+    if (!contracts.isPlainObject(e)) return void (keep[i] = true);
+    const haystack = `${e.name ?? ""} ${e.href ?? ""}`.toLowerCase();
+    if (i < ELEMENT_HEAD || terms.some((t) => haystack.includes(t))) keep[i] = true;
+    else if (CONTROL_ROLES.has(e.role as string) && controls < ELEMENT_CONTROL_CAP) { controls++; keep[i] = true; }
+  });
+  const kept = elements.filter((_, i) => keep[i]);
+  const omitted = elements.length - kept.length;
+  if (omitted < 10) return observation;
+  const parentOf = new Map<unknown, unknown>(elements.map((e) => [(e as PlainRecord | undefined)?.elementId, (e as PlainRecord | undefined)?.parentElementId ?? null]));
+  const keptIds = new Set<unknown>(kept.map((e) => (e as PlainRecord | undefined)?.elementId));
+  const ancestor = (id: unknown): unknown => {
+    for (let guard = 0; typeof id === "string" && !keptIds.has(id) && guard < 10000; guard++) id = parentOf.get(id) ?? null;
+    return id ?? null;
+  };
+  const out = kept.map((e) => {
+    if (!contracts.isPlainObject(e) || typeof e.parentElementId !== "string" || keptIds.has(e.parentElementId)) return e;
+    const parent = ancestor(e.parentElementId);
+    const { parentElementId, ...rest } = e;
+    return parent === null ? rest : { ...rest, parentElementId: parent };
+  });
+  return { ...observation, elements: out, elementsNotShown: omitted };
+}
+
 function buildContext({ goal, state, observation, recentEvents, customMemory = [], pendingMessages = [], navigation = null, workGoalBinding, workGoal, teamBoard, contextManifest, strategyGuidance, textFocusQueries }: ContextInput) {
   contracts.validateGoalSpec(goal, "goal"); // defense in depth; callers should already hold a validated goal
 
@@ -295,13 +383,15 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
     },
     progress: trustedProgress,
     recentEvents: boundedRecentEvents,
-    observation: observation === undefined ? null : focusObservationText(compactObservation(observation), goal.originalRequest, textFocusQueries),
+    observation: observation === undefined ? null : focusObservationElements(focusObservationText(compactObservation(observation), goal.originalRequest, textFocusQueries), goal.originalRequest, textFocusQueries),
     untrustedSummary: modelSummary === undefined ? null : { text: modelSummary, authority: "untrusted_summary" },
     userMemory: { authority: "untrusted_user_memory", entries: customMemory },
     ...(builtinPlaybooks === undefined ? {} : { haloPlaybooks: builtinPlaybooks }),
     // Host-recorded, but every URL/name originated in a page the browser
     // loaded, so it is data to consider, never an instruction.
-    navigationHistory: navigation === null ? null : { authority: "untrusted_page_derived", visited: navigation.visited, frontier: navigation.frontier },
+    navigationHistory: navigation === null ? null : SLIM
+      ? { authority: "untrusted_page_derived", visited: navigation.visited.slice(-4), frontier: navigation.frontier.slice(0, 6).map((link) => contracts.isPlainObject(link) ? withCleanHref(link) : link) }
+      : { authority: "untrusted_page_derived", visited: navigation.visited, frontier: navigation.frontier },
     pendingMessages: [],
     ...(boundWorkGoal === undefined ? {} : { workGoal: boundWorkGoal }),
     ...(manifest === undefined ? {} : { contextManifest: manifest }),
@@ -363,4 +453,4 @@ function buildContext({ goal, state, observation, recentEvents, customMemory = [
   return adapt({ ...packet, teamBoard: { authority: "untrusted_sibling_notes", parentTaskId: board.parentTaskId, entries: notes } });
 }
 
-export = { ContextError, buildContext, compactObservation };
+export = { ContextError, buildContext, compactObservation, focusObservationElements };
